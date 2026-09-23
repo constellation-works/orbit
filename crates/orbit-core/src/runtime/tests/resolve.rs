@@ -10,6 +10,7 @@ use orbit_common::{OrbitError, test_env};
 use super::super::resolve::{
     ResolvedOrbitRoots, WorkspaceRootHint, resolve_bootstrap_roots, resolve_generation_root,
     resolve_initialize_roots, resolve_initialize_roots_with_hint, try_resolve_initialized_roots,
+    try_resolve_initialized_roots_with_hint,
 };
 
 #[test]
@@ -402,10 +403,116 @@ fn try_resolve_rejects_uninitialized_root_override() {
     assert!(!bogus.join(".orbit").exists());
 }
 
+#[test]
+fn config_yaml_only_workspace_resolves_via_walk_up() {
+    let _env = test_env::unset(["ORBIT_ROOT"]);
+    let repo = tempdir().expect("repo tempdir");
+    let nested = repo.path().join("nested");
+    fs::create_dir(&nested).expect("create nested dir");
+    let orbit_root = repo.path().join(".orbit");
+    seed_identity_only_workspace_root(&orbit_root);
+
+    let resolved = try_resolve_initialized_roots(&nested, None)
+        .expect("config.yaml should initialize the workspace via walk-up");
+
+    assert_optional_pinned_roots(&resolved, &orbit_root);
+}
+
+#[test]
+fn config_yaml_only_main_worktree_resolves_from_linked_worktree() {
+    let home = tempdir().expect("home tempdir");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([("ORBIT_ROOT", None), ("HOME", Some(home_var.as_str()))]);
+    let main_repo = tempdir_in(home.path()).expect("main repo tempdir");
+    let worktree = tempdir_in(home.path()).expect("worktree tempdir");
+    seed_fake_git_worktree(main_repo.path(), worktree.path());
+    let main_orbit = main_repo.path().join(".orbit");
+    seed_identity_only_workspace_root(&main_orbit);
+
+    let resolved = try_resolve_initialized_roots(worktree.path(), None)
+        .expect("config.yaml should initialize the main worktree");
+
+    assert_optional_roots(&resolved, &main_orbit, &worktree.path().join(".orbit"));
+}
+
+#[test]
+fn config_yaml_only_workspace_resolves_from_explicit_root_and_env() {
+    let repo = tempdir().expect("repo tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    seed_identity_only_workspace_root(&orbit_root);
+    let elsewhere = tempdir().expect("elsewhere tempdir");
+    let _env = test_env::unset(["ORBIT_ROOT"]);
+
+    let resolved = try_resolve_initialized_roots(elsewhere.path(), Some(repo.path()))
+        .expect("repo root should resolve its config.yaml-only child");
+    assert_optional_pinned_roots(&resolved, &orbit_root);
+
+    let resolved = resolve_initialize_roots(elsewhere.path(), Some(&orbit_root))
+        .expect("explicit .orbit root should resolve");
+    assert_pinned_roots(&resolved, &orbit_root);
+
+    drop(_env);
+    let env_root = repo.path().to_string_lossy().into_owned();
+    let _env_root = test_env::scoped([("ORBIT_ROOT", Some(env_root.as_str()))]);
+    let resolved = try_resolve_initialized_roots(elsewhere.path(), None)
+        .expect("ORBIT_ROOT should resolve the config.yaml-only workspace");
+    assert_optional_pinned_roots(&resolved, &orbit_root);
+}
+
+#[test]
+fn config_yaml_only_workspace_resolves_from_registry_hint() {
+    let _env = test_env::unset(["ORBIT_ROOT"]);
+    let repo = tempdir().expect("repo tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    seed_identity_only_workspace_root(&orbit_root);
+    let elsewhere = tempdir().expect("elsewhere tempdir");
+
+    let resolved = try_resolve_initialized_roots_with_hint(
+        elsewhere.path(),
+        None,
+        Some(&WorkspaceRootHint {
+            orbit_dir: orbit_root.clone(),
+        }),
+    )
+    .expect("hint should resolve the config.yaml-only workspace");
+
+    assert_optional_pinned_roots(&resolved, &orbit_root);
+}
+
+#[test]
+fn bare_orbit_directory_is_not_an_initialized_workspace() {
+    let _env = test_env::unset(["ORBIT_ROOT"]);
+    let repo = tempdir().expect("repo tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    fs::create_dir(&orbit_root).expect("create bare .orbit directory");
+
+    let resolved = try_resolve_initialized_roots(repo.path(), None)
+        .expect("bare .orbit should not raise a resolution error");
+    assert!(resolved.is_none(), "bare .orbit was accepted: {resolved:?}");
+
+    let error = try_resolve_initialized_roots(repo.path(), Some(repo.path()))
+        .expect_err("explicit bare .orbit should be rejected");
+    assert!(matches!(
+        error,
+        OrbitError::InvalidInput(message) if message.contains("not an Orbit workspace")
+    ));
+}
+
 fn seed_initialized_workspace_root(path: &Path) {
     fs::create_dir_all(path.join("resources")).expect("create resources");
     fs::create_dir_all(path.join("tasks")).expect("create tasks");
     fs::create_dir_all(path.join("state")).expect("create state");
+}
+
+fn seed_identity_only_workspace_root(path: &Path) {
+    fs::create_dir_all(path.join("state")).expect("create state");
+    fs::write(
+        path.join("config.yaml"),
+        "schema_version: 1\nworkspace_id: ws_identity_only\n",
+    )
+    .expect("write workspace identity");
+    assert!(!path.join("config.toml").exists());
+    assert!(!path.join("resources").exists());
 }
 
 fn assert_pinned_roots(roots: &ResolvedOrbitRoots, root: &Path) {

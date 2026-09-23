@@ -193,11 +193,11 @@ Each entrypoint loads only the relevant references on demand. `orbit skill docto
 
 ```
 .orbit/                          # workspace-local (safe to delete → clean slate)
-├── config.toml                  # workspace-local runtime overrides
-├── config.yaml                  # workspace_id only
+├── config.yaml                  # workspace identity (workspace_id)
+├── config.toml                  # optional workspace-local runtime overrides
 ├── auto_tasks/                  # recurring task definitions
 ├── routines/                    # routine definitions
-├── resources/                   # activities, jobs, executors, policies (customizable)
+├── resources/                   # optional activities, jobs, executors, policies overrides
 └── state/                       # worktrees, logs, job-runs, audit spool, scoreboard, semantic.db
 
 ~/.orbit/                        # global (machine-level, survives repo moves)
