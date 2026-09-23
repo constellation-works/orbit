@@ -54,6 +54,7 @@ Incident reviews preserve impact, timelines, causal evidence, uncertainty, and f
 
 | Incident | Date | Summary |
 | --- | --- | --- |
+| [Cross-crate recursive test-worker OOM](./rca/2026-09-23-cross-crate-test-worker-oom.md) | 2026-09-23 | Root cause analysis of the cross-crate recursive test-worker fork bomb that exhausted memory and forced a hard reset of the Linux execution host. |
 | [Recursive test-worker fork storm](./rca/2026-09-06-recursive-test-worker-fork-storm.md) | 2026-09-06 | Root cause analysis of the recursive Orbit test-worker fork storm that saturated a 14-CPU Linux host. |
 
 ## Designs
