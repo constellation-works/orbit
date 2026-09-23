@@ -83,6 +83,38 @@ fn a_row_holding_grants_with_no_authorization_record_is_refused() {
 }
 
 #[test]
+fn an_invalid_namespace_cannot_select_or_read_a_grant_witness_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path();
+    let witness_dir = global_root.join("plugins/.grants");
+
+    for name in ["../../../escape", "/absolute", "nested/name", "orbit"] {
+        let path = plugin_grant_witness_path(global_root, name);
+        assert_eq!(
+            path.parent(),
+            Some(witness_dir.as_path()),
+            "invalid namespace '{name}' must stay in the witness directory"
+        );
+        assert_eq!(
+            path.file_name().and_then(|file| file.to_str()),
+            Some(".invalid.json"),
+            "invalid namespace '{name}' must not select a host file"
+        );
+        let message = verify_recorded_grants(global_root, &record(name, true, &["fs"]))
+            .expect_err("an invalid namespace cannot authorize grants");
+        assert!(message.contains("plugin namespace is invalid"), "{message}");
+        assert!(
+            record_authorized_grants(global_root, name, true, &["fs".to_string()]).is_err(),
+            "an invalid namespace cannot create a witness"
+        );
+    }
+    assert!(
+        !global_root.join("escape.json").exists(),
+        "invalid namespace input must not create a file outside the witness directory"
+    );
+}
+
+#[test]
 fn a_recorded_set_verifies_and_any_change_to_the_row_does_not() {
     let temp = tempfile::tempdir().expect("tempdir");
     let global_root = temp.path();

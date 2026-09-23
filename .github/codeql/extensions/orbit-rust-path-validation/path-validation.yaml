@@ -111,6 +111,14 @@ extensions:
           "path-injection",
           "manual",
         ]
+      # The helper validates plugin namespaces before using one as a filename;
+      # malformed names map to a fixed reserved leaf under the witness directory.
+      - [
+          "orbit_core::runtime::plugin_grants::plugin_grant_witness_path",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
       - [
           "orbit_config::store::validated_config_store_path",
           "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",

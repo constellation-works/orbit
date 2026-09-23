@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::physical_with_missing_tail;
-use orbit_types::plugin::InstalledPlugin;
+use orbit_types::plugin::{InstalledPlugin, is_valid_namespace};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -73,6 +73,9 @@ use super::plugin_host::{plugin_install_root, plugin_namespace_dir};
 /// decides who may read it: the directory is denied to every confined backend,
 /// which is granted its own witness file and no other.
 const GRANT_WITNESS_DIR: &str = orbit_tools::plugin::PLUGIN_GRANT_WITNESS_DIR;
+/// Reserved leaf for invalid row names. A leading dot cannot be a valid
+/// namespace, which must start with a lowercase letter.
+const INVALID_GRANT_WITNESS_FILE: &str = ".invalid.json";
 
 /// Domain separator, so the preimage of one Orbit record is never the preimage
 /// of another. Bumping it invalidates every witness, which fails closed.
@@ -92,10 +95,19 @@ struct GrantAuthorization {
 }
 
 /// Where the witness for `name` lives.
+///
+/// Only a valid plugin namespace becomes a path component. Invalid names map
+/// to a reserved leaf that cannot collide with a valid namespace; callers that
+/// write or verify witnesses reject invalid names before using this path.
 pub fn plugin_grant_witness_path(global_root: &Path, name: &str) -> PathBuf {
+    let file_name = if is_valid_namespace(name) {
+        format!("{name}.json")
+    } else {
+        INVALID_GRANT_WITNESS_FILE.to_string()
+    };
     plugin_install_root(global_root)
         .join(GRANT_WITNESS_DIR)
-        .join(format!("{name}.json"))
+        .join(file_name)
 }
 
 /// The integrity value over one authorized grant set.
@@ -149,6 +161,11 @@ pub fn record_authorized_grants(
     enabled: bool,
     grants: &[String],
 ) -> Result<(), OrbitError> {
+    if !is_valid_namespace(name) {
+        return Err(OrbitError::Execution(format!(
+            "cannot record grant authorization for invalid plugin namespace '{name}'"
+        )));
+    }
     let path = plugin_grant_witness_path(global_root, name);
     let witness = GrantAuthorization {
         schema_version: WITNESS_SCHEMA_VERSION,
@@ -171,6 +188,9 @@ pub fn record_authorized_grants(
 /// Drop the witness when the install goes away, so a later reinstall of the
 /// same namespace starts with no authority rather than the old one.
 pub fn forget_authorized_grants(global_root: &Path, name: &str) {
+    if !is_valid_namespace(name) {
+        return;
+    }
     let path = plugin_grant_witness_path(global_root, name);
     if path.exists()
         && let Err(error) = std::fs::remove_file(&path)
@@ -199,6 +219,12 @@ pub fn verify_recorded_grants(
     global_root: &Path,
     installed: &InstalledPlugin,
 ) -> Result<(), String> {
+    if !is_valid_namespace(&installed.name) {
+        return Err(unauthorized_message(
+            installed,
+            "its plugin namespace is invalid, so this Orbit will not read an authorization record for it",
+        ));
+    }
     let path = plugin_grant_witness_path(global_root, &installed.name);
     let expected = plugin_grants_digest(&installed.name, installed.enabled, &installed.grants);
     let raw = match std::fs::read_to_string(&path) {
