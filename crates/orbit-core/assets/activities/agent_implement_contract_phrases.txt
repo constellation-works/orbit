@@ -52,3 +52,5 @@ never clean broadly to catch a specific leftover
 do not substitute a destructive one
 separately from cleanup so a denied cleanup cannot skip these reads
 repeat the inventory after any cleanup
+needs no trash-based recoverable cleanup
+if run-owned output outside `.orbit/tmp/` remains because cleanup was denied or unsafe
