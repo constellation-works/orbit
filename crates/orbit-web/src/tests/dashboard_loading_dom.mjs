@@ -75,7 +75,7 @@ class Node {
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
-const tabs = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 const tabsStrip = new Node("tabs");
 tabsStrip.className = "tabs";

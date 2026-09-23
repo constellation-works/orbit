@@ -30,7 +30,6 @@
           <div class="rail-group">
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
-          <button class="tab" data-tab="auto-drain" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12v4H4z"/><path d="M10 8v5"/><path d="M7 13l3 3 3-3"/></svg><span class="rail-label">Auto-drain</span><span class="rail-count" id="rail-count-auto-drain"></span></button>
           </div>
 
           <div class="rail-group">
@@ -122,20 +121,31 @@
           </section>
         </div>
         <div class="dock-splitter" id="dock-splitter" role="separator" aria-orientation="vertical" tabindex="0" title="Resize dock" aria-label="Resize dock" aria-valuenow="336" aria-valuemin="336"></div>
-        <!-- ORB-10972: the right column is a two-mode dock. Status keeps the
-             per-task file locks; Log hosts the orbit.log tail at full dock
-             height. The column width is identical in both modes, so switching
-             never reflows the task table beside it. -->
-        <div class="col-log" id="side-dock" data-mode="status">
+        <!-- ORB-10972: the right column is a two-mode dock. Drain carries the
+             auto-drain window card (ORB-12898) above the per-task file locks;
+             Log hosts the orbit.log tail at full dock height. The column width
+             is identical in both modes, so switching never reflows the task
+             table beside it. -->
+        <div class="col-log" id="side-dock" data-mode="drain">
           <div class="dock-head">
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
-              <button type="button" role="tab" class="dock-seg on" data-mode="status" aria-selected="true" tabindex="0">Status</button>
+              <button type="button" role="tab" class="dock-seg on" data-mode="drain" aria-selected="true" tabindex="0">Drain</button>
               <button type="button" role="tab" class="dock-seg" data-mode="log" aria-selected="false" tabindex="-1">Log</button>
             </div>
             <span class="dock-meta"><span class="live-dot"></span><span id="log-count">0</span> lines</span>
           </div>
 
-          <div class="dock-pane" data-pane="status">
+          <div class="dock-pane" data-pane="drain">
+            <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
+              <header>
+                <span class="drain-title"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-title">Auto-drain</span></span>
+                <span class="drain-live" id="auto-drain-live">idle</span>
+              </header>
+              <div class="body" id="auto-drain-body">
+                <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+              </div>
+              <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
+            </section>
             <section class="panel" id="locks-panel">
               <header><span>Locked files</span><span class="count" id="locks-count">0 files / 0 tasks</span></header>
               <div class="body" id="locks-body"></div>
@@ -389,20 +399,6 @@
           </header>
           <div class="operation-feedback" id="job-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="jobs-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
-      </main>
-    </section>
-    <section class="tab-pane" data-tab="auto-drain">
-      <main class="operations-layout operations-auto-drain-layout" id="operations-auto-drain-main">
-        <section class="panel" id="auto-drain-panel">
-          <header>
-            <span>Bounded Auto-delivery Window</span>
-            <span class="count" id="auto-drain-count">-</span>
-          </header>
-          <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
-          <div class="body" id="auto-drain-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>

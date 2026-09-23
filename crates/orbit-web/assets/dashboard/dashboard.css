@@ -3609,7 +3609,7 @@
       }
 
       .dock-pane { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; }
-      #side-dock[data-mode="status"] .dock-pane[data-pane="status"] { display: flex; }
+      #side-dock[data-mode="drain"] .dock-pane[data-pane="drain"] { display: flex; }
       #side-dock[data-mode="log"] .dock-pane[data-pane="log"] { display: flex; }
 
       .dock-pane > .panel {
@@ -4923,7 +4923,7 @@
         grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
         align-items: start;
       }
-      .operations-auto-tasks-layout, .operations-auto-drain-layout { grid-template-columns: minmax(0, 1fr); }
+      .operations-auto-tasks-layout { grid-template-columns: minmax(0, 1fr); }
       body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
       .operations-layout .panel { min-width: 0; }
       .tab-pane[data-tab="operations"] .subtabs { border-bottom: 1px solid var(--border); }
@@ -4935,7 +4935,7 @@
       .operation-feedback.pending { color: var(--priority-medium); }
       .operation-feedback.success { color: var(--state-success); }
       .operation-feedback.error { color: var(--state-failed); }
-      #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }
+      #routines-body, #clock-body, #auto-tasks-body { padding: 12px; background: var(--bg); }
       .operation-card {
         padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border);
         border-radius: 4px; background: var(--bg-elev);
@@ -5176,170 +5176,98 @@
       .operation-recent-runs { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
       .operation-recent-runs li { display: flex; align-items: center; gap: 8px; min-width: 0; }
       .operation-button.job-run { min-height: 30px; padding: 5px 12px; }
-      /* Auto-drain pane. Controls first, then the slot picture, then the
-         readiness rows grouped by what an operator can do about them. A
-         waiting row is a normal state, not an alarm, so it never uses the
-         failure color; only the holder / root it depends on is emphasised. */
       .operation-button.primary {
         background: var(--accent); border-color: var(--accent); color: var(--bg);
         font-weight: 600; min-height: 34px; padding: 6px 14px;
       }
       .operation-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--bg); }
-      .operation-state.waiting { color: var(--fg-dim); border-color: var(--border); }
-      .auto-drain-controls, .auto-drain-slots, .auto-drain-group {
-        min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 6px;
-        background: var(--bg-elev);
+      /* ORB-12898: the auto-drain card, first in the Tasks dock's Drain pane.
+         It keeps its natural height and Locked files below takes the rest;
+         a dock too short for both scrolls as one pane. Every row is sized to
+         fit the dock's 336px minimum width without horizontal scroll. */
+      .dock-pane[data-pane="drain"] { overflow-y: auto; }
+      .dock-pane > .panel.drain-card { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
+      .dock-pane[data-pane="drain"] > #locks-panel { min-height: 160px; }
+      .drain-card > header { flex-wrap: nowrap; gap: 10px; padding: 10px 12px; }
+      .drain-title { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+      .drain-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-mute); }
+      .drain-dot.live { background: var(--state-running); box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12); }
+      .drain-dot.stopped { background: var(--priority-medium); }
+      .drain-live {
+        min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        color: var(--fg-dim); font: 400 11px var(--font-mono); letter-spacing: 0; text-transform: none;
       }
-      .auto-drain-controls { display: flex; flex-direction: column; gap: 12px; }
-      .auto-drain-controls-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-      .auto-drain-controls-fields { display: flex; flex-wrap: wrap; gap: 14px 28px; min-width: 0; }
-      .auto-drain-control { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-      .auto-drain-control .operation-field-label { margin: 0; }
-      .auto-drain-control-note { max-width: 320px; color: var(--fg-dim); font: 10px/1.5 var(--font-sans); }
-      .auto-drain-segment {
-        display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border);
-        border-radius: 6px; background: var(--bg); width: fit-content;
+      .drain-idle { color: var(--fg-mute); }
+      #auto-drain-body { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-width: 0; }
+      /* The panel's "Updated." / "Refreshing…" note stays out of the card;
+         only the first load and a failed refresh show. */
+      #auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
+      #auto-drain-body .operations-readonly-note { margin: 0; }
+      .drain-durations {
+        display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; padding: 2px;
+        border: 1px solid var(--border); border-radius: 5px; background: var(--bg);
       }
-      .auto-drain-segment-option {
-        min-height: 26px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent;
-        color: var(--fg-dim); font: 11px var(--font-mono); cursor: pointer;
+      .drain-duration {
+        min-width: 0; min-height: 26px; padding: 0; border: 0; border-radius: 3px;
+        background: transparent; color: var(--fg-dim); font-size: 11px; cursor: pointer;
       }
-      .auto-drain-segment-option:hover { color: var(--fg); }
-      .auto-drain-segment-option.selected { background: var(--border); color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg-mute); }
-      .auto-drain-concurrency { width: 200px; }
-      .auto-drain-complete { display: flex; align-items: center; gap: 8px; min-height: 30px; color: var(--fg); font: 11px var(--font-sans); cursor: pointer; }
-      .auto-drain-complete input { margin: 0; accent-color: var(--accent); }
-      .auto-drain-muted { color: var(--fg-dim); }
-      .auto-drain-controls-action { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: 0 0 auto; }
-      .auto-drain-outcome { color: var(--fg-dim); font: 11px/1.6 var(--font-sans); text-align: right; }
-      .auto-drain-outcome strong { color: var(--fg); font-weight: 500; }
-      .auto-drain-snapshot-note {
-        margin: 0; padding-top: 12px; border-top: 1px solid var(--hair);
-        color: var(--fg-dim); font: 11px/1.5 var(--font-sans);
+      .drain-duration:hover { color: var(--fg); }
+      .drain-duration.selected { background: var(--border); color: var(--fg); }
+      .drain-duration:focus-visible, .drain-step:focus-visible, .drain-stepper-value:focus-visible,
+      .drain-complete:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .drain-settings { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: end; }
+      .drain-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+      .drain-field-label { color: var(--fg-mute); font: 600 9px var(--font-sans); text-transform: uppercase; letter-spacing: .08em; }
+      .drain-stepper {
+        display: inline-flex; align-items: stretch; height: 28px; overflow: hidden;
+        border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
       }
-      .auto-drain-last-run { display: block; margin: 10px 0 0; }
-      /* [ORB-12728] The live window's stop control sits under the Start
-         button with the coordinator run it would act on, so the operator
-         reads what they are stopping before confirming. */
-      .auto-drain-live-window { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; color: var(--fg-dim); font: 11px/1.6 var(--font-sans); }
-      .auto-drain-slots { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
-      .auto-drain-slots-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-      .auto-drain-slots-title { display: flex; align-items: baseline; gap: 10px; }
-      .auto-drain-slots-title .operation-field-label { margin: 0; }
-      .auto-drain-slots-count { color: var(--fg); font-size: 12px; }
-      /* Slots run up to twenty with distributed drain; auto-fill wraps them
-         into rows instead of squeezing a fixed column count. */
-      .auto-drain-slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-      .auto-drain-slot {
-        display: flex; flex-direction: column; gap: 3px; min-width: 0; min-height: 44px;
-        padding: 8px 10px; border: 1px solid var(--border); border-radius: 5px; box-sizing: border-box;
+      .drain-step { width: 26px; padding: 0; border: 0; background: transparent; color: var(--fg-dim); font: 13px var(--font-mono); cursor: pointer; }
+      .drain-step:hover { color: var(--fg); background: var(--bg-elev); }
+      .drain-stepper-value {
+        width: 38px; min-width: 0; padding: 0; border: 0; border-left: 1px solid var(--hair); border-right: 1px solid var(--hair);
+        background: transparent; color: var(--fg); font-size: 12px; text-align: center; appearance: textfield; -moz-appearance: textfield;
       }
-      .auto-drain-slot.free { justify-content: center; border-style: dashed; color: var(--fg-dim); font: 11px var(--font-sans); }
-      .auto-drain-slot.occupied { background: rgba(6, 182, 212, 0.08); border-color: rgba(6, 182, 212, 0.45); }
-      .auto-drain-slot.occupied.lock_waiting { background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.45); }
-      .auto-drain-slot.occupied.post_implementation { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.45); }
-      .auto-drain-slot.occupied.unknown { background: transparent; border-color: var(--fg-mute); }
-      .auto-drain-slot-tasks { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; font: 12px var(--font-mono); }
-      .auto-drain-slot-phase { color: var(--state-running); font-size: 10px; }
-      .auto-drain-slot.lock_waiting .auto-drain-slot-phase { color: var(--priority-medium); }
-      .auto-drain-slot.post_implementation .auto-drain-slot-phase { color: var(--state-success); }
-      .auto-drain-slot.unknown .auto-drain-slot-phase { color: var(--fg-dim); }
-      .auto-drain-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-      .auto-drain-stat {
-        display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px;
-        border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elev);
+      .drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+      .drain-stepper-value::placeholder { color: var(--fg-mute); }
+      .drain-complete {
+        display: flex; align-items: center; gap: 7px; min-width: 0; height: 28px; padding: 0 8px; box-sizing: border-box;
+        border: 1px solid var(--border); border-radius: 4px; color: var(--fg-dim); font: 11px var(--font-sans); cursor: pointer;
       }
-      .auto-drain-stat .operation-field-label { margin: 0; }
-      .auto-drain-stat.eligible { border-left: 3px solid var(--state-success); }
-      .auto-drain-stat.locked { border-left: 3px solid var(--priority-medium); }
-      .auto-drain-stat.dependency { border-left: 3px solid var(--fg-dim); }
-      .auto-drain-stat-value { color: var(--fg); font-size: 20px; line-height: 1.2; }
-      .auto-drain-stat-note { color: var(--fg-dim); font: 10px/1.4 var(--font-sans); overflow-wrap: anywhere; }
-      .auto-drain-readiness { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin-top: 16px; }
-      .auto-drain-readiness-title {
-        margin: 0; color: var(--fg); font: 12px var(--font-sans);
-        text-transform: uppercase; letter-spacing: .08em;
+      .drain-complete span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .drain-complete input { flex: 0 0 auto; margin: 0; accent-color: var(--priority-medium); }
+      .drain-complete.on { border-color: var(--priority-medium); color: var(--fg); }
+      .drain-complete:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+      .drain-actions { display: flex; gap: 8px; min-width: 0; }
+      .operation-button.drain-start { flex: 1 1 auto; min-width: 0; min-height: 32px; overflow: hidden; text-overflow: ellipsis; }
+      .operation-button.drain-stop { flex: 0 0 auto; min-height: 32px; color: var(--state-failed); border-color: var(--state-failed); }
+      .operation-button.drain-stop:hover:not(:disabled) { color: var(--state-failed); border-color: var(--state-failed); background: rgba(239, 68, 68, 0.08); }
+      .drain-slots { margin: -4px 0 0; color: var(--fg-dim); font-size: 10.5px; }
+      .drain-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+      .drain-stat {
+        display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 8px;
+        border: 1px solid var(--border); border-radius: 4px; background: var(--bg);
       }
-      .auto-drain-group { padding: 0; overflow: hidden; }
-      .auto-drain-group-head {
-        display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-        padding: 10px 14px; border-bottom: 1px solid var(--hair);
+      .drain-stat-label {
+        display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap;
+        color: var(--fg-dim); font: 600 9px var(--font-sans); text-transform: uppercase; letter-spacing: .04em;
       }
-      .auto-drain-group:has(> .auto-drain-group-head:last-child) .auto-drain-group-head { border-bottom: 0; }
-      .auto-drain-group-title { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--fg); font: 12px var(--font-sans); }
-      .auto-drain-group-title strong { font-weight: 600; }
-      .auto-drain-group-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); flex: 0 0 auto; }
-      .auto-drain-group-dot.eligible { background: var(--state-success); }
-      .auto-drain-group-dot.locked { background: var(--priority-medium); }
-      .auto-drain-group-count, .auto-drain-group-hint { color: var(--fg-dim); font-size: 11px; }
-      .auto-drain-group-hint { font-family: var(--font-sans); }
-      .auto-drain-group-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
-      .auto-drain-group-toggle {
-        display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px;
-        border: 1px solid var(--border); border-radius: 4px; background: transparent;
-        color: var(--fg-dim); font: 11px var(--font-sans); cursor: pointer;
-      }
-      .auto-drain-group-toggle:hover { border-color: var(--accent); color: var(--accent); }
-      .auto-drain-group-rows { padding-top: 4px; }
-      .auto-drain-group-rows[hidden] { display: none; }
-      .auto-drain-rows { margin: 0; padding: 0; list-style: none; min-width: 0; }
-      .auto-drain-row {
-        display: grid; align-items: center; gap: 6px 12px; min-width: 0;
-        padding: 9px 14px; border-bottom: 1px solid var(--hair); font: 11px var(--font-mono);
-      }
-      .auto-drain-row:last-child { border-bottom: 0; }
-      .auto-drain-row-eligible { grid-template-columns: 24px minmax(120px, auto) minmax(0, 1fr) auto; }
-      .auto-drain-row-locked { grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr); align-items: start; }
-      .auto-drain-row-index { color: var(--fg-mute); }
-      .auto-drain-row-label { color: var(--fg); font-family: var(--font-sans); }
-      .auto-drain-row-reason { color: var(--fg-dim); font-size: 10px; }
-      .auto-drain-row-reason.eligible { color: var(--state-success); }
-      .auto-drain-row-detail { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-      .auto-drain-row-note { color: var(--fg-dim); font: 10px/1.5 var(--font-sans); overflow-wrap: anywhere; }
-      .auto-drain-holder {
-        display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 14px;
-        background: var(--bg); border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair);
-        color: var(--fg-dim); font: 11px var(--font-sans);
-      }
-      .auto-drain-holder-phase { font-size: 10px; color: var(--fg-dim); }
-      .auto-drain-holder-phase.running { color: var(--state-running); }
-      .auto-drain-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
-      .auto-drain-chip {
-        max-width: 100%; padding: 2px 7px; border: 1px solid var(--border); border-radius: 3px;
-        color: var(--fg); font-size: 10px; overflow-wrap: anywhere; cursor: default;
-      }
-      .auto-drain-chips-more { display: contents; }
-      .auto-drain-chips-more > summary { list-style: none; border-style: dashed; color: var(--accent); cursor: pointer; }
-      .auto-drain-chips-more > summary::-webkit-details-marker { display: none; }
-      .auto-drain-chain-lead { margin: 0; color: var(--fg); font: 11px/1.6 var(--font-sans); overflow-wrap: anywhere; }
-      .auto-drain-chain-why { color: var(--fg-dim); }
-      .auto-drain-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font: 10px var(--font-mono); color: var(--fg-dim); }
-      .auto-drain-chain-node { display: inline-flex; flex-wrap: wrap; gap: 0 2px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 3px; }
-      .auto-drain-chain-node.root { border-color: var(--priority-medium); }
-      .auto-drain-chain-node.root .auto-drain-reference { color: var(--priority-medium); }
-      .auto-drain-chain-sep { color: var(--fg-mute); }
-      .auto-drain-task-list { min-width: 0; margin: 0; padding: 0; list-style: none; }
-      .auto-drain-task { min-width: 0; }
-      .auto-drain-task-head {
-        display: grid; grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr);
-        align-items: center; gap: 8px 12px; min-width: 0;
-      }
-      .auto-drain-reference { color: var(--accent); overflow-wrap: anywhere; }
-      .auto-drain-reason { min-width: 0; color: var(--fg); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
-      .auto-drain-missing-id { color: var(--state-failed); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
-      .auto-drain-evidence {
-        display: flex; flex-direction: column; gap: 5px; min-width: 0;
-        margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair);
-      }
-      .auto-drain-evidence-row {
-        display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; min-width: 0;
-      }
-      .auto-drain-evidence-label {
-        color: var(--fg-dim); font: 9px/1.5 var(--font-sans); text-transform: uppercase; letter-spacing: .08em;
-      }
-      .auto-drain-evidence-values { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-      .auto-drain-evidence-value { min-width: 0; color: var(--fg-dim); font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
-      .auto-drain-empty { padding: 10px 0; }
+      .drain-stat-label span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .drain-stat-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+      .drain-stat.eligible .drain-stat-dot { background: var(--state-success); }
+      .drain-stat.blocked .drain-stat-dot { background: var(--priority-medium); }
+      .drain-stat-value { color: var(--fg); font-size: 18px; line-height: 1.2; }
+      .drain-stat.blocked.nonzero .drain-stat-value { color: var(--priority-medium); }
+      .drain-blocked { display: flex; flex-direction: column; gap: 7px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+      .drain-blocked-row { min-width: 0; padding-left: 8px; border-left: 2px solid var(--priority-medium); }
+      .drain-blocked-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; font-size: 11px; }
+      .drain-blocked-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .drain-blocked-state { flex: 0 0 auto; color: var(--fg-dim); font-size: 10px; }
+      .drain-blocked-state.running { color: var(--state-running); }
+      .drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: 10px; }
+      .drain-blocked-more { color: var(--fg-dim); font-size: 10px; }
+      .drain-muted { color: var(--fg-dim); }
+      .drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }
 
       @media (max-width: 900px) {
         .operations-layout { grid-template-columns: 1fr; }
@@ -5360,13 +5288,6 @@
         .operation-row-head { grid-template-columns: minmax(0, 1fr); }
         .operation-card-actions { width: 100%; }
         .operation-mint-warning { overflow-wrap: anywhere; }
-        .auto-drain-task-head, .auto-drain-evidence-row { grid-template-columns: minmax(0, 1fr); }
-        .auto-drain-task-head .operation-state { justify-self: start; }
-        .auto-drain-controls-row { flex-direction: column; }
-        .auto-drain-controls-action { align-items: flex-start; }
-        .auto-drain-outcome { text-align: left; }
-        .auto-drain-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .auto-drain-row-eligible, .auto-drain-row-locked { grid-template-columns: minmax(0, 1fr); }
       }
       @media (max-width: 600px) {
         .operations-layout { display: block; padding: 8px; }
@@ -5376,8 +5297,6 @@
         .operation-card-title > div, .operation-identity { align-items: flex-start; flex-direction: column; }
         .operation-clock-actions, .operation-card-actions { align-items: stretch; }
         .operation-clock-actions > *, .operation-card-actions > * { flex: 1 1 100%; }
-        .auto-drain-summary { grid-template-columns: 1fr; }
-        .auto-drain-concurrency { width: 100%; }
       }
 
       /* ORB-10871: grouped failure incidents (Diagnostics → Incidents).

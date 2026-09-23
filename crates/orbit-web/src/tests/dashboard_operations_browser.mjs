@@ -52,6 +52,7 @@ try {
   });
   await page.evaluate(async () => {
     const { initRouter, initTabs } = await import('/router.js');
+    const { setDockMode } = await import('/log-tail.js');
     let tab = 'operations';
     let diag = 'runs';
     let operations = 'routines';
@@ -65,7 +66,7 @@ try {
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
-      fitLogPanelToViewport: () => {},
+      fitLogPanelToViewport: () => {}, showDrainDock: () => setDockMode('drain'),
       getActiveAuditSubtab: () => 'events', setAuditSubtab: () => {}, applyAuditHashQuery: () => {},
       syncAuditControls: () => {}, buildAuditHash: () => '#audit/events',
       setActiveAuditSubtabFromButton: () => {},
@@ -83,12 +84,8 @@ try {
     await page.evaluate(() => {
       document.querySelectorAll('.operation-details').forEach((node) => { node.open = false; });
     });
-    // Auto-drain is a Work destination now (`.tab`), the other two stay
-    // Operations subtabs; all three must stay reachable and unclipped.
-    for (const tab of ['routines', 'auto-tasks', 'jobs', 'auto-drain']) {
-      const selector = tab === 'auto-drain'
-        ? '.tab[data-tab="auto-drain"]'
-        : `#operations-subtabs .subtab[data-subtab="${tab}"]`;
+    for (const tab of ['routines', 'auto-tasks', 'jobs']) {
+      const selector = `#operations-subtabs .subtab[data-subtab="${tab}"]`;
       await page.click(selector);
       await page.waitForTimeout(200);
       const reachable = await page.evaluate(([name, selector]) => {
@@ -100,32 +97,72 @@ try {
           const box = bounds(node);
           return box.width > 0 && box.height > 0 && box.right > 0 && box.left < window.innerWidth;
         };
-        const clipped = Array.from(panel.querySelectorAll('button, select, .operation-row-head, .operation-clock-summary, .auto-drain-task-head, .auto-drain-evidence-row')).some((node) => {
+        const clipped = Array.from(panel.querySelectorAll('button, select, .operation-row-head, .operation-clock-summary')).some((node) => {
           const box = bounds(node);
           return box.right > window.innerWidth + 1;
         });
-        const readinessRows = name === 'auto-drain' ? panel.querySelectorAll('.auto-drain-task').length : null;
         return {
           subtab: onscreen(button),
           panel: panel && !panel.hidden,
           workspace: workspace && onscreen(workspace),
           clipped,
-          readinessRows,
         };
       }, [tab, selector]);
       if (!reachable.subtab) throw new Error(`${tab} subtab not reachable at ${viewport.name}`);
       if (!reachable.panel) throw new Error(`${tab} panel hidden at ${viewport.name}`);
-      if (tab === 'auto-drain') {
-        const hash = await page.evaluate(() => location.hash);
-        if (hash !== '#auto-drain') throw new Error(`auto-drain did not route to #auto-drain at ${viewport.name}: ${hash}`);
-      }
       if (!reachable.workspace) throw new Error(`workspace selector not reachable at ${viewport.name} / ${tab}`);
       if (reachable.clipped) throw new Error(`Clipped Operations control at ${viewport.name} / ${tab}`);
-      if (tab === 'auto-drain' && reachable.readinessRows !== 9) throw new Error(`Auto-drain diagnostics missing at ${viewport.name}: ${reachable.readinessRows}`);
       await assertNoOverflow(`${viewport.name} / ${tab}`);
       await page.screenshot({ path: path.join(evidence, `${tab}-${viewport.name}.png`), fullPage: true });
     }
   }
+
+  // ORB-12898: the retired #auto-drain destination opens Tasks with the Drain
+  // dock, and the card fits the dock at its 336px minimum (and the narrower
+  // mid-width column) with no horizontal scroll.
+  await page.evaluate(async () => {
+    const { setDockMode } = await import('/log-tail.js');
+    const { setActiveTab } = await import('/router.js');
+    setDockMode('log');
+    setActiveTab('auto-drain');
+  });
+  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
+  const drainCheck = async (label, dockWidth) => {
+    const result = await page.evaluate((width) => {
+      const layout = document.querySelector('main.tasks-layout');
+      if (width) layout.style.setProperty('--dock-w', `${width}px`); else layout.style.removeProperty('--dock-w');
+      const dock = document.getElementById('side-dock');
+      const card = document.getElementById('auto-drain-panel');
+      const cardBox = card.getBoundingClientRect();
+      const overflowing = Array.from(card.querySelectorAll('*'))
+        .filter((node) => node.getClientRects().length > 0 && node.getBoundingClientRect().right > cardBox.right + 1)
+        .map((node) => node.className || node.tagName);
+      return {
+        mode: dock.dataset.mode,
+        dockWidth: Math.round(dock.getBoundingClientRect().width),
+        cardVisible: cardBox.height > 0,
+        firstPanel: dock.querySelector('.dock-pane[data-pane="drain"] > .panel')?.id,
+        scroll: card.scrollWidth > card.clientWidth + 1,
+        overflowing,
+        durations: card.querySelectorAll('.drain-duration[aria-pressed]').length,
+        text: card.textContent,
+      };
+    }, dockWidth);
+    if (result.mode !== 'drain' || !result.cardVisible) throw new Error(`#auto-drain did not open the Drain dock at ${label}: ${JSON.stringify(result)}`);
+    if (result.firstPanel !== 'auto-drain-panel') throw new Error(`auto-drain card is not the first dock card at ${label}: ${result.firstPanel}`);
+    if (result.scroll || result.overflowing.length) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${result.overflowing}`);
+    if (result.durations !== 6 || !result.text.includes('Blocked by running')) throw new Error(`Drain card incomplete at ${label}: ${result.text}`);
+    await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
+    return result.dockWidth;
+  };
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const minimum = await drainCheck('1440-dock336', 336);
+  if (minimum !== 336) throw new Error(`dock did not sit at its 336px minimum: ${minimum}`);
+  await page.setViewportSize({ width: 900, height: 900 });
+  await drainCheck('900', null);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await drainCheck('375x812', null);
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
   await page.setViewportSize({ width: 375, height: 812 });
   await page.click('.tab[data-tab="tasks"]');
@@ -235,7 +272,7 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, reload, history. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, Drain dock card at 336/900/375, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }

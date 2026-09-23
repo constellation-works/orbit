@@ -40,11 +40,10 @@ function markWorkspaceSelectorScope(fleetWide) {
 // ORB-10444: the top-level nav is exactly these tabs plus the hash-only
 // `run-detail` route. A deprecated tab was retired outright and `scoreboard`,
 // being diagnostics-shaped, now routes as `#diagnostics/scoreboard`.
-// Auto-drain sits under Work beside Tasks: draining is working the backlog,
-// not host management, so it is a destination of its own (`#auto-drain`)
-// rather than an Operations subtab. The old `#operations/auto-drain` hash is
-// still accepted and rewritten so bookmarks keep resolving.
-const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
+// Auto-drain is not a destination: its window card is the Tasks dock's Drain
+// mode (ORB-12898). The retired `#auto-drain` and older
+// `#operations/auto-drain` hashes still resolve, to Tasks with Drain selected.
+const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
@@ -194,12 +193,14 @@ function setConfigSubtabImpl(ctx, name) {
 function setActiveTabImpl(ctx, raw, opts = {}) {
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
-  // Legacy route: auto-drain used to be an Operations subtab.
+  // Legacy routes: auto-drain was a destination, and before that an
+  // Operations subtab. Both open Tasks with the dock in Drain mode.
   let legacyRoute = false;
-  if (head === "operations" && segments[1] === "auto-drain") {
-    head = "auto-drain";
-    segments.splice(1, 1);
+  if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain")) {
+    head = "tasks";
+    segments.splice(1);
     legacyRoute = true;
+    if (ctx.showDrainDock) ctx.showDrainDock();
   }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
@@ -241,8 +242,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       ? "Run detail"
       : top.charAt(0).toUpperCase() + top.slice(1);
   }
-  // Auto-drain shares the Operations panel layout, so it scrolls the same way.
-  document.body.classList.toggle("operations-active", top === "operations" || top === "auto-drain" || top === "config");
+  document.body.classList.toggle("operations-active", top === "operations" || top === "config");
   // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
   // so the remembered-subtab highlight must be muted while another destination
   // is active — otherwise the rail shows two things selected at once. The
@@ -324,14 +324,16 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   }
   const hashChanged = window.location.hash !== hash;
   const shouldUpdateHash = opts.updateHash !== false;
-  if (hashChanged && shouldUpdateHash) {
-    window.location.hash = hash;
-  } else if (hashChanged && legacyRoute && typeof window.history?.replaceState === "function") {
-    // A bookmarked legacy hash is rewritten in place so the address bar and
-    // any copied link name the current route, without a second hashchange.
+  // A bookmarked legacy hash is rewritten in place so the address bar and any
+  // copied link name the current route, without a second hashchange — and so
+  // Back does not land on the legacy hash and redirect forward again.
+  const rewriteInPlace = hashChanged && legacyRoute && typeof window.history?.replaceState === "function";
+  if (rewriteInPlace) {
     window.history.replaceState(null, "", hash);
+  } else if (hashChanged && shouldUpdateHash) {
+    window.location.hash = hash;
   }
-  if (opts.refresh !== false && (!hashChanged || !shouldUpdateHash)) ctx.refreshDashboard();
+  if (opts.refresh !== false && (!hashChanged || !shouldUpdateHash || rewriteInPlace)) ctx.refreshDashboard();
 }
 
 function navigateToRunImpl(ctx, runId, workspaceId = null) {

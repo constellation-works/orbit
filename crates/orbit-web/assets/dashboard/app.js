@@ -6,7 +6,7 @@ import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copy
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
 import { renderScoreboard } from './scoreboard.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './reliability.js';
-import { initLogTail, fitLogPanelToViewport } from './log-tail.js';
+import { initLogTail, fitLogPanelToViewport, setDockMode } from './log-tail.js';
 import { renderDiagnosticsSideCard, renderDiagnostics } from './diagnostics.js';
 import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
@@ -200,6 +200,7 @@ function routerContext() {
     // fetches need).
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fitLogPanelToViewport,
+    showDrainDock: () => setDockMode("drain"),
 
     // audit pass-throughs (re-exported here for router; imported at top of this file)
     applyAuditHashQuery,
@@ -1280,6 +1281,9 @@ function activeRefreshJobs() {
     // /api/tasks/locks is per-workspace; skip it in aggregate mode (the locks
     // panel shows the placeholder rendered above).
     if (!aggregate && !document.hidden) jobs.push(fetchAndRenderTaskLocks());
+    // The dock's Drain card; without a concrete workspace it renders its own
+    // read-only note instead of fetching.
+    jobs.push(fetchAndRenderAutoDrainPane());
     return jobs;
   }
 
@@ -1299,11 +1303,6 @@ function activeRefreshJobs() {
 
   if (activeTab === "operations") {
     jobs.push(fetchAndRenderOperations());
-    return jobs;
-  }
-
-  if (activeTab === "auto-drain") {
-    jobs.push(fetchAndRenderAutoDrainPane());
     return jobs;
   }
 
