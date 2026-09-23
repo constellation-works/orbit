@@ -611,7 +611,7 @@ default_crew = "sol"
 [crews.sol]
 provider = "codex"
 backend = "cli"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 
 [crews.terra]
 provider = "codex"

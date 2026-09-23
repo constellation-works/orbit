@@ -1029,7 +1029,7 @@ fn step_failure_recovery_requires_a_middleweight_config() {
     let ctx = recovery_exec_ctx(&host);
     let recovery = step_failure_recovery_agent_loop_activity(recovery_agent_loop_spec(
         Provider::Codex,
-        Some("gpt-5.6-sol"),
+        Some("gpt-6-sol"),
     ));
 
     let err = crew_overridden_recovery_spec(&recovery, &ctx, &json!({ "system_crew": true }))

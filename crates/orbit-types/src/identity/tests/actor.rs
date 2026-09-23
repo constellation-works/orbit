@@ -24,6 +24,9 @@ mod mapping {
     fn provider_from_model_maps_known_prefixes() {
         assert_eq!(provider_from_model("claude-sonnet-4-7"), Some("anthropic"));
         assert_eq!(provider_from_model("gpt-5.5"), Some("openai"));
+        for model in ["gpt-6-sol", "gpt-6-luna"] {
+            assert_eq!(provider_from_model(model), Some("openai"), "{model}");
+        }
         assert_eq!(provider_from_model("gemini-3-pro"), Some("google"));
         assert_eq!(provider_from_model("ollama:mistral"), Some("ollama"));
         assert_eq!(provider_from_model("grok-4"), Some("xai"));

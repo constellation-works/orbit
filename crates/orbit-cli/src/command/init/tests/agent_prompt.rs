@@ -41,7 +41,7 @@ fn declining_lists_seeded_crews_by_name_and_returns_the_chosen_one() {
     assert_eq!(result.as_deref(), Some("astra"));
     let transcript = prompter.transcript();
     assert!(transcript.contains(
-        "Choose the default crew:\n\n   1. opus         claude       opus\n   2. astra        codex        gpt-6-astra\n   3. fable        claude       fable\n   4. luna         codex        gpt-5.6-luna\n   5. sol          codex        gpt-5.6-sol\n   6. sonnet       claude       sonnet\n   7. terra        codex        gpt-5.6-terra"
+        "Choose the default crew:\n\n   1. opus         claude       opus\n   2. astra        codex        gpt-6-astra\n   3. fable        claude       fable\n   4. luna         codex        gpt-6-luna\n   5. sol          codex        gpt-6-sol\n   6. sonnet       claude       sonnet\n   7. terra        codex        gpt-5.6-terra"
     ), "{transcript}");
     assert!(!transcript.contains(" 8."), "{transcript}");
     assert_eq!(transcript.matches("Please enter 1-7.").count(), 3);
@@ -120,11 +120,11 @@ fn system_crew_prompt_offers_only_detected_cheap_tier_crews_by_name() {
     assert_eq!(system, "sonnet");
     let transcript = prompter.transcript();
     assert!(transcript.contains(
-        "   1. luna         codex        gpt-5.6-luna\n   2. sonnet       claude       sonnet\n   3. grok         grok         grok-4.7\n   4. gemini       gemini       gemini-3.8-flash"
+        "   1. luna         codex        gpt-6-luna\n   2. sonnet       claude       sonnet\n   3. grok         grok         grok-4.7\n   4. gemini       gemini       gemini-3.8-flash"
     ), "{transcript}");
     assert!(transcript.contains("System crew [1]: "));
     assert!(!transcript.contains("Custom"));
-    assert!(!transcript.contains("gpt-5.6-sol"));
+    assert!(!transcript.contains("gpt-6-sol"));
     assert!(!transcript.contains("opus"));
     assert!(!transcript.contains("terra"));
     assert!(!transcript.contains("QA crew"));

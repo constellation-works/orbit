@@ -111,7 +111,7 @@ fn projection_separates_requested_resolved_and_actual_activity_identity() {
     let mut run = test_run(JobRunState::Success);
     run.input = Some(json!({ "crew": "luna" }));
     run.resolved_crew = Some("luna".to_string());
-    run.crew_model = Some("gpt-5.6-luna".to_string());
+    run.crew_model = Some("gpt-6-luna".to_string());
     run.steps = vec![
         JobRunStep {
             step_index: 0,
@@ -166,13 +166,13 @@ fn projection_separates_requested_resolved_and_actual_activity_identity() {
             ActivityInvocationEvidence {
                 activity_id: "implement".to_string(),
                 provider: "codex".to_string(),
-                model: Some("gpt-5.6-luna".to_string()),
+                model: Some("gpt-6-luna".to_string()),
             },
         ],
     );
 
     assert_eq!(value["requested_crew"], "luna");
-    assert_eq!(value["resolved_run_crew"]["model"], "gpt-5.6-luna");
+    assert_eq!(value["resolved_run_crew"]["model"], "gpt-6-luna");
     assert_eq!(value["activity_provenance"][0]["actual_status"], "recorded");
     assert_eq!(
         value["activity_provenance"][0]["invocations"][0]["provider"],

@@ -78,7 +78,7 @@ fn cli_agent_envelope_records_canonical_actor_family() {
     let _env = test_env::unset(AGENT_IDENTITY_ENV.iter().copied());
     // SAFETY: the shared test-env guard serializes and restores this mutation.
     unsafe {
-        std::env::set_var("ORBIT_AGENT_MODEL", "gpt-5.6-sol");
+        std::env::set_var("ORBIT_AGENT_MODEL", "gpt-6-sol");
     }
 
     let actor = ActorIdentity::from_env();

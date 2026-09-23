@@ -154,7 +154,7 @@ fn set_rejects_unknown_key_before_asking_about_seeding_a_missing_workspace_confi
 fn write_sol_crew(path: &std::path::Path) {
     fs::write(
         path,
-        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n# hand-authored comment\n",
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\n# hand-authored comment\n",
     )
     .expect("write sol crew config");
 }
@@ -172,7 +172,7 @@ fn set_crew_effort_on_existing_sol_crew_round_trips() {
         fs::read_to_string(workspace_root.join("config.toml")).expect("read workspace config");
     assert!(saved.contains("effort = \"high\""), "{saved}");
     assert!(saved.contains("# hand-authored comment"), "{saved}");
-    assert!(saved.contains("model = \"gpt-5.6-sol\""), "{saved}");
+    assert!(saved.contains("model = \"gpt-6-sol\""), "{saved}");
 }
 
 #[test]

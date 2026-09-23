@@ -189,7 +189,7 @@ const MODEL_SHORTHAND_ALIASES: &[(&str, &str)] = &[("haiku", "claude")];
 /// 2. A known non-agent alias (`admin`, `hook`, `human`, `unknown`, …).
 /// 3. A bare agent family name (`claude`) → agent with no model recorded.
 /// 4. A model string whose family is inferable (`claude-opus-5`, `opus`,
-///    `gpt-5.6-luna`) → agent with family *and* model.
+///    `gpt-6-luna`) → agent with family *and* model.
 /// 5. Anything else → agent with an unknown family, keeping the label as the
 ///    model. Every label reaching this point was produced by an attribution
 ///    path that had a model or family in hand, so treating it as an

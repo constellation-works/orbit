@@ -16,9 +16,9 @@ Delivery (workflow.*)        how tasks are shipped
   xhard_complexity_crews           []                    default  Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
 
 Crews (crews.*)              2 defined, from built-in and global
-  NAME    FROM      PROVIDER  MODEL        EFFORT  TAGS  DESCRIPTION
-  sol     global    codex     gpt-5.6-sol  medium  –  ← workflow.default_crew
-  system  built-in  codex     gpt-5.6-sol  medium  –  ← workflow.system_crew
+  NAME    FROM      PROVIDER  MODEL      EFFORT  TAGS  DESCRIPTION
+  sol     global    codex     gpt-6-sol  medium  –  ← workflow.default_crew
+  system  built-in  codex     gpt-6-sol  medium  –  ← workflow.system_crew
 
 Execution (execution.*)      how agent subprocesses run
   codex.sandbox                    workspace-write       default  Codex sandbox mode: one of read-only, workspace-write, danger-full-access.

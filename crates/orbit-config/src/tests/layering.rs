@@ -441,7 +441,7 @@ fn effective_config_projects_configured_crew_effort_with_layer_provenance() {
 default_crew = "sol"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 effort = "medium"
 
@@ -516,7 +516,7 @@ fn a_persisted_colon_named_crew_is_refused_by_file_and_repaired_by_renaming_it()
 default_crew = "sol"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 
 [crews."gpt-5:codex"]
@@ -528,7 +528,7 @@ provider = "codex"
 default_crew = "sol"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 
 [crews."gpt-5-codex"]

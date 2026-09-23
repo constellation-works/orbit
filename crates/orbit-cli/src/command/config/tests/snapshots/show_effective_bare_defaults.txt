@@ -24,11 +24,11 @@ Crews (crews.*)              15 defined, all from built-in
   fable        built-in  claude       fable                        –       –
   gemini       built-in  gemini       gemini-3.8-flash             –       –
   grok         built-in  grok         grok-4.7                     –       –
-  luna         built-in  codex        gpt-5.6-luna                 –       –
+  luna         built-in  codex        gpt-6-luna                   –       –
   opencode     built-in  opencode     anthropic/claude-sonnet-4-5  –       –
   opus         built-in  claude       opus                         –       –  ← workflow.default_crew
   pi           built-in  pi           sonnet                       –       –
-  sol          built-in  codex        gpt-5.6-sol                  –       –
+  sol          built-in  codex        gpt-6-sol                    –       –
   sonnet       built-in  claude       sonnet                       –       –
   system       built-in  claude       sonnet                       –       –  ← workflow.system_crew
   terra        built-in  codex        gpt-5.6-terra                –       –

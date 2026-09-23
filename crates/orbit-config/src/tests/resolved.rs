@@ -62,9 +62,9 @@ fn built_in_crews_use_standard_model_specific_names() {
         ("opus", "claude", "opus"),
         ("sonnet", "claude", "sonnet"),
         ("fable", "claude", "fable"),
-        ("sol", "codex", "gpt-5.6-sol"),
+        ("sol", "codex", "gpt-6-sol"),
         ("terra", "codex", "gpt-5.6-terra"),
-        ("luna", "codex", "gpt-5.6-luna"),
+        ("luna", "codex", "gpt-6-luna"),
         ("astra", "codex", "gpt-6-astra"),
         ("gemini", "gemini", "gemini-3.8-flash"),
         ("antigravity", "antigravity", "gemini-3.8-flash-high"),
@@ -133,7 +133,7 @@ candidates = ["claude", "codex", "gemini"]
 
 [duel.models]
 claude = "opus"
-codex = "gpt-5.6-sol"
+codex = "gpt-6-sol"
 gemini = "pro"
 "#,
     )
@@ -749,14 +749,14 @@ fn runtime_log_rotation_accepts_valid_values() {
 #[test]
 fn an_absent_system_crew_resolves_onto_the_configured_system_crew() {
     let resolved = load_config(
-        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-5.6-luna\"\n\n[crews.qa]\nprovider = \"codex\"\nmodel = \"gpt-5.6-terra\"\n",
+        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-6-luna\"\n\n[crews.qa]\nprovider = \"codex\"\nmodel = \"gpt-5.6-terra\"\n",
     )
     .expect("a config predating the system crew must load");
 
     let system = resolved.crews.get("system").expect("system crew resolves");
     assert_eq!(system.assignment.provider, "codex");
     assert_eq!(
-        system.assignment.model, "gpt-5.6-luna",
+        system.assignment.model, "gpt-6-luna",
         "the configured system_crew must win over the qa fallback"
     );
 }
@@ -768,7 +768,7 @@ fn an_absent_system_crew_resolves_onto_the_configured_system_crew() {
 #[test]
 fn the_seeded_shape_aliases_system_onto_the_named_system_crew() {
     let seeded = load_config(
-        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\nlow_complexity_crews = []\nmedium_complexity_crews = []\nhard_complexity_crews = []\nxhard_complexity_crews = []\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.sonnet]\nprovider = \"claude\"\nmodel = \"sonnet\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-5.6-luna\"\n",
+        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\nlow_complexity_crews = []\nmedium_complexity_crews = []\nhard_complexity_crews = []\nxhard_complexity_crews = []\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.sonnet]\nprovider = \"claude\"\nmodel = \"sonnet\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-6-luna\"\n",
     )
     .expect("the seeded shape must load");
 
@@ -776,11 +776,11 @@ fn the_seeded_shape_aliases_system_onto_the_named_system_crew() {
     let system = seeded.crews.get("system").expect("system crew resolves");
     assert_eq!(system.name, "system");
     assert_eq!(system.assignment.provider, "codex");
-    assert_eq!(system.assignment.model, "gpt-5.6-luna");
+    assert_eq!(system.assignment.model, "gpt-6-luna");
     assert!(!seeded.crews.contains_key("qa"));
 
     let explicit = load_config(
-        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-5.6-luna\"\n\n[crews.system]\nprovider = \"claude\"\nmodel = \"sonnet\"\n",
+        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-6-luna\"\n\n[crews.system]\nprovider = \"claude\"\nmodel = \"sonnet\"\n",
     )
     .expect("a pre-existing config with an explicit system table must load");
 
@@ -818,7 +818,7 @@ fn an_absent_system_crew_resolves_onto_the_qa_crew() {
 #[test]
 fn an_explicit_system_crew_is_not_overwritten_by_the_qa_alias() {
     let resolved = load_config(
-        "[workflow]\ndefault_crew = \"opus\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.system]\nprovider = \"codex\"\nmodel = \"gpt-5.6-luna\"\n\n[crews.qa]\nprovider = \"claude\"\nmodel = \"sonnet\"\n",
+        "[workflow]\ndefault_crew = \"opus\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.system]\nprovider = \"codex\"\nmodel = \"gpt-6-luna\"\n\n[crews.qa]\nprovider = \"claude\"\nmodel = \"sonnet\"\n",
     )
     .expect("config defining both crews must load");
 
@@ -827,7 +827,7 @@ fn an_explicit_system_crew_is_not_overwritten_by_the_qa_alias() {
         .get("system")
         .expect("system crew is defined");
     assert_eq!(system.assignment.provider, "codex");
-    assert_eq!(system.assignment.model, "gpt-5.6-luna");
+    assert_eq!(system.assignment.model, "gpt-6-luna");
     assert_eq!(resolved.crews.get("qa").expect("qa stays").name, "qa");
 }
 

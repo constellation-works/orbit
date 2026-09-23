@@ -3644,7 +3644,7 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
     // Author the task while the crew exists, the way its owning machine would.
     std::fs::write(
         &config_path,
-        format!("{baseline}\n[crews.remote-only]\nprovider = \"codex\"\nmodel = \"gpt-5.6-sol\"\n"),
+        format!("{baseline}\n[crews.remote-only]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\n"),
     )
     .expect("define the authoring host's crew");
     let add_input = json!({

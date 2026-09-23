@@ -538,7 +538,7 @@ fn every_registry_row_declares_a_section_and_a_unique_order() {
 }
 
 fn sol_crew_document() -> &'static str {
-    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n# keep this comment\n"
+    "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\n# keep this comment\n"
 }
 
 #[test]
@@ -573,7 +573,7 @@ fn set_crew_effort_round_trips_and_preserves_unrelated_toml() {
     assert!(saved.contains("effort = \"high\""), "{saved}");
     assert!(saved.contains("# keep this comment"), "{saved}");
     assert!(saved.contains("default_crew = \"sol\""), "{saved}");
-    assert!(saved.contains("model = \"gpt-5.6-sol\""), "{saved}");
+    assert!(saved.contains("model = \"gpt-6-sol\""), "{saved}");
 
     let reopened = ConfigStore::open(ConfigScope::Workspace, &path).expect("reopen store");
     assert_eq!(
@@ -590,7 +590,7 @@ fn hand_authored_crew_effort_is_readable_without_config_set() {
     let path = config_path(dir.path());
     fs::write(
         &path,
-        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\neffort = \"high\"\n",
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\neffort = \"high\"\n",
     )
     .expect("write config");
 
@@ -836,7 +836,7 @@ fn exists_on_disk_and_explicit_value_for_missing_and_present_keys() {
     let present_path = config_path(present_dir.path());
     fs::write(
         &present_path,
-        "[workflow]\ndefault_crew = \"sol\"\n\n[scoring]\nenabled = false\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n",
+        "[workflow]\ndefault_crew = \"sol\"\n\n[scoring]\nenabled = false\n\n[crews.sol]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\n",
     )
     .expect("write config");
 
@@ -862,7 +862,7 @@ fn exists_on_disk_and_explicit_value_for_missing_and_present_keys() {
         present_store
             .explicit_value("crews.sol.model")
             .expect("query crew model"),
-        Some(serde_json::json!("gpt-5.6-sol"))
+        Some(serde_json::json!("gpt-6-sol"))
     );
     assert!(!present_store.is_key_set("crews.sol.effort"));
     assert_eq!(

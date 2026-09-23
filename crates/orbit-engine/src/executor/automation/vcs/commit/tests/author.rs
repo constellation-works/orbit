@@ -147,7 +147,7 @@ fn git_commit_per_task_preserves_orchestration_attribution_in_the_source_message
 
     let mut task = task_with_file("T1", "Implement one task", "src/task.txt", "gpt-5.6-terra");
     task.orchestrator = Some("sol".to_string());
-    task.created_by = Some("gpt-5.6-sol".to_string());
+    task.created_by = Some("gpt-6-sol".to_string());
     let host =
         CommitTestHost::new(vec![task], workspace.to_path_buf()).with_crew_model("gpt-5.6-terra");
     let input = json!({

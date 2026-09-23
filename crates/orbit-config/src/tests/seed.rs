@@ -111,9 +111,9 @@ fn codex_only_seeds_the_codex_family() {
 
     assert_eq!(crew_names(&parsed), vec!["astra", "luna", "sol", "terra"]);
     assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
-    assert_crew(&parsed, "sol", "codex", "gpt-5.6-sol");
+    assert_crew(&parsed, "sol", "codex", "gpt-6-sol");
     assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
-    assert_crew(&parsed, "luna", "codex", "gpt-5.6-luna");
+    assert_crew(&parsed, "luna", "codex", "gpt-6-luna");
     assert_workflow_str(&parsed, "default_crew", Some("astra"));
     assert_workflow_str(&parsed, "system_crew", Some("luna"));
 }

@@ -118,7 +118,7 @@ fn redact_all_preserves_knowledge_record_identifiers_and_paths() {
         "commit 238a89cbec9abf478d13ed2bf3ca7d28a722c21c\n",
         "run jrun-20260802-2012-4 task ORB-12345\n",
         "worktree /srv/worktrees/jrun-20260802-2012-4/src/module\n",
-        "model gpt-5.6-sol\n",
+        "model gpt-6-sol\n",
         "blob sha256:4f1c2a709db7089bd3da48e35a3a2f77d6c0f41d8d792f0dcb163a7d89fd53e0"
     );
 

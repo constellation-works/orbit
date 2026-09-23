@@ -142,7 +142,7 @@ system_crew = "not-a-real-crew"
 
 [crews.sol]
 provider = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 "#,
     )
     .expect("write crew config with no system entry");

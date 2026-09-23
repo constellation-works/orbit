@@ -298,7 +298,7 @@ model = "opus"
 <div class="ose-panel" id="ose-panel-codex">
 <dl class="ose-facts">
 <dt>Binary on <code>PATH</code></dt><dd><code>codex</code></dd>
-<dt>Example model</dt><dd><code>gpt-5.6-sol</code></dd>
+<dt>Example model</dt><dd><code>gpt-6-sol</code></dd>
 <dt>Reasoning effort</dt><dd>Supported — the full crew vocabulary, rendered as <code>codex exec --config model_reasoning_effort="&lt;value&gt;"</code>.</dd>
 </dl>
 <fieldset class="ose-field">
@@ -319,7 +319,7 @@ default_crew = "sol"
 
 [crews.sol]
 provider = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 <span class="ose-eff" data-effort="low">effort = "low"
 </span><span class="ose-eff" data-effort="medium">effort = "medium"
 </span><span class="ose-eff" data-effort="high">effort = "high"
@@ -613,7 +613,7 @@ an explicit crew on the activity input first, then the task's `crew` field, then
 ```toml
 [crews.sol]
 provider = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 effort = "high"
 ```
 
