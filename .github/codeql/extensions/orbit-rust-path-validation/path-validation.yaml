@@ -4,6 +4,18 @@ extensions:
       extensible: barrierModel
     data:
       - [
+          "orbit_core::runtime::plugin_host::validated_pin_file_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_tools::plugin::callback::validated_callback_session_dir",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_core::bootstrap::global_defaults::validated_stamp_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
@@ -243,6 +255,13 @@ extensions:
         ]
       - [
           "orbit_automation::routines::loader::routines_origin_dir_is_contained",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_tools::plugin::callback::is_token_hex",
           "Argument[0]",
           "true",
           "path-injection",

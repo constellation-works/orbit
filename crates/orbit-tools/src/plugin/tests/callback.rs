@@ -180,6 +180,33 @@ fn ancestry_ignores_a_live_pid_with_a_different_starttime() {
     );
 }
 
+/// A callback directory redirected outside the host root must not expose an
+/// otherwise valid ancestry record from that external directory.
+#[cfg(unix)]
+#[test]
+fn ancestry_scan_refuses_a_callback_directory_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let key = orbit_common::process::ancestry::process_start_key(std::process::id())
+        .expect("current process start key");
+    write_record(outside.path(), "escaped", key.pid, key.starttime);
+    let state = root.path().join("state");
+    std::fs::create_dir(&state).expect("create state directory");
+    symlink(
+        outside.path().join("state/plugin-callbacks"),
+        state.join("plugin-callbacks"),
+    )
+    .expect("redirect callback directory outside host root");
+    let _env = clear_token();
+
+    assert_eq!(
+        resolve_plugin_callback(root.path(), legacy_on).expect("resolve"),
+        None
+    );
+}
+
 #[test]
 fn corrupt_record_does_not_hide_a_valid_ancestry_session() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -236,6 +263,33 @@ fn a_presented_unknown_token_is_a_missing_credential() {
             .contains("credential is missing or invalid"),
         "{error}"
     );
+}
+
+/// A valid token cannot redirect the retired lookup through a symlink to a
+/// record outside the host callback directory.
+#[cfg(unix)]
+#[test]
+fn retired_token_lookup_does_not_follow_a_record_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let key = orbit_common::process::ancestry::process_start_key(std::process::id())
+        .expect("current process start key");
+    let outside_record = write_record(outside.path(), "redirected", key.pid, key.starttime);
+    let token = outside_record
+        .file_name()
+        .expect("token filename")
+        .to_string_lossy()
+        .into_owned();
+    let callback_dir = root.path().join("state/plugin-callbacks");
+    std::fs::create_dir_all(&callback_dir).expect("create callback directory");
+    symlink(&outside_record, callback_dir.join(&token)).expect("redirect session token");
+    let _env = present_token(&token);
+
+    let error = resolve_plugin_callback(root.path(), legacy_on)
+        .expect_err("the token path must not follow an external record symlink");
+    assert!(matches!(error, OrbitError::Io(_)), "{error}");
 }
 
 #[test]

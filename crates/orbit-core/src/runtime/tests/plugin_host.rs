@@ -9,8 +9,8 @@ use orbit_store::Store;
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{load_plugin_dir, refuse_covering_fs_write_roots, render_fs_roots};
 use orbit_types::plugin::{
-    InstalledPlugin, PLUGIN_HOST_API, PluginGrant, PluginGrantSet, PluginProvenance, PluginStatus,
-    PluginTemplateVars,
+    InstalledPlugin, PIN_FILE_NAME, PLUGIN_HOST_API, PluginGrant, PluginGrantSet, PluginPinFile,
+    PluginProvenance, PluginStatus, PluginTemplateVars,
 };
 use orbit_types::telemetry::AuditEventStatus;
 
@@ -21,8 +21,42 @@ use super::super::plugin_grants::{plugin_grant_witness_path, record_authorized_g
 use super::super::plugin_host::{
     build_plugin_backend, host_api_deprecation, host_plugin_cli_groups, host_plugin_registry,
     load_host_plugins, plugin_backend, plugin_dir_load_count, plugin_install_path,
-    plugin_state_dir, unmet_requirement,
+    plugin_state_dir, read_pin_file, unmet_requirement,
 };
+
+#[test]
+fn read_pin_file_preserves_valid_fixed_leaf_reads() {
+    let root = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        root.path().join(PIN_FILE_NAME),
+        "schemaVersion: 1\nplugins: []\n",
+    )
+    .expect("write pin file");
+
+    assert_eq!(
+        read_pin_file(root.path()).expect("read pin file"),
+        Some(PluginPinFile::default())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn read_pin_file_does_not_follow_a_symlinked_leaf() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let orbit_dir = root.path().join(".orbit");
+    std::fs::create_dir(&orbit_dir).expect("create workspace state directory");
+    let outside = root.path().join(PIN_FILE_NAME);
+    std::fs::write(&outside, "schemaVersion: 1\nplugins: []\n").expect("write target pin file");
+    symlink(&outside, orbit_dir.join(PIN_FILE_NAME)).expect("link pin file outside state root");
+
+    assert_eq!(
+        read_pin_file(&orbit_dir).expect("read pin file"),
+        None,
+        "the fixed pin filename must not redirect through a symlink"
+    );
+}
 
 fn write_plugin(root: &Path, name: &str, requires: &str) {
     write_plugin_verb(root, name, "hello", requires);
