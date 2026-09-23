@@ -20,8 +20,7 @@ First establish the installed and source contracts separately:
 
 ```bash
 orbit --version
-orbit executor list --json
-orbit executor show <existing-executor> --json
+orbit doctor providers --json
 <provider-cli> --help
 <provider-cli> --version
 ```
@@ -87,7 +86,7 @@ The crew chooses the `pi` executor. Orbit renders Pi's documented `--model opena
 
 ```bash
 orbit config show
-orbit executor show pi --json
+orbit doctor providers --json   # the `pi` entry: command, args, launcher, sandbox
 pi --version
 pi --list-models
 ```

@@ -12,8 +12,8 @@ dispatch see [orchestration.md](orchestration.md), and for scheduling it see
 - **Activity** — one named step definition referenced by a job's step list
   (`agent_implement`, `task_pilot`, `git_commit`, `git_push`, `pr_open`,
   `worktree_setup`, `reserve_locks`, ...). Activities are never invoked directly
-  by CLI; a job's step list references them. `orbit activity list` shows the
-  catalog.
+  by CLI; a job's step list references them. `orbit job show <id>` names the
+  activity each step runs.
 - **Run** — one execution, with a `jrun-*` id, a durable state bundle under
   `.orbit/state/job-runs/`, and an audit trail.
 
@@ -267,7 +267,7 @@ group and the safe termination order.
 ## Custom jobs and resource overrides
 
 Use `orbit job show <id>` to inspect effective installed job definitions and
-`orbit activity list` to discover registered activities before changing them.
+the activity each step runs before changing them.
 Workspace resource overrides can shadow shipped global resources, so the
 binary's version alone does not prove which pipeline ran. `orbit workspace sync
 --check` reports managed-resource drift; customized files are preserved for

@@ -279,12 +279,12 @@ fn a_multi_line_value_still_occupies_exactly_one_line() {
     );
 }
 
-// --- ORB-10571: golden coverage for the "table" form of four real list
+// --- ORB-10571: golden coverage for the "table" form of three real list
 // commands, at a pinned width. Each fixture below reproduces the column
 // layout its command builds (cross-checked against the source at the call
 // site named in its doc comment) fed with representative row data; this
 // mirrors `tool_list` above rather than reaching into `command::task`,
-// `command::policy`, or `command::skill`, which have no seam that returns a
+// or `command::skill`, which have no seam that returns a
 // `Table` before printing it.
 
 /// Mirrors `command::task::output::print_task_table`'s default (non
@@ -318,29 +318,6 @@ fn task_list() -> Table {
         "proposed",
         "low",
         "feature",
-    ]);
-    table
-}
-
-/// Mirrors `command::policy::list::PolicyListArgs::execute`'s column set.
-fn policy_list() -> Table {
-    let mut table = Table::new(vec![
-        Column::new("NAME").fixed(),
-        Column::new("DESCRIPTION"),
-        Column::new("FSPROFILES"),
-        Column::new("UPDATED").fixed(),
-    ]);
-    table.add_row(vec![
-        "default",
-        "Default filesystem profile policy for Orbit activity runs",
-        "docs_writer, implementer, pure_compute, reviewer, unrestricted",
-        "2026-08-02 04:06",
-    ]);
-    table.add_row(vec![
-        "strict-review",
-        "Deny-by-default profile for externally sourced review crews",
-        "reviewer",
-        "2026-08-02 09:15",
     ]);
     table
 }
@@ -381,7 +358,7 @@ fn golden_path(file_name: &str) -> PathBuf {
 /// Compare against (or, with `ORBIT_UPDATE_OUTPUT_GOLDENS=1`, overwrite) the
 /// checked-in golden file. Shares its golden directory and its regeneration
 /// env var with `tests/output_goldens.rs`'s plain/`json` coverage of the
-/// same four commands, so one command regenerates every golden in this
+/// same commands, so one command regenerates every golden in this
 /// crate: `ORBIT_UPDATE_OUTPUT_GOLDENS=1 cargo test -p orbit-cli`.
 /// Regenerating is a deliberate act requiring review of the diff — not a
 /// fix for a failing test.
@@ -411,10 +388,9 @@ fn assert_golden(file_name: &str, actual: &str) {
 
 #[test]
 fn table_form_matches_goldens_at_a_pinned_width() {
-    let fixtures: [(&str, Table); 4] = [
+    let fixtures: [(&str, Table); 3] = [
         ("tool_list.table.txt", tool_list()),
         ("task_list.table.txt", task_list()),
-        ("policy_list.table.txt", policy_list()),
         ("skill_list.table.txt", skill_list()),
     ];
     for (file_name, table) in &fixtures {
@@ -434,12 +410,11 @@ fn table_form_matches_goldens_at_a_pinned_width() {
 fn a_zero_width_truncates_nothing_while_a_narrow_width_truncates_with_one_ellipsis() {
     // A single truncated value carries exactly one ellipsis
     // (`overflow_is_truncated_with_a_single_ellipsis` above pins that per
-    // cell); a row with more than one flexible column — `policy_list`'s
-    // DESCRIPTION and FSPROFILES both shrink at this width — can validly
-    // carry more than one ellipsis on the same line, so this test checks
-    // presence, not a per-line count.
+    // cell); a row with more than one flexible column can validly carry more
+    // than one ellipsis on the same line, so this test checks presence, not a
+    // per-line count.
     let mut truncated_anywhere = false;
-    for table in [tool_list(), task_list(), policy_list(), skill_list()] {
+    for table in [tool_list(), task_list(), skill_list()] {
         let untruncated = table.render_at(None, false, true);
         assert!(
             !untruncated.body.contains('…'),

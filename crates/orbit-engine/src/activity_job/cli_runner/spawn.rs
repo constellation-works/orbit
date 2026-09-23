@@ -219,6 +219,19 @@ pub(crate) fn resolve_provider_launcher(
     resolve_provider_launcher_with(provider, program, path.as_deref(), home.as_deref(), cwd)
 }
 
+/// Where dispatch would launch `program` from, or `None` when it would fail
+/// to find a launchable file. Read-only view of [`resolve_provider_launcher`]
+/// for `orbit doctor providers`, so the diagnostic and dispatch share one
+/// lookup policy.
+pub fn locate_provider_launcher(program: &str, cwd: Option<&Path>) -> Option<PathBuf> {
+    let resolved = PathBuf::from(resolve_provider_launcher(program, program, cwd).ok()?);
+    let resolved = match cwd {
+        Some(cwd) if resolved.is_relative() => cwd.join(resolved),
+        _ => resolved,
+    };
+    is_launchable_file(&resolved).then_some(resolved)
+}
+
 /// Pin tools invoked by an agent to the Orbit build that dispatched it.
 ///
 /// Long-lived services may retain a `PATH` whose first `orbit` is an older

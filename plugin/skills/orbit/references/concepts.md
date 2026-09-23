@@ -75,8 +75,9 @@ with `orbit job list` / `orbit job show <id>`.
 and an audit trail. Runs are submitted to a detached worker and are asynchronous
 by default: the command returns once the run is durable, not once it finishes.
 
-**Crew** — a named provider-and-model assignment (`orbit executor list` shows the
-available providers). A task's `crew` selects who executes it;
+**Crew** — a named provider-and-model assignment, defined as a `[crews.<name>]`
+table in `config.toml` (`orbit doctor providers` shows which provider CLIs this
+machine can launch). A task's `crew` selects who executes it;
 `workflow.default_crew` covers tasks that don't declare one, and
 `workflow.system_crew` covers Orbit's own bounded activities like failure
 recovery and the task pilot.

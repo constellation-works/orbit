@@ -684,13 +684,36 @@ impl Commands {
                 false,
                 runtime_dispatch!(Log),
             ),
-            Commands::Doctor(_) => CommandOperation::new(
-                RuntimeNeed::Required,
-                Some(admin_meta("doctor", None, Some("workspace"), None)),
-                None,
-                false,
-                runtime_dispatch!(Doctor),
-            ),
+            Commands::Doctor(command) => {
+                use super::doctor::DoctorSubcommand;
+                // The focused diagnostics only read definitions, so they stay
+                // available while another executable generation holds the
+                // store; the health checks and repairs need the full runtime.
+                let (subcommand, target_type, target_id, runtime_need) = match &command.command {
+                    None => (None, "workspace", None, RuntimeNeed::Required),
+                    Some(DoctorSubcommand::Providers(_)) => {
+                        (Some("providers"), "executor", None, RuntimeNeed::ReadOnly)
+                    }
+                    Some(DoctorSubcommand::FsAccess(args)) => (
+                        Some("fs-access"),
+                        "policy",
+                        Some(args.profile.as_str()),
+                        RuntimeNeed::ReadOnly,
+                    ),
+                };
+                CommandOperation::new(
+                    runtime_need,
+                    Some(admin_meta(
+                        "doctor",
+                        subcommand,
+                        Some(target_type),
+                        target_id,
+                    )),
+                    None,
+                    false,
+                    runtime_dispatch!(Doctor),
+                )
+            }
             Commands::AutoTask(command) => {
                 use super::auto_task::AutoTaskSubcommand;
                 let runtime_need = if matches!(
@@ -722,24 +745,6 @@ impl Commands {
                     None,
                     false,
                     runtime_dispatch!(AutoTask),
-                )
-            }
-            Commands::Activity(command) => {
-                use super::activity::ActivitySubcommand;
-                let subcommand = match &command.command {
-                    ActivitySubcommand::List(_) => "list",
-                };
-                CommandOperation::new(
-                    RuntimeNeed::Required,
-                    Some(admin_meta(
-                        "activity",
-                        Some(subcommand),
-                        Some("activity"),
-                        None,
-                    )),
-                    None,
-                    false,
-                    runtime_dispatch!(Activity),
                 )
             }
             Commands::Job(command) => {
@@ -958,45 +963,6 @@ impl Commands {
                     None,
                     false,
                     runtime_dispatch!(Plugin),
-                )
-            }
-            Commands::Policy(command) => {
-                use super::policy::PolicySubcommand;
-                let (subcommand, target_id) = match &command.command {
-                    PolicySubcommand::List(_) => ("list", None),
-                    PolicySubcommand::Show(args) => ("show", Some(args.name.as_str())),
-                    PolicySubcommand::Check(args) => ("check", Some(args.profile_name.as_str())),
-                };
-                CommandOperation::new(
-                    RuntimeNeed::Required,
-                    Some(admin_meta(
-                        "policy",
-                        Some(subcommand),
-                        Some("policy"),
-                        target_id,
-                    )),
-                    None,
-                    false,
-                    runtime_dispatch!(Policy),
-                )
-            }
-            Commands::Executor(command) => {
-                use super::executor::ExecutorSubcommand;
-                let (subcommand, target_id) = match &command.command {
-                    ExecutorSubcommand::List(_) => ("list", None),
-                    ExecutorSubcommand::Show(args) => ("show", Some(args.name.as_str())),
-                };
-                CommandOperation::new(
-                    RuntimeNeed::Required,
-                    Some(admin_meta(
-                        "executor",
-                        Some(subcommand),
-                        Some("executor"),
-                        target_id,
-                    )),
-                    None,
-                    false,
-                    runtime_dispatch!(Executor),
                 )
             }
             Commands::Mcp(command) => {

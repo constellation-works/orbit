@@ -102,10 +102,11 @@ recommendations. Init does not write a `custom` or `system` crew table: the
 explicit user-authored `[crews.system]` table wins if one exists. The four
 `workflow.*_complexity_crews` pools are scaffolded as `[]`. A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
-work, run `orbit config set workflow.system_crew <crew>`. Available providers:
+work, run `orbit config set workflow.system_crew <crew>`. Which provider CLIs
+this machine can launch, and each executor's sandbox mode:
 
 ```bash
-orbit executor list
+orbit doctor providers
 ```
 
 Executors are how a provider is invoked. You choose crews; executors are
@@ -129,9 +130,7 @@ pass = ["HOME", "PATH", "TMPDIR", "USER", "GITHUB_TOKEN"]
 A policy defines the filesystem profiles activities run under.
 
 ```bash
-orbit policy list
-orbit policy show <name>
-orbit policy check <profile> <path>        # dry-run a path against the active profile rules
+orbit doctor fs-access <profile> <path>    # dry-run a workspace-relative path against the profile rules
 ```
 
 Shipped profiles: `reviewer` and `pure_compute` (read-only), `docs_writer`

@@ -967,10 +967,10 @@ updated_at: 2026-09-14T00:00:00Z
     .expect("write auto-task fixture");
 }
 
-/// [ORB-10981] `orbit --root <data-dir> executor list` from a cwd that is not
+/// [ORB-10981] `orbit --root <data-dir> doctor providers` from a cwd that is not
 /// the intended git checkout must not mint a checkout for `parent(data-dir)`.
 #[test]
-fn executor_list_with_explicit_root_does_not_bind_parent_of_data_dir() {
+fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let data_dir = temp.path().join("qa-root");
@@ -1002,8 +1002,8 @@ fn executor_list_with_explicit_root_does_not_bind_parent_of_data_dir() {
         &[
             "--root",
             &data_dir_arg,
-            "executor",
-            "list",
+            "doctor",
+            "providers",
             "--format",
             "json",
         ],
@@ -1015,7 +1015,7 @@ fn executor_list_with_explicit_root_does_not_bind_parent_of_data_dir() {
         assert_ne!(
             canonicalize_or_original(Path::new(&repo_root)),
             parent,
-            "executor list bound parent(data-dir) as {workspace_id} repo_root={repo_root} orbit_dir={orbit_dir}"
+            "doctor providers bound parent(data-dir) as {workspace_id} repo_root={repo_root} orbit_dir={orbit_dir}"
         );
     }
 
@@ -1120,8 +1120,8 @@ fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
         &[
             "--root",
             &data_dir_arg,
-            "executor",
-            "list",
+            "doctor",
+            "providers",
             "--format",
             "json",
         ],

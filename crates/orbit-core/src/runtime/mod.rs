@@ -821,6 +821,16 @@ impl OrbitRuntime {
         self.stores().executors().get_executor_def(name)
     }
 
+    /// Where a dispatch from this workspace would launch an executor's
+    /// `program` from, or `None` when it would fail to find it. Uses the same
+    /// lookup as dispatch (`PATH`, conventional home bins, system prefixes).
+    pub fn locate_provider_launcher(&self, program: &str) -> Option<std::path::PathBuf> {
+        orbit_engine::activity_job::cli_runner::locate_provider_launcher(
+            program,
+            Some(&self.paths().repo_root),
+        )
+    }
+
     pub fn upsert_executor_def(
         &self,
         def: &orbit_types::workflow::ExecutorDef,

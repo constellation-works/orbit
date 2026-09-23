@@ -1,8 +1,9 @@
-use clap::Args;
+use clap::{Args, Subcommand};
 use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
 };
-use orbit_core::OrbitRuntime;
+use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -10,8 +11,15 @@ use crate::output::color::{Domain, Role};
 
 /// `orbit doctor` — workspace-level self-diagnostics [ORB-10005].
 #[derive(Args)]
-#[command(about = "Diagnose workspace health (config, database, disk, indexes, locks, runs)")]
+#[command(
+    about = "Diagnose workspace health (config, database, disk, indexes, locks, runs)",
+    args_conflicts_with_subcommands = true
+)]
 pub struct DoctorCommand {
+    /// Run a focused diagnostic instead of the workspace health checks.
+    #[command(subcommand)]
+    pub command: Option<DoctorSubcommand>,
+
     /// Emit machine-readable JSON instead of the table.
     #[arg(long)]
     pub json: bool,
@@ -45,8 +53,41 @@ pub struct DoctorCommand {
     pub confirm: bool,
 }
 
+#[derive(Subcommand)]
+pub enum DoctorSubcommand {
+    /// Show each executor's provider CLI, whether dispatch can find it, and its sandbox mode
+    Providers(ProvidersArgs),
+    /// Dry-run a workspace-relative path against a filesystem profile's read and modify rules
+    FsAccess(FsAccessArgs),
+}
+
+#[derive(Args)]
+pub struct ProvidersArgs {
+    /// Emit machine-readable JSON instead of the table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub struct FsAccessArgs {
+    /// Filesystem profile name (for example `implementer`)
+    pub profile: String,
+    /// Path to check, matched as written against the profile's workspace-relative rules
+    pub path: String,
+    /// Emit machine-readable JSON instead of the detail view.
+    #[arg(long)]
+    pub json: bool,
+}
+
 impl Execute for DoctorCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        match self.command {
+            Some(DoctorSubcommand::Providers(_)) => return provider_diagnostics(runtime),
+            Some(DoctorSubcommand::FsAccess(args)) => {
+                return fs_access(runtime, &args.profile, &args.path);
+            }
+            None => {}
+        }
         let mut results = Vec::new();
         if self.fix_stale_locks {
             let removed = runtime.remove_stale_lock_files()?;
@@ -181,6 +222,94 @@ impl Execute for DoctorCommand {
             .with_exit_code(exit_code)
             .into())
     }
+}
+
+/// `orbit doctor fs-access`: the active policy's read and modify verdicts for
+/// one path under one fsProfile, without running anything.
+pub(crate) fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
+    let def = runtime
+        .get_policy_def(DEFAULT_POLICY_NAME)?
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!("policy not found: {DEFAULT_POLICY_NAME}"))
+        })?;
+    let read = def.check_path(profile, FsOperation::Read, path)?;
+    let modify = def.check_path(profile, FsOperation::Modify, path)?;
+
+    let doc = json!({
+        "policy": DEFAULT_POLICY_NAME,
+        "profile": profile,
+        "path": path,
+        "read": {
+            "allowed": read.allowed,
+            "matched_rule": read.matched_rule,
+        },
+        "modify": {
+            "allowed": modify.allowed,
+            "matched_rule": modify.matched_rule,
+        },
+    });
+    let verdict = |allowed: bool| if allowed { "allowed" } else { "denied" };
+    let text = format!(
+        "Policy:  {DEFAULT_POLICY_NAME}\nProfile: {profile}\nPath:    {path}\nread:    {} ({})\nmodify:  {} ({})",
+        verdict(read.allowed),
+        read.matched_rule,
+        verdict(modify.allowed),
+        modify.matched_rule
+    );
+    Ok(Payload::detail(doc, text).into())
+}
+
+/// `orbit doctor providers`: one row per executor definition, naming the
+/// provider CLI it launches, where dispatch would find that CLI, and the
+/// sandbox mode the effective definition resolves to.
+pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
+    use crate::output::table::{Column, Table};
+
+    let defs = runtime.list_executor_defs()?;
+    let mut values = Vec::with_capacity(defs.len());
+    let mut table = Table::new(vec![
+        Column::new("EXECUTOR").fixed(),
+        Column::new("TYPE").fixed(),
+        Column::new("CLI").fixed(),
+        Column::new("FOUND").fixed(),
+        Column::new("SANDBOX").fixed(),
+        Column::new("LAUNCHER").path(),
+    ])
+    .empty_message("no executors defined");
+    for def in &defs {
+        let launcher = def
+            .command
+            .as_deref()
+            .and_then(|program| runtime.locate_provider_launcher(program));
+        // An executor without a `command` (e.g. `local-shell`) launches no
+        // provider CLI, so availability does not apply rather than failing.
+        let cli_available = def.command.as_ref().map(|_| launcher.is_some());
+        let sandbox = def.sandbox.map_or("unspecified", |kind| kind.as_str());
+        values.push(json!({
+            "name": def.name,
+            "executor_type": def.executor_type.to_string(),
+            "command": def.command,
+            "args": def.args,
+            "cli_available": cli_available,
+            "launcher": launcher.as_ref().map(|path| path.display().to_string()),
+            "sandbox": def.sandbox,
+            "allow_fallback": def.allow_fallback,
+        }));
+        table.add_row(vec![
+            def.name.clone(),
+            def.executor_type.to_string(),
+            def.command.clone().unwrap_or_else(|| "-".to_string()),
+            match cli_available {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "-",
+            }
+            .to_string(),
+            sandbox.to_string(),
+            launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
+        ]);
+    }
+    Ok(Payload::list(values, table).into())
 }
 
 /// Report Orbit-owned state directories whose write bits let another local

@@ -620,17 +620,25 @@ spec:
             [orbit_bin, "--root", str(root), "--workspace", str(work), "auto-task", "mint",
              "qa-full-sweep", "--json"], work, ["manual-mint-persists-declared-task"], minted)
 
-    for kind, expected in (("job", {"task_pilot_pipeline", "worktree_gc_pipeline"}),
-                           ("activity", {"agent_implement", "task_pilot"})):
-        def catalog(evidence, expected=expected, kind=kind):
-            body = parse_json(evidence, f"{kind} list")
-            rows = body if isinstance(body, list) else body.get("items", [])
-            names = {row.get("name") or row.get("id") or row.get("job_id") for row in rows}
-            if not expected.issubset(names):
-                raise ValueError(f"{kind} catalog missing {sorted(expected-names)}")
-        checked("workflow-definition-boundary",
-                [orbit_bin, "--root", str(root), "--workspace", str(work), kind, "list", "--format", "json"],
-                work, [f"{kind}-catalog-returns-structured-installed-definitions"], catalog)
+    def catalog(evidence):
+        body = parse_json(evidence, "job list")
+        rows = body if isinstance(body, list) else body.get("items", [])
+        names = {row.get("name") or row.get("id") or row.get("job_id") for row in rows}
+        expected = {"task_pilot_pipeline", "worktree_gc_pipeline"}
+        if not expected.issubset(names):
+            raise ValueError(f"job catalog missing {sorted(expected-names)}")
+    checked("workflow-definition-boundary",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "job", "list", "--format", "json"],
+            work, ["job-catalog-returns-structured-installed-definitions"], catalog)
+
+    def step_activities(evidence):
+        body = parse_json(evidence, "job show")
+        if "activity:prepare_task_pilot" not in json.dumps(body.get("steps")):
+            raise ValueError("job show does not name the activity its steps run")
+    checked("workflow-definition-boundary",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "job", "show",
+             "task_pilot_pipeline", "--format", "json"],
+            work, ["job-show-names-step-activities"], step_activities)
 
     def search_result(evidence):
         body = parse_json(evidence, "search")
@@ -665,12 +673,28 @@ spec:
 
     for command, assertion in ((["tool", "list", "--format", "json"], "tool-definitions-are-structured"),
                                (["plugin", "list", "--format", "json"], "plugin-inventory-is-structured"),
-                               (["policy", "list", "--json"], "policy-definitions-are-structured"),
-                               (["executor", "list", "--format", "json"], "executor-definitions-are-structured"),
                                (["skill", "list", "--format", "json"], "skill-definitions-are-structured")):
         checked("definition-policy-boundary",
                 [orbit_bin, "--root", str(root), "--workspace", str(work), *command], work,
                 [assertion], lambda evidence, assertion=assertion: parse_json(evidence, assertion))
+
+    def fs_access(evidence):
+        body = parse_json(evidence, "doctor fs-access")
+        if body.get("read", {}).get("allowed") is not True or body.get("modify", {}).get("allowed") is not False:
+            raise ValueError("implementer must read but not modify the workspace task store")
+    checked("definition-policy-boundary",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "doctor", "fs-access",
+             "implementer", ".orbit/tasks/x", "--json"], work,
+            ["doctor-fs-access-dry-runs-profile"], fs_access)
+
+    def providers(evidence):
+        rows = parse_json(evidence, "doctor providers")
+        if not rows or any("sandbox" not in row or "cli_available" not in row for row in rows):
+            raise ValueError("doctor providers must report each executor's CLI and sandbox")
+    checked("definition-policy-boundary",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "doctor", "providers",
+             "--format", "json"], work,
+            ["doctor-providers-report-executor-sandbox"], providers)
 
     initialize = {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"qa","version":"1"}}}
     requests = [initialize,

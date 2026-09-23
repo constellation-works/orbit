@@ -69,7 +69,7 @@ capability, policy, sandbox, subprocess, or authentication checks.
 ## Use It
 
 ```bash
-orbit activity list
+orbit job show <job_id>                            # the activity each step runs
 orbit run job path/to/job.yaml --input key=value   # submits and returns a run ID
 orbit run job path/to/job.yaml --wait              # block until the run is terminal
 ```

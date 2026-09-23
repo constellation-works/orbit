@@ -1,10 +1,8 @@
-pub mod activity;
 pub mod audit;
 pub mod auto_task;
 pub mod clock;
 pub mod config;
 pub mod doctor;
-pub mod executor;
 pub mod friction;
 pub mod gc;
 pub mod init;
@@ -16,7 +14,6 @@ pub mod migrate;
 pub mod operation;
 pub mod operation_args;
 pub mod plugin;
-pub mod policy;
 pub mod routine;
 pub mod run;
 pub mod search;
@@ -79,6 +76,7 @@ Environment:
   init        Initialize the global Orbit root (~/.orbit)
   workspace   Manage workspaces
   config      Show or update Orbit configuration
+  plugin      Install and manage Orbit plugins
   migrate     Apply or inspect pending .orbit layout/schema migrations
   update      Install a published Orbit release and converge to it
 
@@ -89,20 +87,14 @@ Knowledge:
 
 Operate:
   run         Run a workflow (ship, job)
+  job         View job definitions
+  tool        View tool registry
   gc          Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
   audit       Query the audit event log
   log         Tail the unified Orbit log feed
-  doctor      Diagnose workspace health (config, database, disk, indexes)
-
-Definitions:
-  activity    View activity definitions
-  job         View job definitions
-  tool        View tool registry
-  plugin      Install and manage Orbit plugins
-  policy      View filesystem policies
-  executor    View executors
+  doctor      Diagnose workspace health, provider CLIs, and filesystem access
 
 Scheduler:
   clock       Inspect, control, and manually tick the machine scheduler
@@ -146,6 +138,7 @@ pub enum Commands {
     Init(init::InitCommand),
     Workspace(workspace::WorkspaceCommand),
     Config(config::ConfigCommand),
+    Plugin(plugin::PluginCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
 
@@ -156,20 +149,14 @@ pub enum Commands {
 
     // ── Operate ──
     Run(run::RunCommand),
+    Job(job::JobCommand),
+    Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 
     // ── Observe ──
     Audit(audit::AuditCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
-
-    // ── Definitions ──
-    Activity(activity::ActivityCommand),
-    Job(job::JobCommand),
-    Tool(tool::ToolCommand),
-    Plugin(plugin::PluginCommand),
-    Policy(policy::PolicyCommand),
-    Executor(executor::ExecutorCommand),
 
     // ── Scheduler ──
     Clock(clock::ClockCommand),

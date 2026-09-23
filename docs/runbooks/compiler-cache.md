@@ -309,14 +309,17 @@ The cache grant is the host global `cache/` directory, not a workspace
 `.orbit/state` path and not a shared target dir.
 
 Verify a Linux implementer profile can write the cache without widening
-reviewer:
+reviewer. The workspace-relative fsProfile rules are unchanged, which
+`orbit doctor fs-access` shows (both report `modify: denied`):
 
 ```bash
-orbit policy check implementer "$HOME/.orbit/cache/compiler"
+orbit doctor fs-access implementer .orbit/state/x
+orbit doctor fs-access reviewer src/lib.rs
 ```
 
-`orbit policy check` is workspace-relative and will not name the host global
-path; the grant is applied by the Linux runtime write-root appender at spawn.
+It cannot show the cache grant itself: it rejects
+`"$HOME/.orbit/cache/compiler"` as outside the workspace root, because the
+grant is applied by the Linux runtime write-root appender at spawn.
 Confirm empirically with `make compiler-cache-status` inside a managed
 implementer run, or with a Bubblewrap smoke that bind-mounts the cache
 directory writable and leaves `/tmp` private.

@@ -142,8 +142,8 @@ alone controls Codex's inner mode, not Orbit's outer wrapper. Explicit executor
 checks still apply to Orbit tool calls; provider subprocess filesystem access
 has no Orbit sandbox confinement.
 
-Inspect the configured choice with `orbit executor show codex --json` (the
-`sandbox` field is `"off"`). The invocation audit reports `sandbox_backend: off`,
+Inspect the configured choice with `orbit doctor providers --json` (the `codex`
+entry's `sandbox` field is `"off"`). The invocation audit reports `sandbox_backend: off`,
 no trusted wrapper or probe, and `write_unrestricted` / `read_unrestricted`.
 This is an operator opt-out, not a fallback after a failed security check, and
 successful bare execution does not establish Bubblewrap or AppArmor enforcement.
@@ -174,8 +174,8 @@ Use this order on every process sharing the host resource directory:
    YAML still uses the old values. A successful new CLI `--version` invocation
    alone does not verify the executable already loaded by another process.
 4. Only after all readers have been replaced, set `spec.sandbox: off`. Verify
-   `orbit executor show <provider> --json`, repeat an ordinary authoritative
-   MCP read, and inspect the next invocation's effective sandbox audit before
+   the provider's `sandbox` in `orbit doctor providers --json`, repeat an
+   ordinary authoritative MCP read, and inspect the next invocation's effective sandbox audit before
    resuming normal dispatch. If an older reader must remain active, defer the
    shared YAML change; deleting the sandbox field is not a compatibility solution.
 

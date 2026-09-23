@@ -83,28 +83,6 @@ fn job_show_json_contains_no_human_step_rows() {
     assert!(human_stdout.contains("ID:"), "{human_stdout}");
 }
 
-/// ORB-10571: the same property, for the other two commands covered by
-/// `tests/output_goldens.rs`'s golden-file coverage. Both are seeded by
-/// `orbit workspace init` itself (a default policy, a default skill
-/// catalog), so no fixture setup is needed beyond initializing the
-/// workspace.
-#[test]
-fn policy_list_renders_one_line_per_policy() {
-    let workspace = TestWorkspace::new();
-
-    let json = workspace.run(&["policy", "list", "--json"], "policy list JSON");
-    let policies: Value = serde_json::from_slice(&json.stdout).expect("policy list JSON");
-    let expected = policies.as_array().expect("policy array").len();
-    assert!(expected >= 1, "a fresh workspace seeds a default policy");
-
-    assert_both_forms(
-        &workspace,
-        &["policy", "list"],
-        expected,
-        "orbit policy list",
-    );
-}
-
 #[test]
 fn skill_list_renders_one_line_per_skill() {
     let workspace = TestWorkspace::new();
