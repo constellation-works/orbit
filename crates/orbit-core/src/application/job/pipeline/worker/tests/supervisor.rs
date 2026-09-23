@@ -301,7 +301,7 @@ fn unrequested_signal_exit_is_not_treated_as_a_cancellation() {
 fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
     use std::time::{Duration, Instant};
 
-    use orbit_config::WorkerContainmentSettings;
+    use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
 
     use crate::application::job::pipeline::worker::command::worker_command_override;
     use crate::application::job::pipeline::worker::log::configure_pipeline_worker_stdio;
@@ -321,8 +321,14 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
     ))
     .contained(WorkerLimits::from_settings(&WorkerContainmentSettings {
         enabled: true,
-        memory_high: "48M".to_string(),
-        memory_max: "64M".to_string(),
+        memory_high: MemoryLimit::Bytes {
+            amount: 48,
+            unit: Some(MemoryUnit::M),
+        },
+        memory_max: MemoryLimit::Bytes {
+            amount: 64,
+            unit: Some(MemoryUnit::M),
+        },
         tasks_max: TASKS_MAX,
     }));
     let spawn = |run: &JobRun, argv: &[&str]| -> u32 {

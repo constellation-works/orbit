@@ -45,6 +45,8 @@
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
+//! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
+//!   its one parser [ORB-12913].
 //! - `operation` — typed `[operation]` review preferences and their layered
 //!   resolution [ORB-11333].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views.
@@ -54,6 +56,7 @@
 
 mod crew_pools;
 mod layering;
+mod memory_limit;
 pub mod operation;
 mod persistence;
 pub mod plugins;
@@ -79,6 +82,7 @@ pub use layering::{
     ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,
     EffectiveConfigValue, ShadowReason, ShadowedConfigValue, load_effective_config,
 };
+pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayer, OperationLayerSource,
     OperationPolicy, ReviewPolicy,

@@ -5,8 +5,8 @@ use tempfile::tempdir;
 
 use super::{roots, write_config};
 use crate::{
-    ConfigScope, ConfigStore, MachineSettings, ResolvedConfig, WorkerContainmentSettings,
-    admit_settable_config_key, load_machine_settings,
+    ConfigScope, ConfigStore, MachineSettings, MemoryLimit, MemoryUnit, ResolvedConfig,
+    WorkerContainmentSettings, admit_settable_config_key, load_machine_settings,
 };
 
 const IDENTITY: &str =
@@ -267,7 +267,10 @@ fn worker_limits_default_on_and_admit_systemd_sizes() {
         .snapshot
         .worker_containment();
     assert!(defaults.enabled);
-    assert!(defaults.memory_max.ends_with('%'), "derived from host RAM");
+    assert!(
+        matches!(defaults.memory_max, MemoryLimit::Percent(_)),
+        "derived from host RAM"
+    );
     assert!(defaults.tasks_max > 0);
 
     write_config(
@@ -285,11 +288,35 @@ fn worker_limits_default_on_and_admit_systemd_sizes() {
         configured,
         WorkerContainmentSettings {
             enabled: false,
-            memory_high: "6G".to_string(),
-            memory_max: "infinity".to_string(),
+            memory_high: MemoryLimit::Bytes {
+                amount: 6,
+                unit: Some(MemoryUnit::G),
+            },
+            memory_max: MemoryLimit::Infinity,
             tasks_max: 512,
         }
     );
+}
+
+/// The admitted limit renders back as the systemd value the operator wrote,
+/// both as the worker's `--property=` value and through `orbit config get`.
+#[test]
+fn admitted_memory_limits_render_as_systemd_values() {
+    for value in ["40%", "8G", "512M", "infinity", "536870912"] {
+        let global = tempdir().expect("global");
+        write_config(
+            global.path(),
+            &format!("{IDENTITY}worker_memory_max = \"{value}\"\n"),
+        );
+        let snapshot = ResolvedConfig::load(&roots(global.path(), global.path()))
+            .expect("layered load")
+            .snapshot;
+        assert_eq!(snapshot.worker_containment().memory_max.to_string(), value);
+        assert_eq!(
+            snapshot.value_for("machine.worker_memory_max"),
+            Some(serde_json::json!(value))
+        );
+    }
 }
 
 /// Each value is later one `systemd-run --property=` argument; anything the
@@ -304,6 +331,15 @@ fn malformed_worker_limits_fail_closed_naming_the_key() {
             "machine.worker_memory_high",
         ),
         ("worker_memory_high = \"0\"", "machine.worker_memory_high"),
+        (
+            "worker_memory_high = \"--help\"",
+            "machine.worker_memory_high",
+        ),
+        (
+            "worker_memory_high = \"101%\"",
+            "machine.worker_memory_high",
+        ),
+        ("worker_memory_high = \"8g\"", "machine.worker_memory_high"),
         ("worker_tasks_max = 0", "machine.worker_tasks_max"),
     ] {
         let global = tempdir().expect("global");
@@ -312,6 +348,15 @@ fn malformed_worker_limits_fail_closed_naming_the_key() {
             .expect_err("malformed worker limit must not load")
             .to_string();
         assert!(error.contains(key), "{line}: {error}");
+        if !line.starts_with("worker_tasks_max") {
+            assert!(
+                error.contains(
+                    "; expected a size such as 8G or 512M, a percentage of physical memory \
+                     such as 50%, or infinity"
+                ),
+                "{line}: {error}"
+            );
+        }
     }
 }
 

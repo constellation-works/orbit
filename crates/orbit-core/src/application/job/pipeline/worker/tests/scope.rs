@@ -9,21 +9,29 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
-use orbit_config::WorkerContainmentSettings;
+use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
 use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::scope::{
     WorkerLimits, WorkerScopeCgroup, event_count, scope_unit_name, scoped_worker_command,
 };
 
-fn limits() -> WorkerLimits {
-    WorkerLimits::from_settings(&WorkerContainmentSettings {
+fn memory(value: &str) -> MemoryLimit {
+    MemoryLimit::parse(value).expect("admitted memory limit")
+}
+
+fn settings(memory_high: MemoryLimit, memory_max: MemoryLimit) -> WorkerContainmentSettings {
+    WorkerContainmentSettings {
         enabled: true,
-        memory_high: "6G".to_string(),
-        memory_max: "8G".to_string(),
+        memory_high,
+        memory_max,
         tasks_max: 512,
-    })
-    .expect("enabled containment yields limits")
+    }
+}
+
+fn limits() -> WorkerLimits {
+    WorkerLimits::from_settings(&settings(memory("6G"), memory("8G")))
+        .expect("enabled containment yields limits")
 }
 
 fn args(command: &Command) -> Vec<&str> {
@@ -37,9 +45,7 @@ fn args(command: &Command) -> Vec<&str> {
 fn disabled_containment_has_no_limits() {
     let settings = WorkerContainmentSettings {
         enabled: false,
-        memory_high: "40%".to_string(),
-        memory_max: "50%".to_string(),
-        tasks_max: 4096,
+        ..settings(MemoryLimit::Percent(40), MemoryLimit::Percent(50))
     };
     assert_eq!(WorkerLimits::from_settings(&settings), None);
 }
@@ -87,50 +93,65 @@ fn scoped_command_runs_the_worker_argv_under_the_configured_limits() {
     assert!(envs.contains(&(OsStr::new("ORBIT_ROOT"), None)));
 }
 
+/// `None` means "containment off" and launches the worker unbounded, which is
+/// how one run took the host down (2026-09-23 OOM outage). Every shape an
+/// admitted limit can take must therefore yield limits [ORB-12913].
 #[test]
-fn memory_limits_are_reduced_to_admitted_values_before_becoming_arguments() {
-    for (memory_high, memory_max, expected_high, expected_max) in [
-        (
-            " 040%",
-            "0008G",
-            "--property=MemoryHigh=40%",
-            "--property=MemoryMax=8G",
-        ),
-        (
-            "6G",
-            "infinity",
-            "--property=MemoryHigh=6G",
-            "--property=MemoryMax=infinity",
-        ),
-    ] {
-        let settings = WorkerContainmentSettings {
-            enabled: true,
-            memory_high: memory_high.to_string(),
-            memory_max: memory_max.to_string(),
-            tasks_max: 512,
-        };
-        let limits = WorkerLimits::from_settings(&settings).expect("valid limits");
-        let scoped = scoped_worker_command(&Command::new("orbit"), "unit", &limits);
-        let scoped_args = args(&scoped);
-
-        assert!(scoped_args.contains(&expected_high));
-        assert!(scoped_args.contains(&expected_max));
+fn enabled_containment_always_yields_limits() {
+    let mut shapes = vec![
+        MemoryLimit::Infinity,
+        MemoryLimit::Percent(1),
+        MemoryLimit::Percent(100),
+        MemoryLimit::Bytes {
+            amount: u64::MAX,
+            unit: None,
+        },
+    ];
+    shapes.extend(
+        [MemoryUnit::K, MemoryUnit::M, MemoryUnit::G, MemoryUnit::T].map(|unit| {
+            MemoryLimit::Bytes {
+                amount: 1,
+                unit: Some(unit),
+            }
+        }),
+    );
+    for high in &shapes {
+        for max in &shapes {
+            assert!(
+                WorkerLimits::from_settings(&settings(*high, *max)).is_some(),
+                "enabled containment dropped limits for {high} / {max}"
+            );
+        }
     }
 }
 
+/// The `--property=` arguments are the same systemd values the config
+/// accepted, reduced to canonical form.
 #[test]
-fn malformed_memory_limits_are_not_forwarded_to_systemd() {
-    for value in ["8G TasksMax=1", "--help", "0", "101%", "8g"] {
-        let settings = WorkerContainmentSettings {
-            enabled: true,
-            memory_high: value.to_string(),
-            memory_max: "8G".to_string(),
-            tasks_max: 512,
-        };
+fn memory_limits_become_their_systemd_values() {
+    for (value, expected) in [
+        ("40%", "40%"),
+        ("8G", "8G"),
+        ("512M", "512M"),
+        ("infinity", "infinity"),
+        ("536870912", "536870912"),
+        (" 040%", "40%"),
+        ("0008G", "8G"),
+    ] {
+        let limits = WorkerLimits::from_settings(&settings(memory(value), memory(value)))
+            .expect("enabled containment yields limits");
+        let scoped = scoped_worker_command(&Command::new("orbit"), "unit", &limits);
+        let scoped_args = args(&scoped);
 
+        let high = format!("--property=MemoryHigh={expected}");
+        let max = format!("--property=MemoryMax={expected}");
         assert!(
-            WorkerLimits::from_settings(&settings).is_none(),
-            "invalid value was admitted: {value}"
+            scoped_args.contains(&high.as_str()),
+            "{value}: {scoped_args:?}"
+        );
+        assert!(
+            scoped_args.contains(&max.as_str()),
+            "{value}: {scoped_args:?}"
         );
     }
 }
