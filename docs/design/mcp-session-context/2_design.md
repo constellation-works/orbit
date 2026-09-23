@@ -73,7 +73,9 @@ tools/list is derived from the authoritative host and its validated result is ca
 
 Workspace-bound schema decoration follows the same session selector. In particular, the `orbit.friction.add` and `orbit.friction.update` tag schemas enumerate the bound workspace's operator-owned taxonomy with descriptions. Before a workspace is bound, the schema falls back to the shipped taxonomy and explicitly notes that `.orbit/frictions/tags.yaml` may extend it. The tools-list cache key includes the normalized session selector so re-initializing a connection for another workspace cannot retain the previous workspace's vocabulary.
 
-Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. Both spellings describe the same server rule; only the obligation on the caller differs.
+Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. The JSON schema also marks `workspace` required for an unbound workspace-scoped call. Federated tools/list requires its host-qualified selector. `orbit.task.show` keeps its v1 ID-only exemption. `orbit.search` additionally advertises that at least one of `query` or `tag` must be supplied; its MCP surface does not expose the CLI `path` filter.
+
+For a plugin tool that does not declare `workspace` in its input schema, the MCP adapter moves that argument into the per-call routing context before dispatch. The plugin receives only its declared input. If the plugin itself declares `workspace`, the adapter preserves it in the plugin input.
 
 ## 5. Core dispatch and audit
 

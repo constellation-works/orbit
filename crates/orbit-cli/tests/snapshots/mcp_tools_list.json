@@ -396,6 +396,22 @@
     "description": "Search tasks and frictions using lexical matching.",
     "inputSchema": {
       "additionalProperties": true,
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "query"
+              ]
+            },
+            {
+              "required": [
+                "tag"
+              ]
+            }
+          ]
+        }
+      ],
       "properties": {
         "all": {
           "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
@@ -425,6 +441,7 @@
         },
         "query": {
           "description": "Free-text lexical query. Multiple words need not be adjacent.",
+          "minLength": 1,
           "type": "string"
         },
         "status": {
@@ -447,9 +464,11 @@
               "items": {
                 "type": "string"
               },
+              "minItems": 1,
               "type": "array"
             },
             {
+              "minLength": 1,
               "type": "string"
             }
           ],

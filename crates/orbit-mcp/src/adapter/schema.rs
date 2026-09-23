@@ -85,6 +85,18 @@ pub(super) fn ensure_workspace_selector(
     }
 }
 
+/// The selector is a routing argument only when the plugin did not declare it
+/// as part of its own input. Built-in tools retain their existing inputs.
+pub(super) fn host_owns_plugin_selector(definition: &McpToolDefinition) -> bool {
+    !definition.schema.builtin
+        && definition.scope == McpToolScope::WorkspaceRequired
+        && !definition
+            .schema
+            .parameters
+            .iter()
+            .any(|parameter| parameter.name == WORKSPACE_SELECTOR_PARAM)
+}
+
 fn ensure_authoritative_selector(
     schema: &mut JsonObject,
     definition: &McpToolDefinition,
@@ -100,16 +112,18 @@ fn ensure_authoritative_selector(
     let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
         return;
     };
-    if properties.contains_key(WORKSPACE_SELECTOR_PARAM) {
-        return;
+    if !properties.contains_key(WORKSPACE_SELECTOR_PARAM) {
+        properties.insert(
+            WORKSPACE_SELECTOR_PARAM.to_string(),
+            json!({
+                "type": "string",
+                "description": binding.selector_description(),
+            }),
+        );
     }
-    properties.insert(
-        WORKSPACE_SELECTOR_PARAM.to_string(),
-        json!({
-            "type": "string",
-            "description": binding.selector_description(),
-        }),
-    );
+    if binding == WorkspaceBinding::Unbound {
+        require_property(schema, WORKSPACE_SELECTOR_PARAM);
+    }
 }
 
 fn ensure_federated_selector(schema: &mut JsonObject) {
@@ -126,6 +140,16 @@ fn ensure_federated_selector(schema: &mut JsonObject) {
             "description": FEDERATED_SELECTOR_DESCRIPTION,
         }),
     );
+    require_property(schema, WORKSPACE_SELECTOR_PARAM);
+}
+
+fn require_property(schema: &mut JsonObject, property: &str) {
+    let required = schema.entry("required").or_insert_with(|| json!([]));
+    if let Some(required) = required.as_array_mut()
+        && !required.iter().any(|name| name == property)
+    {
+        required.push(json!(property));
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +164,39 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
 ) -> JsonObject {
     let mut schema = tool_input_schema_for(tool_name, params);
     decorate_friction_schema(&mut schema, tool_name, taxonomy);
+    if tool_name == "orbit.search" {
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            if let Some(query) = properties.get_mut("query").and_then(Value::as_object_mut) {
+                query.insert("minLength".to_string(), json!(1));
+            }
+            if let Some(alternatives) = properties
+                .get_mut("tag")
+                .and_then(|tag| tag.get_mut("anyOf"))
+                .and_then(Value::as_array_mut)
+            {
+                for alternative in alternatives {
+                    if let Some(option) = alternative.as_object_mut() {
+                        match option.get("type").and_then(Value::as_str) {
+                            Some("string") => {
+                                option.insert("minLength".to_string(), json!(1));
+                            }
+                            Some("array") => {
+                                option.insert("minItems".to_string(), json!(1));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        schema.insert(
+            "allOf".to_string(),
+            json!([{ "anyOf": [
+                { "required": ["query"] },
+                { "required": ["tag"] }
+            ] }]),
+        );
+    }
     schema
 }
 
