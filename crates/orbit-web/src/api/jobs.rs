@@ -21,7 +21,7 @@ use super::routines::{
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
 
-/// Submit a catalog job in the selected workspace, as `orbit run job` does.
+/// Submit a catalog job in the selected workspace.
 /// Delivery pipelines need task input and are deliberately unavailable through
 /// this no-input action. The UI directs operators to Ship or Drain for those.
 pub(super) async fn run_job_action(
@@ -41,9 +41,6 @@ pub(super) async fn run_job_action(
         Err(message) => return bad_request(message),
     };
     match blocking("run job", move || {
-        // Resolve only catalog ids. submit_job_run also accepts filesystem
-        // paths for the CLI, which a dashboard route must never accept.
-        runtime.show_job_catalog_entry(&id)?;
         if (id.starts_with("task_") && id != "task_pilot_pipeline")
             || id.starts_with("workspace_")
             || id.starts_with("epic_")
@@ -52,7 +49,7 @@ pub(super) async fn run_job_action(
                 "job '{id}' requires task input or a delivery window; use Ship or Drain"
             )));
         }
-        runtime.submit_job_run(&id, json!({}), Some("dashboard"))
+        runtime.submit_catalog_job_run(&id, json!({}), Some("dashboard"))
     })
     .await
     {
