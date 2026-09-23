@@ -9,6 +9,7 @@ const SHIP_WORKFLOW: &str = "ship";
 
 #[test]
 fn async_ship_dispatch_returns_run_identity_without_waiting() {
+    super::substitute_pipeline_worker();
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let jobs_dir = runtime.global_root().join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");

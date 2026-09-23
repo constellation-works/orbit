@@ -377,10 +377,10 @@ impl OrbitRuntime {
     /// Built per call: supervision is a short-lived unit of work, and a fresh
     /// one always reflects the runtime's current handles.
     fn pipeline_worker_supervisor(&self) -> PipelineWorkerSupervisor {
-        // In-crate tests substitute the worker program and must not reach the
-        // host's service manager; the live containment test opts in on its
-        // own supervisor.
-        let limits = if cfg!(test) {
+        // Tests substitute the worker program and must not reach the host's
+        // service manager; the live containment test opts in on its own
+        // supervisor.
+        let limits = if cfg!(test) || worker_substituted_process_wide() {
             None
         } else {
             scope::WorkerLimits::from_settings(self.context.settings().worker_containment())

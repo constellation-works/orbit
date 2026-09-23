@@ -20,10 +20,10 @@ use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::pipeline_worker_log_test_hook::{self, Phase};
 use crate::application::job::pipeline::{
     ROUTINE_DISPATCH_ORBIT_DIR_FIELD, ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE,
-    configure_pipeline_worker_command, configure_pipeline_worker_stdio, pipeline_worker_log_path,
-    pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable, run_definition_snapshot_path, worker_command_override,
-    worker_observer_read_counter,
+    configure_pipeline_worker_command, configure_pipeline_worker_stdio, orbit_worker_command,
+    pipeline_worker_log_path, pipeline_worker_profile_file, pipeline_worker_root_override,
+    refuse_test_harness_worker, resolve_pipeline_worker_executable, run_definition_snapshot_path,
+    worker_command_override, worker_observer_read_counter,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -1307,6 +1307,72 @@ fn deleted_current_executable_resolves_to_replaced_installed_path() {
         installed,
         "the worker must launch through the replacement at the installed path"
     );
+}
+
+/// [ORB-12902] The production worker command re-execs `current_exe`. From a
+/// test binary that is the libtest harness, which reads the worker argv as
+/// test filters and can select the spawning test again — the 2026-09-23
+/// fork bomb. The guard must refuse before a `Command` exists, so nothing can
+/// be spawned, whichever crate's harness is running.
+#[test]
+fn worker_command_refuses_a_cargo_test_harness_executable() {
+    let harness = std::env::current_exe().expect("running test harness path");
+    let error = orbit_worker_command(
+        harness.clone(),
+        Path::new("/registered/workspace"),
+        "jrun-harness-guard",
+        None,
+    )
+    .expect_err("the running test harness must never be launched as a worker");
+    assert!(
+        matches!(&error, OrbitError::Execution(message)
+            if message.contains("cargo test harness")
+                && message.contains(&harness.display().to_string())),
+        "refusal must name the harness explicitly: {error}"
+    );
+
+    for downstream_harness in [
+        "/checkout/target/debug/deps/orbit_web-106f5a9f2d26e2cf",
+        "/checkout/target/debug/deps/orbit-0123456789abcdef",
+        "/checkout/target/llvm-cov-target/debug/deps/orbit_cli-fedcba9876543210",
+    ] {
+        assert!(
+            refuse_test_harness_worker(Path::new(downstream_harness)).is_err(),
+            "{downstream_harness} is a cargo test harness"
+        );
+    }
+}
+
+#[test]
+fn worker_command_admits_installed_and_built_orbit_binaries() {
+    for orbit in [
+        "/home/operator/.orbit/bin/orbit",
+        "/checkout/target/debug/orbit",
+        "/checkout/target/llvm-cov-target/debug/orbit",
+        "/opt/deps/orbit",
+    ] {
+        let command = orbit_worker_command(
+            PathBuf::from(orbit),
+            Path::new("/registered/workspace"),
+            "jrun-installed",
+            None,
+        )
+        .unwrap_or_else(|error| panic!("{orbit} must stay launchable: {error}"));
+        assert_eq!(command.get_program(), OsStr::new(orbit));
+    }
+
+    // An atomic upgrade's deleted-inode path resolves before the guard reads it.
+    let dir = TempDir::new().expect("tempdir");
+    let installed = dir.path().join("orbit");
+    std::fs::write(&installed, "replacement").expect("write replacement executable");
+    let command = orbit_worker_command(
+        installed.with_file_name("orbit (deleted)"),
+        Path::new("/registered/workspace"),
+        "jrun-replaced",
+        None,
+    )
+    .expect("the replaced installed binary stays launchable");
+    assert_eq!(command.get_program(), installed.as_os_str());
 }
 
 /// ORB-10544: the duplicate-dispatch guard lives in the shared submission path,

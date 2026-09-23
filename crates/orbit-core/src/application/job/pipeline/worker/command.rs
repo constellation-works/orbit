@@ -149,21 +149,30 @@ pub(crate) fn workspace_auto_run_input(
 /// Production re-execs `current_exe` at `job run-pipeline-worker <run_id>`. A
 /// test binary must never re-exec itself: libtest reads the worker argv as test
 /// filters and recurses through the whole suite. In-crate tests install a small
-/// script here instead and assert on the submission path around it.
-#[cfg(test)]
+/// script per thread with [`set`]; tests in downstream crates, whose submissions
+/// reach the spawn on another thread (e.g. a dashboard handler's blocking pool),
+/// install one for the whole process with [`install_process_wide`] through the
+/// `test-support` feature [ORB-12902].
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) mod worker_command_override {
+    #[cfg(test)]
     use std::cell::RefCell;
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::{Mutex, PoisonError};
 
     /// Replaced with the submitted run id in every argv entry.
-    pub(crate) const RUN_ID_PLACEHOLDER: &str = "{run_id}";
+    pub const RUN_ID_PLACEHOLDER: &str = "{run_id}";
 
+    #[cfg(test)]
     thread_local! {
         static ARGV: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
     }
 
+    static PROCESS_ARGV: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
     /// Install `argv` as this thread's worker program until [`clear`].
+    #[cfg(test)]
     pub(crate) fn set<I, S>(argv: I)
     where
         I: IntoIterator<Item = S>,
@@ -173,12 +182,50 @@ pub(crate) mod worker_command_override {
         ARGV.with(|slot| *slot.borrow_mut() = Some(argv));
     }
 
+    #[cfg(test)]
     pub(crate) fn clear() {
         ARGV.with(|slot| *slot.borrow_mut() = None);
     }
 
+    /// Launch `argv` instead of this binary for every pipeline worker the
+    /// process spawns from now on, on any thread. Each entry has
+    /// [`RUN_ID_PLACEHOLDER`] replaced by the run id and the program runs from
+    /// the run's workspace with the worker's usual log redirection.
+    ///
+    /// Last install wins, so a test binary should install one argv for all of
+    /// its tests. A thread-local [`set`] in orbit-core's own tests takes
+    /// precedence.
+    #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
+    pub fn install_process_wide<I, S>(argv: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let argv = argv.into_iter().map(Into::into).collect::<Vec<_>>();
+        *PROCESS_ARGV.lock().unwrap_or_else(PoisonError::into_inner) = Some(argv);
+    }
+
+    /// Whether a downstream test binary substituted the worker program.
+    pub(crate) fn installed_process_wide() -> bool {
+        PROCESS_ARGV
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn installed_argv() -> Option<Vec<String>> {
+        #[cfg(test)]
+        if let Some(argv) = ARGV.with(|slot| slot.borrow().clone()) {
+            return Some(argv);
+        }
+        PROCESS_ARGV
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) fn command(workspace: &Path, run_id: &str) -> Option<Command> {
-        let argv = ARGV.with(|slot| slot.borrow().clone())?;
+        let argv = installed_argv()?;
         let mut parts = argv
             .iter()
             .map(|part| part.replace(RUN_ID_PLACEHOLDER, run_id));
@@ -190,6 +237,62 @@ pub(crate) mod worker_command_override {
             .stdin(Stdio::null());
         Some(command)
     }
+}
+
+/// Whether a downstream test binary substituted the worker program, so worker
+/// launches must stay off the host's service manager like in-crate tests do.
+pub(crate) fn worker_substituted_process_wide() -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        worker_command_override::installed_process_wide()
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    {
+        false
+    }
+}
+
+/// Refuse a worker executable that is a cargo test harness [ORB-12902].
+///
+/// Cargo builds every libtest binary as `target/<profile>/deps/<crate>-<hash>`
+/// with a 16-hex-digit metadata hash; an installed or `cargo run` `orbit` is
+/// never named that way. Re-executing a harness at the worker argv makes
+/// libtest treat `job run-pipeline-worker <run_id>` as test filters, so a
+/// spawning test can select itself and fork without bound (2026-09-23
+/// outage). This holds regardless of how the calling crate was compiled.
+pub(crate) fn refuse_test_harness_worker(executable: &Path) -> Result<(), OrbitError> {
+    let in_deps_dir = executable
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "deps");
+    let hashed_stem = executable
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .and_then(|stem| stem.rsplit_once('-'))
+        .is_some_and(|(_, hash)| hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()));
+    if in_deps_dir && hashed_stem {
+        return Err(OrbitError::Execution(format!(
+            "refusing to launch pipeline worker from cargo test harness '{}': a test must \
+             substitute the worker program (orbit-core `test-support` feature)",
+            executable.display()
+        )));
+    }
+    Ok(())
+}
+
+/// The production worker command: `current_exe` resolved to its launchable
+/// path, refused if it is a test harness, at the hidden worker subcommand.
+pub(crate) fn orbit_worker_command(
+    current_exe: PathBuf,
+    workspace: &Path,
+    run_id: &str,
+    root_override: Option<&Path>,
+) -> Result<Command, OrbitError> {
+    let executable = resolve_pipeline_worker_executable(current_exe);
+    refuse_test_harness_worker(&executable)?;
+    let mut command = Command::new(executable);
+    configure_pipeline_worker_command(&mut command, workspace, run_id, root_override);
+    Ok(command)
 }
 
 /// How this workspace launches a detached worker process.
@@ -232,17 +335,20 @@ impl WorkerCommandConfig {
     }
 
     fn build_uncontained(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(command) = worker_command_override::command(workspace, run_id) {
+            return Ok(command);
+        }
+
         #[cfg(test)]
         {
             // A test binary must never re-exec itself, so an in-crate test
             // substitutes its own program and there is no `orbit` invocation
             // left to forward the pinned root to.
             let _pinned_root = self.root_override.as_deref();
-            worker_command_override::command(workspace, run_id).ok_or_else(|| {
-                OrbitError::Execution(
-                    "test pipeline worker requires an explicit worker command override".to_string(),
-                )
-            })
+            Err(OrbitError::Execution(
+                "test pipeline worker requires an explicit worker command override".to_string(),
+            ))
         }
 
         #[cfg(not(test))]
@@ -250,14 +356,12 @@ impl WorkerCommandConfig {
             let current_exe = std::env::current_exe().map_err(|error| {
                 OrbitError::Execution(format!("resolve current orbit executable: {error}"))
             })?;
-            let mut command = Command::new(resolve_pipeline_worker_executable(current_exe));
-            configure_pipeline_worker_command(
-                &mut command,
+            orbit_worker_command(
+                current_exe,
                 workspace,
                 run_id,
                 self.root_override.as_deref(),
-            );
-            Ok(command)
+            )
         }
     }
 }

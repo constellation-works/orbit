@@ -17,7 +17,10 @@ use tower::ServiceExt;
 
 use super::super::router;
 use super::super::runs::*;
-use super::test_support::{body_json, seed_run, write_replay_job, write_seeded_run};
+use super::test_support::{
+    SUBSTITUTE_WORKER_MARKER, body_json, seed_run, substitute_pipeline_worker, write_replay_job,
+    write_seeded_run,
+};
 
 async fn request_cancel(runtime: OrbitRuntime, run_id: &str, origin: Option<&str>) -> Response {
     let mut builder = Request::builder()
@@ -962,6 +965,56 @@ async fn ship_endpoint_rejects_duplicate_task_ids() {
     );
 }
 
+/// [ORB-12902] Regression for the 2026-09-23 fork bomb: a submission through
+/// the real ship handler reaches `spawn_pipeline_worker` from this crate's
+/// test binary, where orbit-core's `cfg(test)` guard does not apply. With the
+/// `test-support` substitute installed the stub, not this libtest harness, is
+/// what runs as the worker.
+#[tokio::test]
+async fn ship_endpoint_launches_the_substitute_worker_not_the_test_binary() {
+    use std::time::{Duration, Instant};
+
+    substitute_pipeline_worker();
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "task_auto_pipeline");
+    let task_id = runtime
+        .add_task(TaskAddParams {
+            title: "substitute worker fixture".to_string(),
+            description: "submitted through the real ship handler".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed ship fixture task")
+        .id;
+
+    let response = request_ship(
+        runtime.clone(),
+        Some(json!({ "task_ids": [task_id], "mode": "local" })),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    let run_id = payload["run_id"].as_str().expect("run_id").to_string();
+    let expected = format!("{SUBSTITUTE_WORKER_MARKER} {run_id}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let log = runtime
+            .read_pipeline_worker_log(&run_id)
+            .expect("read worker log")
+            .and_then(|snapshot| snapshot.content)
+            .unwrap_or_default();
+        if log.contains(&expected) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the substitute worker never ran for {run_id}; worker log: {log:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 // ─── auto-drain stop [ORB-12728] ──────────────────────────────────────────
 
 async fn request_auto_drain_stop(
@@ -1331,6 +1384,7 @@ mod auto_drain {
     /// same as the ship endpoint's always-review submission.
     #[tokio::test]
     async fn auto_endpoint_defaults_to_review_without_authorization() {
+        substitute_pipeline_worker();
         as_agent(async {
             let runtime = OrbitRuntime::in_memory().expect("build runtime");
             write_replay_job(&runtime, "workspace_auto_pipeline");
@@ -1378,6 +1432,7 @@ mod auto_drain {
     /// `CompletionPolicy::Done` the CLI's `--complete` sends.
     #[tokio::test]
     async fn auto_endpoint_propagates_authorized_complete_opt_in() {
+        substitute_pipeline_worker();
         as_operator(async {
             let runtime = OrbitRuntime::in_memory().expect("build runtime");
             write_replay_job(&runtime, "workspace_auto_pipeline");
@@ -1515,6 +1570,7 @@ async fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lo
 
     use axum::routing::get;
 
+    substitute_pipeline_worker();
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let task_id = runtime
         .add_task(TaskAddParams {
