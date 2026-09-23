@@ -1,4 +1,5 @@
 use super::log::pipeline_worker_file_name;
+use super::scope::{WorkerLimits, contain_worker_command};
 use super::*;
 
 /// Return a stable path suitable for launching a fresh worker process.
@@ -194,26 +195,43 @@ pub(crate) mod worker_command_override {
 /// How this workspace launches a detached worker process.
 ///
 /// Production re-execs this same `orbit` binary at the hidden worker
-/// subcommand; workspace context comes from the child's cwd. The one piece of
-/// launch policy that cannot be derived at the call site is whether the parent
-/// runtime was pinned to a single root, so this carries it.
+/// subcommand; workspace context comes from the child's cwd. The launch policy
+/// that cannot be derived at the call site is whether the parent runtime was
+/// pinned to a single root and which resource limits bound the worker, so this
+/// carries both.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerCommandConfig {
     /// `--root` to forward to the worker, so the child opens the same global
     /// store the parent used to persist the run [ORB-10821]. `None` for the
     /// default split-root layout; see [`pipeline_worker_root_override`].
     root_override: Option<PathBuf>,
+    /// Limits for the worker's own systemd scope [ORB-12903]; `None` launches
+    /// it in the caller's cgroup.
+    containment: Option<WorkerLimits>,
 }
 
 impl WorkerCommandConfig {
+    /// Launch policy without resource containment.
     pub(crate) fn for_paths(paths: &WorkspacePaths) -> Self {
         Self {
             root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
+            containment: None,
         }
+    }
+
+    /// Bound every worker this config launches by `limits`.
+    pub(crate) fn contained(mut self, limits: Option<WorkerLimits>) -> Self {
+        self.containment = limits;
+        self
     }
 
     /// The command that runs `run_id`'s worker from `workspace`.
     pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
+        self.build_uncontained(workspace, run_id)
+            .map(|command| contain_worker_command(command, run_id, self.containment.as_ref()))
+    }
+
+    fn build_uncontained(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
         #[cfg(test)]
         {
             // A test binary must never re-exec itself, so an in-crate test

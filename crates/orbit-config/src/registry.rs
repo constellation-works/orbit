@@ -65,8 +65,9 @@ pub(crate) struct CrewFieldKey<'a> {
 /// section by relevance rather than alphabetically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConfigSection {
-    /// `machine.*` — this machine's identity. Global-only: a workspace
-    /// `config.toml` may neither supply nor override it.
+    /// `machine.*` — this machine's identity and host-level worker limits.
+    /// Global-only: a workspace `config.toml` may neither supply nor override
+    /// it.
     Machine,
     /// `workflow.*` — how tasks are shipped.
     Delivery,
@@ -108,7 +109,7 @@ impl ConfigSection {
     /// One-line explanation of what the section governs.
     pub fn blurb(self) -> &'static str {
         match self {
-            Self::Machine => "who this machine is (global config only)",
+            Self::Machine => "who this machine is and how it bounds workers (global config only)",
             Self::Delivery => "how tasks are shipped",
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
@@ -289,6 +290,30 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 30,
         resolve: |raw: Option<String>| resolve_task_prefix(raw),
     },
+    machine_worker_containment: bool => bool {
+        key: "machine.worker_containment", value_type: "bool",
+        description: "Launch each detached pipeline worker in its own transient systemd user scope bounded by the machine.worker_* limits (Linux with a systemd user manager). false, or no reachable user manager, launches workers in the caller's cgroup with a warning.",
+        section: ConfigSection::Machine, order: 40,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    machine_worker_memory_high: String => String {
+        key: "machine.worker_memory_high", value_type: "string",
+        description: "MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).",
+        section: ConfigSection::Machine, order: 50,
+        resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_HIGH, "machine.worker_memory_high"),
+    },
+    machine_worker_memory_max: String => String {
+        key: "machine.worker_memory_max", value_type: "string",
+        description: "MemoryMax= for each contained worker scope, where the kernel OOM-kills inside the run instead of the host: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 50%).",
+        section: ConfigSection::Machine, order: 60,
+        resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_MAX, "machine.worker_memory_max"),
+    },
+    machine_worker_tasks_max: u32 => u32 {
+        key: "machine.worker_tasks_max", value_type: "integer",
+        description: "TasksMax= for each contained worker scope: processes and threads the run may hold at once before fork/clone fails (>= 1, default 4096).",
+        section: ConfigSection::Machine, order: 70,
+        resolve: |raw: Option<u32>| resolve_worker_tasks_max(raw),
+    },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
         description: "Crew selected for before-PR automatic review. After-landing review runs from its delivery auto-task and uses that definition's template crew.",
@@ -461,6 +486,35 @@ impl ConfigSnapshot {
             id: self.machine_id.clone(),
             name: self.machine_name.clone(),
             task_prefix: self.machine_task_prefix.clone(),
+        }
+    }
+}
+
+/// Resource limits for each detached pipeline worker (`machine.worker_*`).
+///
+/// Values are already admitted: memory limits are systemd size strings
+/// (`<bytes>[K|M|G|T]`, `<n>%` of physical RAM, or `infinity`), so a consumer
+/// can hand them to the service manager verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerContainmentSettings {
+    /// `machine.worker_containment` — launch workers in their own scope.
+    pub enabled: bool,
+    /// `machine.worker_memory_high` — throttling threshold.
+    pub memory_high: String,
+    /// `machine.worker_memory_max` — hard limit; OOM kills stay inside the run.
+    pub memory_max: String,
+    /// `machine.worker_tasks_max` — process/thread ceiling.
+    pub tasks_max: u32,
+}
+
+impl ConfigSnapshot {
+    /// The admitted `machine.worker_*` limits.
+    pub fn worker_containment(&self) -> WorkerContainmentSettings {
+        WorkerContainmentSettings {
+            enabled: self.machine_worker_containment,
+            memory_high: self.machine_worker_memory_high.clone(),
+            memory_max: self.machine_worker_memory_max.clone(),
+            tasks_max: self.machine_worker_tasks_max,
         }
     }
 }
@@ -678,6 +732,12 @@ pub(crate) fn immutable_key_note(key: &str) -> Option<&'static str> {
 /// Dotted prefix of the one table only the global `config.toml` may carry.
 pub const GLOBAL_ONLY_KEY_PREFIX: &str = "machine.";
 
+/// Whether `key` is one of the three `[machine]` identity keys, which are
+/// written together by `orbit init` and never unset one at a time.
+pub(crate) fn is_machine_identity_key(key: &str) -> bool {
+    matches!(key, "machine.id" | "machine.name" | "machine.task_prefix")
+}
+
 /// Whether `key` names a setting a workspace `config.toml` may not supply.
 pub fn is_global_only_key(key: &str) -> bool {
     key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.') || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
@@ -816,6 +876,61 @@ fn resolve_bounded_minutes(raw: Option<u32>, default: u32, key: &str) -> Result<
         ))),
         Some(value) => Ok(value),
         None => Ok(default),
+    }
+}
+
+/// Default `machine.worker_memory_high`: throttle one run well before it can
+/// crowd out the host (2026-09-23 OOM outage, ORB-12903).
+const DEFAULT_WORKER_MEMORY_HIGH: &str = "40%";
+/// Default `machine.worker_memory_max`: one runaway run keeps at most half of
+/// physical RAM, leaving the rest for the host and sibling runs.
+const DEFAULT_WORKER_MEMORY_MAX: &str = "50%";
+const DEFAULT_WORKER_TASKS_MAX: u32 = 4096;
+
+/// Admit a systemd memory size: `infinity`, `<n>%` (1..=100) of physical RAM,
+/// or `<bytes>` with an optional `K`/`M`/`G`/`T` suffix.
+///
+/// The value is later passed to the service manager as one `-p` argument, so
+/// anything outside this grammar is refused here instead of failing every
+/// worker launch.
+fn resolve_memory_limit(
+    raw: Option<String>,
+    default: &str,
+    key: &str,
+) -> Result<String, OrbitError> {
+    let Some(value) = raw else {
+        return Ok(default.to_string());
+    };
+    let value = value.trim();
+    let valid = if value == "infinity" {
+        true
+    } else if let Some(percent) = value.strip_suffix('%') {
+        percent
+            .parse::<u8>()
+            .is_ok_and(|percent| (1..=100).contains(&percent))
+    } else {
+        let digits = value.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(value);
+        !digits.is_empty()
+            && digits.bytes().all(|byte| byte.is_ascii_digit())
+            && digits.parse::<u64>().is_ok_and(|amount| amount > 0)
+    };
+    if valid {
+        Ok(value.to_string())
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value '{value}'; expected a size such as 8G or 512M, \
+             a percentage of physical memory such as 50%, or infinity"
+        )))
+    }
+}
+
+fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitError> {
+    match raw {
+        Some(0) => Err(OrbitError::InvalidInput(
+            "machine.worker_tasks_max has invalid value 0; expected >= 1".to_string(),
+        )),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_WORKER_TASKS_MAX),
     }
 }
 

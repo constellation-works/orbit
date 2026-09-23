@@ -90,8 +90,9 @@ pub use plugins::{
 };
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot,
-    GLOBAL_ONLY_KEY_PREFIX, MachineSettings, admit_config_key, admit_settable_config_key,
-    config_key_options, describe as describe_config_key, is_global_only_key,
+    GLOBAL_ONLY_KEY_PREFIX, MachineSettings, WorkerContainmentSettings, admit_config_key,
+    admit_settable_config_key, config_key_options, describe as describe_config_key,
+    is_global_only_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, ExecutionEnvPolicy, IgnoredCrewProperty, PrSettings, ResolvedConfig,

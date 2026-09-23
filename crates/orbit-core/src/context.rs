@@ -382,6 +382,8 @@ pub(crate) struct OrbitRuntimeSettings {
     system_crew: String,
     /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,
+    /// Global `machine.worker_*` limits for detached workers [ORB-12903].
+    worker_containment: orbit_config::WorkerContainmentSettings,
 }
 
 impl OrbitRuntimeSettings {
@@ -400,6 +402,7 @@ impl OrbitRuntimeSettings {
         complexity_crews: orbit_config::ComplexityCrewPools,
         system_crew: String,
         operation: orbit_config::OperationPolicy,
+        worker_containment: orbit_config::WorkerContainmentSettings,
     ) -> Self {
         Self {
             persistence,
@@ -415,11 +418,16 @@ impl OrbitRuntimeSettings {
             complexity_crews,
             system_crew,
             operation,
+            worker_containment,
         }
     }
 
     pub(crate) fn operation(&self) -> &orbit_config::OperationPolicy {
         &self.operation
+    }
+
+    pub(crate) fn worker_containment(&self) -> &orbit_config::WorkerContainmentSettings {
+        &self.worker_containment
     }
 
     pub(crate) fn automation_stall_window_minutes(&self) -> u32 {

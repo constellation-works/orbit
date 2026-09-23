@@ -353,8 +353,8 @@ pub(crate) fn reject_workspace_machine_table(
     }
     Err(OrbitError::InvalidInput(format!(
         "[{table}] is not a workspace setting: remove it from '{}'. This machine's identity \
-         lives only in the global config.toml, where `orbit init` writes it; \
-         `orbit config set --global machine.name <value>` renames it",
+         and worker limits live only in the global config.toml, where `orbit init` writes the \
+         identity; `orbit config set --global machine.<key> <value>` edits them",
         redact_home_dir(&path.display().to_string())
     )))
 }

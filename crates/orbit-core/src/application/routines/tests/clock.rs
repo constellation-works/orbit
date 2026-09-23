@@ -427,6 +427,15 @@ fn rendered_systemd_service_discovers_local_provider_launchers() {
     assert!(!rendered_path.contains("/nix/store/"));
     assert!(rendered.contains("Type=oneshot"));
     assert!(rendered.contains("KillMode=process"));
+    // 2026-09-23 OOM outage: an unbounded sweep cgroup let one run take the host.
+    assert!(
+        rendered.contains("\nMemoryHigh=") && rendered.contains("\nTasksMax="),
+        "the sweep unit bounds the work left in its cgroup"
+    );
+    assert!(
+        !rendered.contains("MemoryMax="),
+        "a hard limit on the sweep cgroup would OOM-kill in-flight uncontained runs"
+    );
     assert!(rendered.contains("ExecStart=/opt/orbit/bin/orbit clock tick"));
 }
 

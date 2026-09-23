@@ -12,7 +12,8 @@ contain task content and command output, so report only the decisive lines.
 
 ## Identify the Source
 
-There are four separate operational evidence sources:
+There are four separate operational evidence sources (plus, on Linux, each
+run's [worker scope](#worker-resource-containment)):
 
 | Source | Contents | First inspection |
 | --- | --- | --- |
@@ -113,6 +114,75 @@ orbit run logs <run_id> --json
 For a failed, cancelled, or stuck run, continue with
 [run-debugging.md](../../orbit-orchestrate/references/run-debugging.md). It covers the run bundle, v2
 audit trail, blobs, and live-process checks in the right order.
+
+## Worker Resource Containment
+
+On Linux with a reachable systemd user manager, every detached pipeline worker
+and everything it spawns (agent CLIs, cargo, rustc, test binaries) runs in its
+own transient scope, `orbit-worker-<run_id>-<nonce>.scope`, under the user
+manager's `app.slice`. One runaway run is throttled or OOM-killed inside that
+scope; the dashboard, the sweep clock, SSH, and sibling runs keep working.
+
+The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
+
+| Key | Default | Scope property |
+| --- | --- | --- |
+| `machine.worker_containment` | `true` | `false` launches workers in the caller's cgroup |
+| `machine.worker_memory_high` | `40%` | `MemoryHigh=`: the kernel throttles the run above it |
+| `machine.worker_memory_max` | `50%` | `MemoryMax=`: OOM kills stay inside the run |
+| `machine.worker_tasks_max` | `4096` | `TasksMax=`: processes plus threads before fork/clone fails |
+
+Memory values take bytes with an optional `K`/`M`/`G`/`T` suffix, a
+percentage of physical RAM (resolved by systemd, so the defaults scale with
+the host), or `infinity`. Change one with
+`orbit config set --global machine.worker_memory_max 12G`; a worker picks up
+the value its launching process loaded, so restart a long-lived
+`orbit web serve` between runs (never mid-run) to apply it there. Each scope
+also sets `OOMPolicy=continue`: the kernel kills the largest process in the run
+rather than systemd stopping the whole scope, so the worker survives to record
+the cause.
+
+Inspect a live run's scope:
+
+```bash
+systemctl --user list-units --type=scope 'orbit-worker-*' --no-pager
+unit="$(systemctl --user list-units --type=scope --plain --no-legend 'orbit-worker-<run_id>-*' \
+  | awk '{print $1}')"
+systemctl --user show -p MemoryHigh -p MemoryMax -p TasksMax -p MemoryCurrent -p TasksCurrent "$unit"
+cat "/proc/<worker_pid>/cgroup"   # 0::/…/app.slice/orbit-worker-….scope
+scope_dir="/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/<worker_pid>/cgroup")"
+cat "$scope_dir"/{memory.max,pids.max,memory.events,pids.events}
+```
+
+A run that fails after its scope hit a limit carries the error code
+`worker_resource_limit` in `orbit run show`, naming `memory.max` / `pids.max`
+and how many processes were OOM-killed or forks refused. The worker records it
+itself; if the worker process died instead, its launcher records it when it is
+still watching the child. A run whose launcher had already exited can still
+end as `interrupted` / `process_not_found`; then correlate with the kernel log
+(`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
+
+Containment falls back to the old behaviour, with one warning per Orbit
+process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
+workers launch without a bounded systemd scope"), when it is disabled, on
+macOS, or when `systemd-run --user --scope` cannot reach a user manager
+(containers, sandboxes, sessions without `XDG_RUNTIME_DIR`). Uncontained
+workers share the launching service's cgroup. The rendered `orbit-sweep.service`
+carries `MemoryHigh=70%` and `TasksMax=4096` as a backstop, and re-enabling the
+clock (`orbit clock enable`) rewrites an older installed unit. `orbit-web.service`
+is operator-installed: bound it with a user drop-in such as
+`~/.config/systemd/user/orbit-web.service.d/limits.conf` (`[Service]`
+`MemoryHigh=`, `MemoryMax=`, `TasksMax=`), then `systemctl --user
+daemon-reload`; apply it to the running unit with `systemctl --user
+set-property orbit-web.service …` rather than a restart, which would interrupt
+in-flight uncontained runs.
+
+Restarts: a contained worker lives outside the `orbit-web.service` and
+`orbit-sweep.service` cgroups, so restarting either never signals it. An
+uncontained worker keeps the existing guarantee: it runs in its own `setsid`
+session and the sweep unit uses `KillMode=process`. Stopping a worker scope
+(`systemctl --user stop orbit-worker-….scope`) kills that run; use
+`orbit run cancel` instead.
 
 ## Archive-Pruning Warning
 

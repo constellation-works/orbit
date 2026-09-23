@@ -144,6 +144,10 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `workflow.hard_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
 | `workflow.required_validation_commands` | array&lt;string&gt; | Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted. |
+| `machine.worker_containment` | bool | Global only. Run each detached pipeline worker in its own systemd user scope bounded by the `machine.worker_*` limits (default `true`; Linux with a user manager, otherwise workers launch unbounded with a warning). |
+| `machine.worker_memory_high` | string | Global only. Worker scope `MemoryHigh=`: size such as `6G`, percentage of RAM, or `infinity` (default `40%`). |
+| `machine.worker_memory_max` | string | Global only. Worker scope `MemoryMax=`, same grammar (default `50%`). |
+| `machine.worker_tasks_max` | integer | Global only. Worker scope `TasksMax=` (default `4096`). |
 | `tasks.id_start` | integer | Floor for this machine's task-id allocator. Forward-only; lets machines hold disjoint ID ranges. |
 | `automation.stall_window_minutes` | integer | Minutes a deferred delivery-automation reason may persist before the evaluator logs a warning and files one friction (1–1440). |
 | `scoring.enabled` | bool | Whether scoreboard metrics are recorded for task runs. |
