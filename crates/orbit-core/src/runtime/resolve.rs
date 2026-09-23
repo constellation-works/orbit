@@ -427,10 +427,11 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
     if !path.is_dir() {
         return false;
     }
-    if path.join("config.toml").is_file() {
+    if path.join("config.yaml").is_file() || path.join("config.toml").is_file() {
         return true;
     }
 
+    // Retain the legacy layout marker for workspaces without an identity file.
     // Task bundles are canonical in the global registry. The checkout-local
     // `.orbit/tasks` projection was removed in layout version 3, so it cannot
     // be part of the initialized-root probe anymore.
