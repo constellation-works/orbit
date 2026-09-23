@@ -40,7 +40,7 @@
 //! [ORB-12801].
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
@@ -348,7 +348,7 @@ where
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let caller = CallerProcess::current();
-    let ancestry = scan_ancestry_session(&dir, &caller);
+    let ancestry = scan_ancestry_session(global_root, &caller);
     // Nothing legacy to weigh: the answer is the same either way, so the flag
     // is never read. An unreadable session directory is still the sandbox
     // answering — that gate is not part of the deprecation [ORB-12798].
@@ -586,8 +586,9 @@ fn credential_from_descriptor(dir: &Path) -> Option<SessionRecord> {
     // name: a plugin may write neither the session directory nor any record in
     // it. A descriptor on a record the host wrote therefore resolves to the
     // same inode by name; a forgery does not.
-    let named = fs::metadata(dir.join(&record.token)).ok()?;
-    (named.dev() == held.dev() && named.ino() == held.ino()).then_some(record)
+    let named = orbit_common::fs::io::open_read_only_no_follow(&dir.join(&record.token)).ok()?;
+    let named = named.metadata().ok()?;
+    (named.is_file() && named.dev() == held.dev() && named.ino() == held.ino()).then_some(record)
 }
 
 /// Descriptor inheritance is a Unix contract, and so is every sandbox Orbit
@@ -599,6 +600,21 @@ fn credential_from_descriptor(_dir: &Path) -> Option<SessionRecord> {
 
 fn callback_dir(global_root: &Path) -> PathBuf {
     global_root.join(SESSION_DIR)
+}
+
+/// Resolve the existing callback directory under the selected host root.
+/// Symlinked state subdirectories that escape that root are refused before a
+/// directory scan can follow them.
+fn validated_callback_session_dir(global_root: &Path) -> std::io::Result<PathBuf> {
+    let root = global_root.canonicalize()?;
+    let dir = callback_dir(&root).canonicalize()?;
+    if !dir.starts_with(&root) || !std::fs::metadata(&dir)?.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "plugin callback directory is outside its host root or is not a directory",
+        ));
+    }
+    Ok(dir)
 }
 
 fn identity_from(record: &SessionRecord) -> PluginCallbackIdentity {
@@ -627,8 +643,31 @@ fn load_token_session(dir: &Path, token: &str) -> Result<SessionRecord, OrbitErr
         return Err(invalid_callback_credential(None));
     }
     let path = dir.join(token);
-    match fs::read(&path) {
-        Ok(bytes) => parse_session(&bytes).ok_or_else(|| invalid_callback_credential(None)),
+    match orbit_common::fs::io::open_read_only_no_follow(&path) {
+        Ok(file) => {
+            let metadata = file.metadata().map_err(|error| {
+                OrbitError::Io(format!(
+                    "read plugin callback session `{}`: {error}",
+                    path.display()
+                ))
+            })?;
+            if !metadata.is_file() {
+                return Err(invalid_callback_credential(None));
+            }
+            let mut bytes = Vec::new();
+            file.take(MAX_SESSION_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| {
+                    OrbitError::Io(format!(
+                        "read plugin callback session `{}`: {error}",
+                        path.display()
+                    ))
+                })?;
+            if bytes.len() > MAX_SESSION_BYTES {
+                return Err(invalid_callback_credential(None));
+            }
+            parse_session(&bytes).ok_or_else(|| invalid_callback_credential(None))
+        }
         // `NotFound` is a token that matches no session. `PermissionDenied`
         // is a confined child reaching for a record the sandbox grants some
         // other plugin: both are a credential this caller does not hold.
@@ -647,7 +686,7 @@ fn load_token_session(dir: &Path, token: &str) -> Result<SessionRecord, OrbitErr
     }
 }
 
-fn scan_ancestry_session(dir: &Path, caller: &CallerProcess) -> AncestryScan {
+fn scan_ancestry_session(global_root: &Path, caller: &CallerProcess) -> AncestryScan {
     // Landlock refuses `/proc/<pid>` of any other process (it would leak
     // `environ`). Identity therefore uses syscalls that still work in the
     // confined child: this pid, `getppid`, and `getpgrp`.
@@ -656,7 +695,14 @@ fn scan_ancestry_session(dir: &Path, caller: &CallerProcess) -> AncestryScan {
     // scan is how an unidentified plugin child is told apart from a local
     // caller: `EACCES` here is the sandbox answering, and an absent directory
     // means no session was ever minted on this host.
-    let entries = match fs::read_dir(dir) {
+    let dir = match validated_callback_session_dir(global_root) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return AncestryScan::Unreadable;
+        }
+        Err(_) => return AncestryScan::None,
+    };
+    let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             return AncestryScan::Unreadable;
@@ -664,9 +710,24 @@ fn scan_ancestry_session(dir: &Path, caller: &CallerProcess) -> AncestryScan {
         Err(_) => return AncestryScan::None,
     };
     for entry in entries.flatten() {
-        let Ok(bytes) = fs::read(entry.path()) else {
+        let Ok(file) = orbit_common::fs::io::open_read_only_no_follow(&entry.path()) else {
             continue;
         };
+        let Ok(metadata) = file.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if file
+            .take(MAX_SESSION_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() > MAX_SESSION_BYTES
+        {
+            continue;
+        }
         let Some(record) = parse_session(&bytes) else {
             continue;
         };

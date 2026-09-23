@@ -8,6 +8,7 @@
 //! untouched.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -320,16 +321,41 @@ pub fn plugin_state_dir(global_root: &Path, name: &str) -> PathBuf {
 
 /// The workspace's committed pin file, when it has one.
 pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitError> {
-    let path = orbit_dir.join(orbit_types::plugin::PIN_FILE_NAME);
-    let Ok(raw) = std::fs::read_to_string(&path) else {
+    let Ok(path) = validated_pin_file_path(orbit_dir) else {
         return Ok(None);
     };
+    let Ok(mut file) = orbit_common::fs::io::open_read_only_no_follow(&path) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(None);
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    let mut raw = String::new();
+    if file.read_to_string(&mut raw).is_err() {
+        return Ok(None);
+    }
     let pins: PluginPinFile = serde_yaml::from_str(&raw).map_err(|error| {
         OrbitError::InvalidInput(format!("invalid {}: {error}", path.display()))
     })?;
     pins.validate()
         .map_err(|error| OrbitError::InvalidInput(format!("{}: {error}", path.display())))?;
     Ok(Some(pins))
+}
+
+/// Resolve the runtime-selected `.orbit` directory before appending the fixed
+/// pin filename. The leaf is opened with no-follow semantics by the caller.
+fn validated_pin_file_path(orbit_dir: &Path) -> std::io::Result<PathBuf> {
+    let root = orbit_dir.canonicalize()?;
+    if !std::fs::metadata(&root)?.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "plugin pin root is not a directory",
+        ));
+    }
+    Ok(root.join(orbit_types::plugin::PIN_FILE_NAME))
 }
 
 /// Every active plugin tool this host serves, with the scope its manifest
