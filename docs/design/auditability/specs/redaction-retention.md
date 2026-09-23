@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Redaction and Retention Boundaries
-last_validated: 2026-08-31
+last_validated: 2026-09-23
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -51,7 +51,7 @@ Global process tracing:
 - Uses `~/.orbit/state/logs/orbit.jsonl` as the active file.
 - Is append-only within the active file; oversized files are renamed to dated archives and old archives are pruned from long-lived processes and when the active file exceeds its size budget.
 - Is an operational log stream, not the canonical workflow envelope.
-- Carries policy-denial path/resource strings and friction summaries after [T20260427-0023], so default tracing redaction is part of its durability boundary.
+- Carries policy-denial path/resource strings, so default tracing redaction is part of its durability boundary.
 
 ## Failure Modes
 

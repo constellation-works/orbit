@@ -3,7 +3,8 @@ summary: "Lexical task search using SQLite FTS5 BM25."
 type: design
 title: "Task Search — Overview"
 owner: codex
-last_updated: 2026-09-21
+last_updated: 2026-09-23
+last_validated: 2026-09-23
 status: Accepted
 feature: orbit-search
 doc_role: overview
@@ -28,8 +29,9 @@ external references, and artifact manifest paths, then applies existing filters.
 Federation interleaves per-workspace rankings and attributes each hit.
 
 The index retains `semantic.db` for persisted-path compatibility. The first
-writable open migrates earlier FTS layouts and removes obsolete vector tables,
-then vacuums. Read-only/unavailable storage retains the bundle fallback.
+writable open migrates earlier FTS layouts and removes obsolete vector tables;
+vacuum runs when those vector tables existed. Read-only runtimes can search an
+existing index, while an unavailable index uses the bundle substring fallback.
 See [upgrade guidance](../../runbooks/upgrades.md#lexical-search-migration).
 
 The public query mode is lexical. There is no inference backend, download,
