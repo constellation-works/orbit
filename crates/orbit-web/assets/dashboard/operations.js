@@ -231,7 +231,7 @@ async function runOperation({ selection, key, feedbackId, pending, failure, rend
     if (!selection.current()) return;
     feedback(feedbackId, "success", success(result));
     if (result.task_id) {
-      const link = el("a", { text: ` Open ${result.task_id} →` });
+      const link = el("a", { class: "mono operation-run-link operation-task-link operation-link", text: ` Open ${result.task_id} →` });
       link.href = `?workspace=${encodeURIComponent(selection.workspace)}#tasks?status=all&q=${encodeURIComponent(result.task_id)}`;
       $(feedbackId)?.appendChild(link);
     }
@@ -450,7 +450,7 @@ function jobIdFromTarget(target) {
 function jobLink(target) {
   const jobId = jobIdFromTarget(target);
   if (!jobId) return el("span", { class: "mono", text: target || "—" });
-  const link = el("a", { class: "mono", text: jobId, title: `Open ${jobId} under Jobs` });
+  const link = el("a", { class: "mono operation-run-link operation-job-link operation-link", text: jobId, title: `Open ${jobId} under Jobs` });
   link.href = `#operations/jobs?job=${encodeURIComponent(jobId)}`;
   return link;
 }
@@ -826,7 +826,7 @@ function autoTaskChip(text, tone = "") {
 }
 
 function taskLink(taskId, workspaceId) {
-  const link = el("a", { class: "mono", text: taskId, title: `Open ${taskId}` });
+  const link = el("a", { class: "mono operation-run-link operation-task-link operation-link", text: taskId, title: `Open ${taskId}` });
   link.href = `?workspace=${encodeURIComponent(workspaceId || "")}#tasks?status=all&q=${encodeURIComponent(taskId)}`;
   return link;
 }
@@ -912,7 +912,7 @@ function syncAutoTaskSchedulerNote() {
     note.appendChild(el("span", { text: "Definitions live in .orbit/auto_tasks/ and are evaluated on the host sweep clock. Toggle writes the definition's enabled field; Mint now bypasses schedule, enabled and dedupe." }));
     return;
   }
-  const link = el("a", { text: scheduler.name });
+  const link = el("a", { class: "operation-run-link operation-routine-link operation-link", text: scheduler.name });
   link.href = "#operations/routines";
   if (!scheduler.enabled) {
     note.className += " warn";
@@ -2032,7 +2032,7 @@ function renderAutoDrain(payload) {
   body.appendChild(autoDrainControls(payload, counts));
   if (lastAutoDrainRun && lastAutoDrainRun.workspaceId === workspace?.id) {
     const runLink = el("a", {
-      class: "operation-control-note auto-drain-last-run",
+      class: "operation-control-note auto-drain-last-run operation-run-link operation-link",
       text: `Open run ${lastAutoDrainRun.runId} (${lastAutoDrainRun.state}, completion: ${lastAutoDrainRun.completion}) →`,
       title: "Open the submitted parent run",
     });

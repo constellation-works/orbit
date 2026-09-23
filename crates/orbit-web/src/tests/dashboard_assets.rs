@@ -1249,10 +1249,13 @@ async fn dashboard_scoreboard_is_reachable_under_diagnostics() {
         "scoreboard-insights",
         "scoreboard-orchestration",
         "scoreboard-orchestration-count",
-        "scoreboard-highlights",
     ] {
         assert!(body.contains(&format!(r#"id="{id}""#)), "{id} must survive");
     }
+    assert!(
+        !body.contains(r#"id="scoreboard-highlights""#),
+        "scoreboard-highlights host must be removed"
+    );
     // ORB-10588 appended `reliability` to the same list.
     assert!(
         router.contains(
@@ -4050,15 +4053,20 @@ fn dashboard_scoreboard_highlights_are_accessible_and_honest() {
         "window tabs must have a visible focus ring"
     );
 
+    // ORB-12889: Daniel finds 'Notable completions' not useful; retired host, render functions and CSS.
     assert!(
-        scoreboard.contains("Notable completions")
-            && scoreboard.contains("not a quality score")
-            && scoreboard.contains("No completion summary recorded.")
-            && scoreboard.contains("function renderNotableCompletions("),
-        "highlights must name the reading order and missing summaries"
+        !index.contains("scoreboard-highlights"),
+        "Notable completions host section must be removed from index.html"
     );
     assert!(
-        !scoreboard.contains("quality score") || scoreboard.contains("not a quality score"),
+        !scoreboard.contains("Notable completions")
+            && !scoreboard.contains("renderNotableCompletions")
+            && !scoreboard.contains("renderHighlightItem")
+            && !scoreboard.contains("No completion summary recorded."),
+        "Notable completions render functions and labels must be removed from scoreboard.js"
+    );
+    assert!(
+        !scoreboard.contains("quality score") || scoreboard.contains("Not a quality score."),
         "the UI must not claim an objective quality score"
     );
     assert!(
@@ -4085,10 +4093,8 @@ fn dashboard_scoreboard_highlights_are_accessible_and_honest() {
     );
 
     assert!(
-        css.contains(".scoreboard-highlights")
-            && css.contains(".scoreboard-highlight-excerpt")
-            && css.contains("overflow-wrap: anywhere;"),
-        "highlights must wrap instead of clipping"
+        !css.contains(".scoreboard-highlights") && !css.contains(".scoreboard-highlight-excerpt"),
+        "Notable completions CSS must be removed from dashboard.css"
     );
     let scoreboard_720 = css
         .find("table.sb2-matrix col.metric { width: 132px; }")
@@ -5620,4 +5626,62 @@ if (!btnClasses.has('on')) throw new Error('expected on class on wrap button');
 if (btnAttrs['aria-pressed'] !== 'true') throw new Error('expected aria-pressed true');
 "#;
     run_dashboard_javascript_test(script);
+}
+
+/// ORB-12889: task status/crew/complexity selects are content-sized (no wider
+/// than needed for longest option + chevron) and .row STATUS/CREW columns
+/// shrink so the title column gains width.
+#[test]
+fn dashboard_tasks_table_selects_are_compact_and_content_sized() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+
+    // Status select is capped tightly for longest status ("in-progress" + chevron)
+    assert!(
+        css.contains(".task-status-select {") && css.contains("max-width: 108px;"),
+        "status select must be capped at compact content width"
+    );
+
+    // Crew and complexity selects share the compact rule (fits longest crew + chevron)
+    assert!(
+        css.contains(".task-crew-select,")
+            && css.contains(".task-complexity-select {")
+            && css.contains("max-width: 120px;"),
+        "crew and complexity selects must be capped at compact content width"
+    );
+
+    // .row STATUS and CREW columns shrunk to match
+    assert!(
+        css.contains("grid-template-columns: minmax(80px, max-content) minmax(140px, 1fr) minmax(104px, max-content) minmax(120px, max-content);"),
+        "desktop task row must shrink status and crew columns to return space to title"
+    );
+}
+
+/// ORB-12889: task-id links (taskLink) and all Operations links use the dashboard
+/// accent link color and are legible on dark and light themes (no browser-default blue).
+#[test]
+fn dashboard_operations_links_use_accent_color() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let operations = include_str!("../../assets/dashboard/operations.js");
+
+    // taskLink has the accent link class
+    assert!(
+        operations.contains("function taskLink(taskId, workspaceId) {")
+            && operations.contains("operation-run-link operation-task-link"),
+        "taskLink must receive the dashboard link treatment"
+    );
+
+    // jobLink has the accent link class
+    assert!(
+        operations.contains("function jobLink(target) {")
+            && operations.contains("operation-run-link operation-job-link"),
+        "jobLink must receive the dashboard link treatment"
+    );
+
+    // CSS provides accent link color for all operation links
+    assert!(
+        css.contains(".operation-run-link,")
+            && css.contains(".operation-task-link,")
+            && css.contains("color: var(--accent);"),
+        "operations links must use the theme accent color"
+    );
 }
