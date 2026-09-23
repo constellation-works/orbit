@@ -1,10 +1,11 @@
 //! Job catalog and job-run listing handlers.
 
 use crate::state::Ws;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
 use orbit_core::application::job::{JobRunListParams, JobRunOrder, job_run_to_json};
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
@@ -12,8 +13,59 @@ use serde_json::{Value, json};
 
 use super::{bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
 use crate::projections::job_catalog_to_json_with_last_run;
+use crate::state::DashboardState;
+
+use super::routines::{
+    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
+};
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
+
+/// Submit a catalog job in the selected workspace, as `orbit run job` does.
+/// Delivery pipelines need task input and are deliberately unavailable through
+/// this no-input action. The UI directs operators to Ship or Drain for those.
+pub(super) async fn run_job_action(
+    State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(rejection) = explicit_workspace(&query) {
+        return rejection.into_response();
+    }
+    if let Err(denial) = authorized_caller(&DASHBOARD_JOB_RUN, state.operator_session()) {
+        return authorization_denied(denial);
+    }
+    let id = match validate_id(&id) {
+        Ok(id) => id.to_string(),
+        Err(message) => return bad_request(message),
+    };
+    match blocking("run job", move || {
+        // Resolve only catalog ids. submit_job_run also accepts filesystem
+        // paths for the CLI, which a dashboard route must never accept.
+        runtime.show_job_catalog_entry(&id)?;
+        if (id.starts_with("task_") && id != "task_pilot_pipeline")
+            || id.starts_with("workspace_")
+            || id.starts_with("epic_")
+        {
+            return Err(orbit_core::OrbitError::InvalidInput(format!(
+                "job '{id}' requires task input or a delivery window; use Ship or Drain"
+            )));
+        }
+        runtime.submit_job_run(&id, json!({}), Some("dashboard"))
+    })
+    .await
+    {
+        Ok(invoke) => Json(json!({
+            "job_id": invoke.job_name,
+            "run_id": invoke.run_id,
+            "state": if invoke.queued { "queued" } else { "submitted" },
+            "submitted_at": invoke.submitted_at,
+        }))
+        .into_response(),
+        Err(response) => *response,
+    }
+}
 
 #[derive(Deserialize, Default)]
 pub(super) struct JobRunListQuery {

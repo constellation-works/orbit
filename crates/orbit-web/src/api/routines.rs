@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
-    DASHBOARD_CLOCK_SERVICE, DASHBOARD_ROUTINE_TOGGLE, GovernedOperation, authorize,
+    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE, GovernedOperation,
+    authorize,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
@@ -371,6 +372,7 @@ pub(super) fn report_json(
         "controls_authorized": authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok(),
         "capabilities": {
             "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE, operator_session),
+            "job_run": action_capability(&DASHBOARD_JOB_RUN, operator_session),
             "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE, operator_session),
             "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE, operator_session),
         },

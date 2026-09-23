@@ -27,7 +27,7 @@ export function initOperations(nextContext) {
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = null;
-    for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback"]) feedback(id, "", "");
+    for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
   });
 }
 
@@ -976,10 +976,8 @@ function renderAutoTasks(payload) {
 }
 
 // ---------------------------------------------------------------------------
-// Jobs. The catalogue is projected from what the dashboard already serves:
-// every `job:` target a routine names plus every job id in this workspace's
-// recent runs. There is no job endpoint yet, so Run is offered but not wired;
-// the row hands the operator the exact CLI command instead.
+// Jobs. The catalogue is projected from routine targets and recent runs.
+// Manual Run submits catalog jobs; delivery pipelines use Ship or Drain.
 
 const JOB_RUN_LIMIT = 100;
 let lastJobs = null;
@@ -1037,10 +1035,27 @@ function jobRow(job, workspace) {
   const detailsKey = `job:${job.id}`;
   const last = job.lastRun;
   const command = jobCommand(job.id, workspace);
-  const runReason = `Running a job from the dashboard is not wired yet. From a terminal: ${command}`;
-  const run = el("button", { class: "operation-button primary job-run", text: "Run ▸", title: runReason });
+  const key = `job:run:${workspace.id}:${job.id}`;
+  const runReason = jobFamily(job.id) === "delivery"
+    ? "Delivery jobs require task input or a delivery window. Use Ship or Drain."
+    : controlReason(lastOperations, "job_run");
+  const pending = pendingOperations.has(key);
+  const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", title: runReason || `Run ${job.id} in ${workspace.name}` });
   run.type = "button";
-  run.disabled = true;
+  run.disabled = Boolean(runReason) || pending;
+  run.addEventListener("click", () => {
+    if (runReason) return;
+    const selection = selectionSnapshot();
+    runOperation({
+      selection, key, feedbackId: "job-operation-feedback",
+      pending: `Submitting ${job.id}…`,
+      failure: `Could not run ${job.id}`,
+      render: () => renderJobs(lastJobs),
+      request: () => postJson(`/api/jobs/${encodeURIComponent(job.id)}/run`, {}),
+      refresh: fetchAndRenderJobs,
+      success: (result) => `Run ${result.run_id} ${result.state} for ${result.job_id}.`,
+    });
+  });
   const scheduledBy = job.routines.length
     ? job.routines.map((routine) => {
       const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
@@ -1090,7 +1105,7 @@ function jobRow(job, workspace) {
         el("code", { class: "mono", text: command }),
         copy,
       ]),
-      el("p", { class: "operation-control-note", text: "Every step receives --input key=value pairs; the dashboard button will submit the same run once the job endpoint lands." }),
+      el("p", { class: "operation-control-note", text: "Run submits without extra input. Delivery jobs need a task id and are started through Ship or Drain." }),
       recent.length
         ? el("ul", { class: "operation-recent-runs" }, recent.map((run) => el("li", {}, [
           outcomeDot(run.state),
@@ -1105,6 +1120,7 @@ function jobRow(job, workspace) {
 
 function renderJobs(payload) {
   lastJobs = payload;
+  if (payload.routines) lastOperations = payload.routines;
   const body = $("jobs-body");
   if (!body) return;
   body.textContent = "";
@@ -1148,18 +1164,19 @@ function renderJobs(payload) {
       for (const job of members) group.appendChild(jobRow(job, workspace));
       body.appendChild(group);
     }
-    body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs; the same list as orbit job list once the job endpoint lands.` }));
+    body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
   }
   $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${running.length} running · ${workspace.name}`;
   setRailSubtabCount("rail-count-ops-jobs", running.length ? `${running.length} running` : "");
 }
 
-function fetchAndRenderJobs() {
+function fetchAndRenderJobs(routinesRequest = null) {
   if (!selectedWorkspace()) {
     return requestPanel("jobs-body", "unselected", () => Promise.resolve({ runs: [] }), renderJobs, "jobs-count");
   }
   return requestPanel("jobs-body", "jobs",
-    () => fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`).then((runs) => ({ runs })),
+    () => Promise.all([routinesRequest || Promise.resolve(lastOperations), fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`)])
+      .then(([routines, runs]) => ({ routines, runs })),
     renderJobs, "jobs-count");
 }
 
@@ -1614,7 +1631,7 @@ export async function fetchAndRenderOperations() {
     requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
     requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),
     fetchAndRenderAutoTasks(),
-    fetchAndRenderJobs(),
+    fetchAndRenderJobs(routines),
   ]));
 }
 

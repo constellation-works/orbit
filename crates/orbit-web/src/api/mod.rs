@@ -592,6 +592,7 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
             post(frictions::resolve_friction_action),
         )
         .route("/jobs", get(jobs::list_jobs))
+        .route("/jobs/:id/run", post(jobs::run_job_action))
         .route("/job-runs", get(jobs::list_job_runs))
         .route("/job-runs/:id/resume", post(jobs::resume_job_run_action))
         .route("/workflows/ship", post(runs::ship_workflow_action))
