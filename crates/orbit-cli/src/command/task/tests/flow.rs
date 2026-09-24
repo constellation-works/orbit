@@ -4,7 +4,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use orbit_core::TaskStatus;
 
-use crate::command::task::flow::{FlowPoint, StatusChange, TerminalKind, compute_flow, format_net};
+use crate::command::task::flow::{
+    FlowPoint, StatusChange, TerminalKind, compute_flow, format_net, report_start,
+};
 
 fn at(day: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, day, 12, 0, 0)
@@ -273,4 +275,14 @@ fn net_renders_a_leading_sign_only_when_the_backlog_grew() {
     assert_eq!(format_net(3), "+3");
     assert_eq!(format_net(0), "0");
     assert_eq!(format_net(-3), "-3");
+}
+
+#[test]
+fn a_span_past_the_timestamp_range_is_refused_instead_of_panicking() {
+    let now = at(20);
+    assert_eq!(
+        report_start(now, Duration::days(7), 2),
+        Some(now - Duration::days(14))
+    );
+    assert_eq!(report_start(now, Duration::weeks(20_000_000), 1), None);
 }
