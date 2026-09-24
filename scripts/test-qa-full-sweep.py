@@ -689,6 +689,64 @@ spec:
                 [orbit_bin, "--root", str(root), "--workspace", str(work), *command], work,
                 [assertion], lambda evidence, assertion=assertion: parse_json(evidence, assertion))
 
+    plugin_source = temp / "qa-plugin"
+    (plugin_source / "bin").mkdir(parents=True)
+    backend = plugin_source / "bin/backend.sh"
+    backend.write_text("#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"echo\":%s}}\\n' \"$input\"\n")
+    backend.chmod(0o755)
+    (plugin_source / "plugin.yaml").write_text("""schemaVersion: 2
+kind: Plugin
+metadata:
+  name: qashapes
+  version: 0.1.0
+  description: Isolated QA command group.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: recommend
+      description: Echo schema-derived input.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema:
+        type: object
+        properties:
+          query: { type: string }
+          max_depth: { type: integer }
+          tags: { type: array, items: { type: string } }
+      cli:
+        positional: [query]
+""")
+    plugin_base = [orbit_bin, "--root", str(root), "--workspace", str(work)]
+    added = checked("definition-policy-boundary",
+                    [*plugin_base, "plugin", "add", str(plugin_source)], work, [], succeeds)
+    enabled = (checked("definition-policy-boundary",
+                       [*plugin_base, "plugin", "enable", "qashapes"], work, [], succeeds)
+               if added else None)
+    if enabled:
+        plugin_input = {"query": "leakage", "max_depth": 3, "tags": ["rust", "cli"]}
+        operator_env = {**env, "ORBIT_OPERATOR": "1"}
+        group = run([*plugin_base, "qashapes", "recommend", "leakage", "--max-depth", "3",
+                     "--tags", "rust", "--tags", "cli", "--format", "json"],
+                    cwd=work, env=operator_env)
+        tool = run([*plugin_base, "tool", "run", "qashapes.recommend", "--input",
+                    json.dumps(plugin_input), "--format", "json"], cwd=work, env=operator_env)
+        failure = None
+        try:
+            group_body = parse_json(group, "plugin command group")
+            tool_body = parse_json(tool, "plugin tool run")
+            if group_body != tool_body or group_body.get("echo", {}).get("input") != plugin_input:
+                raise ValueError("plugin command group and tool run returned different behavior")
+        except (AttributeError, TypeError, ValueError) as error:
+            failure = str(error)
+        add_result(results, "definition-policy-boundary",
+                   finalize_result(tool, [], candidate_id))
+        add_result(results, "definition-policy-boundary",
+                   finalize_result(group,
+                                   ["plugin-derived-command-groups-match-tool-run"] if failure is None else [],
+                                   candidate_id, failure))
+
     def fs_access(evidence):
         body = parse_json(evidence, "doctor fs-access")
         if body.get("read", {}).get("allowed") is not True or body.get("modify", {}).get("allowed") is not False:
