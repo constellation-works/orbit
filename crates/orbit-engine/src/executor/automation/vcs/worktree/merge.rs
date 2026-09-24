@@ -9,7 +9,7 @@ use crate::executor::automation::input::{canonicalize_existing_dir, input_string
 use super::super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_output_raw, git_run, git_success,
-    git_timeout_error, resolve_worktree_start_point,
+    git_timeout_error, normalize_base_branch, resolve_worktree_start_point,
 };
 use super::super::handoff::rebase_in_progress;
 use super::resolve_shared_worktree_path;
@@ -40,7 +40,11 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
         ));
     }
 
-    let base = input_string_field(input, "base").unwrap_or_else(|| DEFAULT_BASE.to_string());
+    // Same spelling rule as the worktree start point: `origin/main` names the
+    // local `main` branch this step lands on, not a detached remote ref.
+    let base = normalize_base_branch(
+        &input_string_field(input, "base").unwrap_or_else(|| DEFAULT_BASE.to_string()),
+    )?;
     let base_sync_mode = base_sync_mode_from_input(input)?;
     let base_checkout = checkout_holding_branch(&repo_root, &base)?.unwrap_or(repo_root.clone());
     ensure_clean_checkout(&base_checkout, "base branch checkout")?;

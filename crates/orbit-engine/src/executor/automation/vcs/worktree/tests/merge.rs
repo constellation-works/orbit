@@ -284,3 +284,41 @@ impl RuntimeHost for MergeTestHost {
         &self.scoreboard_dir
     }
 }
+
+/// `origin/<branch>` is an accepted spelling of the base everywhere else; the
+/// merge must land on the local branch, not a detached remote ref.
+#[test]
+fn an_origin_prefixed_base_lands_on_the_local_branch() {
+    let temp = tempdir().unwrap();
+    let remote = temp.path().join("remote.git");
+    let seed = temp.path().join("seed");
+    let primary = temp.path().join("primary");
+    let worktree = temp.path().join("worktree");
+
+    git(temp.path(), &["init", "--bare", path(&remote)]);
+    init_repo(&seed);
+    commit_file(&seed, "base.txt", "base");
+    git(&seed, &["remote", "add", "origin", path(&remote)]);
+    git(&seed, &["push", "-u", "origin", BASE_BRANCH]);
+    git(
+        temp.path(),
+        &[
+            "clone",
+            "--branch",
+            BASE_BRANCH,
+            path(&remote),
+            path(&primary),
+        ],
+    );
+    configure_identity(&primary);
+    add_task_worktree(&primary, &worktree, "orbit/prefixed");
+    let commit = commit_file(&worktree, "task.txt", "task");
+    let host = MergeTestHost::new(&primary, temp.path());
+
+    let mut input = merge_input("prefixed-run", &worktree, "local");
+    input["base"] = json!(format!("origin/{BASE_BRANCH}"));
+    let result = merge_batch_worktree_into_base(&host, &input).unwrap();
+
+    assert_eq!(result["base"], BASE_BRANCH);
+    assert!(is_ancestor(&primary, &commit, BASE_BRANCH));
+}
