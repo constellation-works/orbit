@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP,
 };
+use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_common::security::redaction::redact_all;
 use orbit_core::application::job::{
     ActivityInvocationEvidence, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
@@ -151,34 +152,15 @@ const MIN_AUTO_DRAIN_SECONDS: u64 = 1;
 const AUTO_DRAIN_READINESS_LIMIT: usize = 50;
 
 /// Parses a "30m"/"2h"/"1d"-shaped duration the same way the CLI's `--for`
-/// does. `orbit-web` does not depend on `orbit-cli` (the dependency edge runs
-/// the other way), so this ~20-line parser is duplicated here rather than
-/// shared across that boundary.
+/// does, then requires a non-empty window.
 fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
-    let value = raw.trim();
-    if value.is_empty() {
+    if raw.trim().is_empty() {
         return Err("for_duration must not be empty".to_string());
     }
-    let split_at = value
-        .find(|c: char| c.is_alphabetic())
-        .ok_or_else(|| format!("invalid duration: {raw}"))?;
-    let (num_raw, unit_raw) = value.split_at(split_at);
-    let num: u64 = num_raw
-        .parse()
-        .map_err(|_| format!("invalid duration number: {raw}"))?;
-    let seconds = match unit_raw {
-        "s" => Some(num),
-        "m" => num.checked_mul(60),
-        "h" => num.checked_mul(3600),
-        "d" => num.checked_mul(86400),
-        "w" => num.checked_mul(604800),
-        _ => {
-            return Err(format!(
-                "invalid duration unit: {unit_raw} (expected s/m/h/d/w)"
-            ));
-        }
-    }
-    .ok_or_else(|| format!("duration '{raw}' is too large to represent"))?;
+    let seconds = parse_duration_seconds(raw).map_err(|error| match error {
+        orbit_core::OrbitError::InvalidInput(message) => message,
+        other => other.to_string(),
+    })?;
     if seconds < MIN_AUTO_DRAIN_SECONDS {
         return Err("for_duration must describe a bounded window greater than zero".to_string());
     }

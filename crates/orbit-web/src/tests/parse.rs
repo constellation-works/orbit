@@ -19,3 +19,15 @@ fn parses_duration() {
     let now = Utc::now();
     assert!(now.signed_duration_since(ts).num_seconds() >= 9);
 }
+
+#[test]
+fn bare_numbers_are_seconds() {
+    assert_eq!(parse_duration_seconds("90").expect("bare seconds"), 90);
+    assert_eq!(parse_duration_seconds("2m").expect("minutes"), 120);
+}
+
+#[test]
+fn overflowing_durations_are_rejected_rather_than_wrapped() {
+    let error = parse_duration_seconds("99999999999999999w").expect_err("must not wrap");
+    assert!(matches!(error, orbit_core::OrbitError::InvalidInput(_)));
+}

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+pub use orbit_common::protocol::tool_input::parse_duration_seconds;
 
 /// Shared CSV parsing for task add/update
 /// context file parsing and `orbit job`'s `--env-extra` handling.
@@ -43,40 +44,4 @@ pub fn parse_since(raw: &str) -> Result<DateTime<Utc>, orbit_core::OrbitError> {
             "duration '{raw}' is too large to convert into a timestamp"
         ))
     })
-}
-
-pub fn parse_duration_seconds(raw: &str) -> Result<u64, orbit_core::OrbitError> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return Err(orbit_core::OrbitError::InvalidInput(
-            "duration must not be empty".to_string(),
-        ));
-    }
-
-    let split_at = value
-        .find(|c: char| c.is_alphabetic())
-        .ok_or_else(|| orbit_core::OrbitError::InvalidInput(format!("invalid duration: {raw}")))?;
-    let (num_raw, unit_raw) = value.split_at(split_at);
-
-    let num: u64 = num_raw.parse().map_err(|_| {
-        orbit_core::OrbitError::InvalidInput(format!("invalid duration number: {raw}"))
-    })?;
-
-    let seconds = match unit_raw {
-        "s" => Some(num),
-        "m" => num.checked_mul(60),
-        "h" => num.checked_mul(3600),
-        "d" => num.checked_mul(86400),
-        "w" => num.checked_mul(604800),
-        _ => {
-            return Err(orbit_core::OrbitError::InvalidInput(format!(
-                "invalid duration unit: {unit_raw} (expected s/m/h/d/w)"
-            )));
-        }
-    }
-    .ok_or_else(|| {
-        orbit_core::OrbitError::InvalidInput(format!("duration '{raw}' is too large to represent"))
-    })?;
-
-    Ok(seconds)
 }
