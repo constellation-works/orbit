@@ -21,8 +21,8 @@ executions become runs; ordinary tool calls have their own audit records.
 **Machine** — one machine. It has an identity, the `[machine]` table in the
 global `~/.orbit/config.toml`: a stable `id`, a renameable display `name`, and
 an **immutable `task_prefix`** that namespaces every task ID this machine
-allocates. Written once, at `orbit init`. `orbit config show` displays it; only
-`machine.name` is settable.
+allocates. Written once, at `orbit init`. `orbit config show` displays it; of
+those identity fields, only `machine.name` is settable.
 
 **Workspace** — a logical project registered with a local checkout, with
 `.orbit/` at its root. A checkout declares an owner or replica role; the owner
@@ -86,23 +86,25 @@ recovery and the task pilot.
 choose crews, not executors.
 
 **Policy / fsProfile** — the filesystem grant an activity runs under
-(`reviewer`, `implementer`, `docs_writer`, `pure_compute`, `unrestricted`). A
-read-only activity that omits its profile silently falls back to workspace
-writes, so profiles are declared explicitly.
+(`reviewer`, `implementer`, `docs_writer`, `pure_compute`, `unrestricted`). An
+activity that omits its profile falls back to `unrestricted`, so profiles are
+declared explicitly.
 
 ## Scheduling
 
-**Routine** — a cron trigger (`.orbit/routines/*.yaml`) pointing at a
-`job:<name>` target, with a retry and overlap policy. Definitions are
+**Routine** — a definition (`.orbit/routines/*.yaml`) pointing at a
+`job:<name>` target, with a retry and overlap policy. The trigger is cron, or
+a state predicate for task-pilot. Definitions are
 per-user checkout state and are evaluated by every host holding an owner
 checkout of that workspace.
 
-**Sweep** — the stateless tick. `orbit sweep` fires whatever routine is due on
-this host, and an OS clock unit invokes it every minute.
+**Sweep** — the stateless tick. `orbit clock tick` (alias `orbit sweep`)
+evaluates due routines and auto-tasks on this host. An OS clock unit invokes
+`orbit clock tick` every minute.
 
 **Auto-task** — a definition (`.orbit/auto_tasks/*.yaml`) that *mints a task* on
-its own schedule. One generic routine drives all of them, so adding a recurring
-chore is a new definition, never new code or a new routine.
+its own schedule. The host clock tick evaluates due definitions directly, so
+adding a recurring chore is a new definition, never new code or a new routine.
 
 The distinction that matters: a **routine** runs a pipeline on a schedule; an
 **auto-task** creates work on a schedule, which something else then ships.
