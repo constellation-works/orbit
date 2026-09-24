@@ -59,8 +59,9 @@ impl Store {
             params.len() + 2
         );
         let mut params = params;
-        params.push(Box::new(limit as i64));
-        params.push(Box::new(offset as i64));
+        // Saturate: a wrapped negative LIMIT/OFFSET means "no bound" to SQLite.
+        params.push(Box::new(i64::try_from(limit).unwrap_or(i64::MAX)));
+        params.push(Box::new(i64::try_from(offset).unwrap_or(i64::MAX)));
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
 
