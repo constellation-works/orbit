@@ -4,10 +4,9 @@ use tempfile::tempdir;
 use super::super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
 use super::super::super::dispatch::{auto_detected_providers, run_action, vscode_home_user_dir};
 use super::super::claude::claude_mcp_server_value;
-use super::super::codex::codex_mcp_server_table;
 use super::super::common::ServerLaunch;
-use super::super::grok::grok_mcp_server_table;
 use super::super::simple_json::simple_mcp_server_value;
+use super::super::toml_servers::mcp_server_table;
 use super::{BOUND_LAUNCH, OPERATOR_LAUNCH};
 
 #[test]
@@ -23,7 +22,7 @@ fn server_value_builders_emit_mcp_serve_only() {
     assert_eq!(gemini_args.len(), 2);
     assert!(gemini.get("cwd").is_none());
 
-    let codex = codex_mcp_server_table(ServerLaunch::default());
+    let codex = mcp_server_table(ServerLaunch::default());
     let codex_args = codex["args"].as_array().expect("codex args");
     assert_eq!(codex_args.len(), 2);
     assert!(codex.get("cwd").is_none());
@@ -45,11 +44,11 @@ fn server_value_builders_emit_federated_mode_only_when_requested() {
         ),
         (
             "codex",
-            toml_args(&codex_mcp_server_table(ServerLaunch::Federated)),
+            toml_args(&mcp_server_table(ServerLaunch::Federated)),
         ),
         (
             "grok",
-            toml_args(&grok_mcp_server_table(ServerLaunch::Federated)),
+            toml_args(&mcp_server_table(ServerLaunch::Federated)),
         ),
     ] {
         assert_eq!(args, expected, "{provider} must launch the federated mux");
@@ -72,10 +71,13 @@ fn server_value_builders_append_operator_flag_when_authorized() {
         &vec![json!("mcp"), json!("serve"), json!("--operator")]
     );
 
-    let codex = codex_mcp_server_table(OPERATOR_LAUNCH);
+    let codex = mcp_server_table(OPERATOR_LAUNCH);
     let codex_args = codex["args"].as_array().expect("codex args");
     assert_eq!(codex_args.len(), 3);
-    assert_eq!(codex_args[2].as_str(), Some("--operator"));
+    assert_eq!(
+        codex_args.get(2).and_then(|arg| arg.as_str()),
+        Some("--operator")
+    );
     assert_eq!(codex["enabled"].as_bool(), Some(true));
 }
 
@@ -90,8 +92,8 @@ fn server_value_builders_bind_the_registered_workspace() {
     for (provider, args) in [
         ("claude", json_args(&claude_mcp_server_value(BOUND_LAUNCH))),
         ("gemini", json_args(&simple_mcp_server_value(BOUND_LAUNCH))),
-        ("codex", toml_args(&codex_mcp_server_table(BOUND_LAUNCH))),
-        ("grok", toml_args(&grok_mcp_server_table(BOUND_LAUNCH))),
+        ("codex", toml_args(&mcp_server_table(BOUND_LAUNCH))),
+        ("grok", toml_args(&mcp_server_table(BOUND_LAUNCH))),
     ] {
         assert_eq!(args, expected, "{provider} must launch bound");
     }
@@ -106,7 +108,7 @@ fn json_args(server: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-fn toml_args(server: &toml::value::Table) -> Vec<String> {
+fn toml_args(server: &toml_edit::Table) -> Vec<String> {
     server["args"]
         .as_array()
         .expect("toml args")

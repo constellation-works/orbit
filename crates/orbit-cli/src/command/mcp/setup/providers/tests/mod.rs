@@ -2,10 +2,9 @@
 
 mod antigravity;
 mod claude;
-mod codex;
 mod gemini;
-mod grok;
 mod simple_json;
+mod toml_servers;
 
 // Content moved from inline #[cfg(test)] mod tests in providers/*.rs per ORB-00221.
 
