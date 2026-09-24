@@ -237,6 +237,17 @@ def add_result(results, scenario, evidence):
     results.append(evidence)
 
 
+def owner_checkout(repo: Path):
+    # Git lists the main worktree first. Its workspace-local definition is not
+    # copied into managed linked worktrees, whose .orbit/auto_tasks may be empty.
+    listing = subprocess.check_output(
+        ["git", "worktree", "list", "--porcelain"], cwd=repo, text=True)
+    first = listing.splitlines()[0]
+    if not first.startswith("worktree "):
+        raise ValueError("cannot identify the Git owner checkout")
+    return Path(first.removeprefix("worktree ")).resolve()
+
+
 def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id: str):
     results = []
     root = temp / "home/.orbit"
@@ -290,7 +301,7 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
 
     destination = work / ".orbit/auto_tasks/qa-full-sweep.yaml"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(repo / ".orbit/auto_tasks/qa-full-sweep.yaml", destination)
+    shutil.copyfile(owner_checkout(repo) / ".orbit/auto_tasks/qa-full-sweep.yaml", destination)
 
     def task_added(evidence):
         body = parse_json(evidence, "task add")
