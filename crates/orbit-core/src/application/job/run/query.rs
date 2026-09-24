@@ -1,4 +1,5 @@
-//! Query, list, show, and history methods for job runs, with reconciliation.
+//! Query, list, show, and history methods for job runs: reconciling reads
+//! for operators and observation-only reads for no-mutation callers.
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::JobRunQuery;
@@ -29,14 +30,7 @@ impl OrbitRuntime {
     pub fn list_job_runs(&self, params: JobRunListParams) -> Result<Vec<JobRun>, OrbitError> {
         let mut pass = ReconcilePass::default();
         self.reconcile_stale_job_runs_with_pass(params.job_id.as_deref(), &mut pass)?;
-        if let Some(job_id) = params.job_id.as_deref()
-            && let Err(error) = self.load_v2_job_asset_by_name(job_id)
-        {
-            let runs = self.list_job_history_backend(job_id)?;
-            if runs.is_empty() {
-                return Err(error);
-            }
-        }
+        self.ensure_listable_job(params.job_id.as_deref())?;
 
         let query = job_run_query(params);
         let runs = self.list_job_runs_filtered_backend(&query)?;
@@ -48,15 +42,43 @@ impl OrbitRuntime {
     }
 
     pub fn show_job_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
-        let run = self
-            .get_job_run_backend(run_id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
+        let run = self.show_job_run_observed(run_id)?;
         if self.reconcile_stale_job_run(&run)? {
-            self.get_job_run_backend(run_id)?
-                .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))
+            self.show_job_run_observed(run_id)
         } else {
             Ok(run)
         }
+    }
+
+    /// [`Self::list_job_runs`] without its stale-run reconciliation: the
+    /// records exactly as stored. Reconciliation can finalize an orphaned
+    /// `pending`/`running` run as `interrupted` and release its task
+    /// reservations, so a reader bound to a no-mutation contract (the
+    /// run-failure scan) must list through this instead [ORB-12941].
+    pub fn list_job_runs_observed(
+        &self,
+        params: JobRunListParams,
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        self.ensure_listable_job(params.job_id.as_deref())?;
+        self.list_job_runs_filtered_backend(&job_run_query(params))
+    }
+
+    /// [`Self::show_job_run`] without its stale-run reconciliation; see
+    /// [`Self::list_job_runs_observed`].
+    pub fn show_job_run_observed(&self, run_id: &str) -> Result<JobRun, OrbitError> {
+        self.get_job_run_backend(run_id)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))
+    }
+
+    /// A job filter must name a known job or one with recorded runs.
+    fn ensure_listable_job(&self, job_id: Option<&str>) -> Result<(), OrbitError> {
+        if let Some(job_id) = job_id
+            && let Err(error) = self.load_v2_job_asset_by_name(job_id)
+            && self.list_job_history_backend(job_id)?.is_empty()
+        {
+            return Err(error);
+        }
+        Ok(())
     }
 
     // History/list backends and get_job_run_backend live here; the two-pass

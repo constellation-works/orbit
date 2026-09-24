@@ -10,12 +10,13 @@ use super::format::{
     format_history_role, format_timestamp, format_waiting_line, summarize_error_message,
 };
 use super::job::cli_job_run_to_json;
+use super::steps::RunRead;
 
 pub(crate) const DEFAULT_HISTORY_LIMIT: usize = 50;
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --json"
+    after_help = "JSON shape: {\"runs\":[<job-run>]}\nROLE says how a run was submitted: top-level directly, child by a parent run.\nRun ids minted before role markers existed read as unmarked.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID
@@ -29,11 +30,22 @@ pub struct RunHistoryArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Report stored run records as-is: skip stale-run reconciliation, which
+    /// finalizes an orphaned pending or running run as interrupted and
+    /// releases its task reservations
+    #[arg(long)]
+    pub no_reconcile: bool,
 }
 
 impl Execute for RunHistoryArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        run_history_payload(runtime, self.job_id.as_deref(), Some(self.limit))
+        run_history_payload(
+            runtime,
+            self.job_id.as_deref(),
+            Some(self.limit),
+            RunRead::from_no_reconcile(self.no_reconcile),
+        )
     }
 }
 
@@ -41,18 +53,16 @@ pub(crate) fn run_history_payload(
     runtime: &OrbitRuntime,
     job_id: Option<&str>,
     limit: Option<usize>,
+    read: RunRead,
 ) -> CommandOut {
-    let runs = match job_id {
-        Some(job_id) => runtime.list_job_runs(JobRunListParams {
-            job_id: Some(job_id.to_string()),
+    let runs = read.list(
+        runtime,
+        JobRunListParams {
+            job_id: job_id.map(str::to_string),
             limit,
             ..Default::default()
-        })?,
-        None => runtime.list_job_runs(JobRunListParams {
-            limit,
-            ..Default::default()
-        })?,
-    };
+        },
+    )?;
 
     let states = runs
         .iter()

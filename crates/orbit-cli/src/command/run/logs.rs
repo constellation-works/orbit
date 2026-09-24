@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::steps::{resolve_run, resolve_step_filter};
+use super::steps::{RunRead, resolve_run, resolve_step_filter};
 
 #[derive(Args)]
 #[command(
@@ -23,11 +23,22 @@ pub struct RunLogsArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Report stored run records as-is: skip stale-run reconciliation, which
+    /// finalizes an orphaned pending or running run as interrupted and
+    /// releases its task reservations
+    #[arg(long)]
+    pub no_reconcile: bool,
 }
 
 impl Execute for RunLogsArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        run_logs_payload(runtime, self.run_id.as_deref(), self.step_id.as_deref())
+        run_logs_payload(
+            runtime,
+            self.run_id.as_deref(),
+            self.step_id.as_deref(),
+            RunRead::from_no_reconcile(self.no_reconcile),
+        )
     }
 }
 
@@ -35,8 +46,9 @@ pub(crate) fn run_logs_payload(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     step_id: Option<&str>,
+    read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id)?;
+    let run = resolve_run(runtime, run_id, read)?;
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
     let records = filter_cli_invocation_records(

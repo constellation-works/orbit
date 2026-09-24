@@ -21,6 +21,7 @@ mod trace;
 pub use command::{RunCommand, RunSubcommand};
 pub use job::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
 pub(crate) use show::{legacy_logs_summary_payload, run_show_payload};
+pub(crate) use steps::RunRead;
 
 #[cfg(test)]
 mod tests;

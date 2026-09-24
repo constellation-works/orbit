@@ -26,7 +26,7 @@ impl Execute for ArtifactsCommand {
         }
 
         eprintln!("[deprecated] use \"orbit run show {}\"", self.id);
-        run::run_show_payload(runtime, Some(&self.id), None)
+        run::run_show_payload(runtime, Some(&self.id), None, run::RunRead::Reconcile)
     }
 }
 

@@ -113,7 +113,8 @@ definition of the same name.
   sharing a normalized signature at least 3 times across at least 2 runs are
   filed as one redacted friction or proposed task per pattern unless an
   existing task or friction already tracks it. The scan never mutates run
-  state, and a window with no new pattern is a successful no-op.
+  state — its run reads pass `--no-reconcile`, so an orphaned run it lists is
+  not finalized — and a window with no new pattern is a successful no-op.
 - `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task

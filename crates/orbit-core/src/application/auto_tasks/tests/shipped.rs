@@ -687,6 +687,21 @@ fn run_failure_patterns_default_is_cursor_driven_portable_and_inert() {
         ),
         "the scan must attach the cursor artifact the next scan reads"
     );
+
+    // A run read without `--no-reconcile` finalizes an orphaned run and
+    // releases its reservations, breaking the scan's no-mutation criterion.
+    let mut run_reads = 0;
+    for verb in ["history", "show", "logs", "events"] {
+        for (start, _) in body.match_indices(&format!("`orbit run {verb}")) {
+            let command = body[start + 1..].split('`').next().unwrap_or_default();
+            assert!(
+                command.contains("--no-reconcile"),
+                "[ORB-12941] run read must not reconcile stale runs: {command}"
+            );
+            run_reads += 1;
+        }
+    }
+    assert!(run_reads >= 4, "the scan must name its run read commands");
 }
 
 /// Every `orbit tool run <name>` mentioned in a shipped auto-task template

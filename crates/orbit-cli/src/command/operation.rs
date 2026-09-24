@@ -220,6 +220,17 @@ fn dispatch_mismatch(variant: &str) -> CommandOut {
     )))
 }
 
+/// `run logs`/`run events` reconcile stale runs at runtime open by default;
+/// `--no-reconcile` opens read-only so the whole command observes stored run
+/// state without finalizing an orphaned run.
+fn observation_runtime_need(no_reconcile: bool) -> RuntimeNeed {
+    if no_reconcile {
+        RuntimeNeed::ReadOnly
+    } else {
+        RuntimeNeed::Required
+    }
+}
+
 fn admin_meta(
     command: &str,
     subcommand: Option<&str>,
@@ -401,13 +412,13 @@ impl Commands {
                         "logs",
                         Some("job_run"),
                         args.run_id.as_deref(),
-                        RuntimeNeed::Required,
+                        observation_runtime_need(args.no_reconcile),
                     ),
                     RunSubcommand::Events(args) => (
                         "events",
                         Some("job_run"),
                         args.run_id.as_deref(),
-                        RuntimeNeed::Required,
+                        observation_runtime_need(args.no_reconcile),
                     ),
                     RunSubcommand::Trace(args) => (
                         "trace",

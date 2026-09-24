@@ -16,9 +16,13 @@ template:
 
     - Read-only against run state. Never retry, resume, cancel, or edit a run,
       and never change the status of a task a run touched. Read runs only with
-      `orbit run history --limit <n> --json`, `orbit run show <run-id> --json`,
-      `orbit run logs <run-id>`, and `orbit run events <run-id>`; do not read or
-      edit the Orbit database or state files directly.
+      `orbit run history --limit <n> --no-reconcile --json`,
+      `orbit run show <run-id> --no-reconcile --json`,
+      `orbit run logs <run-id> --no-reconcile`, and
+      `orbit run events <run-id> --no-reconcile`; do not read or edit the Orbit
+      database or state files directly. Never drop `--no-reconcile`: without it
+      these reads finalize an orphaned `pending` or `running` run as
+      `interrupted` and release its task reservations.
     - Use the registered Orbit tool surface for records. Find the newest completed
       prior instance with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["run-failure-patterns","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
@@ -53,10 +57,10 @@ template:
     starts; record that timestamp before reading any run.
 
     The window contains every run whose `finished_at` falls inside it. Page
-    `orbit run history --limit <n> --json` (newest first by creation) by raising
-    `<n>` until the oldest returned run was created at least seven days before
-    the window start, so long-running runs that finished inside the window are
-    included. Runs still `pending` or `running` at scan start belong to the
+    `orbit run history --limit <n> --no-reconcile --json` (newest first by
+    creation) by raising `<n>` until the oldest returned run was created at
+    least seven days before the window start, so long-running runs that
+    finished inside the window are included. Runs still `pending` or `running` at scan start belong to the
     window in which they finish.
 
     ## Collect failure evidence
@@ -68,10 +72,10 @@ template:
     2. Step failure records: every non-success, non-skipped entry in a run's
        `steps` list, including failed steps inside runs that later succeeded
        after a retry or a recovery activity such as `step_failure_recovery`.
-       Use `orbit run show <run-id> --json` for the step detail.
-    3. Worker log evidence for those runs from `orbit run logs <run-id>` (and
-       `--step <step-id>` for one step), read only as far as needed to name the
-       error.
+       Use `orbit run show <run-id> --no-reconcile --json` for the step detail.
+    3. Worker log evidence for those runs from
+       `orbit run logs <run-id> --no-reconcile` (and `--step <step-id>` for one
+       step), read only as far as needed to name the error.
 
     ## Cluster by normalized signature
 

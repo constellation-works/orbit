@@ -8,7 +8,7 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 use super::format::format_backlog_exclusion_lines;
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::steps::{
-    RunDisplaySteps, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
+    RunDisplaySteps, RunRead, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
     legacy_step_to_json, resolve_run, resolve_run_step, run_display_steps, run_header_text,
     run_header_text_with_state, run_step_record_to_json, step_record_payload, step_summary_table,
 };
@@ -28,11 +28,22 @@ pub struct RunShowArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Report stored run records as-is: skip stale-run reconciliation, which
+    /// finalizes an orphaned pending or running run as interrupted and
+    /// releases its task reservations
+    #[arg(long)]
+    pub no_reconcile: bool,
 }
 
 impl Execute for RunShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        run_show_payload(runtime, self.run_id.as_deref(), self.step_id.as_deref())
+        run_show_payload(
+            runtime,
+            self.run_id.as_deref(),
+            self.step_id.as_deref(),
+            RunRead::from_no_reconcile(self.no_reconcile),
+        )
     }
 }
 
@@ -40,8 +51,9 @@ pub(crate) fn run_show_payload(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     step_id: Option<&str>,
+    read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id)?;
+    let run = resolve_run(runtime, run_id, read)?;
     let state = runtime.read_run_state(&run.run_id)?;
 
     if let Some(step_id) = step_id {

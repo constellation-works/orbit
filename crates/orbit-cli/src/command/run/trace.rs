@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::command::{CommandOut, Execute, Payload};
 
 use super::events::summarize_audit_event;
-use super::steps::resolve_run;
+use super::steps::{RunRead, resolve_run};
 
 #[derive(Args)]
 #[command(
@@ -30,7 +30,7 @@ impl Execute for RunTraceArgs {
 }
 
 fn run_trace_payload(runtime: &OrbitRuntime, run_id: Option<&str>) -> CommandOut {
-    let run = resolve_run(runtime, run_id)?;
+    let run = resolve_run(runtime, run_id, RunRead::Reconcile)?;
     let events = runtime.collect_run_audit_events(&run.run_id)?;
     let tree = build_trace_tree(&events);
     let doc = json!({
