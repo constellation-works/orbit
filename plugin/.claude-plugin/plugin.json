@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "version": "0.24.0",
-  "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP tool surface and shared workflow skills to Claude Code.",
+  "description": "Durable tasks, sandboxed parallel runs, and PR-gated delivery for AI coding agents. Adds Orbit's MCP tools and workflow skills to Claude Code.",
   "author": {
     "name": "constellation-works",
     "url": "https://github.com/constellation-works"
