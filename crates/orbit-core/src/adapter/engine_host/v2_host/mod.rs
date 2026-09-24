@@ -22,6 +22,7 @@ pub(crate) mod pull;
 pub(crate) mod pull_adapters;
 pub(super) mod sandbox;
 pub(super) mod scan_unresolved;
+mod sweep_filing;
 pub(super) mod task_context;
 pub(super) mod task_pilot;
 #[cfg(test)]
