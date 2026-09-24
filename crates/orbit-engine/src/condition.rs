@@ -2,7 +2,8 @@
 //!
 //! Evaluates `StepCondition::Expr` strings against a `TemplateContext`.
 //!
-//! Expression syntax (post template resolution):
+//! Expression syntax (parsed before template resolution; each operand is
+//! rendered on its own):
 //!   `true` | `false` | `<lhs> == <rhs>` | `<lhs> != <rhs>`
 //!   Combined with `&&` (AND, higher precedence) and `||` (OR).
 //!
