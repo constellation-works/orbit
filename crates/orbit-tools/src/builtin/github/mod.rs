@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -291,23 +292,6 @@ pub fn bound_log_text(raw: &str, max_bytes: usize) -> BoundedLog {
         truncated: true,
         total_bytes,
     }
-}
-
-fn floor_char_boundary(text: &str, mut index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    while index > 0 && !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
-}
-
-fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
-    while index < text.len() && !text.is_char_boundary(index) {
-        index += 1;
-    }
-    index
 }
 
 /// Prose a runner emits around a checkout. Matched case-insensitively.

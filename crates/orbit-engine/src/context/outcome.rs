@@ -1,6 +1,7 @@
 //! Invocation-result types, error-code constants, and workflow-failure
 //! helpers.
 
+use orbit_common::text::floor_char_boundary;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::InvocationTrace;
 use serde_json::Value;
@@ -69,22 +70,6 @@ fn elide_note_error(run_id: &str, error_message: &str) -> String {
         "{head}… [elided: error_message is {total} B; full text: \
          `orbit run show {run_id} --json`, field .run.steps[].error_message]"
     )
-}
-
-/// Largest index at or below `index` that splits `text` between characters.
-///
-/// Stands in for the unstable `str::floor_char_boundary`. Slicing an error
-/// message mid-codepoint would panic, and error text is arbitrary bytes from a
-/// failing subprocess.
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    let mut end = index;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
 }
 
 pub fn blocked_workflow_failure_update(

@@ -10,7 +10,7 @@
 //!
 //! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and
 //! responsibility-based helpers: governance, filesystem, process, storage,
-//! protocol, observability, and security.
+//! protocol, observability, security, and text.
 
 pub mod error;
 pub mod fs;
@@ -23,6 +23,7 @@ pub mod process;
 pub mod protocol;
 pub mod security;
 pub mod storage;
+pub mod text;
 
 pub mod test_env;
 
