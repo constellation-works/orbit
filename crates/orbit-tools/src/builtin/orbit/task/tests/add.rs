@@ -20,7 +20,6 @@ struct RecordingHost {
 struct RecordedCall {
     action: OrbitBuiltinAction,
     input: Value,
-    agent: Option<String>,
     model: Option<String>,
 }
 
@@ -29,14 +28,13 @@ impl OrbitToolHost for RecordingHost {
         &self,
         action: OrbitBuiltinAction,
         input: Value,
-        agent: Option<String>,
+        _agent: Option<String>,
         model: Option<String>,
         _reservation_owner: Option<crate::ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         *self.call.lock().expect("record call") = Some(RecordedCall {
             action,
             input,
-            agent,
             model,
         });
         // Simulate success without touching disk (real YAML write exercised in

@@ -16,7 +16,7 @@ use orbit_types::identity::{normalize_agent_family_for_model, require_canonical_
 use orbit_types::tool::{McpToolScope, ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::{OrbitBuiltinAction, OrbitTaskScope, ToolContext, ToolRegistry};
+use crate::{OrbitBuiltinAction, ToolContext, ToolRegistry};
 
 pub(super) use orbit_common::protocol::tool_input::{optional_string_alias, required_string};
 
@@ -247,27 +247,6 @@ pub(super) fn reject_unknown_tool_arguments(
     reject_unknown_tool_fields(input, &allowed)
 }
 
-pub(super) fn scored_identity_params() -> Vec<ToolParam> {
-    vec![
-        ToolParam {
-            name: "agent".to_string(),
-            description:
-                "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
-                    .to_string(),
-            param_type: "string".to_string(),
-            required: false,
-        },
-        ToolParam {
-            name: "model".to_string(),
-            description:
-                "Required provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`), or `human` for human-authored review feedback to opt out of scoreboard scoring. Full model strings are accepted and auto-normalized."
-                    .to_string(),
-            param_type: "string".to_string(),
-            required: true,
-        },
-    ]
-}
-
 pub(super) fn execute_host_action(
     ctx: &ToolContext,
     input: Value,
@@ -390,13 +369,6 @@ fn set_input_workspace(input: &mut Value, workspace: &str) -> Result<(), OrbitEr
     Ok(())
 }
 
-pub(super) fn task_scope(ctx: &ToolContext) -> OrbitTaskScope {
-    ctx.orbit_host
-        .as_ref()
-        .map(|host| host.task_scope())
-        .unwrap_or_default()
-}
-
 fn require_orbit_host(ctx: &ToolContext) -> Result<&dyn crate::OrbitToolHost, OrbitError> {
     ctx.orbit_host.as_deref().ok_or_else(|| {
         OrbitError::Execution(
@@ -405,13 +377,7 @@ fn require_orbit_host(ctx: &ToolContext) -> Result<&dyn crate::OrbitToolHost, Or
     })
 }
 
-/// Extract an optional string from the first matching key in `keys`.
-///
-/// Tools accept multiple key names for the same logical field to stay
-/// friendly to agents that may use slightly different naming conventions
-/// (e.g. `"type"`, `"task_type"`, `"taskType"` all map to the task type
-/// parameter). The first non-absent key wins; absence of all keys returns
-/// `None`. An explicitly empty value is rejected as an error.
+/// The single required `id` parameter of a `kind` lookup tool.
 pub(super) fn orbit_id_params(kind: &str) -> Vec<ToolParam> {
     vec![ToolParam {
         name: "id".to_string(),
