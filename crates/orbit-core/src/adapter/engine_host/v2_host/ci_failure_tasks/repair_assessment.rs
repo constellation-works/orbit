@@ -506,5 +506,5 @@ pub(super) fn retain(
 }
 
 #[cfg(test)]
-#[path = "tests/ci_repair_assessment.rs"]
+#[path = "../tests/ci_repair_assessment.rs"]
 mod tests;
