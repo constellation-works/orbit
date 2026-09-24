@@ -254,7 +254,7 @@ render_design_rows() {
       "$(markdown_escape "$summary")" \
       "$(markdown_escape "$status")" \
       "$(markdown_escape "$owner")"
-  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_archive' ! -name '_templates' | sort)
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' | sort)
 }
 
 render_index() {

@@ -10,7 +10,7 @@ type: design
 summary: What the pull-based drain deliberately does not do yet — crew auto-assignment, cloud stores, follower-side merge, federated run inspection — and the questions each one opens.
 tags: [distributed-drain, multi-host, vision]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-mcp/**"]
-related_features: [distributed-drain, federated-mcp, resident-orchestrator, host-registry]
+related_features: [distributed-drain, federated-mcp, host-registry]
 related_artifacts: [ORB-12488]
 ---
 
@@ -61,9 +61,9 @@ they are not prerequisites hidden as future work.
 
 `workspace_auto_pipeline` already refills slots from the whole backlog as each child finishes and
 treats a live wrapper run as the claim. The distributed drain keeps that throughput model, moves
-the claim into authoritative store transactions and drops the epic branch of the loop. Archiving
-the resident-orchestrator folder is part of the proposed retirement, not an already completed step.
-See [resident-orchestrator 2_design.md §4](../resident-orchestrator/2_design.md#4-workspace-drain-workspace_auto_pipeline).
+the claim into authoritative store transactions and drops the epic branch of the loop. The
+resident-orchestrator design folder has been removed; its drain loop lives on in
+`workspace_auto_pipeline`.
 
 ### Federated MCP and remote authority
 
@@ -107,7 +107,6 @@ CI, and landing before adding placement policy or automatic recovery.
 - [federated-mcp specs/federated-workspace-mcp.md](../federated-mcp/specs/federated-workspace-mcp.md)
 - [federated-mcp 4_decisions.md — An SSH login to a destination is ownership of it](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) (supersedes the withdrawn [specs/caller-authorization.md](../federated-mcp/specs/caller-authorization.md))
 - [host-registry 3_vision.md](../host-registry/3_vision.md) — "checkoutless operations" gate
-- [resident-orchestrator 2_design.md](../resident-orchestrator/2_design.md)
 - [runbooks/build-budget.md](../../runbooks/build-budget.md)
 
 **External**

@@ -70,7 +70,7 @@ or live mutation surface.
 
 ### Retired task sync
 
-The archived [Task Sync](../_archive/task-sync/1_overview.md) proposal used an
+The retired Task Sync proposal (removed; see git history) used an
 orphan branch in the source-code repository as a shared writable registry. It
 required online task mutations, shared allocation, operation-aware replay,
 tombstones, and structured conflict resolution. Task publication retains Git as
@@ -110,7 +110,6 @@ authority merely because a machine can clone or push.
 - [Remote Access design](../remote-access/2_design.md)
 - [Federated MCP design](../federated-mcp/2_design.md)
 - [State and backup runbook](../../runbooks/state-and-backup.md)
-- [Retired Task Sync design](../_archive/task-sync/2_design.md)
 
 **External**
 

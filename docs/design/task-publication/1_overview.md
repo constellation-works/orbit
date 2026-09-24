@@ -42,7 +42,7 @@ Existing capabilities solve adjacent problems:
 - `orbit task export` and `orbit task import` move validated archives between
   registries. They are explicit migration tools rather than a continuously
   refreshed remote backup channel.
-- The retired [Task Sync](../_archive/task-sync/1_overview.md) design stored a
+- The retired Task Sync design stored a
   shared writable registry on an orphan branch in the source repository. It
   made mutations network-dependent and required operation-aware multi-writer
   conflict resolution.
@@ -107,7 +107,6 @@ encrypted secret store.
 | Same-authority publication recovery | [`orbit-store` restore workflow](../../../crates/orbit-store/src/workflow/task/restore.rs) | [ORB-11076] |
 | Operator CLI and network-free end-to-end contract | [`orbit-cli` publication commands](../../../crates/orbit-cli/src/command/task/publication.rs) | [ORB-11077] |
 | Portable migration archive primitives | [`orbit-store` task workflow](../../../crates/orbit-store/src/workflow/task/mod.rs) | — |
-| Retired source-repository registry | [Task Sync](../_archive/task-sync/1_overview.md) | — |
 
 ## Task References
 
