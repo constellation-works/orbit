@@ -225,7 +225,9 @@ pub(super) fn list_backlog_tasks(
         // if an override actually names such a root: the explicit path is
         // deliberately a per-id load, and one selected ship should not pay for
         // a whole-workspace listing.
-        let mut workspace_tasks: Option<Vec<Task>> = None;
+        // Built on first need and reused: the hierarchy read and walk cover
+        // the whole workspace, so doing them per epic candidate is quadratic.
+        let mut epic_roots: Option<BTreeMap<String, Vec<String>>> = None;
         for task_id in &explicit_task_ids {
             let task = runtime.get_task(task_id).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
@@ -271,23 +273,30 @@ pub(super) fn list_backlog_tasks(
             // undeclared — so it decides only who pays for the hierarchy read,
             // never who is withheld.
             if has_epic_tag(&task.tags) && task.context_files.is_empty() {
-                if workspace_tasks.is_none() {
-                    workspace_tasks = Some(runtime.list_tasks().map_err(|err| {
+                if epic_roots.is_none() {
+                    let workspace_tasks = runtime.list_tasks().map_err(|err| {
                         DispatchError::DeterministicActionFailed {
                             action: action.to_string(),
                             message: format!("list tasks: {err}"),
                         }
-                    })?);
+                    })?;
+                    let roots = inherited_only_epic_roots(
+                        workspace_tasks.iter().map(EpicHierarchyNode::from),
+                    )
+                    .into_iter()
+                    .map(|(root, descendants)| {
+                        let descendants = descendants.into_iter().map(str::to_string).collect();
+                        (root.to_string(), descendants)
+                    })
+                    .collect();
+                    epic_roots = Some(roots);
                 }
-                let inherited_only_roots = inherited_only_epic_roots(
-                    workspace_tasks
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(EpicHierarchyNode::from),
-                );
-                if let Some(descendants) = inherited_only_roots.get(task.id.as_str()) {
-                    excluded.push(inherited_only_epic_root_exclusion(&task.id, descendants));
+                if let Some(descendants) = epic_roots
+                    .as_ref()
+                    .and_then(|roots| roots.get(task.id.as_str()))
+                {
+                    let descendants: Vec<&str> = descendants.iter().map(String::as_str).collect();
+                    excluded.push(inherited_only_epic_root_exclusion(&task.id, &descendants));
                     continue;
                 }
             }
