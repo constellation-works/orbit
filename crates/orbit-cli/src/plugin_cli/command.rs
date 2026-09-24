@@ -14,6 +14,7 @@
 use std::sync::OnceLock;
 
 use clap::{Arg, ArgMatches, Command};
+use orbit_common::process::shell::quote_posix_arg;
 use orbit_core::adapter::command::{PluginCliGroup, PluginCliVerb};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
@@ -59,7 +60,7 @@ impl Execute for PluginGroupInvocation {
             let mut command = format!(
                 "orbit tool run {} --input {}",
                 self.tool_run.name,
-                shell_quote(&encoded)
+                quote_posix_arg(&encoded)
             );
             if self.tool_run.dry_run {
                 command.push_str(" --dry-run");
@@ -244,10 +245,6 @@ fn build_invocation(
             .copied()
             .unwrap_or(false),
     }
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// The `Plugins:` block `orbit --help` prints, or an empty string when this
