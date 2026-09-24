@@ -334,3 +334,40 @@ fn task_deletion_cascades_to_lexical_chunks() {
             .is_empty()
     );
 }
+
+/// Status filters apply before the candidate budget: when the strongest
+/// lexical matches are all Done, the open match still fills the page.
+#[test]
+fn filtered_out_top_matches_do_not_starve_the_task_page() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    for index in 0..6 {
+        add_task(
+            &runtime,
+            &format!("haystack haystack {index}"),
+            "haystack haystack haystack",
+            TaskStatus::Done,
+        );
+    }
+    let open = add_task(
+        &runtime,
+        "unrelated title",
+        "a long description that mentions the haystack only once in passing",
+        TaskStatus::Backlog,
+    );
+
+    let response = runtime
+        .global_search(GlobalSearchParams {
+            query: Some("haystack".to_string()),
+            kind: GlobalSearchKind::Task,
+            limit: 1,
+            ..Default::default()
+        })
+        .expect("search tasks");
+
+    let ids: Vec<Option<&str>> = response
+        .results
+        .iter()
+        .map(|hit| hit.id.as_deref())
+        .collect();
+    assert_eq!(ids, [Some(open.as_str())]);
+}

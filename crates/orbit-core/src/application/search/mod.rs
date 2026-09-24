@@ -153,34 +153,26 @@ impl OrbitRuntime {
             limit,
         } = ctx;
         let statuses = resolve_task_statuses(params, status_filters);
+        let path = params.path.as_deref();
+        let accepts = |task: &orbit_types::task::Task| {
+            statuses.contains(&task.status)
+                && (tag_filter.is_empty() || task_has_all_tags(task, tag_filter))
+                && path.is_none_or(|path| task_selectors_contain_path(&task.context_files, path))
+        };
 
         let candidates = if let Some(query) = query {
-            self.lexical_task_candidates(query, limit)?
+            self.lexical_task_candidates(query, limit, accepts)?
         } else {
             // No query → enumerate tasks (used by `--path` and `--tag`).
-            let tasks = self.list_tasks()?;
-            tasks
+            self.list_tasks()?
                 .into_iter()
-                .map(|task| (lexical_task_hit(&task), Some(task)))
+                .filter(|task| accepts(task))
+                .map(|task| (lexical_task_hit(&task), task))
                 .collect()
         };
 
-        let path = params.path.as_deref();
-
         let mut out = Vec::new();
         for (mut hit, task) in candidates {
-            let Some(task) = task else { continue };
-            if !statuses.contains(&task.status) {
-                continue;
-            }
-            if !tag_filter.is_empty() && !task_has_all_tags(&task, tag_filter) {
-                continue;
-            }
-            if let Some(path) = path
-                && !task_selectors_contain_path(&task.context_files, path)
-            {
-                continue;
-            }
             fill_task_record_fields(&mut hit, &task);
             out.push(hit);
         }
@@ -253,11 +245,16 @@ impl OrbitRuntime {
     /// manifest paths, and tasks not yet indexed — appended in index order
     /// behind the BM25 hits [DANI-10445]. Without task chunks the bundle
     /// matcher is the only source. Neither source opens artifact payloads.
+    ///
+    /// Only tasks `accepts` admits count toward the candidate budget, so a
+    /// status, tag or path filter cannot starve the page when the best
+    /// lexical matches are all filtered out.
     fn lexical_task_candidates(
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<(GlobalSearchHit, Option<orbit_types::task::Task>)>, OrbitError> {
+        accepts: impl Fn(&orbit_types::task::Task) -> bool,
+    ) -> Result<Vec<(GlobalSearchHit, orbit_types::task::Task)>, OrbitError> {
         let candidate_limit = limit.saturating_mul(2).max(limit);
         let mut seen = std::collections::BTreeSet::new();
         let mut candidates = Vec::with_capacity(candidate_limit);
@@ -272,9 +269,10 @@ impl OrbitRuntime {
                 if !seen.insert(hit.source_id.clone()) {
                     continue;
                 }
-                let task = self.get_task(&hit.source_id).ok();
-                if let Some(task) = task {
-                    candidates.push((lexical_task_hit(&task), Some(task)));
+                if let Ok(task) = self.get_task(&hit.source_id)
+                    && accepts(&task)
+                {
+                    candidates.push((lexical_task_hit(&task), task));
                 }
                 if candidates.len() == candidate_limit {
                     return Ok(candidates);
@@ -286,10 +284,10 @@ impl OrbitRuntime {
             if candidates.len() == candidate_limit {
                 break;
             }
-            if !seen.insert(task.id.clone()) {
+            if !seen.insert(task.id.clone()) || !accepts(&task) {
                 continue;
             }
-            candidates.push((lexical_task_hit(&task), Some(task)));
+            candidates.push((lexical_task_hit(&task), task));
         }
         Ok(candidates)
     }
