@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-20
+last_updated: 2026-09-24
 last_validated: 2026-09-20
 status: Draft
 feature: distributed-drain
@@ -16,491 +16,320 @@ related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616]
 
 # Distributed Drain — Design
 
-> **Status: Draft, proposed.** This is the target contract; no section is live. Each mechanism
-> names the existing code it extends so the implementation tasks can be filed against real anchors.
+> **Status: Draft, partly live.** Live on the owner: the claim/admission substrate, owner-local
+> claimed leaves, handoff acceptance and approval, the landing consumer, the probe and claim
+> listing, dashboard actions, and shared capacity and entry-point admission. **Not live:** the
+> routed follower peer, `orbit run auto --pull`, and every mutating distributed entry point,
+> refused by `application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` (`false`).
 
-This doc covers the v1 shape: one owner checkout, any number of replica checkouts on other hosts,
-each replica running the drain in pull mode against the owner, and the existing
-machinery the shape retires. It deliberately leaves to [3_vision.md](./3_vision.md): a
-cloud-offloaded owner store, crew auto-assignment, and follower-side merge.
+This doc covers v1: one owner checkout, any number of replica checkouts on other hosts, each
+replica running the drain in pull mode against the owner, and the machinery the shape retires.
+Deferred to [3_vision.md](./3_vision.md): a cloud-offloaded owner store, crew auto-assignment,
+and follower-side merge. Rationale lives in [4_decisions.md](./4_decisions.md).
 
 ## 1. Roles: one owner, N followers
 
 Roles are the host-registry catalog roles, unchanged. The owner checkout has no checkout-level
-`owner_machine_id` and its logical owner equals the local `machine_id`; a follower is a replica
-checkout whose `owner_machine_id` names the owner machine. `RegisteredRuntimeFactory` already
-carries the replica owner into Core's coordination-write guard
+`owner_machine_id` (its logical owner is the local `machine_id`); a follower is a replica checkout
+whose `owner_machine_id` names the owner machine. `RegisteredRuntimeFactory` carries the replica
+owner into Core's coordination-write guard
 (`crates/orbit-cmd/src/registry_runtime.rs::replica_owner_for_checkout`), and
-`automation/ownership.rs` already refuses delivery automation on a replica. The distributed drain
-adds no role, no fleet table, and no host list.
+`automation/ownership.rs` refuses delivery automation on a replica. No role, fleet table or host
+list is added.
 
-The precondition this design imposes on the operator is **one control plane per repository**. The
-current state — `ws_orbit` independently initialized as an owner on both hosts, minting `ORB-` on
-one and `DANI-` on the other — must be collapsed first: the follower host re-registers its checkout
-as a replica of the owner machine. Tasks minted on the demoted host are moved with task-migration
-export/import or left to drain on that host before the switch. The federated mux cannot detect the
-collision (spec: *single control-plane per repository is operator configuration*), so this is a
-runbook step, not a code path.
+**Operator precondition: one control plane per repository.** A repository initialized as owner on
+two hosts is collapsed first by re-registering one checkout as a replica and migrating or draining
+its tasks. The federated mux cannot detect the collision; this is a runbook step.
 
 ## 2. The ready queue and `orbit.task.pull`
 
-The **ready queue** is a logical owner-side query over `backlog` tasks whose dependencies are
-all `done`, ordered by the existing automatic-dispatch comparator, including corrective tags and
-its task-ID tie-breaker. It need not be a maintained table or cache. If implementation introduces
-a projection, it is advisory until admission revalidates it against authoritative state.
-Followers never compute dependency readiness or choose priority order.
+The **ready queue** is a logical owner-side query over `backlog` tasks whose dependencies are all
+`done`, ordered by the automatic-dispatch comparator (corrective tags, task-ID tie-breaker). No
+materialized table is required; any projection is advisory until admission revalidates it.
+Followers never compute readiness or priority.
 
-`orbit.task.pull` is an owner-only `control_plane` tool. Its full contract is in
-[specs/task-pull.md](./specs/task-pull.md). The owner serializes candidate selection, readiness and
-footprint validation, reservation, claim creation, `backlog → in-progress`, history, and the
-request result in one store transaction. Checking candidates before the transaction and only
-serializing the final writes is insufficient. Task updates and other reservation/admission paths
-must share that serialization boundary. The current reservation store transaction is an anchor,
-not an existing transaction spanning all those records; implementing this boundary is v1 work.
+`orbit.task.pull` is an owner-only `control_plane` tool; its contract is
+[specs/task-pull.md](./specs/task-pull.md). Candidate selection, readiness and footprint
+validation, reservation, claim creation, `backlog → in-progress`, history and the request result
+commit in **one store transaction**, and every other task-update and reservation path shares that
+serialization boundary. Pre-checking outside the transaction is insufficient.
 
-The storage substrate for that transaction is live [ORB-12528]: `orbit-store`'s
-task/reservation commit boundary publishes a task transition, its history, a reservation, and
-dependent coordination rows as one durable decision, and gives ordinary task and reservation
-mutations the serialization an admission decision holds
-([docs/design-patterns/task_commit_boundary.md](../../design-patterns/task_commit_boundary.md)).
-All runtime constructors now use `compose::workspace_coordinated_backends`. The internal
-owner admission API builds immutable receipts and frozen claims on that journal and shares
-its canonical ordering with readiness reporting. A host admission lock also serializes
-cross-workspace dependency checks. Public distributed entry points remain unavailable until
-claim binding, routed mutations, settlement, and handoff integration land. Nullable run,
-task-link, and artifact-origin fields represent trusted execution provenance; absent historical
-identity remains unknown and is never inferred from the workspace owner or a hostname.
+**Substrate (live, [ORB-12528]).** `orbit-store`'s task/reservation commit boundary publishes a
+task transition, its history, a reservation and dependent coordination rows as one durable
+decision ([task_commit_boundary.md](../../design-patterns/task_commit_boundary.md)). Every runtime
+constructor uses `compose::workspace_coordinated_backends`. The internal owner admission API builds
+immutable receipts and frozen claims on that journal and shares its ordering with readiness
+reporting; a host admission lock serializes cross-workspace dependency checks.
 
-A caller durably allocates a `request_id` before each intended pull. Its scope is the owner
-workspace and runtime execution-machine namespace. A retry with the same input returns the stored result,
-never another task. The drain run ID is context, not an idempotency key: one drain makes many
-legitimate pulls. Store successful `idle` results too; a later poll uses a new request ID. Refusals
-do not create a claim. Request receipts must not be deleted in a way that permits an old ID to
-become a new admission; retain a tombstone if full response retention is compacted. Stop a refill
-pass after its first idle response rather than polling once per remaining slot. V1 retains compact
-tombstones indefinitely: random IDs alone do not make deletion safe. At a 30-second idle poll this
-is 2,880 receipts per drain per day before compaction, independent of its free-slot count. Expose
-receipt/tombstone counts and bytes for storage planning; bounded retention requires a future
-protocol that rejects retired request namespaces, not a time-based DELETE. Unsettled claims retain
-full receipts. This storage cost is accepted explicitly for v1.
+**Request identity.** A caller durably allocates a `request_id` before each pull, scoped to the
+owner workspace and runtime execution-machine namespace. A retry with the same input returns the
+stored result, never another task; the drain run ID is context, not an idempotency key.
 
-The response includes the task, resolved ship inputs, and a **claim handle**: `claim_id`,
-`reservation_id`, reservation expiry, and runtime execution machine. A claim identifies
-one attempt, including the interval before a leaf run exists. Owner and follower drains use the
-same path. Request receipts and claim state are durable coordination data, not a fleet registry.
+- `idle` results are stored too; a later poll uses a new ID. Refusals create no claim. A refill
+  pass stops at its first idle response.
+- No deletion may let an old ID become a new admission: v1 keeps compact tombstones forever and
+  full receipts for unsettled claims, and exposes their counts and bytes. Bounded retention needs a
+  protocol that rejects retired namespaces, not a time-based DELETE.
 
-There is no epic path after the retirement in [§7](#7-retirements-and-retained-ship-sweep). A task
-tagged `epic` is an ordinary entry using its own canonicalized `context_files`; hierarchy does not
-implicitly order execution. Required sequencing must be expressed with dependencies. Empty or
-invalid lock surfaces are reported as ineligible rather than silently treated as a claim protecting
-no files. This is the distributed pull contract: the owner excludes an empty surface before
-creating a claim. The legacy v2 dispatch admission path currently permits an empty surface as a
-compatibility no-op, while the operator-facing `orbit.task.locks.reserve` path refuses an empty
-task-scope reservation. Diagnostics distinguish those paths; the pull path must retain the
-no-empty rule when it is implemented.
+The response carries the task, resolved ship inputs, and a **claim handle** (`claim_id`,
+`reservation_id`, reservation expiry, runtime execution machine). A claim identifies one attempt,
+including the interval before a leaf run exists. Owner and follower drains use the same path.
 
-Remove filesystem-existence pruning from task context normalization/read projections and all
-admission, reservation, and status-lock calculations used by this workspace. Canonicalize selector
-syntax and enforce repository boundaries, but preserve valid selectors for not-yet-created files and
-symbols. `allow_missing_context` still controls explicit operator existence checks; it must never
-cause a stored selector to disappear later. This replaced the former
-`locks.rs::existing_envelope_context_files_at_root` pruning behavior and the equivalent task read
-paths with the shared non-pruning calculation
-`runtime/task/mod.rs::declared_context_files` [ORB-12490]. Missing is not invalid. Freeze the full canonical footprint on the claim and use it through
-execution and review, including after reservation expiry; current checkout contents cannot shrink
-it. Unclaimed legacy status locks use the same non-pruning canonicalization. A truly empty declared
-surface is eligible for the current legacy v2 dispatch no-op but remains ineligible for distributed
-pull admission and operator task-scope reservation until an operator supplies context; diagnostics
-name that distinction and remedy. Restore previously pruned declarations from authoritative task history where possible
-(`application/task/context_repair.rs`, reached by `orbit task lint --restore-pruned`), or report
-them for operator repair; do not guess their intended scope.
+**Footprints.** There is no epic path ([§7.1](#71-epic-machinery)); an `epic`-tagged task is an
+ordinary entry using its own `context_files`, and sequencing is expressed with dependencies.
 
-V1 has no crew or platform filter in pull. Participating hosts must be able to execute every task
-eligible for the workspace, including its configured crews and required toolchains. This is a
-restrictive deployment prerequisite, not a claim that eligibility filtering would create a second
-scheduler. Heterogeneous task eligibility is deferred. Explicit task crews and the workspace's
-fallback crew configuration must resolve equivalently on each participant.
+- An empty or invalid lock surface is reported ineligible, never admitted as a claim protecting no
+  files. The legacy v2 dispatch path still admits an empty surface as a compatibility no-op, while
+  `orbit.task.locks.reserve` refuses an empty task-scope reservation; diagnostics name which path
+  and the remedy.
+- Context is never pruned by filesystem existence. Selectors are canonicalized and held to
+  repository boundaries, but selectors for not-yet-created files and symbols are preserved;
+  `allow_missing_context` governs explicit operator existence checks only. Admission, reservation,
+  status locks and task reads share `runtime/task/mod.rs::declared_context_files` [ORB-12490].
+- The full canonical footprint is frozen on the claim and used through execution and review,
+  including after reservation expiry; checkout contents cannot shrink it.
+- Previously pruned declarations are restored from task history where possible
+  (`application/task/context_repair.rs`, via `orbit task lint --restore-pruned`) or reported for
+  operator repair, never guessed.
+
+**Eligibility.** Pull has no crew or platform filter in v1: every participant must execute every
+eligible task, with task and fallback crews resolving equivalently.
 
 ## 3. Pull-mode drain and the pulled leaf pipeline
 
 ### Caller-side implementation status
 
-The internal caller foundation uses the job store's `local_pull` feature migration
-for immutable requests, returned receipts, unique claim-to-leaf bindings, launch
-intent and pending settlement. Capacity allocation and leaf creation share SQLite
-writer transactions with job state. A launch intent with no acknowledgment is
-uncertain and refuses replay; a terminal leaf keeps pending capacity until its
-settlement is acknowledged. Stopping parent admission leaves its children intact.
-Queued-leaf cancellation is reconciled before binding or launching, including
-after a lost binding response. The launch-intent transaction independently
-requires the bound run to remain pending; cancellation cannot be overwritten
-by that checkpoint. Disconnected cancellation settlement remains durable.
+The job store's `local_pull` migration persists immutable requests, receipts, unique
+claim-to-leaf bindings, launch intent and pending settlement; capacity allocation and leaf
+creation share SQLite writer transactions with job state. An unacknowledged launch intent is
+uncertain and refuses replay; a terminal leaf holds capacity until settlement is acknowledged.
+Stopping parent admission leaves children intact. Queued-leaf cancellation is reconciled before
+binding or launch, and the launch-intent transaction requires the bound run to still be pending,
+so it cannot overwrite a cancellation.
 
-[ORB-12616] made the **owner-local** half of that foundation executable and
-replaced the injected adapters with real ones.
+**Claimed leaf definitions** ([ORB-12616]). A claim selects `task_claimed_local_pipeline` or
+`task_claimed_pr_pipeline` by owner-resolved ship mode, never the merge-capable legacy pair. Both
+skip rediscovery and reservation (the owner froze the footprint; settlement releases it), expose
+no `completion` input, end at `claim_handoff`, and contain no `git_merge`, `pr_complete` or
+`task_complete`. The local variant also has no `git_push`, `pr_prepare` or `pr_open`, so it needs
+no origin or PR credentials.
 
-A claim now selects one of two internal leaf definitions by owner-resolved ship
-mode — `task_claimed_local_pipeline` or `task_claimed_pr_pipeline`, never the
-merge-capable legacy pair. Both bypass rediscovery and reservation (the owner
-froze the footprint inside the admission transaction and settlement releases
-it), expose no `completion` input at all, and end at `claim_handoff`. Neither
-contains `git_merge`, `pr_complete` or `task_complete`; the owner-local one also
-contains no `git_push`, `pr_prepare` or `pr_open`, so it needs no origin.
+- `claim_validate` resolves candidate and base from Git in the executor's worktree, refuses a
+  candidate that does not descend from the base, runs the owner's
+  `workflow.required_validation_commands` on that exact candidate, and attaches one
+  `HandoffValidationLog` per command to the owner's task through the routed coordination
+  transport. An empty owner requirement list fails closed on both sides.
+- `claim_handoff` re-observes the same identity, refuses a worktree that moved, and records the
+  typed `TaskHandoff` as the claim's durable pending settlement *before* any owner call, so a
+  disconnect leaves one immutable settlement the next refill retries idempotently.
 
-The two new steps are `claim_validate` and `claim_handoff`. Validation resolves
-the candidate and the base from Git in the executor's worktree, refuses a
-candidate that does not descend from the validated base, runs the commands the
-*owner* declares in `workflow.required_validation_commands` on that exact
-candidate, and attaches one captured `HandoffValidationLog` per command to the
-owner's copy of the task through the routed coordination transport. The handoff
-step re-observes the same identity, refuses a worktree that moved after
-validation, and records the typed `TaskHandoff` as the claim's durable pending
-settlement *before* any owner call — so a disconnect leaves exactly one
-immutable settlement the next refill retries idempotently. An empty owner
-requirement list is fail-closed on both sides.
+**Execution authority** is the trusted worker binding plus the durable admission, never a
+payload: `execute_pipeline_run_worker` admits a claimed leaf only when the binding's task, claim,
+execution machine, bound run and owner match the admission. The supervisor records the binding
+against the child PID and sets `ORBIT_WORKER_CONTEXT_REQUIRED`. A bound leaf's worktree admission
+reads the owner's admitted task instead of re-admitting; generic workers and generic resume refuse
+these leaves.
 
-Execution authority is the trusted worker binding plus the durable admission,
-never a payload. `execute_pipeline_run_worker` admits a claimed leaf only when
-the process binding's task, claim, execution machine, bound run and owner match
-the admission record; an unbound worker gets the same refusal as before. The
-launcher derives that binding from the admission and spawns the leaf through
-the existing supervisor, which records it against the child PID and sets
-`ORBIT_WORKER_CONTEXT_REQUIRED`, so a child that cannot resolve it refuses to
-run. Worktree admission on a bound leaf no longer re-admits locally: it checks
-the binding and reads the owner's already-admitted task. Generic workers still
-refuse these leaves, and a local binding still refuses generic resume.
+**One capacity ceiling** ([ORB-12617]). The legacy classifier and the pull allocator read one
+occupancy, `JobRunStoreBackend::drain_leaf_occupancy`, which the allocator commits against inside
+its transaction:
 
-[ORB-12617] closed the mixed-admission integration and proved the whole path
-end to end.
+- a wrapper is replaced by the descendant carrying its work (a live run of any of the four leaf
+  definitions, or a pull admission whose bound leaf went terminal before settling), not counted
+  beside it;
+- an admission with no live run holds its own slot;
+- each definition's `max_active_runs: 10` is checked against the same reading;
+- a slot returns when the claim settles, not when its leaf terminalizes.
 
-**One capacity ceiling.** The legacy classifier used to divide the configured
-ceiling by its own `task_auto_pipeline` run count, so a pulled claim's leaf was
-invisible to it and the two admission paths could each fill the drain. Both now
-read one occupancy from the job store —
-`JobRunStoreBackend::drain_leaf_occupancy`, the same reading the pull allocator
-commits against inside its own transaction. A wrapper is replaced by whatever
-descendant is actually carrying its work (a live leaf run of any of the four
-leaf definitions, or a pull admission whose bound leaf went terminal before
-settling) rather than counted beside it; an admission with no live run of its
-own holds its own slot; each definition's `max_active_runs: 10` is checked
-against that same reading, per definition. `classify_workspace_auto_tasks` and
-the readiness diagnostic both report the breakdown (`wrapper_leaf_runs`,
-`leaf_occupancy_by_pipeline`), so a drain saturated by claimed work reads as
-saturation rather than as an empty backlog. A slot returns when the claim
-settles, not when its leaf terminalizes.
+`classify_workspace_auto_tasks` and the readiness diagnostic report `wrapper_leaf_runs` and
+`leaf_occupancy_by_pipeline`.
 
-**Fault injection against the real adapters.** Request, create, bind and launch
-cuts run against the real owner peer and the real launcher binding. Each cut is
-the response half of a step whose owner-side effect already committed, except
-the create cut, which is an executor dying with a leaf it never announced.
-Across all four, one claim and one leaf survive, a failed launch leaves exactly
-one immutable settlement the next pass retries idempotently, and a killed
-launch leaves a `Launching` record that every generic path refuses — the drain
-refuses to relaunch it, `orbit job resume` refuses it, and nothing settles or
-revokes it on a guess. Deliberate recovery remains the only way forward.
+**Crash cuts.** Request, create, bind and launch cuts leave one claim and one leaf. A failed
+launch leaves one settlement retried idempotently; a killed launch leaves a `Launching` record every
+generic path (drain, `orbit job resume`) refuses, pending deliberate recovery.
 
-[ORB-12500] closed the owner's half of published delivery and converged the
-retained entry points on one admission decision.
+**Published delivery** ([ORB-12500]). The owner accepts a PR handoff from its own observation
+(`orbit_engine::observe_published_candidate`): it reads the PR from the provider, pins head
+branch, base branch and head commit against the submitted candidate, refuses closed-without-merge
+or self-contradictory state, and resolves candidate and base in *its own* checkout with the
+executor's tree-identity and ancestry rules. A merged PR is observable, not refused (completion
+still needs authority). Only `landing_branch` (owner-resolved ship configuration) is taken from
+the submission. Acceptance and landing resolve revisions through one shared rule.
 
-**Both delivery shapes now settle.** The owner accepts a published
-pull-request handoff from its own observation
-(`orbit_engine::observe_published_candidate`): it reads the pull request from
-the provider, pins the reported head branch, base branch and head commit
-against the submitted candidate, refuses a closed-without-merge or
-self-contradictory state, and then resolves the candidate and base objects in
-*its own* checkout with the same tree-identity and ancestry rules the executor
-applied. A merged pull request is observable rather than refused — the external
-write already happened, refusing it here would only strand the settlement, and
-completion still needs separately recorded authority. `landing_branch` is the
-one field carried from the submitted candidate, because it is owner-resolved
-ship configuration rather than anything a pull request reports. Accepted
-revisions are resolved through one shared rule that handoff acceptance and the
-landing attempt both call, so the owner cannot read a candidate one way when it
-accepts the work and another way when it lands it. Already-landed delivery
-keeps its refusal: no-diff work carries its own typed report through the
-existing verifier and is not a route a claimed leaf takes.
+**Not yet executable.** Only an owner-local destination is served. The routed follower
+`PullPeer` over federated SSH does not exist (only `OwnerPullPeer` in
+`adapter/engine_host/v2_host/pull_adapters.rs`), no mutating distributed entry point is a
+registered tool, and `orbit run auto --pull` is not implemented. `run auto` / `run ship` still
+render a legacy pipeline name for `pr` and `local` modes after taking the shared admission
+decision ([§7.3](#73-ship-sweep)).
 
-**What is still not executable.** Only an owner-local destination is served at
-all. The routed follower peer — a `PullPeer` speaking the pull protocol over
-the federated SSH transport — does not exist, and no mutating distributed
-entry point is a registered tool, so `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
-stays false and a follower destination still fails on that gate.
-`orbit run auto --pull <selector>` is not implemented. No routine, schedule or
-live host changes, and `run auto` / `run ship` still render a legacy pipeline
-name for every mode they admit (`pr`, `local`) — what changed for them is the
-admission decision they make first, described in [§7.3](#73-ship-sweep).
-
+### Target pull-mode contract
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
-selector copied from federated discovery. Verify that the local checkout belongs to that logical
-workspace and repository. Persist the owner machine, workspace identity, selector, and claim in run
-inputs; detached children and in-run step retries inherit them. A renamed or unavailable destination
-must not fall back to a local coordination store.
+selector from federated discovery, verifies the checkout belongs to that workspace and repository,
+and persists owner machine, workspace identity, selector and claim in run inputs, which detached
+children and in-run step retries inherit. A renamed or unavailable destination never falls back to
+a local coordination store. The drain keeps its window, sleep controls and detached execution;
+admission becomes:
 
-The drain retains its window, sleep controls, and detached execution model, but admission changes:
+1. Reconcile pending local pull requests and claimed-but-not-launched work first.
+2. Count live leaf runs **and pending admissions without a live run** against local capacity,
+   across all four leaf definitions, under the configured ceiling and each `max_active_runs`.
+   Queued bound runs count until terminal settlement. Persist a new request ID per free slot
+   before sending it.
+3. Persist the handle. Create or recover exactly one local leaf per claim (durable local
+   uniqueness), then bind its host-qualified run ID on the owner. Binding is idempotent and never
+   replaces another run for that claim.
+4. Launch only after binding. A crash between steps resumes the same request, claim or
+   not-yet-started run. Stopping the drain stops new admissions, not live children.
 
-1. Reconcile pending local pull requests and claimed-but-not-launched work before requesting more.
-2. Count live leaf runs **and pending admissions not yet represented by a live run** against local
-   capacity. Count every leaf definition — the legacy `task_pr_pipeline` / `task_local_pipeline`
-   pair and the claimed `task_claimed_pr_pipeline` / `task_claimed_local_pipeline` pair — not just
-   `workspace_auto.rs::LEAF_JOB_NAME` (`task_auto_pipeline` today). Preserve the configured drain
-   ceiling and each pipeline's existing `max_active_runs: 10`; queued bound runs count as pending
-   capacity until terminal settlement. Persist a new request ID for each free slot before sending it.
-3. Persist the returned handle. Create or recover exactly one local leaf run per claim using a
-   durable local uniqueness constraint, then bind its host-qualified run ID to the claim on the
-   owner. Binding is idempotent and cannot replace another run for that claim.
-4. Launch only after binding succeeds. A crash between any two steps resumes the same request,
-   claim, or not-yet-started run. Stopping the drain stops new admissions; it does not invalidate live children.
+**Interrupted execution** is left for deliberate recovery. `orbit job resume` refuses claimed
+leaves (`resume_job_run` creates a new run that cannot inherit the binding). Recovery fences the old
+claim before admitting a new claim/run; preserved branches may seed it, but validation and handoff
+are fresh. Step retries keep the bound run; pre-launch recovery may reuse the queued run, but an
+uncertain run is never restarted.
 
-Once execution starts, a dead process leaves an interrupted claim for deliberate recovery. V1
-refuses `orbit job resume` for claimed leaves: existing `resume_job_run` creates a new run and
-cannot inherit an immutable claim/run binding. Recovery fences the old claim before admitting a new
-claim/run; preserved branch contents may seed that attempt, but validation and handoff are fresh.
-In-run step retries keep the same bound run. Crash recovery before launch may recover the same
-queued run and idempotent binding; it must never restart a run whose execution became uncertain.
+**Claimed dispatch.** A claimed task never goes through `task_auto_pipeline` backlog discovery.
+The claimed path verifies the claim and selects the claimed leaf for the owner-resolved mode; a
+bare `pulled: true` flag is not authority. Followers cannot execute local mode. The local variant
+keeps local base sync, stops before `git_merge`, and hands off a local candidate (repository,
+branch, candidate/base SHAs, validation evidence) for the owner's authorized local merge.
+Review-only local work stays an unmerged candidate.
 
-Do not send an already claimed task through ordinary backlog discovery in `task_auto_pipeline`. Add
-a claimed-task dispatch path that bypasses rediscovery and lock acquisition, verifies the claim, and
-selects the claimed leaf for the owner-resolved mode — `task_claimed_pr_pipeline` for PR mode or
-`task_claimed_local_pipeline` for owner-local mode — with the handle. These are separate
-handoff-only definitions rather than the legacy merge-capable pair, because a claim settles through
-the owner and a leaf that could merge or complete on its own would bypass that lifecycle. A bare `pulled: true` flag is not authority. The `start_epic` branch is removed by §7.
-Followers cannot execute local mode. The claimed local variant retains local base sync and needs no
-origin or PR credentials; it stops before `git_merge` and emits a local-candidate handoff
-(repository, branch, candidate/base SHAs, validation evidence). The owner consumer performs the
-authorized local merge and verifies its commit evidence. Review-only local work remains an unmerged
-candidate. Both variants settle the same claim lifecycle; local success cannot bypass it.
+**Settlement.** `reserve_locks` / `release_reservation` live in `task_gate_pipeline`, so the
+claimed path settles explicitly on success, launch failure, cancellation and terminal failure.
+Settlement is an idempotent owner mutation scoped to that claim's reservation and never releases
+a newer attempt's. A terminal failure before review atomically records evidence, moves the task to
+`blocked`, invalidates execution authority and releases the reservation. Disconnected, the
+settlement is persisted locally and retried; the owner holds the claim until settlement or
+recovery. TTL is not settlement.
 
-`reserve_locks` and `release_reservation` currently belong to `task_gate_pipeline`, not
-`task_pr_pipeline`. Bypassing the gate therefore requires explicit claim settlement and cleanup
-on success, launch failure, cancellation, and terminal failure. Settlement is an idempotent owner
-mutation scoped to that claim's reservation; it never releases a newer attempt's reservation.
-A terminal failure before review atomically records evidence, moves the task to `blocked`,
-invalidates execution authority, and releases the reservation. If disconnected, persist the
-pending settlement locally and retry; the owner retains the claim until settlement or deliberate
-recovery. TTL is not a substitute for settlement.
-
-Branches include immutable attempt identity. The existing run-derived worktree branch scheme may
-remain because each claim binds one unique run; record that association durably. A claim-derived
-name such as `orbit/<task-id>-<claim-id>` is also valid, not a required second scheme. A display
-host name alone does not distinguish successive attempts on the same machine. The follower executes
-implementation, validation, push, and PR opening locally, then submits the durable handoff described
-below. It does not run merge completion.
+**Branches** carry attempt identity: the run-derived branch suffices because each claim binds
+one run; `orbit/<task-id>-<claim-id>` is also valid. The follower implements, validates, pushes and
+opens the PR, then hands off; it never runs merge completion.
 
 ### 3.1 Attempt ownership and recovery
 
-The owner records each claim as `claimed`, `running`, `handed_off`, `failed`, or `revoked`.
-Only `claimed` and `running` authorize execution writes. The current claim ID, trusted runtime
-machine, bound run where applicable, and allowed phase are checked **inside the same transaction
-as every claim-scoped mutation**. Cover task summaries, artifacts, comments, friction creation,
-run binding, failure settlement, promotion, and cleanup. Mutation request IDs deduplicate retries
-of append/create operations. Ordinary operator edits remain separately authorized and audited.
+Claim phases are `claimed`, `running`, `handed_off`, `failed`, `revoked` and `landed`
+(`ExecutionClaimPhase`). Only `claimed` and `running` authorize execution writes; `claimed`,
+`running` and `handed_off` protect the footprint. Current claim ID, trusted runtime machine, bound
+run and allowed phase are checked **inside the same transaction as every claim-scoped mutation**:
+task summaries, artifacts, comments, friction, run binding, failure settlement, promotion and
+cleanup. Mutation request IDs deduplicate append/create retries. Operator edits remain separately
+authorized and audited.
 
-The existing `vcs/handoff.rs::load_handoff_context` run-ownership guard is useful but insufficient:
-it reads ownership before later mutation, and currently compares an unqualified run ID. Extend
-ownership to the claim and machine/run pair and enforce it on the owner. Generic task-write paths
-used by workers must carry the same claim context; they cannot bypass fencing by omitting it.
-Changing an actively claimed task's status, run binding, dependencies, or lock footprint must
-preserve the claim invariant or atomically revoke the claim through deliberate recovery. V1 refuses
-footprint expansion during execution; it requires stopping and re-admitting with revised context.
+- Ownership is the claim plus machine/run pair, enforced on the owner; the local run-ownership
+  read in `vcs/handoff.rs::load_handoff_context` is not sufficient alone. Worker task writes must
+  carry claim context; omitting it cannot bypass fencing.
+- Changing a claimed task's status, run binding, dependencies or footprint must preserve the claim
+  invariant or revoke it through recovery. Footprint expansion during execution is refused.
 
-V1 has **manual reclamation**, no heartbeat and no automatic failure inference. Add an owner-side
-claim listing with age, phase, reservation expiry, execution machine/run, and last recorded event.
-Those fields aid inspection; age, TTL expiry, and an absent owner-local run are not proof of death.
-`scan_unresolved_work` currently excludes `in-progress` and `review` tasks and reads local failed
-runs. It is not a remote-claim detector. Status-derived locks on `in-progress` and `review` tasks
-also survive reservation expiry using the frozen, non-pruned claim footprint, not an
-existence-filtered recomputation.
+**Manual reclamation only**: no heartbeat or failure inference. The claim listing shows age,
+phase, reservation expiry, execution machine/run and last event; none of these proves death.
+`scan_unresolved_work` is not a remote-claim detector. Status locks on `in-progress` and `review`
+tasks survive reservation expiry using the frozen footprint.
 
-Recovery inspects the recorded run on its host when possible and preserves any branch, PR, or
-failure evidence. An authorized operator or supervised orchestrator explicitly revokes the claim
-and chooses the permitted task transition, usually to `blocked` for diagnosis or to `backlog`
-for retry. Revocation, invalidation of pending landing authority, reservation release, and task
-transition are atomic. A replayed pull response for that attempt must not reactivate it. A sleeping
-worker that returns receives `stale_claim` even if a newer attempt has made the task `in-progress`
-again. Its local compute and an already in-flight GitHub write cannot be undone, but its old
-candidate cannot become authoritative task state or pass the owner landing gate.
+**Recovery** preserves branch, PR and failure evidence; an authorized operator or supervised
+orchestrator revokes the claim and picks the transition (usually `blocked` or `backlog`).
+Revocation, landing-authority invalidation, reservation release and transition are atomic. A
+replayed pull cannot reactivate the attempt, and a returning worker gets `stale_claim` even if a
+newer attempt made the task `in-progress`; its candidate can never become task state or land.
 
-The internal lifecycle substrate exposes `ClaimInvocation` (non-deserializable trusted runtime
-context), `ClaimMutation`, and read-only `ClaimInspection`. The existing task journal commits claim
-compare-and-set updates, mutation receipts, evidence, task transitions and reservation release.
-Inspection refuses pending journal repair rather than writing as a side effect. The durable merge
-intent guard and `landing_invalidated` state are seams for the later landing consumer. Recovery
-requires explicit operator context and retains prior branch/PR and artifact evidence.
-
-The lifecycle substrate is now used by generic tool/friction transport propagation. Integrated proof belongs
-to the routing/integration slice; distributed public execution stays unavailable until it passes.
+The substrate is `ClaimInvocation` (non-deserializable trusted context), `ClaimMutation` and
+read-only `ClaimInspection` (which refuses pending journal repair rather than writing), committed
+through the task journal.
 
 ### 3.2 Durable review and landing handoff
 
-The current `workspace_ship_pipeline` launches the workspace backlog drain; it does not consume
-arbitrary tasks already in `review`. V1 adds an explicit owner-side handoff consumer. This is
-required implementation work, not reuse of an existing review sweep. The ship-sweep routine and its
-wrapper remain as described in [§7.3](#73-ship-sweep); landing does not depend on either.
+**Handoff contents.** An idempotent submission of claim and execution run identity, repository
+and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
+and landing branch, execution summary and validation artifact references.
 
-The follower submits an idempotent handoff containing the claim and execution run identity,
-repository and PR identity, source branch, published candidate head SHA, validated base SHA,
-intended base and landing branch, execution summary, and durable validation artifact references. V1
-supports only `review_policy = none`, captured at admission. Include typed review evidence `{
-policy: none, disposition: not_required }`; do not invent reviewed SHAs, an agent verdict, or a
-review artifact. Neither `before-pr` nor `after-landing` is admitted. Validation still runs on the
-exact candidate/base pair. The PR pipeline's existing `gate: not_required` result is adapted into
-this evidence, not treated as an empty successful review. Task status `review` means a delivery
-handoff awaiting completion authority; it does not assert that an automated review occurred.
-Artifacts must be accessible in the owner's coordination store; a follower-local path is not landing
-evidence. Owner-local candidates carry the local variant above. No-diff/already-landed work carries
-its existing typed evidence instead of a PR. The owner validates required evidence and atomically
-persists the handoff, promotes the task to `review`, closes execution writes, and releases the claim
-reservation. The task's review lock continues to protect its footprint. A lost response replays the
-same handoff result.
+- V1 admits only `review_policy = none`, captured at admission ([V1 review policy is
+  none](./4_decisions.md#v1-review-policy-is-none)). Review evidence is the typed
+  `{ policy: none, disposition: not_required }`, with no reviewed SHA, verdict or review artifact;
+  the PR pipeline's `gate: not_required` is adapted into it. Task status `review` means a delivery
+  handoff awaiting completion authority, not that a review occurred.
+- Validation runs on the exact candidate/base pair. Artifacts must live in the owner's store; a
+  follower-local path is not evidence.
+- No-diff/already-landed work carries its typed evidence instead of a PR; the owner observer
+  itself runs the Git ancestry, delivery-marker, unchanged-scope and clean-tree checks.
 
-The internal authority foundation now implements these transitions through
-`application::review` and `TaskCommitBoundary`, using the existing task commit journal.
-`TaskHandoff` binds workspace, task, claim, execution machine/run, repository, delivery variant,
-branches and candidate/base commit/tree identities. Owner observations and required validation
-commands are trusted runtime context, never deserialized from worker input. Each validation
-reference pins the digest of an owner task artifact containing the exact identity, command,
-zero exit code and captured output. Acceptance and approval re-read that evidence; merge-intent
-publication rechecks it again. The `none` disposition has no reviewed SHA or verdict fields.
-The summary-only lifecycle handoff shape remains readable but cannot accept new writes.
+**Acceptance** (`application::review`, `TaskCommitBoundary`). `TaskHandoff` binds workspace, task,
+claim, execution machine/run, repository, delivery variant, branches and candidate/base
+commit/tree identities. Owner observations and required validation commands are trusted runtime
+context, never deserialized from worker input. Each validation reference pins the digest of an
+owner task artifact holding the exact identity, command, zero exit code and captured output;
+acceptance, approval and merge-intent publication each re-read it. The summary-only handoff shape
+stays readable but refuses new writes. Handoff, `review` transition, claim closure, reservation
+release, and any grant-backed authorization and pending landing-start record commit together; the
+task's review lock keeps protecting the footprint. A lost response replays the same result.
 
-Already-landed delivery shares the existing typed report and task-scope projection with the
-local verifier, and requires criterion evidence and the same exact validation logs. The trusted
-owner observer must additionally perform the existing Git ancestry, task delivery marker,
-unchanged-scope and clean-tree verification; a follower assertion is insufficient. Local candidates
-use the same handoff, approval and validation boundary without requiring a PR or remote.
+**Completion authority.** Completion defaults to `review`; pull eligibility or `agent` access
+never authorizes a merge. `completion: done` requires durable, explicitly granted task/workspace
+authority, persisted with the handoff and rechecked at landing.
 
-Handoff, review transition, claim closure, reservation release, and any grant-backed authorization
-and pending landing-start record commit together. Explicit operator approval atomically creates
-one immutable candidate-scoped authorization and one deduplicated pending request. Revocation
-records a separate immutable audit row and cancels the pending request; deliberate recovery does
-the same while revoking the claim. An unresolved merge intent blocks either operation until
-reconciliation. Grant-backed acceptance and merge-intent publication recheck the grant inside the
-SQLite commit transaction, including hard revocation. A historical replay is an advisory recorded
-outcome, never renewed permission to execute or merge.
-
-The outbox is durable without a live drain or ship sweep. Public distributed writes remain gated,
-and no scheduler, destination caller registry, routine enablement or live rollout is introduced by
-this foundation.
-
-Completion defaults to `review`. Pull eligibility or `agent` access alone does not authorize a
-merge. Any `completion: done` must reference durable, explicitly granted completion authority
-with task/workspace scope; neither the follower nor a newly enabled consumer may invent it.
-Review-only handoffs remain awaiting approval until that authority is recorded. Persist the
-authority reference with the handoff and recheck it at landing.
-
-Add an owner-only, operator-authorized, idempotent **approve handoff** mutation. Its input
-identifies workspace, current handoff/claim, exact candidate/base, and a mutation request ID. In one
-transaction it verifies `review` state and the current evidence, persists a completion authorization
-scoped to that handoff and candidate, records who approved it and when, and creates the durable
-landing-start request. Store an immutable authorization ID, scope, approver, creation time, and
-revocation state; recheck revocation/currentness before external merge. A follower's `agent` grant
-cannot approve. An existing applicable completion grant can authorize the same record at handoff
-acceptance. Do not silently reuse `enable_operation_grant` for post-handoff approval: its current
-scope validator accepts only proposed/backlog tasks. Implement the review-state approval path
-explicitly. Revocation invalidates pending landing authorization; uncertain merge intents still
-require reconciliation.
-
-An owner-local durable job consumes authorized handoffs, one landing attempt per handoff at a time.
-Accepting a completion-authorized handoff durably records the request to start that job; approving a
-review-only handoff records the same request. Owner job recovery must reconcile pending start
-requests after interruption, with handoff identity deduplicating job creation. This is a required
-handoff-to-job delivery contract, not a periodic backlog scan. An explicit owner operation can retry
-or reconcile a named handoff without starting a drain. Neither scheduled ship-sweep nor a running
-owner drain is required for accepted, authorized work to land. It verifies that the handoff is still
-current, checks the exact candidate head/base, validation evidence, and typed `none` review
-disposition, respects GitHub checks/protection for PRs, and verifies `MERGED` plus merge evidence
-before `review → done` (or verified local merge evidence for owner-local candidates). Persist the
-merge intent before the external call. After a crash or lost reply, reconcile GitHub's actual state,
-or the owner-local target ref, for the same pinned candidate before retrying. Recovery must not
-reassign a task with an unresolved merge intent until that intent is reconciled; database revocation
-alone cannot cancel a request already sent to GitHub.
-
-Existing `pr_complete` depends on the execution run and a local worktree. Extract or adapt its
-pinned-delivery and completion checks for an owner handoff consumer without pretending the
-follower's run or path is local. Do not weaken those checks or copy a follower run into the owner
-store. A changed head/base or a conflict stops landing with durable evidence. Repairs execute as
-an explicitly authorized new attempt and require fresh validation and a new handoff; the owner
-does not silently rebase unvalidated code. No-diff completion uses the existing typed evidence
-checks and the same completion-authority boundary.
+- **Approve handoff** is owner-only, operator-authorized and idempotent. Input: workspace, current
+  handoff/claim, exact candidate/base, mutation request ID. One transaction verifies `review`
+  state and current evidence, persists an immutable candidate-scoped authorization (ID, scope,
+  approver, time, revocation state), and creates one deduplicated landing-start request. A
+  follower's `agent` grant cannot approve.
+- **Revocation** writes a separate immutable audit row and cancels the pending request; recovery
+  does the same while revoking the claim. An unresolved merge intent blocks both until reconciled.
+- Acceptance and merge-intent publication recheck the grant (including revocation) inside the
+  commit; a replay is never renewed permission.
 
 ### Landing consumer implementation status
 
-The owner landing consumer now exists as a durable job. Recording completion authority — accepting
-a completion-authorized handoff, or approving a review-only one — dispatches `task_landing_pipeline`
-from the outbox in the same call, so no drain, ship sweep, routine or schedule is involved.
-Handoff identity keys one durable landing attempt and the job's action key; a merged handoff refuses
-re-dispatch, a live owner job is left alone, and a pending request whose job never started or whose
-job died is picked up by the next explicit dispatch pass as the next attempt. Landing a named
-handoff is also an explicit owner operation, which is how a stopped attempt is retried and an
-uncertain one reconciled.
+The landing consumer is the durable owner job `task_landing_pipeline`, one attempt per handoff
+at a time, keyed by handoff identity. Recording completion authority (accepting a
+completion-authorized handoff, or approving a review-only one) dispatches it from the outbox in the
+same call; no drain, ship sweep, routine or schedule is involved. A merged handoff refuses
+re-dispatch, a live owner job is left alone, and a pending request whose job never started or died
+is taken by the next explicit dispatch pass. Landing a named handoff is also an explicit owner
+operation (retry or reconcile).
 
-Its `handoff_land` step observes rather than assumes. The pinned `pr_complete` delivery identity is
-reused directly — the same branch, base and head-commit pins, the same merged-with-merge-commit
-evidence and the same provider-state classification — with no follower run or path involved: the
-owner checks the head on every poll, resolves candidate and base objects in its own checkout, and
-verifies that the validated base is still reachable from the landing ref. That ref is the owner's
-remote-tracking `origin/<landing branch>`, which only moves when this checkout fetches it, so the
-attempt refreshes it from `origin` once before judging anything against it: a base or covering
-commit that landed from another machine since the owner's last fetch is a freshness gap rather than
-a missing commit, while one that is genuinely absent upstream still stops with durable evidence
-naming the refreshed view. The merge intent is durable before the external call; a lost reply or a
-crash leaves recorded uncertainty that the next attempt resolves against the provider's actual state
-or the local target ref before anything is retried, and the store refuses revocation, recovery and
-reassignment until it does. Changed identity, a conflict, an unsatisfied protection or an exhausted
-check budget records a durable stop and leaves the task in review. Owner-local candidates
-fast-forward the local landing branch and are verified from the ref; no-diff delivery verifies its
-covering commit on the landing ref and makes no external call. Every completion re-runs the
-authorization, candidate and validation-artifact checks inside the transaction that moves `review ->
-done`, and the observation the activity supplies must equal the accepted candidate exactly.
+The merge intent is persisted before the external call; after a crash or lost reply the next
+attempt reconciles the provider's state or the local target ref for the same pinned candidate
+before retrying, and the store refuses revocation, recovery and reassignment until then. Repairs
+are a new authorized attempt with fresh validation and handoff; the owner never silently rebases.
+
+`handoff_land` reuses `pr_complete`'s pinned delivery identity (branch, base and head-commit pins,
+merged-with-merge-commit evidence, provider-state classification) with no follower run or path.
+The owner checks the head on every poll, resolves candidate and base in its own checkout, and
+verifies the validated base is reachable from `origin/<landing branch>`, fetched once from `origin`
+per attempt so a commit landed from another machine is not misread as missing. Changed identity, a
+conflict, unsatisfied protection or an exhausted check budget records a durable stop and leaves the
+task in `review`. Owner-local candidates fast-forward the local landing branch and are verified
+from the ref; no-diff delivery verifies its covering commit on the landing ref with no external
+call. Every completion re-runs authorization, candidate and validation checks inside the
+`review → done` transaction, and the activity's observation must equal the accepted candidate.
 
 ### Owner dashboard surface
 
-[ORB-12516] gave the owner's own operator a place to read claim state and act on
-it: the existing task and run views, not a console of its own. There is no
-distributed tab, route or navigation entry, so the incomplete feature gains no
-public surface — the panel appears on a task detail only when this workspace
-actually holds a claim for it, and a replica says the owner machine holds that
-state rather than rendering an empty view.
+[ORB-12516] added claim state and actions to the owner's existing task and run views. There is no
+distributed tab or route; the panel appears on a task detail only when this workspace holds a
+claim for it, and a replica says the owner holds that state.
 
-What it reads is one owner-domain projection over the records above
-(`application::review::handoff`): host-qualified execution machine and host,
-claim phase with the bound run, the frozen footprint, reservation expiry, the
-accepted handoff's candidate/base/validation and typed `none` disposition, and
-the handoff's authority and landing state. The vocabulary is load-bearing, since
-a misread here becomes a wrong decision: an elapsed reservation is reported as a
-diagnostic that is explicitly *not* revocation and *not* proof the attempt died;
-`review` is named as a delivery handoff awaiting completion authority rather
-than a code review that passed; merged is named as a merge into the landing
-branch rather than a deployment; and a run bound to another machine names the
-host to inspect instead of an owner-local link, which would resolve against the
-wrong job store. Absent execution provenance stays *unknown*.
-
-Acting is the same three canonical transactions the landing consumer uses —
-`approve_task_handoff`, `revoke_task_handoff`, `ClaimMutation::Recover` — behind
-three `OperationSurface::Dashboard` rows in the governed-operation registry
-(`handoff.approve`, `handoff.revoke`, `claim.recover`, operator only). No second
-authority model and no disabled-button boundary: the capability the read
-projects is the one each mutation re-resolves, every action carries the exact
-identity the operator was shown (the candidate/base commit pair for a handoff,
-the phase for a claim) plus a replay identity that makes a retry idempotent, and
-the observation an approval commits is rebuilt from the owner's own accepted
-record rather than from the payload. Stale identity, a replica checkout and an
-unresolved merge intent are distinct typed refusals, because the operator's next
-move differs: refresh, act on the owner, or reconcile the merge first.
-
-Adapters above Core cannot depend on `orbit-store` — `ClaimInvocation` and
-`HandoffObservation` are deliberately not constructible outside trusted runtime
-code — so the HTTP layer holds no lifecycle state at all. The gated routed
-entry points are unaffected: these are owner-local operator actions, and
-`DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` still refuses pull, binding and
-settlement from a follower.
+- **Read:** one owner projection (`application::review::handoff`) of execution machine, claim
+  phase and bound run, frozen footprint, reservation expiry, the accepted handoff and its
+  authority and landing state. Wording is load-bearing: an elapsed reservation is *not*
+  revocation or death; `review` awaits authority, not a passed code review; merged means into the
+  landing branch, not deployed; a remote run names the host to inspect; absent provenance is
+  *unknown*.
+- **Act:** `approve_task_handoff`, `revoke_task_handoff` and `ClaimMutation::Recover` behind the
+  operator-only dashboard governed rows `handoff.approve`, `handoff.revoke`, `claim.recover`. Each
+  action carries the identity shown plus a replay identity; approval rebuilds its observation from
+  the owner's record. Stale identity, replica checkout and unresolved merge intent are distinct
+  typed refusals.
+- `ClaimInvocation` and `HandoffObservation` are not constructible outside trusted runtime code,
+  so the HTTP layer holds no lifecycle state. These are owner-local actions; the follower gate is
+  unaffected.
 
 ## 4. Follower preconditions
 
-Before new admission, check the common workspace execution requirements and local capacity.
-A failed check records a diagnostic and sleeps; these probes reduce failures but cannot guarantee
-that credentials, network access, or tools remain usable after pull.
+Before new admission, check execution requirements and local capacity; a failed check records a
+diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 
 | Check | Source of truth |
 |---|---|
@@ -511,60 +340,41 @@ that credentials, network access, or tools remain usable after pull.
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
 | Repository readable and credentials configured for push and PR operations | Git transport checks and provider authentication; `gh auth status` alone does not prove Git push permission |
 
-The owner resolves ship mode, base/landing branches, and applicable completion authority. Follower
-execution always stops at handoff, even when that authority permits the owner to complete. Local
-ship mode is refused for followers. Equal binary/schema versions do not establish equal crew,
-policy, or toolchain configuration; v1 requires compatible workspace execution settings as well.
+The owner resolves ship mode, base/landing branches and completion authority. Follower execution
+always stops at handoff; local ship mode is refused for followers. Equal binary/schema versions do
+not imply equal crew, policy or toolchain configuration; v1 requires both.
 
 ### 4.1 Read-only admission probe
 
-Add an owner-served read-only probe before enabling pull. Its input is the host-qualified workspace
-selector; its response names the owner/workspace, binary version, distributed-drain protocol schema
-version, effective session capabilities, diagnostic caller machine, resolved ship mode,
-and review policy. It creates no receipts, reservations, claims, or tasks. SSH login establishes
-owner access. There is no destination callers file, forced-command acceptance requirement,
-key-bound proof, or replacement identity registry. Managed callers still cannot acquire operator
-capability by changing tool input or launching a privileged child. Policy/version mismatches are
-observable before admission and rechecked by pull.
-The distributed-drain protocol schema starts at `1` and versions pull, probe, and lifecycle
-request/response shapes; incompatible changes increment it. It is not the scoreboard's
-`ORCHESTRATION_SCHEMA_VERSION`. MCP initialization's binary/protocol metadata alone is insufficient.
+The owner serves a read-only probe ([ORB-12495]). Input: the host-qualified workspace selector.
+Response: owner/workspace, binary version, distributed-drain protocol schema version, effective
+session capabilities, diagnostic caller machine, resolved ship mode and review policy. It creates
+no receipts, reservations, claims or tasks. A caller may declare its version, protocol schema and
+review policy, and the probe reports the first refusal admission would raise by running the same
+ordered ladder (`orbit_store::admission_refusal`).
 
-[ORB-12495] implemented this section together with the pull spec's receipt reconciliation, as the
-owner's whole read-only surface: `orbit.drain.probe`, `orbit.drain.receipt.lookup`, and the
-operator-only `orbit.drain.claims` listing from [§3.1](#31-attempt-ownership-and-recovery). The MCP
-server and `orbit tool run` reach them through the same registry and the same application entry
-points (`orbit-core`'s `application::distributed`), so neither surface can drift into a different
-check; both read-only tools are `control_plane`, so a replica destination refuses them instead of
-answering about itself. A caller may declare its version, protocol schema, and review policy, and
-the probe reports the first refusal admission would raise by running the same ordered ladder
-(`orbit_store::admission_refusal`) rather than a second copy of it. The mutating entry points —
-pull, binding, settlement, handoff, approval — are not registered tools and are refused by one
-named gate (`application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`), so the
-incomplete feature cannot be enabled by configuration.
-
-[ORB-12582] moved the `agent`-or-`operator` requirement out of the application function and into
-the governed-operation registry, where every other tool's requirement lives. Both read-only tools
-carry a row allowing `agent` or `operator`: an identification floor rather than an operator gate,
-so a follower holding only `agent` is served and a caller the chokepoint cannot identify is not.
-Reading session capabilities inside the application function had made the two surfaces differ
-after all — an MCP session carries the capability its server stamped, while `orbit tool run`
-carries none and expresses the caller's authority in the process envelope only the chokepoint
-resolves, so the owner's own machine was refused its own preflight. Cross-attempt receipt
-inspection still requires `operator`, resolved through the same shared rule
-(`runtime::authorization::resolved_caller_capabilities`) rather than off the session.
+- The protocol schema starts at `1` and versions pull, probe and lifecycle shapes; it is not the
+  scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
+- The owner's read-only surface is `orbit.drain.probe`, `orbit.drain.receipt.lookup` and the
+  operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)). MCP and
+  `orbit tool run` reach them through one registry and `application::distributed`. The read-only
+  tools are `control_plane`, so a replica refuses them.
+- Their governed-operation rows allow `agent` or `operator` — an identification floor, not an
+  operator gate ([ORB-12582]). Cross-attempt receipt inspection requires `operator`, resolved by
+  `runtime::authorization::resolved_caller_capabilities`, not read off the session.
+- SSH login establishes owner access; there is no destination callers file, forced-command
+  requirement, key-bound proof or identity registry. Managed callers cannot gain operator
+  capability by changing tool input or launching a privileged child.
 
 ## 5. Transport and authority routing
 
-> **Authority decision (2026-09-19):** SSH login establishes ownership of the destination.
-> Session agent/operator capabilities and caller-side managed-run privilege restrictions remain.
-> Execution-machine labels provide attribution; trusted invocation context fences a claim and its
-> immutable run. It is not a new destination caller authorization grant.
-
-Followers initiate federated MCP over SSH stdio. The follower's destinations file locates the
-owner, and the SSH login to the owner is what admits the follower at all. SSH connection reuse is a
-transport optimization, not a delivery guarantee. Every coordination mutation has an idempotency
-or reconciliation contract before step recovery retries it.
+SSH login to the owner is the admission; session agent/operator capabilities and caller-side
+managed-run restrictions still apply; execution-machine labels are attribution; trusted invocation
+context fences a claim and its run ([SSH login is the admission; machine labels are
+attribution](./4_decisions.md#ssh-login-is-the-admission-machine-labels-are-attribution)).
+Followers initiate federated MCP over SSH stdio, locating the owner through their destinations
+file. SSH connection reuse is an optimization, not a delivery guarantee; every coordination
+mutation has an idempotency or reconciliation contract before step recovery retries it.
 
 | Data or operation | Authority and execution location |
 |---|---|
@@ -574,80 +384,56 @@ or reconciliation contract before step recovery retries it.
 | Review policy | `none` only in v1; typed not-required disposition and validation evidence live on owner |
 | Completion authority, landing intent, merge verification, task completion | Owner |
 
-`WorkerInvocation` carries the owner destination/workspace, task, claim, execution location and
-immutable bound run. Runtime composition installs it; ordinary `ToolSessionContext` JSON cannot
-set it. Core routes task/dependency reads and task/friction writes through `OwnerCoordinator`.
-The command layer composes the existing federated SSH or in-process transport; neither transport
-falls back to a follower task store. Owner identity and workspace are checked again at dispatch.
-SSH initialization carries the binding separately from tool arguments. Bound sessions and their
-proxies lose operator capability. SSH access remains the access grant; the owner claim transaction
-separately validates execution machine, bound run, current claim and phase.
+**Worker invocation.** `WorkerInvocation` carries owner destination/workspace, task, claim,
+execution location and immutable bound run. Runtime composition installs it; `ToolSessionContext`
+JSON cannot set it. Core routes task/dependency reads and task/friction writes through
+`OwnerCoordinator` over the federated SSH or in-process transport, with no fallback to a follower
+store; owner identity and workspace are rechecked at dispatch. SSH initialization carries the
+binding apart from tool arguments, and bound sessions and their proxies lose operator capability.
 
-Detached workers and provider subprocesses recover their invocation from the protected host
-recovery-authority database, keyed by kernel process identity. Linux PID-namespace children also
-use the namespace init identity; editable environment labels and job-input records cannot create
-or replace a binding. A required managed child refuses startup when its binding is unavailable.
-Step retries register new processes against the same bound run. Unsupported process-identity
-platforms fail closed for claimed workers. This is attempt context, not a destination caller registry.
+- Detached workers and provider subprocesses recover their invocation from the host
+  recovery-authority database, keyed by kernel process identity (plus namespace-init identity in
+  Linux PID namespaces), never from env labels or job inputs. A managed child without a binding
+  refuses to start; unsupported platforms fail closed.
+- Only task activity/automation writes cross the owner seam (run identity checked first); Git and
+  worktree checks stay local. Generic updates cannot promote or complete a task. Source-file
+  artifacts are materialized on the executor and routed path-free.
+- Evidence, document and friction writes share one SQLite commit with the claim comparison and
+  mutation receipt. Omitted `during_task` means the bound task; conflicting arguments refuse;
+  canonical digests (excluding friction timestamps) deduplicate retries.
 
-Activities retain executor-local Git/worktree checks. Their task activity/automation writes alone
-cross the owner seam, with runtime run identity checked before dispatch. Generic updates cannot
-promote to review or complete a task: review still requires the typed owner handoff boundary.
-Source-file artifacts are materialized on the executor before routing path-free payloads. Local
-run/step diagnostics remain on the execution host even when the owner is unavailable.
-
-Generic evidence, document updates and friction creation enter the claim commit boundary. Friction
-allocation, publication, claim comparison and mutation receipt share one SQLite commit decision;
-there is no check-then-write append to a separate friction store. Omitted `during_task` uses the
-bound task, and conflicting task/claim/run arguments refuse. Canonical mutation digests deduplicate
-identical retries (friction wall-clock timestamps are excluded). Claim footprint changes require
-recovery and readmission. Task run links and artifact manifests use the claim's runtime-derived
-execution location; legacy absent locations remain unknown. No remote run is imported locally.
-
-The destination serves the session's granted capabilities after SSH access. Payload host labels
-are diagnostic, not credentials. Revalidate session capability and attempt context on retries.
-An uncertain request remains pending until its original receipt is reconciled; it does not permit
-minting a replacement request. Receipt lookup preserves the original namespace and input across
-compatible upgrades without granting execution authority. Worker invocations inspect their own
-receipt namespace; owner operators retain cross-attempt inspection and deliberate recovery access.
-No retired cross-caller ACL restricts operator access. No inbound follower connection or fleet
-registry is required.
+Payload host labels are diagnostic; session capability and attempt context are revalidated on
+retries. An uncertain request stays pending until its receipt is reconciled and never licenses a
+replacement. Receipt lookup preserves the original namespace and input across compatible upgrades
+without granting execution authority; workers see their own namespace, owner operators all of
+them. No inbound follower connection or fleet registry is required.
 
 ## 6. Execution provenance
 
-Execution identity is required for v1 claim fencing and handoff acceptance, not deferred
-observability. Today a job run, a task's `job_run_id`, and a task artifact
-say nothing about where execution happened; with one host that was implicit, with two it is a
-dangling reference.
+Execution identity is required for claim fencing and handoff acceptance. The key is the stable
+`machine_id` in an `ExecutionLocation { machine_id, machine_name }` (`machine_name` is display-only
+and reads the legacy `host_id` spelling). Nothing is inferred from hostname, cwd, SSH target or
+audit label, and absent historical identity reads as *unknown*, never as "the owner".
 
 | Record | Field | Set by | Notes |
 |---|---|---|---|
-| Job run | `executed_on { machine_id, host_id }` | the runtime that inserts the run | immutable; steps inherit; nullable so pre-existing rows read as *unknown*, never as "the owner" |
-| Task | `job_run_host` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; without the host the owner's `orbit run show` cannot resolve it |
-| Task history | `pulled_by { machine_id, run_context, claim_id, request_id }` | `orbit.task.pull` | already in the spec |
-| Task artifact | `origin { machine_id, host_id }` | the owner, at put time | from trusted runtime invocation context; remote advisory labels alone leave origin unknown |
-| Agent envelope | `ORBIT_MACHINE_ID`, `ORBIT_HOST_ID` | the dispatching runner | advisory, for execution summaries and PR bodies; the store fields above are the truth |
+| Job run | `executed_on` | the runtime that inserts the run | immutable; steps inherit; nullable |
+| Task | `job_run_machine` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; the legacy `job_run_host` name is still read |
+| Task history | `pulled_by` event | `orbit.task.pull` | request and claim identity |
+| Task artifact | `origin` | the owner, at put time | from trusted invocation context; remote labels alone leave it unknown |
 
-The key is the stable `machine_id`; `host_id` rides along for display and may be renamed. Nothing is
-inferred from hostname, cwd, SSH target, or audit label, per the host-registry rule. Federated run
-inspection ([3_vision.md](./3_vision.md#1-open-questions)) is what eventually reads these fields
-across hosts; until then they identify where to inspect a run manually. A host pointer alone does
-not provide remote reachability or a lookup implementation.
+Until federated run inspection ([3_vision.md](./3_vision.md#1-open-questions)) exists, these
+fields only say where to inspect a run manually.
 
 ## 7. Retirements and retained ship sweep
 
-Two existing mechanisms are retired as part of this feature: epic execution and failed-run triage.
-Ship sweep remains available; all entry points use the same owner admission boundary.
+Epic execution and failed-run triage are retired; ship sweep is retained behind the shared
+admission boundary.
 
 ### 7.1 Epic machinery
 
-The epic distinction — a root that owns one stable worktree and branch, drains its children into
-it sequentially, reserves the union of its descendants' `context_files`, is excluded from leaf
-admission, and is finished by a dedicated `epic_orchestrator` — was a way to give one large body
-of work a single review artifact. In practice it fragmented the drain: one epic pinned a slot for
-its whole life, its reservation shadowed unrelated leaves, and none of it splits across hosts.
-
-What is removed:
+Retired by [ORB-12491] ([Epic is a tag, not a
+pipeline](./4_decisions.md#epic-is-a-tag-not-a-pipeline)). Removed:
 
 | Piece | Anchor |
 |---|---|
@@ -656,198 +442,140 @@ What is removed:
 | `start_epic` step and `has_epic` / `epic_task_id` / `active_epic_run_id` outputs | `workspace_auto_pipeline.yaml`, `classify_workspace_auto_tasks.yaml` |
 | Epic-tag exclusion from leaf admission and the refusal to ship an `epic`-tagged root | `list_backlog_tasks`, `classify_workspace_auto_tasks`, ship admission |
 | Descendant-union footprint for `epic`-tagged roots | `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task` — the `tags.contains("epic")` branch |
-| Epic-specific worktree identity/GC handling | `crates/orbit-engine/src/executor/automation/vcs/worktree/mod.rs::WorktreeIdentity::from_input`, `crates/orbit-core/src/application/gc.rs::delivery_job_owns_worktree`; preserve decoding needed to reap historical worktrees |
-| `docs/design/resident-orchestrator/` | removed (history in git); this folder supersedes it |
+| Epic-specific worktree identity/GC handling | `crates/orbit-engine/src/executor/automation/vcs/worktree/mod.rs::WorktreeIdentity::from_input`, `crates/orbit-core/src/application/gc.rs::delivery_job_owns_worktree`; decoding needed to reap historical worktrees is preserved |
+| `docs/design/resident-orchestrator/` | removed (history in git) |
 
-What stays:
+Kept:
 
-- **Parent/child task relations.** Hierarchy is still useful for reading a backlog; it just no
-  longer changes admission. A child is a leaf like any other, ordered by its own priority, age, and
-  dependencies.
-- **The `epic` tag**, redefined: a size hint meaning *one large task a top-tier crew takes on
-  whole*. Crew selection reads it (today by hand; later through auto-assignment, where `epic`
-  routes to the pools `fable` / `astra` serve). Admission ignores it for ordering and shape, with
-  one carve-out that keeps the retirement safe: a root carrying it that declares no
-  `context_files` of its own *while a descendant does* is withheld, because nothing inherits the
-  union it used to reserve and it would otherwise run holding no reservation beside the very
-  children whose surface that union covered. A tagged root that declares its own surface, and a
-  tagged family that declares nothing anywhere, are both ordinary leaves.
-- **`workspace_auto_pipeline`'s drain window, slot refill, and detached leaves** — the parts of
-  the resident-orchestrator work that were actually about throughput.
+- **Parent/child relations**, for reading a backlog only; a child is an ordinary leaf.
+- **The `epic` tag** as a size hint (one large task a top-tier crew takes whole). Admission
+  ignores it except for one carve-out: a tagged root with no `context_files` of its own *while a
+  descendant has some* is withheld, since nothing inherits the union it used to reserve. A tagged
+  root with its own surface, or a tagged family with none anywhere, is an ordinary leaf.
+- **`workspace_auto_pipeline`'s drain window, slot refill and detached leaves.**
 
-[ORB-12491] implemented this section. The migration check is `orbit-core`'s
-`application::epic_retirement`: `assess_epic_retirement` is a pure decision over a
-tasks/runs/reservations snapshot, and `OrbitRuntime::epic_retirement_readiness` is its read-only
-gatherer. It writes nothing — the refusal, the inherited-only roots, and the historical runs GC
-must still discover are the product.
+**Migration check.** `application::epic_retirement::assess_epic_retirement` is a pure decision over
+a tasks/runs/reservations snapshot; `OrbitRuntime::epic_retirement_readiness` is its read-only
+gatherer. It refuses while any old epic execution, child execution, reservation or uncertain
+landing is unreconciled, regardless of root status (a root in `review` can still have a live
+`complete_pr` step), and reports inherited-only roots and the historical runs GC must still find.
 
-Migration refuses while any old epic execution, child execution, reservation, or uncertain landing
-is unreconciled, regardless of root status. A root already in `review` can still have a live
-`complete_pr` step; a status-only `in-progress` check is insufficient. Drain or deliberately stop
-and reconcile those runs before removal. Preserve historical worktree discovery until cleanup is
-verified. Existing epic-tagged tasks retain tags and hierarchy, but roots that relied solely on
-inherited child context need operator-supplied own context or deliberate retirement before they
-become eligible; migration reports them rather than silently converting an empty root.
-
-That ineligibility is enforced, not merely reported. `orbit_types::task::inherited_only_epic_roots`
-is the single definition of the population — the report, admission, and reservation all read it, so
-none of them decides separately what a descendant is — and every admission path applies it:
-`backlog_snapshot` withholds such a root from the automatic drain with an
-`inherited_only_epic_root` exclusion naming the descendants and the repair, `list_backlog_tasks`
-applies the same withholding to an explicit ship override, and `reserve_with_index` refuses it
-ahead of the `EmptyTaskSurfacePolicy` branch so the managed gate's compatibility `Admit` path
-cannot reserve it trivially either. An ordinary task that declares no context is unaffected: the
-rule is about the inherited footprint the tag used to carry, not about empty surfaces in general.
+**Enforcement.** `orbit_types::task::inherited_only_epic_roots` is the one definition of the
+withheld population: `backlog_snapshot` excludes such roots (`inherited_only_epic_root`, naming
+descendants and repair), `list_backlog_tasks` applies it to explicit ship overrides, and
+`reserve_with_index` refuses them before the `EmptyTaskSurfacePolicy` compatibility `Admit`.
 
 ### 7.2 Failed-run triage
 
-`task_triage_pipeline` and its seeded `task_triage` routine list blocked tasks whose `job_run_id`
-points at a failed run in the local store, have an agent classify the failure, and re-backlog the
-"environmental" ones. Under followers the run a task is blocked on may live on another host, so
-the owner's triage either skips it or diagnoses the wrong thing, and an automatic re-backlog would
-hide exactly the host-specific failures the operator needs to see.
+Retired ([Blocked tasks wait for a reader, not a
+classifier](./4_decisions.md#blocked-tasks-wait-for-a-reader-not-a-classifier)): the owner cannot
+see a follower's failed run, and automatic re-backlogging would hide host-specific failures.
+Removed: `task_triage_pipeline.yaml`, the `list_triage_candidates` / `triage_failed_runs` /
+`apply_triage_dispositions` activities, the triage recursion guard in
+`application/automation/incidents.rs`, and the seed entry. The routine survives only as
+`routines/retired/task_triage.yaml`, a provenance shape so `orbit workspace sync` can tell a
+seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in `application/routine.rs`).
 
-What is removed: `task_triage_pipeline.yaml`, `routines/task_triage.yaml` (shipped `enabled:
-false`), the `list_triage_candidates` / `triage_failed_runs` / `apply_triage_dispositions`
-activities, the triage recursion guard in `application/automation/incidents.rs`, the seed entry in
-`application/routine.rs`, and the references in `CONFIG.md`, automation-triggers,
-and the orbit-orchestrate recovery reference.
-
-What replaces it: nothing automatic. A failed run parks its task in `blocked` with the failure and
-`job_run_host` attached; a human or the orchestrate skill reads it. Re-backlogging is a deliberate
-transition, made by whoever looked.
+Nothing automatic replaces it: a failed run parks its task in `blocked` with the failure and
+`job_run_machine` attached, and re-backlogging is a deliberate transition by whoever read it.
 
 ### 7.3 Ship sweep
 
-Ship sweep is retained by Daniel's revised decision. Keep the seeded `ship_sweep` routine,
-`workspace_ship_pipeline`, and the separate registry-driven `orbit run ship-sweep` CLI, including
-its `workflow.auto_ship` opt-in and external scheduler support. Preserve existing enablement and
-schedules; this design does not enable any routine or install a timer.
+Retained ([Ship sweep remains an admission entry
+point](./4_decisions.md#ship-sweep-remains-an-admission-entry-point)): the seeded `ship_sweep`
+routine, `workspace_ship_pipeline`, and the registry-driven `orbit run ship-sweep` CLI with its
+`workflow.auto_ship` opt-in and external scheduler support. Existing enablement and schedules are
+preserved; nothing is enabled or scheduled by this design. Scheduled invocation confers no
+completion authority, and landing never depends on a sweep.
 
-Adapt every entry point to the common claim admission contract. The CLI currently calls
-`submit_ship_run` directly; retaining only the YAML wrapper is not sufficient coverage. Owner ship
-sweeps may start owner work, but cannot use legacy backlog selection or reservation paths to bypass
-claims, policy checks, or footprint serialization. Replica-host sweeps continue refusing owner-only
-coordination work; followers execute through pull. Scheduled invocation confers no completion
-authority. Landing is driven by durable accepted-handoff/approval requests and continues when no
-ship sweep or drain is running.
+[ORB-12500] put every retained entry point behind one decision,
+`OrbitRuntime::drain_entry_admission`, taken before dispatch: `orbit run ship` (and the MCP and
+dashboard surfaces behind `submit_ship_run`), `orbit run auto`, and `orbit run ship-sweep`. The
+seeded routine and `workspace_ship_pipeline` reach it through the drain beneath them. It reads and
+reports:
 
-[ORB-12500] implemented that convergence as one shared decision,
-`OrbitRuntime::drain_entry_admission`, which every retained entry point takes before it dispatches
-anything: an explicit `orbit run ship` (and the MCP and dashboard surfaces behind
-`submit_ship_run`), an explicit `orbit run auto`, and the independent registry-driven
-`orbit run ship-sweep` CLI. The seeded routine and `workspace_ship_pipeline` reach it through the
-drain beneath them, so the wrapper and the independent CLI cannot diverge. The decision reads three
-things and reports all of them:
+- **Destination authority.** A replica serves no owner coordination from any entry point; the
+  unattended sweep reports this before reading a backlog. Followers execute through pull.
+- **One capacity reading.** `JobRunStoreBackend::drain_leaf_occupancy`, as in §3. Saturation
+  stands the *unattended* sweep down, not an operator's explicit invocation, which its own leaf
+  definition bounds.
+- **The claim ledger.** A claimed task is never admitted again: `submit_ship_run` and explicit
+  overrides in `list_backlog_tasks` consult the ledger. Automatic discovery need not, since a
+  claimed task is `in-progress` or `review` (a status lock holder) and the journal refuses ordinary
+  mutations of it.
 
-- **Destination authority.** A replica serves no owner coordination from any of these entry points.
-  The unattended sweep reports it before it reads a backlog at all, because a replica's task reads
-  are not the population it would be counting.
-- **One capacity reading.** `JobRunStoreBackend::drain_leaf_occupancy` — the same reading the pull
-  allocator commits against, counting legacy wrappers, every leaf definition and pending admissions
-  no run represents yet. The independent CLI used its own `task_auto_pipeline` history scan, which
-  could not see a claimed leaf or a pending admission and would have started a legacy drain beside
-  them. Saturation stands the *unattended* sweep down; it does not stand an operator's explicit
-  invocation down, whose own leaf definition bounds it.
-- **The claim ledger.** A task a live claim is executing is settled or deliberately recovered, never
-  admitted a second time. Both paths that can reach a claimed task by name — `submit_ship_run` and
-  an explicit task override in `list_backlog_tasks` — consult the ledger and refuse. Automatic
-  discovery needs no separate reading: a claimed task is `in-progress` or `review`, so its surface
-  is already a status-derived holder, and the claim journal refuses every ordinary mutation of a
-  claimed task (including narrowing its `context_files`), so the recomputed lock cannot drift from
-  the footprint the claim froze. Consulting the ledger on the drain's hot loop would only add a way
-  for it to fail on a journal awaiting repair.
-
-The decision also reports the owner's review policy and the verdict the claim contract's own ordered
-ladder (`orbit_store::admission_refusal`) would return, so a preflight and a retained entry cannot
-disagree about it. It is reported rather than raised: v1 admits only `review_policy = none` through
-the *claim* contract, while a workspace configured for `before-pr` or `after-landing` keeps shipping
-through its legacy leaf and its review gate. Enablement, schedules and `auto_ship` semantics are
-untouched, and a scheduled invocation still confers no completion authority.
+It also reports the owner's review policy and the verdict of `orbit_store::admission_refusal`,
+without raising it: v1 admits only `none` through the claim contract, while a workspace configured
+for `before-pr` or `after-landing` keeps shipping through its legacy leaf and review gate.
 
 ## 8. Required validation scenarios
 
-These are implementation acceptance criteria, not tests reported as passing by this draft.
+Acceptance criteria, not reported as passing.
 
 | Scenario | Required result |
 |---|---|
-| Concurrent pulls and concurrent ordinary task/reservation writes | One current claim per task; no overlapping admission; readiness revalidated transactionally |
-| Commit succeeds but pull response is lost | Same request returns the same claim; no second task is consumed |
-| Idle result replayed after new work arrives | Same request remains idle; a new poll may claim work |
-| Crash before local run creation, after creation, or before binding response | Reconcile the same claim; at most one local leaf per claim; pending admission occupies capacity |
-| Invalid dependency or empty lock surface | Diagnostic exclusion; unrelated eligible tasks can still progress |
-| Reservation expires during valid execution | No automatic revocation or duplicate admission; task status lock remains |
-| Old worker returns after deliberate recovery and reassignment | Old claim cannot bind, mutate task evidence, promote, settle, or release the new reservation |
-| Failure/cancellation while owner is disconnected | Local settlement remains pending; eventual idempotent settlement or explicit recovery |
-| Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local task-store fallback |
-| Generic resume of an interrupted claimed leaf | Explicit refusal; deliberate recovery creates a fenced new claim/run, preserving branch evidence |
-| Handoff commits but response is lost | Exactly one authoritative handoff and review transition |
-| Review-only handoff reaches the landing consumer | No merge without recorded completion authorization |
-| PR head/base changes or merge conflicts | Stop with evidence; fresh validated repair required |
-| Merge succeeds but owner crashes before completion | Reconcile the pinned PR and merge evidence before marking done or retrying |
-| Recovery requested with an uncertain external merge in flight | Reassignment waits for merge-intent reconciliation |
-| No-diff/already-landed delivery | Typed durable evidence and completion authority still required |
-| Authorized handoff accepted while no owner drain or ship sweep runs | Foundation persists one pending landing-start request across restart; dependent consumer dispatches/reconciles it once; review-only work has no request |
-| Retained routine, wrapper, CLI ship-sweep, and explicit owner drains | All use common claim admission; existing enablement retained; none grants merge rights or bypasses slot accounting |
-| Epic retirement with active old runs, including roots in review | Refuse migration until old execution and reservation ownership are reconciled |
-| Missing file selector, then reservation expiry | Full declared footprint remains protected; no filesystem-existence pruning or overlapping admission |
-| Truly empty legacy task/epic context | Diagnostic with pre-admission repair; no guessed or inherited surface |
-| `none`, `before-pr`, and `after-landing` review policies | Only `none` admits; typed not-required handoff works without reviewed SHAs or a review artifact |
-| Owner-local task without origin | Local candidate handoff and authorized local landing; no PR dispatch or remote credentials required |
-| SSH session and managed worker invocation | Session capability gates operator actions; a client inside a managed run never propagates operator authority; payload labels cannot replace current claim/run authority |
-| Claim revocation during a live attempt | The revoked attempt cannot bind, mutate, settle, or promote, and its receipt reports the revoked phase rather than reviving it |
-| Read-only probe and receipt lookup after binary upgrade | No admission side effects; lookup finds original outcome without rewriting original input; an incompatible lookup protocol refuses and `not_found` licenses no replacement request; revoked claims cannot acquire execution authority |
-| Approve a review-only handoff twice, or revoke before merge | Operator capability required; one immutable authorization/start request, including concurrent retries; revoked or stale candidate cannot publish merge intent |
-| Missing, failed, replaced or wrong-candidate validation artifact | Reject acceptance/approval/merge-intent publication without partial review, authorization or reservation effects |
-| Idle polling and receipt compaction | One idle request per refill pass; tombstone replay cannot re-admit; unsettled receipt retained; growth metrics visible |
-| PR/local leaves replace auto wrappers in capacity accounting | Configured local ceiling includes actual bound/queued runs and unrepresented admissions exactly once |
-| Mixed legacy and claimed admission under one ceiling | Legacy classifier and pull allocator read one occupancy; wrapper -> gate -> queued claimed leaf is one slot; a terminal leaf holds its slot until settlement; each definition's own `max_active_runs` applies per definition |
+| Concurrent pulls and ordinary task/reservation writes | One current claim per task; no overlapping admission; readiness revalidated transactionally |
+| Pull commits, response lost | Same request returns the same claim; no second task consumed |
+| Idle result replayed after new work arrives | Same request stays idle; a new poll may claim |
+| Crash before/after local run creation or before binding response | Same claim reconciled; at most one leaf per claim; pending admission holds capacity |
+| Invalid dependency or empty lock surface | Diagnostic exclusion; other eligible tasks progress |
+| Reservation expires during valid execution | No automatic revocation or duplicate admission; status lock remains |
+| Old worker returns after recovery and reassignment | Cannot bind, mutate evidence, promote, settle, or release the new reservation |
+| Failure/cancellation while owner disconnected | Settlement stays pending locally; later idempotent settlement or explicit recovery |
+| Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
+| Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
+| Handoff commits, response lost | Exactly one handoff and review transition |
+| Review-only handoff reaches the landing consumer | No merge without recorded authorization |
+| PR head/base changes or conflicts | Stop with evidence; fresh validated repair required |
+| Merge succeeds, owner crashes before completion | Reconcile pinned PR and merge evidence before done or retry |
+| Recovery with an uncertain external merge | Reassignment waits for merge-intent reconciliation |
+| No-diff/already-landed delivery | Typed evidence and completion authority still required |
+| Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
+| Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
+| Epic retirement with active old runs, including roots in review | Migration refused until execution and reservations are reconciled |
+| Missing file selector, then reservation expiry | Full declared footprint stays protected |
+| Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
+| `none`, `before-pr`, `after-landing` policies | Only `none` admits; typed not-required handoff needs no reviewed SHA or artifact |
+| Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
+| SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
+| Revocation during a live attempt | Revoked attempt cannot bind, mutate, settle or promote; its receipt reports the revoked phase |
+| Probe and receipt lookup after binary upgrade | No admission side effects; original outcome found without rewriting input; incompatible protocol refuses; `not_found` licenses no replacement |
+| Approve twice, or revoke before merge | Operator required; one immutable authorization/start request under concurrent retries; revoked or stale candidate cannot publish merge intent |
+| Missing, failed, replaced or wrong-candidate validation artifact | Acceptance, approval and merge-intent publication rejected with no partial effects |
+| Idle polling and receipt compaction | One idle request per pass; tombstones cannot re-admit; unsettled receipts kept; growth metrics visible |
+| Mixed legacy and claimed admission under one ceiling | One occupancy reading; wrapper → gate → queued claimed leaf is one slot; terminal leaf holds its slot until settlement; `max_active_runs` per definition |
 
 ## 9. Concerns & Honest Limitations
 
-- **Receipt metadata grows in v1.** Idle polling and settled requests leave permanent compact
-  tombstones. Stop at first idle per pass and expose storage metrics; safe bounded retention is
-  future protocol work, not deletion based only on age or UUID collision probability.
-- **No automatic review in v1.** `review_policy` must be `none`; build/test validation and delivery
-  evidence remain mandatory. Before-PR and after-landing review need a later protocol extension.
-- **Manual recovery limits availability.** A dead or unreachable follower can retain its task's
-  footprint indefinitely. Claim age and reservation TTL are diagnostics, not failure detectors.
-- **Revocation cannot stop remote compute or retract external writes.** An old attempt can finish
-  a push or open an orphan PR. Attempt-specific branches and owner fencing isolate authoritative
-  delivery; local worktree GC does not delete remote branches or close PRs automatically.
-- **No heterogeneous eligibility yet.** Every participant must satisfy the workspace's full
-  execution requirements. A Mac and Linux host are interchangeable only for tasks whose required
-  validation is supported on both. Auth probes cannot establish that by themselves.
-- **Coordination requires the owner.** Task reads, evidence writes, settlement, and handoff stall
-  during partitions. Logs remain local and full federated run inspection is future work.
-- **Large tasks still hold slots.** The `epic` tag adds no special execution path after retirement;
-  large tasks may hold their own footprints for hours.
-- **One owner is an operator prerequisite.** Two independent stores can admit overlapping work in
-  the same repository. Migration must quiesce old drains, reconcile active runs and PRs, move tasks,
-  disable the demoted host's coordination routines, and only then enable replica pull mode.
-- **Throughput is not guaranteed to double.** Shared CI, provider limits, file conflicts, and serial
-  landing can become the next bottleneck. Compiler caches remain per host.
-- **Auto-task minting stays owner-only.** Claim-scoped friction writes are routed to the owner;
-  follower auto-task issuance is out of scope.
+- **Receipt metadata grows** as permanent tombstones (§2).
+- **No automatic review.** Only `review_policy = none`; other policies need a protocol extension.
+- **Manual recovery limits availability.** A dead or unreachable follower can hold its task's
+  footprint indefinitely; claim age and TTL are diagnostics, not failure detectors.
+- **Revocation cannot stop remote compute or retract external writes.** An old attempt may push
+  or open an orphan PR; fencing keeps it out of delivery, and GC does not delete remote branches
+  or close PRs.
+- **No heterogeneous eligibility.** Every participant must meet the workspace's full execution
+  requirements; auth probes alone cannot establish that a Mac and a Linux host are
+  interchangeable.
+- **Coordination requires the owner.** Task reads, evidence writes, settlement and handoff stall
+  during partitions; large tasks hold their slots for as long as they run.
+- **One owner is an operator prerequisite** (§1): two stores can admit overlapping work, so the
+  demoted host's drains and coordination routines must be quiesced before replica pull.
+- **Throughput is not guaranteed to scale**: shared CI, provider limits, file conflicts, serial
+  landing and per-host compiler caches.
+- **Auto-task minting stays owner-only.** Claim-scoped friction writes route to the owner.
 
 ## Task References
 
-- [ORB-12488] — authored this design folder for the pull-based multi-host drain.
-- [ORB-12495] — implemented §4.1's probe, the pull spec's receipt lookup, and the claim listing, and
-  reconciled this folder with the authorization decision recorded in
-  [4_decisions.md](./4_decisions.md#ssh-login-is-the-admission-machine-labels-are-attribution).
-- [ORB-12616] — made the owner-local claimed leaf executable: the two claimed leaf definitions, the
-  `claim_validate` / `claim_handoff` steps, owner-declared required validation, and the real owner
-  and launcher adapters. The follower-PR executable path is explicitly not delivered.
-- [ORB-12617] — put legacy and claimed admission on one shared capacity reading, ran request /
-  create / bind / launch fault injection against the real owner and launcher adapters, and added
-  the integrated acceptance fixtures: an owner-local no-origin claim that executes, validates and
-  hands off without PR credentials or a merge; a published PR claim that hands off a typed
-  `PullRequest` delivery without merging; and a stopped parent that revokes no child.
-- [ORB-12500] — implemented the owner's observation of a published pull request, so both delivery
-  shapes settle end to end, and converged the retained entry points on one shared admission
-  decision (destination authority, one capacity reading, and the claim ledger). It did **not** open
-  the public mutation gate: the routed follower peer and the mutating distributed tools are not
-  implemented, so `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` is still false.
+- [ORB-12488] — authored this design folder.
+- [ORB-12490] — replaced context pruning with `declared_context_files`.
+- [ORB-12491] — retired epic machinery.
+- [ORB-12495] — added the probe, receipt lookup and claim listing.
+- [ORB-12500] — added published-PR observation and the shared entry-point admission decision.
+- [ORB-12516] — added owner dashboard claim state and actions.
+- [ORB-12528] — landed the task/reservation commit boundary.
+- [ORB-12582] — moved the probe's capability floor into the governed-operation registry.
+- [ORB-12616] — made the owner-local claimed leaf executable.
+- [ORB-12617] — unified capacity accounting and added fault-injection acceptance fixtures.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
