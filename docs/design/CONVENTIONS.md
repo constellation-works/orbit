@@ -234,6 +234,5 @@ Retired features are removed from this table along with their folder.
 | Task Publication | [docs/design/task-publication/](./task-publication/) | codex |
 | Terminal Interface | [docs/design/terminal-interface/](./terminal-interface/) | claude |
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
-| Worktree Artifacts | [docs/design/worktree-artifacts/](./worktree-artifacts/) | codex |
 
 Ownership means: the lead is accountable for keeping the folder's docs in sync with implementation, for recording task provenance when decisions change, and for responding to cross-review comments. Ownership does not preclude other agents from editing — it names who's on the hook when things drift.

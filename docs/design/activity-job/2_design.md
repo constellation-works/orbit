@@ -562,7 +562,7 @@ The durable `execution_summary` delivery gate ([ORB-10313] / [Fail delivery befo
 unchanged and remains the last line. Nothing here weakens it or bypasses it —
 this check simply means a stalled implementer no longer reaches it.
 
-After [ORB-10603] / [Derive the delivery execution summary from the change, not from the agent](../worktree-artifacts/4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent), the gate is also no longer reachable in the
+After [ORB-10603] / [Derive the delivery execution summary from the change, not from the agent](./4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent), the gate is also no longer reachable in the
 ordinary case, because the commit step fills the field it reads. When — and only
 when — durable state carries no meaningful summary, `commit_batch_changes`
 derives one from `git status` in the delivery worktree (the same file set
@@ -1107,7 +1107,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-10464]** — Verify that done dependencies are delivered into the pinned base before a worktree is created.
 - **[ORB-10499]** — Identify the bounded post-recovery attempt as the duplicate implement invocation, and let a re-dispatched attempt exit on a write-gated task.
 - **[ORB-10593]** — Fail dispatch at admission when a `blocked_by` target is archived, rejected, or dangling, naming the blocker.
-- **[ORB-10603]** — Derive the durable `execution_summary` from the delivered change when the implementing agent persisted none, leaving the delivery gate itself unchanged ([Derive the delivery execution summary from the change, not from the agent](../worktree-artifacts/4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent)).
+- **[ORB-10603]** — Derive the durable `execution_summary` from the delivered change when the implementing agent persisted none, leaving the delivery gate itself unchanged ([Derive the delivery execution summary from the change, not from the agent](./4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent)).
 - **[ORB-10644]** — Refuse to open or promote a PR against a base branch that is gone from `origin` or has already landed on the declared landing branch ([Delivery fails closed against a base branch that can no longer carry work to the landing branch](./4_decisions.md#delivery-fails-closed-against-a-base-branch-that-can-no-longer-carry-work-to-the-landing-branch)).
 - **[ORB-10604]** — Reconcile local-pipeline merges against the current in-session base while retaining the remote-mode divergence refusal.
 
