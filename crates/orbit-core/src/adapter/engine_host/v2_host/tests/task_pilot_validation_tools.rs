@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::super::task_pilot::{apply, member_ready, prepare};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_layout, write_workspace_file,
+    runtime_with_non_git_workspace_layout as runtime_with_workspace_layout, write_workspace_file,
 };
 use crate::application::task::TaskAddParams;
 

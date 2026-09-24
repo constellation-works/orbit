@@ -8,7 +8,7 @@ use super::super::task_pilot::{
 };
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_layout, write_workspace_file,
+    runtime_with_non_git_workspace_layout as runtime_with_workspace_layout, write_workspace_file,
 };
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
