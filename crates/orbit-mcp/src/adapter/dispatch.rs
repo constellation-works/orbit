@@ -33,12 +33,13 @@ impl OrbitToolServer {
         let definitions = self.load_tool_definitions()?;
         self.name_map()
             .map_err(|error| OrbitError::InvalidInput(error.message.into_owned()))?;
-        Ok(definitions)
+        Ok(definitions.as_ref().clone())
     }
 
-    fn load_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+    /// The host's definitions, loaded and validated once and then shared.
+    fn load_tool_definitions(&self) -> Result<Arc<Vec<McpToolDefinition>>, OrbitError> {
         if let Some(definitions) = self.definitions.get() {
-            return Ok(definitions.as_ref().clone());
+            return Ok(Arc::clone(definitions));
         }
 
         let definitions = self.host.list_mcp_tool_definitions()?;
@@ -52,15 +53,9 @@ impl OrbitToolServer {
                 schema.name
             )));
         }
-        let definitions = Arc::new(definitions);
-        let _ = self.definitions.set(Arc::clone(&definitions));
-        Ok(self
-            .definitions
-            .get()
-            .cloned()
-            .unwrap_or(definitions)
-            .as_ref()
-            .clone())
+        Ok(Arc::clone(
+            self.definitions.get_or_init(|| Arc::new(definitions)),
+        ))
     }
 
     fn name_map(&self) -> Result<Arc<std::collections::HashMap<String, String>>, McpError> {
@@ -70,8 +65,8 @@ impl OrbitToolServer {
                     .load_tool_definitions()
                     .map(|definitions| {
                         definitions
-                            .into_iter()
-                            .map(|definition| definition.schema)
+                            .iter()
+                            .map(|definition| definition.schema.clone())
                             .collect::<Vec<_>>()
                     })
                     .map_err(invalid_definitions_mcp_error)
@@ -338,7 +333,9 @@ impl ServerHandler for OrbitToolServer {
         self.name_map()?;
         let mut definitions = self
             .load_tool_definitions()
-            .map_err(invalid_definitions_mcp_error)?;
+            .map_err(invalid_definitions_mcp_error)?
+            .as_ref()
+            .clone();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         let tools = definitions
             .into_iter()
