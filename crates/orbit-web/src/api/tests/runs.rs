@@ -1818,3 +1818,29 @@ async fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lo
         let _ = tokio::time::timeout(Duration::from_secs(5), ship).await;
     }
 }
+
+#[tokio::test]
+async fn list_run_events_pages_forward_without_a_kind_filter() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-events-page";
+    seed_run(&runtime, run_id, "web_events_page", JobRunState::Success);
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        (0..3).map(|index| {
+            json!({
+                "event_type": "step.started",
+                "event_id": format!("evt-page-{index}"),
+                "body_kind": "step_started"
+            })
+        }),
+    );
+
+    let response = request_dashboard_run_events_query(runtime, run_id, "?offset=1&limit=1").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    let events = payload.as_array().expect("events array");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["event_id"], "evt-page-1");
+}

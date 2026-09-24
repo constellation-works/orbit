@@ -49,10 +49,11 @@ impl Store {
         let (where_clause, params) = v2_filter_sql(filter);
         let limit = filter.limit.unwrap_or(1000);
         let offset = filter.offset.unwrap_or(0);
+        let order = if filter.oldest_first { "ASC" } else { "DESC" };
         let sql = format!(
             "SELECT id, workspace_id, event_id, source, schema_version, event_type, ts, \
              run_id, agent_identity, parent_event_id, workspace_path, payload_json \
-             FROM v2_audit_events {where_clause} ORDER BY ts DESC, id DESC \
+             FROM v2_audit_events {where_clause} ORDER BY ts {order}, id {order} \
              LIMIT ?{} OFFSET ?{}",
             params.len() + 1,
             params.len() + 2

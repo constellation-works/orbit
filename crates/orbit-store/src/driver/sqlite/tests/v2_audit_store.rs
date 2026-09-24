@@ -139,3 +139,32 @@ fn insert_envelope(
         })
         .expect("insert envelope");
 }
+
+/// A run's event pages read forward from its first event: `oldest_first`
+/// windows must not start mid-run the way reversing a newest-first window does.
+#[test]
+fn oldest_first_windows_page_forward_from_the_first_event() {
+    let store = Store::open_in_memory().expect("store");
+    for minute in 0..5_u32 {
+        insert_envelope(&store, "jrun-1", &format!("evt-{minute}"), minute, None);
+    }
+    let page = |oldest_first, offset| {
+        store
+            .list_v2_audit_events(&V2AuditEventFilter {
+                workspace_id: "ws_a".to_string(),
+                run_id: Some("jrun-1".to_string()),
+                limit: Some(2),
+                offset: Some(offset),
+                oldest_first,
+                ..Default::default()
+            })
+            .expect("list")
+            .into_iter()
+            .map(|row| row.event_id)
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(page(true, 0), ["evt-0", "evt-1"]);
+    assert_eq!(page(true, 3), ["evt-3", "evt-4"]);
+    assert_eq!(page(false, 0), ["evt-4", "evt-3"]);
+}

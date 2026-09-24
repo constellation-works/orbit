@@ -25,6 +25,8 @@ pub struct V2AuditEventFilter {
     pub source: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    /// Page from the oldest event instead of the newest.
+    pub oldest_first: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

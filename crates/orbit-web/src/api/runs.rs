@@ -545,24 +545,27 @@ pub(super) async fn list_run_events(
     let run_id = run_id.to_string();
     match blocking("run events", move || {
         runtime.show_job_run(&run_id)?;
+        // Pages read forward from the run's first event. Without a kind
+        // filter the page is a plain SQL window; `body_kind` lives inside the
+        // payload, so a filtered page scans under a row budget instead.
+        let (sql_offset, sql_limit, skip) = match kind {
+            None => (offset, limit, 0),
+            Some(_) => (0, RUN_EVENTS_MAX_SCAN_LINES + 1, offset),
+        };
         let rows = runtime.list_v2_audit_events(V2AuditEventFilter {
             workspace_id: String::new(),
             run_id: Some(run_id),
             source: Some("v2_envelope".to_string()),
-            limit: Some(RUN_EVENTS_MAX_SCAN_LINES + 1),
+            limit: Some(sql_limit),
+            offset: Some(sql_offset),
+            oldest_first: true,
             ..Default::default()
         })?;
+        let budget_exceeded = kind.is_some() && rows.len() > RUN_EVENTS_MAX_SCAN_LINES;
         let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
         let mut matched: usize = 0;
-        let mut lines_scanned: usize = 0;
-        let mut budget_exceeded = false;
 
-        for row in rows.into_iter().rev() {
-            lines_scanned = lines_scanned.saturating_add(1);
-            if lines_scanned > RUN_EVENTS_MAX_SCAN_LINES {
-                budget_exceeded = true;
-                break;
-            }
+        for row in rows.into_iter().take(RUN_EVENTS_MAX_SCAN_LINES) {
             let value: Value = match serde_json::from_str(&row.payload_json) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -573,7 +576,7 @@ pub(super) async fn list_run_events(
                     continue;
                 }
             }
-            if matched < offset {
+            if matched < skip {
                 matched = matched.saturating_add(1);
                 continue;
             }
