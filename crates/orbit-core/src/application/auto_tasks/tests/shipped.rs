@@ -31,6 +31,7 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         "doc-duties",
         "friction-curation",
         "qa-sweep",
+        "run-failure-patterns",
         "security-review",
     ] {
         assert!(
@@ -598,6 +599,52 @@ fn security_review_default_is_portable_weekly_and_inert() {
             .any(|criterion| criterion.to_lowercase().contains("no findings")
                 && criterion.to_lowercase().contains("no-op")),
         "[ORB-10950] security-review acceptance criteria must treat a clean review as success"
+    );
+}
+
+/// The run-failure scan's window starts at the prior instance's cursor, so the
+/// prior-instance query must select this definition's own minted tags and the
+/// cursor artifact it reads must be the one it attaches.
+#[test]
+fn run_failure_patterns_default_is_cursor_driven_portable_and_inert() {
+    let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(name, _)| *name == "run-failure-patterns")
+        .expect("run-failure-patterns default");
+    let definition = parse_auto_task_yaml(yaml).expect("parse run-failure-patterns");
+
+    assert!(!definition.enabled, "definition must ship disabled");
+    assert!(matches!(definition.schedule, AutoTaskSchedule::Cron { .. }));
+    assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
+    for required_tag in ["run-failure-patterns", "no-diff-expected"] {
+        assert!(
+            definition
+                .template
+                .tags
+                .iter()
+                .any(|tag| tag == required_tag),
+            "missing required tag {required_tag}"
+        );
+    }
+    assert!(
+        !yaml.contains("/home/") && !yaml.contains("/Users/") && !yaml.contains("agent-main"),
+        "default must stay workspace-generic"
+    );
+
+    let body = &definition.template.description;
+    assert!(
+        body.contains(r#""tag":["run-failure-patterns","no-diff-expected"],"limit":1"#),
+        "the prior-instance query must select this definition's own completed scans"
+    );
+    assert!(
+        body.contains(r#""id":"<id>","path":"run-failure-cursor.json""#),
+        "the scan must read the prior instance's cursor artifact"
+    );
+    assert!(
+        body.contains(
+            r#""source_path":".orbit/tmp/run-failure-cursor.json","path":"run-failure-cursor.json""#
+        ),
+        "the scan must attach the cursor artifact the next scan reads"
     );
 }
 

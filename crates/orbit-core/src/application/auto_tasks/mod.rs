@@ -68,6 +68,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
     ),
     (
+        "run-failure-patterns",
+        include_str!("../../../assets/auto_tasks/run-failure-patterns.yaml"),
+    ),
+    (
         "security-review",
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
     ),
