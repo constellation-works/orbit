@@ -747,6 +747,24 @@ impl WorktreeBoundaryGuard {
             recovery_parent.join(format!(".{}.{}.pending", self.run_id, std::process::id()));
         fs::create_dir(&pending)
             .map_err(|error| recovery_io_error("create pending recovery", &pending, error))?;
+        if let Err(error) = self.write_recovery_payload(&pending, assigned_after) {
+            // Best effort: never leave a half-written payload behind.
+            let _ = fs::remove_dir_all(&pending);
+            return Err(error);
+        }
+        fs::rename(&pending, &recovery_root).map_err(|error| {
+            recovery_io_error("publish worktree recovery", &recovery_root, error)
+        })?;
+        Ok(Some(artifact))
+    }
+
+    /// Fill a pending recovery directory: the tracked patch, a copy of every
+    /// untracked path, and the manifest naming them.
+    fn write_recovery_payload(
+        &self,
+        pending: &Path,
+        assigned_after: &GitWorktreeFingerprint,
+    ) -> Result<(), DispatchError> {
         let pending_payload = pending.join("untracked");
         fs::create_dir(&pending_payload).map_err(|error| {
             recovery_io_error("create untracked recovery payload", &pending_payload, error)
@@ -778,7 +796,7 @@ impl WorktreeBoundaryGuard {
                     recovery_io_error("create untracked payload directory", parent, error)
                 })?;
             }
-            fs::copy(&source, &destination).map_err(|error| {
+            copy_untracked_entry(&source, &destination).map_err(|error| {
                 recovery_io_error("copy untracked recovery payload", &destination, error)
             })?;
         }
@@ -803,10 +821,7 @@ impl WorktreeBoundaryGuard {
         fs::write(&manifest_path, manifest_bytes).map_err(|error| {
             recovery_io_error("write worktree recovery manifest", &manifest_path, error)
         })?;
-        fs::rename(&pending, &recovery_root).map_err(|error| {
-            recovery_io_error("publish worktree recovery", &recovery_root, error)
-        })?;
-        Ok(Some(artifact))
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1009,6 +1024,26 @@ fn safe_relative_path(path: &str) -> Result<PathBuf, DispatchError> {
         )));
     }
     Ok(candidate.to_path_buf())
+}
+
+/// Copy one untracked path into a recovery payload as what it is. A symlink
+/// is recreated, never followed: an agent-created link to a file outside the
+/// worktree must not pull that file's contents into the payload, and a
+/// dangling or directory link must not fail preservation.
+fn copy_untracked_entry(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if !fs::symlink_metadata(source)?.file_type().is_symlink() {
+        return fs::copy(source, destination).map(|_| ());
+    }
+    let target = fs::read_link(source)?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, destination)
+    }
+    #[cfg(not(unix))]
+    {
+        // Record the link target as text rather than follow it.
+        fs::write(destination, target.to_string_lossy().as_bytes())
+    }
 }
 
 fn recovery_io_error(action: &str, path: &Path, error: std::io::Error) -> DispatchError {

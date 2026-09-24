@@ -3156,6 +3156,39 @@ fn dirty_integrity_failure_persists_and_restores_tracked_and_untracked_content()
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn dirty_integrity_recovery_preserves_untracked_symlinks_without_following_them() {
+    let fixture = linked_worktree_fixture();
+    let guard = boundary_guard(&fixture, "ORB-RECOVER-LINKS", "run-recover-links");
+    let secret = fixture.root().join("outside-secret");
+    fs::write(&secret, "do not copy\n").expect("write outside secret");
+    std::os::unix::fs::symlink(&secret, fixture.assigned.join("secret-link"))
+        .expect("link to outside secret");
+    std::os::unix::fs::symlink("missing-target", fixture.assigned.join("dangling-link"))
+        .expect("dangling link");
+    git_ok(&fixture.primary, &["checkout", "-b", "primary-link-drift"]);
+
+    let error = guard
+        .verify()
+        .expect_err("a primary branch switch must fail after preserving assigned dirt");
+    let diagnostic = worktree_integrity_diagnostic(&error);
+    let payload = PathBuf::from(
+        diagnostic["recovery"]["untracked_payload"]
+            .as_str()
+            .unwrap_or_else(|| panic!("symlinks must not fail preservation: {diagnostic}")),
+    );
+
+    assert_eq!(
+        fs::read_link(payload.join("secret-link")).expect("preserved secret link"),
+        secret
+    );
+    assert_eq!(
+        fs::read_link(payload.join("dangling-link")).expect("preserved dangling link"),
+        PathBuf::from("missing-target")
+    );
+}
+
 #[test]
 fn provider_created_commit_is_a_typed_boundary_failure_without_admission_checks() {
     let fixture = linked_worktree_fixture();
