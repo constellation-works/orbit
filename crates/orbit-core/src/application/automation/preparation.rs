@@ -126,6 +126,34 @@ pub(crate) fn fingerprint_with_instructions(
     instructions: &InstructionSnapshot,
     eligibility: &PreparationEligibility,
 ) -> Result<String, AutomationError> {
+    let dependencies = dependency_evidence(runtime, task)?;
+    preparation::fingerprint(task, revision, &dependencies, &instructions.0, eligibility)
+}
+
+/// Capture both task-pilot hashes from one instruction and dependency read.
+/// This keeps their only difference the normalized status fields even when a
+/// dependency is updated concurrently with preparation.
+pub(crate) fn fingerprints(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: &str,
+    eligibility: &PreparationEligibility,
+) -> Result<(String, String), AutomationError> {
+    let instructions = instructions(runtime, revision)?;
+    let dependencies = dependency_evidence(runtime, task)?;
+    let material =
+        preparation::fingerprint(task, revision, &dependencies, &instructions.0, eligibility)?;
+    let neutral = preparation::fingerprint_ignoring_status(
+        task,
+        revision,
+        &dependencies,
+        &instructions.0,
+        eligibility,
+    )?;
+    Ok((material, neutral))
+}
+
+fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, AutomationError> {
     let mut dependencies = Vec::new();
 
     for id in task.dependencies().iter().take(51) {
@@ -171,11 +199,5 @@ pub(crate) fn fingerprint_with_instructions(
     dependencies.push(json!({"effective_assignment": {"crew": assignment.name,
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}));
 
-    preparation::fingerprint(
-        task,
-        revision,
-        &Value::Array(dependencies),
-        &instructions.0,
-        eligibility,
-    )
+    Ok(Value::Array(dependencies))
 }

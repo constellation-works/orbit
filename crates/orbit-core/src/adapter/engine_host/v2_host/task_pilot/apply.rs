@@ -32,6 +32,7 @@ struct PreparedTaskSnapshot {
     title: String,
     tags: Vec<String>,
     material: Option<(String, String)>,
+    status_neutral_fingerprint: Option<String>,
     /// Deterministic feasibility findings for the tools this task's acceptance
     /// criteria require, computed at preparation [ORB-11980].
     validation_tool_warnings: Vec<String>,
@@ -218,6 +219,10 @@ pub(in super::super) fn apply(
                         .map(|(fingerprint, revision)| {
                             (fingerprint.to_string(), revision.to_string())
                         }),
+                    status_neutral_fingerprint: entry
+                        .get("status_neutral_fingerprint")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
                 },
             ))
         })
@@ -859,107 +864,161 @@ fn apply_task(
             "task-pilot does not rewrite in-progress, review, or terminal work",
         ));
     }
-    let mut lock_ids = vec![task.task_id.clone()];
-    lock_ids.extend(runtime.get_task(&task.task_id)?.dependencies());
-    lock_ids.sort();
-    lock_ids.dedup();
-    let mut outcome = None;
-    let mut operation = || {
-        crate::application::automation::members::claim(runtime, prepared)?;
-        let receipt = format!("operation_id={}", task.operation_id);
-        if runtime
-            .get_task_history(&task.task_id)?
-            .iter()
-            .any(|event| {
-                event.event == "task_pilot_applied"
-                    && event
-                        .note
-                        .as_deref()
-                        .is_some_and(|note| note.lines().next() == Some(receipt.as_str()))
-            })
-        {
-            outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
-                runtime,
-                &task.task_id,
-                snapshot,
-                eligibility,
-            )?));
-            return Ok(());
-        }
-        let current = match runtime.get_task(&task.task_id) {
-            Ok(current) => current,
-            Err(OrbitError::NotFound { .. }) => {
-                outcome = Some(ApplyTaskOutcome::Stale(
-                    "task_deleted",
-                    "task no longer exists at the write boundary",
-                ));
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
-        if let Some(reason) = task_snapshot_drift(runtime, &current, snapshot, eligibility) {
-            outcome = Some(ApplyTaskOutcome::Stale(reason.0, reason.1));
-            return Ok(());
-        }
-
-        let target_status = if task.promote {
-            TaskStatus::Backlog
-        } else {
-            snapshot.status
-        };
-        let mutation_params = AtomicTaskMutationParams {
-            actor: "task-pilot".to_string(),
-            operation_id: task.operation_id.clone(),
-            expected_context_files: snapshot.context_files.clone(),
-            expected_status: snapshot.status,
-            expected_complexity: snapshot.complexity,
-            context_files: task.after.clone(),
-            status: target_status,
-            complexity: task.complexity,
-            event_type: "task_pilot_applied".to_string(),
-            event_note: "task-pilot atomic application".to_string(),
-            audit_note: serde_json::to_string(&json!({
-                "assessment": task.assessment,
-                "context_files_before": snapshot.context_files,
-                "complexity_before": snapshot.complexity,
-                "complexity_after": task.complexity,
-            }))
-            .map_err(|error| {
-                OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
-            })?,
-        };
-        let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
-        match mutation {
-            AtomicTaskMutationOutcome::Applied => {
-                runtime.record_event(OrbitEvent::TaskUpdated {
-                    id: task.task_id.clone(),
-                })?;
-                outcome = Some(ApplyTaskOutcome::Applied(resulting_fingerprint(
-                    runtime,
-                    &task.task_id,
-                    snapshot,
-                    eligibility,
-                )?));
-            }
-            AtomicTaskMutationOutcome::AlreadyApplied => {
+    let mut snapshot = snapshot.clone();
+    for attempt in 0..=1 {
+        let mut lock_ids = vec![task.task_id.clone()];
+        lock_ids.extend(runtime.get_task(&task.task_id)?.dependencies());
+        lock_ids.sort();
+        lock_ids.dedup();
+        let mut outcome = None;
+        let mut retry_fingerprint = None;
+        let mut operation = || {
+            crate::application::automation::members::claim(runtime, prepared)?;
+            let receipt = format!("operation_id={}", task.operation_id);
+            if runtime
+                .get_task_history(&task.task_id)?
+                .iter()
+                .any(|event| {
+                    event.event == "task_pilot_applied"
+                        && event
+                            .note
+                            .as_deref()
+                            .is_some_and(|note| note.lines().next() == Some(receipt.as_str()))
+                })
+            {
                 outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
                     runtime,
                     &task.task_id,
-                    snapshot,
+                    &snapshot,
                     eligibility,
                 )?));
+                return Ok(());
             }
-            AtomicTaskMutationOutcome::Stale => {
+            let current = match runtime.get_task(&task.task_id) {
+                Ok(current) => current,
+                Err(OrbitError::NotFound { .. }) => {
+                    outcome = Some(ApplyTaskOutcome::Stale(
+                        "task_deleted",
+                        "task no longer exists at the write boundary",
+                    ));
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
+            if let Some(reason) = task_snapshot_drift(runtime, &current, &snapshot, eligibility) {
+                if attempt == 0 && matches!(reason.0, "material_changed" | "status_changed") {
+                    retry_fingerprint =
+                        status_only_fingerprint(runtime, &current, &snapshot, eligibility)
+                            .map(|fingerprint| (fingerprint, current.status));
+                }
+                if retry_fingerprint.is_none() {
+                    outcome = Some(ApplyTaskOutcome::Stale(reason.0, reason.1));
+                }
+                return Ok(());
+            }
+            if attempt == 1 && !matches!(current.status, TaskStatus::Proposed | TaskStatus::Backlog)
+            {
                 outcome = Some(ApplyTaskOutcome::Stale(
-                    "write_boundary_changed",
-                    "task changed between validation and the atomic write boundary",
+                    "status_changed",
+                    "task status changed after preparation; task-pilot does not rewrite active work",
                 ));
+                return Ok(());
             }
+
+            let target_status = if task.promote {
+                TaskStatus::Backlog
+            } else {
+                snapshot.status
+            };
+            let mutation_params = AtomicTaskMutationParams {
+                actor: "task-pilot".to_string(),
+                operation_id: task.operation_id.clone(),
+                expected_context_files: snapshot.context_files.clone(),
+                expected_status: snapshot.status,
+                expected_complexity: snapshot.complexity,
+                context_files: task.after.clone(),
+                status: target_status,
+                complexity: task.complexity,
+                event_type: "task_pilot_applied".to_string(),
+                event_note: "task-pilot atomic application".to_string(),
+                audit_note: serde_json::to_string(&json!({
+                    "assessment": task.assessment,
+                    "context_files_before": snapshot.context_files,
+                    "complexity_before": snapshot.complexity,
+                    "complexity_after": task.complexity,
+                }))
+                .map_err(|error| {
+                    OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
+                })?,
+            };
+            let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
+            match mutation {
+                AtomicTaskMutationOutcome::Applied => {
+                    runtime.record_event(OrbitEvent::TaskUpdated {
+                        id: task.task_id.clone(),
+                    })?;
+                    outcome = Some(ApplyTaskOutcome::Applied(resulting_fingerprint(
+                        runtime,
+                        &task.task_id,
+                        &snapshot,
+                        eligibility,
+                    )?));
+                }
+                AtomicTaskMutationOutcome::AlreadyApplied => {
+                    outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
+                        runtime,
+                        &task.task_id,
+                        &snapshot,
+                        eligibility,
+                    )?));
+                }
+                AtomicTaskMutationOutcome::Stale => {
+                    outcome = Some(ApplyTaskOutcome::Stale(
+                        "write_boundary_changed",
+                        "task changed between validation and the atomic write boundary",
+                    ));
+                }
+            }
+            Ok(())
+        };
+        with_task_locks(runtime, &lock_ids, 0, &mut operation)?;
+        if let Some((fingerprint, status)) = retry_fingerprint {
+            // Admit this fresh fingerprint only once. The next pass releases
+            // and reacquires the task/dependency locks, then reads them again.
+            snapshot.material = snapshot
+                .material
+                .map(|(_, revision)| (fingerprint, revision));
+            snapshot.status = status;
+            inject_concurrent_retry_edit(runtime, &task.task_id)?;
+            continue;
         }
-        Ok(())
-    };
-    with_task_locks(runtime, &lock_ids, 0, &mut operation)?;
-    outcome.ok_or_else(|| OrbitError::Execution("task-pilot operation did not run".to_string()))
+        return outcome
+            .ok_or_else(|| OrbitError::Execution("task-pilot operation did not run".to_string()));
+    }
+    Err(OrbitError::Execution(
+        "task-pilot status retry loop did not settle".to_string(),
+    ))
+}
+
+fn status_only_fingerprint(
+    runtime: &OrbitRuntime,
+    current: &Task,
+    snapshot: &PreparedTaskSnapshot,
+    eligibility: &PreparationEligibility,
+) -> Option<String> {
+    let (_, revision) = snapshot.material.as_ref()?;
+    let neutral = snapshot.status_neutral_fingerprint.as_ref()?;
+    let (fresh, fresh_neutral) = crate::application::automation::preparation::fingerprints(
+        runtime,
+        current,
+        revision,
+        eligibility,
+    )
+    .ok()?;
+    if &fresh_neutral != neutral {
+        return None;
+    }
+    Some(fresh)
 }
 
 fn apply_atomic_with_retries(
@@ -1116,11 +1175,36 @@ fn task_outcome(task_id: &str, outcome: &str, error: Option<String>) -> Value {
 #[cfg(test)]
 thread_local! {
     static INJECT_CONCURRENT_EDIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static INJECT_RETRY_EDIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
 pub(in super::super) fn inject_concurrent_edit_before_locked_apply() {
     INJECT_CONCURRENT_EDIT.set(true);
+}
+
+#[cfg(test)]
+pub(in super::super) fn inject_concurrent_edit_before_status_retry() {
+    INJECT_RETRY_EDIT.set(true);
+}
+
+#[cfg(test)]
+fn inject_concurrent_retry_edit(runtime: &OrbitRuntime, task_id: &str) -> Result<(), OrbitError> {
+    if INJECT_RETRY_EDIT.replace(false) {
+        runtime.update_task(
+            task_id,
+            TaskUpdateParams {
+                title: Some("Changed between status reads".to_string()),
+                ..TaskUpdateParams::default()
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn inject_concurrent_retry_edit(_runtime: &OrbitRuntime, _task_id: &str) -> Result<(), OrbitError> {
+    Ok(())
 }
 
 #[cfg(test)]

@@ -307,7 +307,12 @@ Use proposed defaults of a two-minute quiet period, ten-minute maximum wait and
 50 tasks per batch, preserving partitions of at most five. Coalesce repeated
 changes to a pending task into its newest fingerprint. One in-flight assessment
 per task/fingerprint; changes during execution remain pending and do not mutate
-the captured snapshot. Stable ordering by oldest pending time then task ID
+the captured snapshot. At pilot apply, a companion status-neutral fingerprint
+allows one fresh read and retry when only the task's status or a dependency's
+status changed. A dependency-only status change may then apply; a task that
+entered in-progress remains unwritable and is reported as `status_changed`.
+Any other material change, or a second mismatch on that retry, still refuses
+the assessment. Stable ordering by oldest pending time then task ID
 prevents repeatedly edited work from starving other tasks.
 
 The prepare/apply domain boundary recomputes fingerprints and eligibility under
