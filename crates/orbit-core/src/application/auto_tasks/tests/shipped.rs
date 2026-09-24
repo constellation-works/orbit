@@ -27,6 +27,7 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         .map(|(name, _)| *name)
         .collect();
     for required in [
+        "backlog-hygiene",
         "code-review",
         "doc-duties",
         "friction-curation",
@@ -56,6 +57,46 @@ fn shipped_defaults_all_parse_and_are_disabled() {
             "[ORB-12463] default auto-task {stem} must declare an explicit complexity"
         );
     }
+}
+
+/// The hygiene task reports candidates for a human to act on. Granting a
+/// status-changing task tool here would undermine its report-only contract.
+#[test]
+fn backlog_hygiene_default_is_weekly_inert_and_read_only() {
+    let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(name, _)| *name == "backlog-hygiene")
+        .expect("backlog-hygiene default");
+    let definition = parse_auto_task_yaml(yaml).expect("parse backlog-hygiene");
+
+    assert!(!definition.enabled);
+    assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
+    let AutoTaskSchedule::Cron { cron } = &definition.schedule else {
+        panic!("backlog-hygiene must use cron");
+    };
+    assert_eq!(cron.split_whitespace().count(), 5);
+    assert_eq!(cron.split_whitespace().nth(4), Some("1"));
+    assert!(definition.template.complexity.is_some());
+    for required_tag in ["backlog-hygiene", "no-diff-expected"] {
+        assert!(
+            definition
+                .template
+                .tags
+                .iter()
+                .any(|tag| tag == required_tag)
+        );
+    }
+    assert!(
+        definition
+            .template
+            .required_tools
+            .iter()
+            .all(|tool| matches!(
+                tool.as_str(),
+                "orbit.task.list" | "orbit.task.show" | "orbit.search"
+            )),
+        "report-only task must not request status-mutating tools"
+    );
 }
 
 /// The delivery defaults ship to every workspace, so they carry the base

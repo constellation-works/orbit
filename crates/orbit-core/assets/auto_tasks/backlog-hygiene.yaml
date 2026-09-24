@@ -1,0 +1,95 @@
+schemaVersion: 1
+name: backlog-hygiene
+description: Weekly report of stalled and untriaged tasks for human follow-up
+enabled: false
+schedule:
+  cron: 30 7 * * 1
+template:
+  title: Report backlog hygiene candidates
+  description: |-
+    Produce one read-only backlog hygiene report for this workspace. The report
+    is the task's persisted execution_summary; an empty report is a successful
+    no-op. Snapshot the scan time in UTC and state the thresholds below.
+
+    ## Safety and evidence
+
+    - Do not change any task's status, approve, reject, dispatch, retry, resume,
+      cancel, or mint work. Do not invoke status-changing task tools or workflow
+      commands. Approval and disposition belong to a human. Do not edit Orbit
+      state files directly. The only permitted write is this report through
+      `orbit.task.update` with execution_summary; at most one comment per flagged
+      task is optional and must contain no status change.
+    - List each nonterminal status separately with
+      `orbit tool run orbit.task.list --input '{"status":["blocked","in-progress","review","proposed","backlog","someday"],"limit":10000,"model":"<agent-family>"}'`.
+      Check `truncated` and raise the limit if needed; a partial task corpus is
+      not a clean scan. Inspect candidates and their dependencies with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Use the task's status-entry event in `history` to age blocked, in-progress,
+      and review states; use `created_at` for proposed age. If history is absent,
+      say which timestamp was substituted rather than implying certainty.
+    - Read job runs through `orbit run history --limit <n> --json` and
+      `orbit run show <run-id> --json`. Increase the history limit until it
+      covers every candidate's linked `job_run_id` and the seven-day lookback;
+      use the task's linked run as primary evidence. A missing run is unknown,
+      not proof of failure. Do not read or edit the Orbit database.
+
+    ## Candidate rules
+
+    1. Blocked: status has lasted at least 7 days. Quote the latest blocking
+       reason from task comments/history or description, and the linked run's
+       state, completion time, and error when available. If either is absent,
+       write "not recorded". Recommend the specific owner or credential check
+       needed to unblock, without performing it.
+    2. Orphaned: in-progress for at least 48 hours, or review for at least 7
+       days, with no linked job run currently pending/running and no linked run
+       started or finished in the last 48 hours. A missing linked run qualifies
+       only after the status-age threshold. Check the linked run directly before
+       labeling it orphaned; report its last known outcome or "no linked run".
+       Recommend checking the worker or review owner before any re-dispatch.
+    3. Proposed: created at least 14 days ago and still proposed. Group rows
+       as likely duplicate, possibly already landed, or needs triage. Compare
+       title/scope with open and closed tasks using
+       `orbit tool run orbit.search --input '{"query":"<one distinctive term>","kind":"task","all":true,"model":"<agent-family>"}'`
+       and inspect plausible matches. Check `git log --all --oneline --grep=<task-id>`
+       for each candidate. A log match is a lead, not proof that the exact work
+       landed; inspect the commit before recommending closure. Never reject a
+       task based on a title match alone.
+    4. Dependency-unblocked but idle: backlog or someday tasks with at least
+       one dependency, every dependency now done or rejected, and no status
+       transition for at least 7 days after the last dependency entered its
+       terminal status. Read each dependency's status and history; a rejected
+       dependency may invalidate the task, so recommend reassessment rather
+       than automatic pickup. If the latest terminal time is unavailable,
+       report the uncertainty and do not claim the age threshold is met.
+
+    ## Output
+
+    Persist one execution_summary with scan time, thresholds, task and run
+    coverage, and a Markdown table for each category. Every flagged row needs
+    task id, age in the relevant status (or age since dependency clearance),
+    concise evidence, and a recommended human action. Proposed rows also name
+    their group and any duplicate task or candidate commit. A task may appear
+    in more than one category; cross-reference rather than hiding it. Record
+    counts and uncertainty explicitly. If no rows qualify, write the zero
+    counts and "No action needed"; do not create filler work.
+  acceptance_criteria:
+  - The execution summary states scan time, thresholds, coverage, and a table for each of the four categories, with id, age, evidence, and recommended action for every flagged task.
+  - Blocked rows include reason and linked run outcome; orphaned rows distinguish live, recent, missing, and terminal run evidence; proposed rows include duplicate and git-log checks; dependency rows verify every dependency's terminal status.
+  - No task status was changed, no task was approved or rejected, and no work was dispatched; an empty scan is a successful no-op.
+  task_type: chore
+  tags:
+  - backlog-hygiene
+  - no-diff-expected
+  required_tools:
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.search
+  priority: medium
+  complexity: medium
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-24T00:00:00Z
+updated_by: system
+updated_at: 2026-09-24T00:00:00Z
