@@ -6,6 +6,7 @@
 //! `queries` contains internal SQL helpers and row-to-type mapping.
 //! `util` contains shared path, time, relation, and WAL helpers used by the registry.
 //! `store` contains the `TaskRegistryStore` implementation and transaction orchestration.
+//! `relations` validates task relations: target existence, dangling targets, and cycles.
 //! `listing` contains the index reads behind bounded task listing: freshness rows,
 //! filtered selection, and the workspace-scoped status projection.
 //! `tests` contains the registry unit tests; split it further if it grows past the file-size budget.
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 mod listing;
 mod partition_id;
 mod queries;
+mod relations;
 mod schema;
 mod store;
 mod util;

@@ -19,8 +19,9 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use tempfile::TempDir;
 
 use super::REGISTRY_SCHEMA_VERSION;
+use super::relations::reachable_cycle_family_sql;
 use super::schema::registry_user_version;
-use super::store::{TASK_PREFIX_PROBE_SQL, reachable_cycle_family_sql};
+use super::store::TASK_PREFIX_PROBE_SQL;
 use super::util::now_string;
 use super::{
     BindWorkspaceParams, RegisterWorkspaceParams, TaskIndexFilter, TaskRegistryStore,
