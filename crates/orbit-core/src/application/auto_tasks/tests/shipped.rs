@@ -28,6 +28,7 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         .collect();
     for required in [
         "code-review",
+        "doc-duties",
         "friction-curation",
         "qa-sweep",
         "security-review",

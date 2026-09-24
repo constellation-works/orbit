@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-09-20
+last_updated: 2026-09-24
 last_validated: 2026-09-20
 status: Accepted
 feature: auto-tasks
@@ -87,7 +87,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These four YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These seven YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -103,6 +103,12 @@ definition of the same name.
   is a successful no-op (ORB-10950).
 - `code-review` — disabled-by-default six-hourly review of commits merged
   since the previous sweep's recorded cursor.
+- `doc-duties` — disabled-by-default daily validation of the oldest tracked
+  documentation. Existing `last_validated` dates take precedence; documents
+  without the key use git last-touched dates and completed task summaries for
+  rotation, without gaining frontmatter solely for this task.
+- `delivery-code-review` and `delivery-qa` — disabled-by-default checks of
+  newly landed deliveries.
 
 ## Workspace-authored definitions in this repo
 
@@ -110,7 +116,7 @@ Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 **not** embedded defaults. They may be enabled, name a family-specific crew, or
 encode this repository's branches and gates. Re-init preserves them:
 
-- `doc-duties`, `model-price-audit`, `release-prep`, `skill-validation`, and
+- `model-price-audit`, `release-prep`, `skill-validation`, and
   this repository's enabled copies of catalog names such as `code-review` and
   `security-review`.
 

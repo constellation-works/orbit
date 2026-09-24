@@ -1,0 +1,72 @@
+schemaVersion: 1
+name: doc-duties
+description: Daily rolling verification of workspace documentation against current behavior
+enabled: false
+schedule:
+  cron: 30 6 * * *
+template:
+  title: Validate the oldest workspace documentation
+  description: |
+    Validate a small batch of documentation against the current repository.
+    Correct factual drift and broken links or Markdown. A batch whose claims
+    are already accurate is a successful no-diff run.
+
+    ## Select a batch
+
+    1. List tracked Markdown files under `docs/` and tracked top-level
+       `README*` or `CONTRIBUTING*` documents with `git ls-files`. Exclude vendored
+       dependencies, generated trees and indexes, archives, and files the
+       repository identifies as generated or historical records. Use repository
+       guidance for any additional documentation scope; do not edit unrelated
+       files. Keep the paths relative to the repository root.
+    2. For each candidate, read a valid `last_validated: YYYY-MM-DD` value in
+       existing YAML frontmatter when present. Otherwise obtain its last-touched
+       date with `git log -1 --format=%cI -- <path>`. Use the date part of that
+       timestamp as the initial validation age. Report invalid frontmatter
+       values and missing git history rather than treating them as real dates.
+    3. If previous completed doc-duties execution summaries record a later
+       validation date for a candidate without `last_validated`, use the latest
+       recorded date as its age. This lets a no-frontmatter repository rotate
+       after a clean no-diff batch. Otherwise retain the git-derived date.
+    4. Sort candidates by validation age, oldest first, breaking ties by
+       relative path. Take at most six. If no candidates have a usable age,
+       explain why in the execution summary and finish without a diff.
+
+    ## Validate and record
+
+    For each selected document, check factual claims against current source,
+    commands, configuration, and related documentation. Correct verified drift,
+    genuine spelling errors, and broken Markdown or relative links. Preserve
+    the author's style and avoid unrelated rewrites. If a claim cannot be
+    checked, leave it unchanged and record the limit.
+
+    Update `last_validated` to today's date only when that key already exists
+    and the document was actually verified. Never add YAML frontmatter or a
+    `last_validated` key to a document that lacks it. Record every verified
+    document, including unchanged ones, in this task's durable
+    `execution_summary` with the validation date and supporting checks.
+
+    The execution summary must list the selected paths in order, each path's
+    ordering date and source (frontmatter, git, or prior summary), changes and
+    verification evidence, and any skipped document or unverified claim. State
+    explicitly when the batch was clean. Do not manufacture an edit to mark a
+    clean run complete.
+  acceptance_criteria:
+  - Up to six least-recently-validated tracked documents were selected by date and stable path order, using git last-touched dates where no validation metadata or prior summary exists.
+  - Each selected document was checked against current evidence; verified drift was corrected, while unverifiable claims were left unchanged and reported.
+  - No frontmatter or last_validated key was added to a document that lacked it; existing last_validated keys were updated only after verification.
+  - The durable execution summary records selected paths, ordering evidence, checks, changes, and skipped claims, including clean no-diff batches.
+  task_type: chore
+  tags:
+  - doc-duties
+  - docs
+  - no-diff-expected
+  priority: medium
+  complexity: low
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-24T00:00:00Z
+updated_by: system
+updated_at: 2026-09-24T00:00:00Z

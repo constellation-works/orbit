@@ -56,6 +56,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/code-review.yaml"),
     ),
     (
+        "doc-duties",
+        include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
+    ),
+    (
         "friction-curation",
         include_str!("../../../assets/auto_tasks/friction-curation.yaml"),
     ),
