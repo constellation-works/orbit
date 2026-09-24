@@ -1,6 +1,0 @@
-dir:src/command
-file:src/lib.rs
-symbol:src/lib.rs#hello:function
-symbol:src/lib.rs#Greeter:trait
-module:orbit_core::scheduler
-command:task.update

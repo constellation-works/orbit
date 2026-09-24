@@ -89,8 +89,8 @@ The retired decision artifact store used the same envelope-plus-Markdown pattern
 
 ### 2.3 Orbit task sync
 
-[docs/design/_archive/task-sync/](../_archive/task-sync/1_overview.md) documents
-the retired shared-writer Git registry. Live visibility and mutation now route to
+The retired Task Sync design (removed; see git history) proposed a
+shared-writer Git registry. Live visibility and mutation now route to
 the owning host through [remote-access](../remote-access/1_overview.md) and
 [federated-mcp](../federated-mcp/1_overview.md), so the multi-writer registry
 remains superseded.
@@ -145,7 +145,6 @@ Orbit tasks should feel local and inspectable without forcing every user into a 
 ### 4.1 Orbit-internal
 
 - [docs/design/CONVENTIONS.md](../CONVENTIONS.md) - design folder layout and ADR rules.
-- [docs/design/_archive/task-sync/](../_archive/task-sync/1_overview.md) - archived (superseded) git-sync proposal over the existing task layout; see [remote-access](../remote-access/1_overview.md).
 - [docs/design/task-publication/](../task-publication/1_overview.md) - draft one-way publication proposal using a dedicated private repository while preserving one task authority.
 - [.orbit/adrs/](../../../.orbit/adrs/) - internal precedent for envelope plus Markdown body and monotonic artifact IDs.
 - [docs/design/orbit-search/](../orbit-search/) - per-field indexing of task text.

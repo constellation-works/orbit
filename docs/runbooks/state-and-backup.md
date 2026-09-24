@@ -113,7 +113,7 @@ the retired links until it is restarted.
 
 ### Retired graph state and task selectors
 
-[Retire and delete Orbit's code-graph subsystem](../design/_archive/orbit-graph/4_decisions.md#retire-and-delete-orbits-code-graph-subsystem) retired graph as an Orbit capability. Task `symbol:<path>#<symbol>:<kind>` context
+The "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) retired graph as an Orbit capability. Task `symbol:<path>#<symbol>:<kind>` context
 selectors now use only `<path>` as a canonical workspace-contained file anchor; the symbol and
 kind are opaque descriptive metadata. No health, task, or dashboard path probes graph state or
 resolves symbols through it.

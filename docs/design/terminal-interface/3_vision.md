@@ -10,7 +10,7 @@ type: design
 summary: "Open questions for orbit's terminal surface — TUI vs. composable CLI, agent-readable output, progress under concurrency — and the prior art the house style borrows from."
 tags: [terminal-interface]
 paths: ["crates/orbit-cli/src/output/**"]
-related_features: [terminal-interface, user-interface, resident-orchestrator]
+related_features: [terminal-interface, user-interface]
 related_artifacts: []
 ---
 

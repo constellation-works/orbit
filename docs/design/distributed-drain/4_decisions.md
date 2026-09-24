@@ -10,7 +10,7 @@ type: design
 summary: Pull-based admission, durable request and attempt identity, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
-related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator]
+related_features: [distributed-drain, federated-mcp, host-registry]
 related_artifacts: [ORB-12488]
 ---
 
@@ -204,7 +204,7 @@ top-tier crew*, read by crew selection and ignored by admission.
 
 - One admission path, one footprint rule (a task's own `context_files`), one leaf pipeline.
 - Large work is one leaf; its size shows up as slot time, not as special machinery.
-- `docs/design/resident-orchestrator/` is archived; its drain-window and slot-refill work lives on
+- `docs/design/resident-orchestrator/` is removed; its drain-window and slot-refill work lives on
   in `workspace_auto_pipeline`.
 - Cost: a big task no longer gets a stable, reattachable worktree across runs; a crash mid-epic
   restarts from the branch, like any other leaf.

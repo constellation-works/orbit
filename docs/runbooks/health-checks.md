@@ -205,7 +205,7 @@ The repair deletes only that obsolete `spec.backend` key, leaves unknown backend
 unrelated malformed activities untouched (and reports them for a manual edit), and is
 idempotent across every activity catalog directory in the workspace.
 
-Graph is retired under [Retire and delete Orbit's code-graph subsystem](../design/_archive/orbit-graph/4_decisions.md#retire-and-delete-orbits-code-graph-subsystem) and is not inspected by ordinary health checks. To remove
+Graph is retired under the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) and is not inspected by ordinary health checks. To remove
 leftover state explicitly, run `orbit doctor --remove-graph`. This deletes only the current
 worktree's `.orbit/graph` and the shared workspace's `.orbit/knowledge/graph`; it is
 idempotent when either is absent. Combine it with `--json` for a single JSON result with no

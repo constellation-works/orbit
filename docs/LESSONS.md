@@ -24,7 +24,7 @@ This all changed during our benchmarking session on graph tools. The benchmarkin
 - `no-graph`: only `Read`, `Grep`, `Glob`
 
 Historical graph benchmark rounds v1 and v2 (removed with the graph subsystem
-under [Retire and delete Orbit's code-graph subsystem](./design/_archive/orbit-graph/4_decisions.md#retire-and-delete-orbits-code-graph-subsystem) / ORB-10491) exposed Codex to graph tools through shell execution
+under the "Retire and delete Orbit's code-graph subsystem" decision, ORB-10491) exposed Codex to graph tools through shell execution
 and Claude through MCP. In both rounds, hybrid Codex never reached for the graph
 tools over 60 runs.
 

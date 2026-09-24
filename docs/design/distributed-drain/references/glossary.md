@@ -7,7 +7,7 @@ owner: claude
 status: Draft
 feature: distributed-drain
 tags: [distributed-drain, glossary]
-related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator]
+related_features: [distributed-drain, federated-mcp, host-registry]
 related_artifacts: [ORB-12488]
 ---
 
