@@ -1,111 +1,74 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-09-20
+last_validated: 2026-09-23
 ---
 
 # Orbit Configuration
 
-Reference for Orbit's runtime config — the `config.toml` consumed by `orbit run ship` and the activity-job dispatcher. The defaults shipped with the binary live in [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml).
+Operator reference for Orbit's `config.toml`: every fixed key, its default, and what it does. `orbit config keys` prints the same key list with descriptions. The annotated template `orbit init` writes is [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml); treat it as a reference, not a file to copy wholesale. A shorter overview lives on the website under [Reference › Configuration](https://orbit-cli.com/reference/config/).
 
-This doc focuses on the user-facing knobs: `[workflow]` and `[crews.*]`. Other sections are summarized at the end.
-
-Contributors adding a new execution lane or deterministic command executor should
-use the [executor onboarding runbook](runbooks/executor-onboarding.md). It
-documents the v2 seams and validation obligations; this reference remains the
-operator contract for configuring an already shipped lane.
+To add a new execution lane rather than configure a shipped one, see the [executor onboarding runbook](runbooks/executor-onboarding.md).
 
 ## Where config lives
 
-Two paths are consulted, in order:
-
 | Path | Scope | Created by |
 |---|---|---|
-| `<workspace>/.orbit/config.toml` | Workspace-local (per-user, gitignored) | Hand-authored or seeded by `orbit workspace init` |
-| `~/.orbit/config.toml` | Global / user | `orbit init` |
+| `<workspace>/.orbit/config.toml` | Workspace-local (per user, gitignored) | Hand-authored, or `orbit config set --fresh` / `--seed-from-global` |
+| `~/.orbit/config.toml` | Global | `orbit init` (only when absent, or under `--force`) |
 
-Workspace `config.toml` is this checkout owner's settings — crews, sandbox, base-branch fallback — and is not a repository artifact. Ordinary settings inherit per key: workspace values override global values, global values fill omissions, and built-in defaults fill remaining gaps.
+Ordinary settings inherit per key: workspace values override global values, global values fill omissions, and built-in defaults fill remaining gaps.
 
-Tables layer down to individual settings, while scalar and array values replace the matching global value. Named crews layer by crew name and field, so this is a complete workspace override when the global file already defines `sol`:
+- **Tables** layer down to individual settings. **Scalars and arrays** replace the matching global value.
+- **Named crews** layer by crew name and field, so `[crews.sol]` with only `model = "gpt-5.6-terra"` in the workspace file overrides one field of the global `sol` crew.
+- **Security exceptions.** `execution.codex.sandbox`, `execution.codex.approval_policy` and `execution.env.pass` never inherit from global once a workspace file exists. If the workspace file omits one, its built-in default applies.
+- **Global-only.** A `[machine]` table in a workspace file is refused at load, naming the file.
 
-```toml
-[crews.sol]
-model = "gpt-5.6-terra"
-```
+The workspace identity file `.orbit/config.yaml` (it stores `workspace_id`) is a separate artifact and not runtime config.
 
-The `[machine]` table is **global-only**: a workspace `config.toml` that supplies it is refused at load, naming the file. See [`[machine]` — who this machine is](#machine--who-this-machine-is).
+## Inspecting and editing
 
-Three security-sensitive settings deliberately do not inherit from global whenever a distinct workspace file exists:
-
-- `execution.codex.sandbox`
-- `execution.codex.approval_policy`
-- `execution.env.pass`
-
-If the workspace file omits one of these, Orbit uses that setting's built-in default. This keeps repository agent sandboxing, approval, and environment passthrough deterministic instead of depending on a user's global policy. `execution.env.inherit` is not a configurable key: an agent subprocess environment is always composed from an allowlist — see [`[execution.env]` — the agent subprocess environment](#executionenv--the-agent-subprocess-environment).
-
-Run `orbit config show` for the effective merged view. It is grouped into sections — Machine (`machine.*`), Delivery (`workflow.*`), Crews, Execution (`execution.*`), Review (`operation.*`), Housekeeping, and Paths — and every key prints the same description `orbit config keys` shows. Each value reports exactly one state:
-
-| State | Meaning |
+| Command | What it does |
 |---|---|
-| `workspace` / `global` / `environment` | A layer set it; that layer is named |
-| `default` | No layer set it and the built-in value is in force |
-| `unset` | No layer set it and there is no default: the key has no value |
+| `orbit config show` | Effective merged view, grouped as Machine, Delivery (`workflow.*`), Crews, Execution, Review (`operation.*`), Housekeeping and Paths. `--all` expands sections whose keys are all unset. `--json` adds a `provenance` object. |
+| `orbit config get <key>` | One value. |
+| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value is parsed as a TOML literal, falling back to a string. If the workspace file does not exist, pass `--fresh` (start empty) or `--seed-from-global`. |
+| `orbit config keys` | Every fixed settable key with type, section, and description. |
+| `orbit config path` | The resolved `config.toml` path. |
 
-When a lower layer also defines a key, the row says so rather than hiding it: `(overrides global: main)` for an ordinary override, and `(global sets danger-full-access — not inherited)` for one of the three security keys a workspace file did not restate. The security exception also gets a banner line under `Layers` whenever a workspace file exists. Crews render as one row per crew, annotated with the `workflow.default_crew` / `workflow.system_crew` keys that point at them. A section whose keys are all unset collapses to a one-line summary; pass `--all` to list every key. A registered checkout also gets a `Workspace` line reporting the base branch and ship mode from the **workspace registry** — those are what delivery uses, so a mismatch against `workflow.base_branch` is visible here.
+Each value in `show` reports one state: `workspace`, `global` or `environment` (the layer that set it), `default` (built-in value in force), or `unset` (no value and no default). When a lower layer also defines the key, the row says so: `(overrides global: main)`, or `(global sets danger-full-access — not inherited)` for a security key the workspace file did not restate. A registered checkout also gets a `Workspace` line with the registry's base branch and ship mode, which is what delivery uses.
 
-`orbit config show --json` exposes the same attribution in its `provenance` object: the `scope` and `path` fields as before, plus `section`, `description`, `state` (`set`/`default`/`unset`), and `shadowed_by` (`[{layer, value, reason}]`, where `reason` is `overridden`, `not-inherited`, or `preset-reset`). A top-level `workspace_binding` object reports the registered base branch and ship mode, or `null` for an unregistered checkout.
+In `--json`, each key's provenance carries `scope`, `path`, `section`, `description`, `state` (`set`/`default`/`unset`) and `shadowed_by` (`[{layer, value, reason}]`, reason `overridden`, `not-inherited` or `preset-reset`). A top-level `workspace_binding` reports the registered base branch and ship mode, or `null`.
 
-Use `--scope global` or `--scope workspace` to resolve either physical file in isolation, without values from the other file. Scoped output uses the same grouping, minus the layering banner and the crew table (a single file resolves registry keys only). Both `config show --scope <scope>` and `config get --scope <scope> <key>` include built-in defaults for keys omitted from the selected file, so they report the same value for a given key. In scoped `config get --json`, the top-level `exists` field instead reports whether that key is explicitly present in the selected file; it can be `false` while `value` contains a default. In scoped `config show --json`, `source.exists` reports whether the selected file itself exists. Settings are still resolved when the file is absent.
-
-The workspace identity file `.orbit/config.yaml` is a separate artifact (it stores `workspace_id` for the canonical task store binding) and is unrelated to runtime config.
+`--scope global` or `--scope workspace` resolves one file in isolation, still filling built-in defaults for omitted keys. In scoped `config get --json`, `exists` says whether the key is present in that file. In scoped `config show --json`, `source.exists` says whether the file exists.
 
 ---
 
 ## `[machine]` — who this machine is
 
-Written once by `orbit init` into the **global** `~/.orbit/config.toml`:
+Global-only. `orbit init` writes the identity keys once.
 
 ```toml
 [machine]
-id          = "hm_9ca6004473492f06"   # stable, generated once, never reused
-name        = "dk-server-1"           # renameable display label
-task_prefix = "ORB"                   # immutable task-id namespace for ids minted here
+id          = "hm_9ca6004473492f06"
+name        = "dk-server-1"
+task_prefix = "ORB"
 ```
 
-| Key | Settable | What it is |
-|---|---|---|
-| `machine.id` | No | Opaque `hm_…` identity generated once at `orbit init`. It names run ownership, workspace ownership, and federated routing; every task, run, and workspace record minted here refers to it. |
-| `machine.name` | Yes | Operator-chosen display label. Rename with `orbit config set --global machine.name <value>`. |
-| `machine.task_prefix` | No | The 2–5 uppercase ASCII-letter namespace task ids minted on this machine use. Fixed for the life of the local task store. |
+| Key | Default | Settable | What it is |
+|---|---|---|---|
+| `machine.id` | written by init | No | Opaque `hm_…` identity. It names run ownership, workspace ownership and federated routing. |
+| `machine.name` | written by init | Yes (`--global`) | Display label. |
+| `machine.task_prefix` | written by init | No | 2–5 uppercase ASCII letters used for task IDs minted here. Fixed for the life of the local task store. |
+| `machine.worker_containment` | `true` | Yes | Run each detached pipeline worker in its own transient systemd user scope (`orbit-worker-<run_id>-<nonce>.scope`), so a runaway run is throttled or OOM-killed inside it. Without a user manager (macOS, containers) or with `false`, workers run in the caller's cgroup and each Orbit process logs one warning. |
+| `machine.worker_memory_high` | `40%` | Yes | Scope `MemoryHigh=` (throttle point). Bytes with optional `K`/`M`/`G`/`T`, a percentage of physical RAM, or `infinity`. |
+| `machine.worker_memory_max` | `50%` | Yes | Scope `MemoryMax=` (OOM point). Same grammar. |
+| `machine.worker_tasks_max` | `4096` | Yes | Scope `TasksMax=` (processes plus threads), at least 1. |
 
-Three rules follow from "this is one machine's identity, not a repository setting":
-
-- **Global-only.** A `[machine]` table in a workspace `.orbit/config.toml` is refused at load with an error naming that file. A checkout must not be able to rename, renumber, or re-identify the machine it happens to sit on.
-- **`id` and `task_prefix` are read-only.** `orbit config set` refuses both, naming the reason: changing `machine.id` would orphan every record minted under it, and ids already allocated under a `task_prefix` cannot be renumbered.
-- **Hand edits fail closed.** A `[machine]` table missing any of the three keys is an error naming the missing ones. A `machine.task_prefix` that contradicts what the local task allocator already minted is refused at runtime open, and a `machine.id` that contradicts a workspace record declaring this machine as owner is refused by registry validation. Nothing falls back to the OS hostname and nothing is regenerated.
-
-A pre-`[machine]` installation carried these values in `~/.orbit/host.toml`. That file is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths — they are two different answers to "who is this machine", and either choice orphans the ids minted under the other. Reconcile them by deleting the stale file.
-
-### Worker limits
-
-The same global-only table bounds every detached pipeline worker this machine launches. On Linux with a reachable systemd user manager each worker — and everything it spawns: agent CLIs, cargo, rustc, test binaries — runs in its own transient scope, `orbit-worker-<run_id>-<nonce>.scope`, so one runaway run is throttled or OOM-killed inside that scope instead of taking the host down.
-
-```toml
-[machine]
-worker_containment = true    # false launches workers in the caller's cgroup
-worker_memory_high = "40%"   # MemoryHigh=: the kernel throttles the run above this
-worker_memory_max  = "50%"   # MemoryMax=: OOM kills stay inside the run
-worker_tasks_max   = 4096    # TasksMax=: processes + threads before fork/clone fails
-```
-
-| Key | Default | What it is |
-|---|---|---|
-| `machine.worker_containment` | `true` | Launch each worker in its own scope. Without a user manager (macOS, containers, sandboxes without a user bus) or with `false`, workers launch in the caller's cgroup and each Orbit process logs one warning. |
-| `machine.worker_memory_high` | `40%` | Scope `MemoryHigh=`. Bytes with an optional `K`/`M`/`G`/`T` suffix, a percentage of physical RAM, or `infinity`. |
-| `machine.worker_memory_max` | `50%` | Scope `MemoryMax=`, same grammar. |
-| `machine.worker_tasks_max` | `4096` | Scope `TasksMax=`, at least 1. |
-
-Percentages are resolved by systemd against the host's physical RAM, so the defaults scale with the machine. Unlike the identity keys, a worker limit can be set with `orbit config set --global machine.<key> <value>` and unset back to its default. A run that fails after its scope hit a limit carries the error code `worker_resource_limit` in `orbit run show`, naming the limit and how often it was hit. Operating and inspecting the scopes: the orbit-setup skill's [operational-logs reference](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
+- `orbit config set` refuses `machine.id` and `machine.task_prefix`: changing either would orphan or renumber records minted under it.
+- Hand edits fail closed. A `[machine]` table missing any identity key is an error. A `task_prefix` that contradicts the local task allocator, or an `id` that contradicts a workspace record naming this machine as owner, is refused. Nothing falls back to the hostname.
+- A legacy `~/.orbit/host.toml` is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths. Delete the stale one.
+- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
 
 ---
 
@@ -113,49 +76,48 @@ Percentages are resolved by systemd against the host's physical RAM, so the defa
 
 ```toml
 [workflow]
-base_branch = "main"        # config fallback when no registered workspace base_branch is bound
-default_crew = "opus"       # fallback crew when a task has no `crew` set
-system_crew = "luna"        # crew for bounded system work; shipped `crew: system` steps resolve onto it
-low_complexity_crews = []   # automatic pools per task complexity; empty falls back to default_crew
+base_branch = "main"
+default_crew = "opus"
+system_crew = "luna"
+low_complexity_crews = []
 medium_complexity_crews = []
 hard_complexity_crews = []
 xhard_complexity_crews = []
 ```
 
-This is the shape a fresh `orbit init` writes on a host with the Claude and Codex CLIs: both lane keys name real crews from the `[crews.<name>]` tables below, and the four pools are scaffolded empty. Init never writes a crew whose only job is to be pointed at — there is no seeded `[crews.custom]` or `[crews.system]` table.
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.base_branch` | `main` | Fallback base branch for ship, auto and pilot when the workspace registry has none. The registry value (`orbit workspace show`) wins, and `--base <branch>` overrides both. For a two-branch repo, register with `--base-branch agent-main`. |
+| `workflow.default_crew` | see [resolution](#resolution-precedence) | Crew for a task with no `crew`. Must name a defined crew. |
+| `workflow.system_crew` | `system` | Crew for runtime-synthesized system work such as step-failure recovery. |
+| `workflow.low_complexity_crews`, `medium_…`, `hard_…`, `xhard_…` | `[]` | Crew pools a crew-less task draws from at creation, by complexity. Empty means "use `default_crew`". See [pools](#automatic-crew-pools-by-complexity). |
+| `workflow.auto_ship` | `false` | Opt in to unattended ship dispatch from the sweep/routine scheduler. While `false`, the ship sweep skips with `auto_ship_disabled`. |
+| `workflow.required_validation_commands` | `[]` | Commands a distributed-drain claim must pass on its exact candidate before this owner accepts its handoff. Empty refuses every claimed handoff. |
 
-- **`base_branch`** — config fallback for ship/auto/pilot when no registered workspace `base_branch` is bound. Delivery defaults prefer the workspace registry value (`orbit workspace show`). Override per-invocation with `--base <branch>`. If your repo uses a two-branch pattern like this repo does (`main` = release, `agent-main` = dev integration), register the workspace with `--base-branch agent-main` (or set this key as a fallback).
-- **`default_crew`** — name of the crew under `[crews.<name>]` used for any task whose own `crew` field is unset. Must match a defined crew or config load fails. See [Per-task crew override](#per-task-crew-override) for how individual tasks select a different crew.
-- **`system_crew`** — name of the crew for system activities that are synthesized at runtime and so have no job step to name a crew on, principally `step_failure_recovery`. Defaults to `system`. A shipped pipeline such as `task_pilot_pipeline` does **not** read this key: its steps name `crew: system` directly, so the definition states which crew does the work. Either way the crew is resolved at dispatch through an explicit crew input, so system work never inherits a failed task's crew or the workspace default. A missing or unusable crew leaves the original failed step failed and emits a diagnostic naming `workflow.system_crew` and the configured crew.
+**The `system` name.** Shipped job steps such as `task_pilot_pipeline` name `crew: system` directly. At load that name is aliased onto the crew `workflow.system_crew` names, so `system_crew = "luna"` runs the task pilot on Luna. A user-authored `[crews.system]` table wins over the alias. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then to the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
 
-  **Resolving the `system` name.** A seeded config defines no `[crews.system]` table. Instead `workflow.system_crew` names a real crew, and at load the `system` name shipped job steps use is aliased onto that crew — so `system_crew = "luna"` runs `task_pilot_pipeline` on Luna. To change what runs system work after init, point `system_crew` at another defined crew (`orbit config set workflow.system_crew sonnet`). An explicit `[crews.system]` table in a user-authored config always wins over the alias. Configs written before `system_crew` existed still resolve: for Orbit's default or legacy lane names (`system` and `qa`), a missing crew falls back to an existing `qa` crew and then to the already-validated workspace default, which keeps old Gemini- and Grok-only configs working even though they never seeded `qa`. Unknown custom names are not substituted, so a typo fails closed at dispatch. `[crews.qa]` remains a loadable compatibility lane for explicitly user-authored legacy configs, but fresh init never creates it.
+**What `orbit init` seeds.** Only the global file, and only when it is absent (or under `--force`):
 
-  **What init seeds.** `--non-interactive` writes the cheapest built-in crew of the preferred detected family, in this order: Codex `luna` (`gpt-6-luna`), Claude `sonnet`, Grok `grok` (`grok-4.7`), Antigravity `antigravity` (`gemini-3.8-flash-high` via `agy`), Gemini `gemini` (`gemini-3.8-flash` on the legacy Gemini CLI), Copilot `copilot`, Cursor `cursor`, Pi `pi`, then OpenCode `opencode`; single-crew families name their one crew, and appending the newer lanes preserves every existing family's selection. Interactive `orbit init` (or `--force` on a fresh rewrite) offers exactly those detected cheap-tier crews by name with the same recommendation pre-selected; it does not offer Astra, Sol, Opus, Terra, or a free-form provider, and it never prompts for a QA crew. A host with exactly one candidate takes it without a prompt; a host with no supported family leaves `system_crew` unset rather than inventing a provider.
-- **`*_complexity_crews`** — `low_complexity_crews`, `medium_complexity_crews`, `hard_complexity_crews`, and `xhard_complexity_crews` are the automatic crew pools a crew-less task draws from at creation, by its assessed complexity. Entries are crew names, written `name` or `name:weight` (all bare or all weighted). Init scaffolds all four as `[]`; an empty pool disables routing for that complexity, so the task is routed to `default_crew`. See [Automatic crew pools by complexity](#automatic-crew-pools-by-complexity).
-- **`required_validation_commands`** — commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff. Empty by default; an empty value is fail-closed and refuses every claimed handoff.
+- the [built-in crews](#crewsname--which-provider-model-runs-the-task) for each detected provider CLI,
+- `default_crew` set to the default crew of the first detected family in preference order,
+- `system_crew` set to the first detected of `luna`, `sonnet`, `grok`, `antigravity`, `gemini`, `copilot`, `cursor`, `pi`, `opencode` (cheapest tier first),
+- all four pools as `[]`.
+
+Interactive init asks for both crews by name, and skips the question when there is only one candidate. With no supported CLI detected, it writes an empty `[crews]` table (so the built-in crews are not used) and leaves both keys unset. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
 ---
 
 ## `[crews.<name>]` — which provider-model runs the task
 
-A **crew** is one provider-model assignment. Activities do not carry a model-selection role: a rendered activity input may name a `crew`, and otherwise the activity inherits the run's resolved crew.
+A crew is one provider-model assignment. An activity uses the crew named in its rendered input, otherwise the run's resolved crew.
 
-A crew name may not contain `:`. The colon is the weight separator in
-[`workflow.*_complexity_crews`](#weighting-a-pool), which has no quoting form,
-so a colon-named crew could never be pooled. Both `[crews.<name>]` at config
-load and `orbit config set crews.<name>.<field>` refuse the name outright,
-naming that grammar, rather than letting the config load and fail later on
-every command.
-
-| Field | Purpose | Values |
+| Field | Required | Values |
 |---|---|---|
-| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.7`) |
-| `provider` | Agent family or execution lane | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
-| `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Antigravity: `low`, `medium`, `high`; OpenCode: `high` or `max`; Grok: verified per model below |
-| `description` | Optional human-facing crew summary | Any non-empty string after trimming |
-| `tags` | Optional discovery labels | Array of strings; normalized, sorted, and deduplicated |
-
-Example — the standard Codex Sol crew:
+| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`. See [provider identity](#provider-identity-and-resolution). |
+| `model` | Yes | Model ID passed to the provider CLI. |
+| `effort` | No | Reasoning effort; see the table below. Omitted leaves the provider's default. |
+| `description` | No | Summary. Trimmed; blank becomes absent. |
+| `tags` | No | Discovery labels. Trimmed, blanks dropped, sorted and deduplicated. |
 
 ```toml
 [crews.sol]
@@ -166,843 +128,190 @@ description = "Systems implementation"
 tags = ["implementation", "review"]
 ```
 
-`effort` is omitted by default, which leaves the provider's existing model
-default unchanged. When set to a supported value, Orbit passes it through the
-provider's documented argv: Codex receives `model_reasoning_effort`, Claude
-receives `--effort`, Antigravity receives `--effort` (`low`/`medium`/`high`
-only), and Grok receives `--reasoning-effort`. The installed Claude CLI
-(2.1.261, checked September 2026) advertises all five values, so Orbit
-forwards `low`, `medium`, `high`, `xhigh`, and `max` exactly; [Claude's
-effort documentation](https://code.claude.com/docs/en/model-config) notes that
-availability can still depend on the selected model. Grok Build 1.0.13
-advertises `--reasoning-effort` (with `--effort` as an alias), and
-`grok models` currently lists `grok-4.7`, `grok-4.6`, and `grok-4.5`. Orbit
-accepts `low`, `medium`, `high`, and `xhigh` for `grok-4.7` and `grok-4.6`,
-and `low`, `medium`, and `high` for `grok-4.5`, matching [xAI's Grok 4.7
-model contract](https://docs.x.ai/developers/models/grok-4.7) and [reasoning
-contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
-An invalid or provider-unsupported `effort` (including `max` on Grok,
-Antigravity `xhigh`/`max`, OpenCode `low`/`medium`/`xhigh`, effort on
-providers with no contract, or a slip such as `effort = "hard"`) is ignored
-for that crew — treated as unset — with a warning naming the config path,
-crew, property, value, and accepted values. `orbit doctor` lists each ignored
-property; `orbit config set` still refuses to persist a value admission would
-drop. Required crew fields, retired backends, and Antigravity legacy Gemini
-CLI model ids still fail closed rather than being rewritten. A selected
-activity crew (including `workflow.system_crew`) supplies its effort together
-with its provider and model, so it takes precedence over an activity's inline
-baseline in the same way as the rest of that assignment. For the standard
-Codex tiers, use the model-specific crew to choose capability first: Terra
-(`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
-budget inside the chosen Codex model.
+**Built-in crews.** `orbit init` seeds a family's crews when it detects that family's binary. A config with no `[crews]` table at all uses the full set, plus a built-in `system` crew (`claude`, `sonnet`). Families are listed in init's preference order. Existing explicit model pins are kept as written.
 
-Named crew fields are addressable through `orbit config` as
-`crews.<name>.<field>` (`model`, `provider`, `effort`, `description`, `tags`):
+| Family | Binary | Crews (model) | Default crew |
+|---|---|---|---|
+| `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `fable` (`fable`) | `opus` |
+| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6-sol`), `terra` (`gpt-5.6-terra`), `luna` (`gpt-6-luna`) | `astra` |
+| `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`) | `antigravity` |
+| `gemini` | `gemini` | `gemini` (`gemini-3.8-flash`) | `gemini` |
+| `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
+| `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |
+| `cursor` | `cursor-agent` | `cursor` (`gpt-5`) | `cursor` |
+| `pi` | `pi` | `pi` (`sonnet`) | `pi` |
+| `opencode` | `opencode` | `opencode` (`anthropic/claude-sonnet-4-5`) | `opencode` |
+
+**Reasoning effort.** Choose capability with the model first, then tune `effort` inside it.
+
+| Provider | Accepted `effort` | Rendered as |
+|---|---|---|
+| `claude`, `codex`, `pi` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--thinking` |
+| `antigravity` | `low`, `medium`, `high` | `--effort` |
+| `opencode` | `high`, `max` | `--variant` |
+| `grok` (`grok-4.7`, `grok-4.6`) | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
+| `grok` (`grok-4.5`) | `low`, `medium`, `high` | `--reasoning-effort` |
+| others | none | — |
+
+An invalid or unsupported `effort` (for example `max` on Grok, or `effort = "hard"`) is ignored for that crew with a warning naming the file, crew, value and accepted values. It is never remapped. `orbit doctor` lists ignored properties, and `orbit config set` refuses to write a value load would drop. A selected crew's provider, model and effort all override an activity's inline baseline.
+
+**Editing crews.** Crew fields are addressable as `crews.<name>.<field>`:
 
 ```bash
 orbit config set crews.sol.effort high
 orbit config get crews.sol.effort
-orbit config show --json
 ```
 
-`get` and `show` report the same configured effort the runtime assignment
-uses. `show` includes `crews.sol.effort` with `workspace` or `global`
-provenance when the field is set; omitting it leaves the provider default and
-does not invent a configured value in effective output. Invalid values,
-unsupported provider/model combinations, and misspelled crew fields are
-refused before the file is written. Creating a crew still requires a
-`[crews.<name>]` table with `model` and `provider` — `config set` will not
-persist an incomplete crew.
+`config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.crew.list` returns the normalized crews of the selected checkout's effective config.
 
-Example — the standard Grok crew:
+**Validation.**
 
-```toml
-[crews.grok]
-model = "grok-4.7"
-provider = "grok"
-```
+- `model` and `provider` must be non-empty.
+- `default_crew` must name a defined crew. If you define crews but leave `default_crew` unset, Orbit uses `opus` (or a legacy `claude` crew) when defined, and otherwise refuses to load.
+- A crew name may not contain `:`, because the pool grammar reserves it. See [repair](#repairing-a-config-that-already-names-a-crew-with-a-colon).
+- An Antigravity crew must use an `agy models` slug. A bare Gemini CLI ID such as `gemini-3.8-flash` fails with migration guidance.
 
-The current Grok Build CLI lists `grok-4.7` in `grok models`, so Orbit uses that live menu id. The older `grok-build` string is not retained as a default or alias.
+**Retired crew shapes.** These fail load with migration guidance:
 
-Fresh `orbit init` configuration advertises only detected provider CLIs. Claude seeds `opus`, `sonnet`, and `fable`; Codex seeds `astra`, `sol`, `terra`, and `luna`; an installed `agy` seeds `antigravity`; Gemini CLI still seeds the legacy `gemini` crew when that binary is present; Grok seeds `grok`; Copilot seeds `copilot`; an installed `cursor-agent` seeds `cursor`; an installed `pi` seeds `pi`; and an installed `opencode` seeds `opencode`. Antigravity occupies Gemini CLI's previous default-provider slot, so a host with both `agy` and `gemini` prefers Antigravity. Copilot, Cursor, Pi, and OpenCode remain appended after the original families. Those built-in tables are the only crews init writes: `workflow.default_crew` names the preferred family's default crew (`opus`, `astra`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, or `opencode`) and `workflow.system_crew` names the cheap-tier crew described under [`[workflow]`](#workflow--branch-and-crew-defaults). Interactive init asks which existing crew is the default (every seeded crew is offered, recommendation first) and, when more than one cheap-tier family is detected, which is the system crew; both answers are written by name. It never writes a `[crews.custom]` or `[crews.system]` table and does not ask for QA. The legacy `qa` name remains loadable when an existing user-authored config defines `[crews.qa]`, but init does not seed that table. If no supported provider CLI is detected, init asks nothing about crews and leaves the crew registry, `workflow.default_crew`, and `workflow.system_crew` unset instead of writing an unusable provider. Existing files are never rewritten: `orbit init` seeds `config.toml` only when it is absent (or under `--force`).
-
-The `astra` crew (`gpt-6-astra`) is the Codex fresh-config default; the existing `sol`, `terra`, and `luna` crews remain available. The Antigravity `antigravity` crew uses `gemini-3.8-flash-high` from `agy models` (verified against Antigravity CLI 1.1.27). The legacy `gemini` crew still uses `gemini-3.8-flash` for enterprise Gemini CLI. These exact IDs are not remapped: a crew that names `gemini-3.8-flash` on `provider = "antigravity"` fails with migration guidance. Existing explicit model pins are retained when their configuration loads.
-
-You can define any number of crews. Set the workspace-wide fallback with `workflow.default_crew`; assign a specific crew to individual tasks via the [per-task crew override](#per-task-crew-override). Crews are validated at load time: each crew must have non-empty `model` and `provider`; `workflow.default_crew` must name a defined crew.
-
-Crew metadata is runtime data, not display-only TOML. Orbit trims `description`
-(blank becomes absent), trims each tag, drops blank tags, and stores tags in sorted
-deduplicated order. `orbit.crew.list` reads and normalizes the selected checkout's
-effective local configuration on the machine serving the request. It returns the
-versioned `CrewDiscoveryV1` projection directly; no execution-profile publication or
-registry database is involved.
-
-> **Retired crew shape.** `planner`, `implementer`, and `reviewer` sub-tables
-> are no longer accepted in a crew entry. A workspace using that old shape must
-> rewrite every `[crews.<name>]` entry to set flat `model` and `provider`
-> fields before Orbit can load its configuration. Use separate crew-bound runs
-> when comparing providers.
-
-> **Retired `backend` field.** `[crews.<name>] backend` selected the agent
-> execution backend. Orbit executes agent activities through the CLI agent path
-> only, so the setting no longer chooses anything: `backend = "cli"` is accepted
-> and ignored, while `"http"` and `"auto"` are rejected at config load with the
-> migration message. Remove the key. Orbit never rewrites `http` to the CLI
-> agent for you — that would change which runtime a crew dispatches to without
-> saying so.
-
-> **Note.** Earlier Orbit versions used `[agent.<role>]` tables. That schema was removed in [ORB-00058](../.orbit/) — config load now hard-errors if `[agent.*]` is present. Migrate to `[crews.<name>]` + `workflow.default_crew`.
+- `planner` / `implementer` / `reviewer` sub-tables: rewrite as flat `model` and `provider`.
+- `backend`: `cli` is accepted and ignored, while `http` and `auto` are refused. The same applies to `ORBIT_BACKEND` and `[runtime] backend`. Remove the key.
+- `[agent.<role>]` tables: migrate to `[crews.<name>]` plus `workflow.default_crew`.
 
 ### Repairing a config that already names a crew with a colon
 
-A colon-named crew was admissible before this rule existed, so upgrading Orbit
-can turn a working `config.toml` into one Orbit refuses to load. That refusal
-is total: every command reads the config, and every `orbit config` subcommand
-opens a runtime first, so `orbit config set` cannot rewrite the offending table
-either. Editing the file is the way back, and the refusal names which file and
-which table:
+A colon-named crew makes every command refuse to load, including `orbit config set`, so fix the file by hand. The error names the file and table:
 
 ```
-error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':';
-workflow.*_complexity_crews entries are written 'name' or 'name:weight', so the
-pool grammar reserves that separator. The crew is defined in
-'~/.orbit/config.toml'; Orbit refuses to load that config, so `orbit config set`
-cannot repair it either. Edit '~/.orbit/config.toml' and rename or remove the
-[crews."gpt-5:codex"] table, then rerun the command
+error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':'; ...
+Edit '~/.orbit/config.toml' and rename or remove the [crews."gpt-5:codex"] table, then rerun the command
 ```
 
-To recover, open the file the message names, rename the `[crews."<name>"]`
-table to a colon-free name (or delete the table), update anything that
-referenced the old name — `workflow.default_crew`, `workflow.system_crew`, a
-pool entry, a task's own `crew` field — and rerun the command. Each layer is
-checked against this rule before the global and workspace files are merged, so
-with both layers present the message names the file that actually defines the
-crew rather than the other one.
+Rename the table to a colon-free name (or delete it), update anything that referenced the old name (`default_crew`, `system_crew`, pool entries, a task's `crew`), and rerun. Each layer is checked before merging, so the message names the file that actually defines the crew.
 
 ---
 
 ## Provider identity and resolution
 
-Every `provider` string Orbit reads — in `[crews.<name>]`, in an activity's inline `provider`, and in setup detection — is parsed through **one canonical surface** (`orbit_types::workflow::Provider`, ORB-10091). Centralizing parsing means the crew resolver, the CLI executor, and reconciliation cannot disagree with each other or with Worker/Bridge about what a provider name means.
+Every `provider` string, whether in a crew, an activity's inline `provider`, or setup detection, goes through one canonical parser.
 
 ### Canonical providers
 
-| Canonical id | Aliases | CLI runtime | HTTP transport | Worker-executable |
-|---|---|---|---|---|
-| `claude` | — | yes | yes | yes |
-| `codex` | — | yes | no | yes |
-| `gemini` | — | yes | no | yes |
-| `grok` | — | yes | no | yes |
-| `copilot` | — | yes | no | **no** |
-| `ollama` | — | **unsupported at the Orbit CLI entry point** | no | **no** |
-| `openai_compat` | `openai-compat` | **no** (HTTP-only) | no | **no** |
-| `cursor` | — | yes (`cursor-agent`) | no | **no** |
-| `pi` | — | yes (`pi`) | no | **no** |
-| `antigravity` | — | yes (`agy`) | no | **no** |
-| `opencode` | — | yes (`opencode`) | no | **no** |
+| ID | CLI binary | Notes |
+|---|---|---|
+| `claude` | `claude` | |
+| `codex` | `codex` | |
+| `gemini` | `gemini` | Legacy Gemini CLI (enterprise / API-key deployments). |
+| `grok` | `grok` | |
+| `copilot` | `copilot` | [GitHub Copilot CLI](#github-copilot-cli) |
+| `cursor` | `cursor-agent` | [Cursor Agent CLI](#cursor-agent-cli) |
+| `pi` | `pi` | [Pi CLI](#pi-cli) |
+| `antigravity` | `agy` | [Antigravity CLI](#antigravity-cli) |
+| `opencode` | `opencode` | [OpenCode CLI](#opencode-cli) |
+| `ollama` | — | Recognized but unsupported at the Orbit CLI entry point. Selecting it fails with `provider.unsupported`. |
+| `openai_compat` (`openai-compat`) | — | HTTP-only, with no CLI runtime. Selecting it fails. |
 
-- **Parsing is case- and whitespace-insensitive.** `Claude`, `  claude `, and `CLAUDE` all resolve to `claude`. `openai-compat` normalizes to `openai_compat`.
-- **Deprecated aliases resolve *and* warn.** The legacy vendor names normalize to their canonical id and log an `orbit.config.crew` deprecation warning (`{alias, canonical}`) — they never fail, but update the config:
-
-  | Deprecated alias | Canonical |
-  |---|---|
-  | `anthropic` | `claude` |
-  | `openai`, `chatgpt` | `codex` |
-  | `google` | `gemini` |
-  | `xai` | `grok` |
-
-  `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` have **no** aliases.
-  `github`, `cursor-agent`, `anysphere`, `pi-coding-agent`, `earendil`, `agy`,
-  and `sst` are not provider spellings, and the vendor that supplies a session's
-  underlying model never changes its execution-lane identity. `google` still
-  aliases to `gemini` (the model family / legacy Gemini CLI), not Antigravity.
-  See [GitHub Copilot CLI](#github-copilot-cli),
-  [Cursor Agent CLI](#cursor-agent-cli), [Pi CLI](#pi-cli),
-  [Antigravity CLI](#antigravity-cli), and [OpenCode CLI](#opencode-cli).
-
-- **Canonical ≠ Worker-executable.** Orbit's canonical set is deliberately wider than what the model-neutral Worker leaf executor can run: `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, `ollama`, and `openai_compat` are first-class Orbit providers but Worker does not execute them. This distinction is preserved on purpose — do not narrow the canonical set to Worker's subset. For `copilot`, `cursor`, `pi`, `antigravity`, and `opencode` this is a *stable diagnostic*, not a fallback: a Worker-routed step naming one of those lanes is refused by identity rather than silently re-pointed at another family.
-- **Known ≠ executable at this entry point.** The shared contract recognizes `ollama`, but the Orbit CLI capability set is the canonical cross-repo four; explicitly selecting `ollama` fails as `provider.unsupported` rather than falling back.
-- **`openai_compat` has no CLI runtime.** Every crew dispatches through the CLI agent path, so selecting it fails structurally (see below) rather than falling back.
+- Parsing is case- and whitespace-insensitive.
+- Deprecated aliases resolve with an `orbit.config.crew` warning: `anthropic` → `claude`, `openai`/`chatgpt` → `codex`, `google` → `gemini`, `xai` → `grok`. Update the config.
+- `copilot`, `cursor`, `pi`, `antigravity` and `opencode` have no aliases. The model vendor a lane runs (a Claude model through Copilot, say) never changes the provider identity.
+- The cross-repo Worker executor runs only `claude`, `codex`, `gemini` and `grok`. A Worker-routed step naming another lane is refused rather than re-pointed.
 
 ### Resolution precedence
 
-Provider selection is **three composed steps**, not one. Describe them precisely — the inline `provider` on an activity is the *template baseline*, **not** an explicit override that outranks the crew.
+**Which crew a task dispatches.** The first tier that is set wins:
 
-**1 — Which crew is dispatched** (`resolve_crew_for_task`). The crew *name* is chosen by the Constellation provider-resolution precedence (contract §3), first non-empty tier wins:
+1. **explicit**: `--crew` or run-input `crew`.
+2. **task_config**: `task.crew`. Tasks normally get this at creation (see [pools](#automatic-crew-pools-by-complexity)).
+3. **workspace_default**: `workflow.default_crew`.
+4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus` and `codex` selects `sol` when defined, and any other ID selects the same-named crew. It never overrides a configured `default_crew`.
+5. **system_default**: the `opus` crew, or a legacy `claude` crew.
 
-1. **explicit** — `--crew` flag / run-input `crew`.
-2. **task_config** — `task.crew` on the task artifact.
-3. **workspace_default** — `[workflow].default_crew` in `config.toml`.
-4. **environment_default** — the `CONSTELLATION_DEFAULT_PROVIDER` environment variable (a canonical provider id, which names the same-named single-family crew).
-5. **system_default** — the canonical baseline (see below).
+**Which crew an activity uses.** A non-empty `crew` in the activity's rendered input, otherwise the run's crew. Activity and job assets that declare `role` are rejected.
 
-**2 — Which crew an activity uses.** A non-empty `crew` in the activity's rendered input selects that named crew. Without one, the activity uses the run's resolved crew from step 1. This is the only activity-authoring routing mechanism. Activity and job assets that declare `role` are rejected with guidance to pass `crew` in the activity input instead.
-
-**3 — The activity crew's assignment overrides the inline baseline** (`resolve_from_config`). For each `(provider, model, effort)` field independently: the selected crew value wins **when present**; otherwise the activity's inline `agent_loop` value stands. A crew assignment that omits a field (or whose `provider` string is unparseable) leaves the inline baseline in place — so a config typo never coerces dispatch onto a wrong runtime. This is also why **persisted provider identity is never re-defaulted** during reconciliation: a provider already frozen on a run record is reused verbatim, not reset to the enum default.
-
-### The one setting that changes the default — `CONSTELLATION_DEFAULT_PROVIDER`
-
-`CONSTELLATION_DEFAULT_PROVIDER` occupies the **environment_default** tier (4) — below any explicit / task / workspace choice, above the persisted baseline. Setting it to a canonical id (or a deprecated alias, which normalizes) re-defaults **every otherwise-defaulted resolution path at once**, without editing any repo or per-workspace config; a path that already made a higher-precedence choice is deliberately unaffected. Because Orbit seeds `[workflow].default_crew` on `orbit init`, a normally-configured workspace resolves at the workspace tier, so the env lever governs paths that reach resolution without a configured crew and **never overrides a configured `[workflow].default_crew`**.
-
-> **System default.** The canonical Constellation system default is `claude`. When no higher tier selects a crew, Orbit dispatches the same-named `claude` crew. Existing workspaces whose `[workflow].default_crew` is `codex` retain that higher-precedence configured choice; the system fallback does not rewrite workspace configuration.
+**Crew over inline baseline.** For each of `provider`, `model` and `effort`, the selected crew's value wins when present, and otherwise the activity's inline `agent_loop` value stands. An unrecognized crew `provider` is logged and falls back to the inline provider, so a typo never moves dispatch onto a different runtime. A provider already recorded on a run is reused verbatim on reconciliation.
 
 ### No silent fallback
 
-Explicit selections that are unsupported or unavailable **fail with a stable diagnostic and never fall back** to a different runtime:
+Explicit selections that cannot run fail with a stable diagnostic and never fall back to another runtime:
 
-- `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)` — a CLI-executable dispatch selected an HTTP-only provider.
-- `provider ollama is unsupported by the Orbit CLI entry point` — a known provider is outside this entry point's capability set.
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode — no CLI runtime registered` — the provider string did not resolve to a canonical id.
-
-An **unrecognized `[crews.<name>].provider` value** is the one non-fatal case: it is logged (`orbit.config.crew` warn) and that field falls back to the activity's inline `provider`, because a config typo should not coerce dispatch onto a wrong runtime — the inline value is the known-good identity, not a default guess.
+- `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)`
+- `provider ollama is unsupported by the Orbit CLI entry point`
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode`
+- A selected lane whose binary is missing fails with a permanent diagnostic naming the binary.
 
 ---
+
+## Provider CLI notes
+
+Common to every lane below: Orbit passes `--model` from the crew, sends the prompt on **stdin** (never argv, which is visible in process listings and audit), and treats the Orbit OS sandbox as the filesystem boundary. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment), and Orbit never puts a key on argv. Provider-specific write grants apply only while that provider is running. Lanes without native MCP (or without Orbit-managed MCP config) reach Orbit tools with `orbit tool run <tool> --input '<json>'` through their shell tool, under the same grants.
 
 ## GitHub Copilot CLI
 
-Orbit dispatches Copilot through the **standalone `copilot` CLI** (npm package
-`@github/copilot`), which provides a non-interactive programmatic mode.
+| | |
+|---|---|
+| Install | `npm install -g @github/copilot`, then `copilot --version`. The retired `gh copilot` extension is not supported. |
+| Auth | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, else the `copilot /login` session (macOS keychain item `github-copilot-app`). Orbit forwards none of the token variables unless you list one in `pass`. The recommended Mac setup is `/login` once. |
+| Model | `--model` is always passed, so `COPILOT_MODEL` and the CLI's saved `/model` are ignored. List IDs with `/model` inside `copilot`, and recheck pins after upgrading the CLI. |
+| Flags | `--allow-all-tools --no-ask-user --output-format json`. Never `--allow-all`/`--yolo`, which would widen paths and URLs. |
+| Sandbox | Write: `COPILOT_HOME` (default `~/.copilot`) and `$XDG_CACHE_HOME/copilot`. macOS: read `~/Library/Keychains`. No access to `~/.config/gh`. |
 
-> **The retired `gh-copilot` extension is not supported.** `gh copilot` was a
-> shell-command *suggester*, not an agent: it could not edit files or run a
-> turn to completion, so it cannot satisfy Orbit's completion-envelope
-> contract. Orbit never probes for it, never dispatches to it, and installing
-> it does not make the `copilot` provider available.
-
-### Installation
-
-```sh
-npm install -g @github/copilot
-copilot --version
-```
-
-`orbit init` detects the `copilot` binary on `PATH` and offers the `copilot`
-crew. Detection is by binary presence only — see
-[Authentication](#authentication) for what a *working* run additionally needs.
-
-### Organization-policy prerequisites
-
-Copilot is organization-governed, and its policy checks happen server-side
-after the CLI starts. Two failures are common and are **not** Orbit
-misconfiguration:
-
-- **No Copilot entitlement.** The CLI exits non-zero with
-  `Error: Authentication failed` and advises checking the token's
-  `Copilot Requests` permission. Orbit reports the step as failed; it never
-  falls back to another provider.
-- **Third-party MCP servers disabled by policy.** The CLI emits a
-  `session.warning` frame with `warningType: "policy"` and continues with
-  built-in servers only.
-
-Both require a change by the GitHub organization administrator, not by Orbit.
-
-### Authentication
-
-Copilot resolves credentials in this documented order:
-
-1. `COPILOT_GITHUB_TOKEN`
-2. `GH_TOKEN`
-3. `GITHUB_TOKEN`
-4. Otherwise the session stored by `copilot /login`. On macOS that session is
-   the login-keychain item `github-copilot-app`, not a file under
-   `COPILOT_HOME`. `COPILOT_HOME` (default `$HOME/.copilot`) still holds CLI
-   configuration, session history, `mcp-config.json`, and logs.
-
-**Orbit does not forward those token variables on the provider's behalf.**
-Agent subprocesses get an allowlist-composed environment, and credentials are
-admitted only when an operator names them, so an unrelated `GITHUB_TOKEN` left
-in the environment cannot be silently borrowed by a Copilot run. To skip the
-macOS keychain and use token-based authentication, add the variable explicitly:
-
-```toml
-[execution.env]
-pass = ["COPILOT_GITHUB_TOKEN"]
-```
-
-Token *values* are never logged, recorded in audit argv, or included in error
-messages. The recommended setup on a Mac is `copilot` `/login` once on the
-host, which needs no token in the environment at all; Orbit's Copilot sandbox
-profile re-allows `$HOME/Library/Keychains` reads so that item is visible.
-
-`COPILOT_HOME` is forwarded to the provider subprocess and is also what the
-sandbox grants, so the directory the CLI writes to and the directory Orbit
-allows cannot drift apart.
-
-### Model selection
-
-Orbit always passes `--model` explicitly, from the crew assignment. Without it
-the CLI would fall back to `COPILOT_MODEL` or its own persisted `/model`
-choice, which would make a run's model depend on ambient operator state rather
-than on configuration.
-
-```toml
-[crews.copilot]
-model = "claude-sonnet-5"
-provider = "copilot"
-```
-
-Copilot routes to several vendors' models (`claude-*`, `gpt-*`, `gemini-*`).
-**The provider identity stays `copilot` regardless.** A crew running
-`gpt-5.4` through Copilot is a `copilot` run, not a `codex` run: the execution
-lane, its authentication, its policy, and its sandbox grants are Copilot's.
-Start `copilot` and enter `/model` to list the ids the authenticated account
-currently allows. Orbit's Sonnet default and Haiku system-crew pin were checked
-against Copilot CLI 1.0.84; repeat that account-visible catalog check whenever
-the Copilot CLI is upgraded, then update affected `crews.<name>.model` pins.
-
-### Sandbox and permissions
-
-Orbit's activity sandbox remains the security boundary. The shipped executor
-passes `--allow-all-tools` so the agent does not block waiting for approval,
-together with `--no-ask-user`. It deliberately does **not** pass `--allow-all`
-or `--yolo`: those also imply `--allow-all-paths` and `--allow-all-urls`, which
-would widen the agent's reach past what the enclosing Orbit sandbox granted.
-
-When a Copilot executor is the active provider, the sandbox additionally grants
-write access to `COPILOT_HOME` (default `$HOME/.copilot`) and to the launcher's
-package-extraction cache (`$XDG_CACHE_HOME/copilot`, default
-`$HOME/.cache/copilot`). Those grants are **gated on Copilot being the provider
-actually running** — other providers do not inherit them.
-
-Copilot is not granted read access to the GitHub CLI's credential store
-(`~/.config/gh`). On macOS, the confined Copilot profile re-allows reads of
-`$HOME/Library/Keychains` so `/login` can see `github-copilot-app`;
-`/Library/Keychains` and `/System/Library/Keychains` stay denied, and an
-activity `denyRead` on the user keychain directory outranks the carve-out. To
-skip the keychain, pass `COPILOT_GITHUB_TOKEN` through `[execution.env].pass`.
-
-### Prompt transport
-
-The Orbit execution envelope is written to the agent's **standard input**, not
-passed as `-p <text>`. Both are supported by the CLI, but argv is visible in
-process listings and is recorded in Orbit's audit argv, so the prompt — which
-carries task context and instructions — must not travel there.
-
-Copilot's stdout is JSONL agent events (`--output-format json`). Orbit reads
-completion evidence only from model-authored frames; a run that emits no
-assistant message has not completed its contract, and Orbit fails the step
-rather than inferring success from the session control plane.
-
----
+An account without Copilot entitlement fails with `Error: Authentication failed`. Third-party MCP servers disabled by org policy produce a `session.warning` (`warningType: "policy"`). Both are fixed by the GitHub org admin, not in Orbit. A run with no assistant message fails the step.
 
 ## Cursor Agent CLI
 
-The `cursor` provider launches the local `cursor-agent` binary as an
-Orbit-supervised worker. Cursor cloud agents are not used.
-
-### Installation and detection
-
-Install and verify the supported local CLI using Cursor's documented command:
-
-```sh
-curl https://cursor.com/install -fsS | bash
-cursor-agent --version
-```
-
-Ensure the installed directory (normally `$HOME/.local/bin`) is on `PATH`
-before running `orbit init`. Fresh init detects `cursor-agent`, adds a
-`[crews.cursor]` assignment, and can choose it only after every previously
-supported family in the preference order. Selecting `cursor` when its binary
-is unavailable fails with a permanent diagnostic naming `cursor-agent`; Orbit
-never falls back to Codex or another model vendor.
-
-### Authentication and credential handling
-
-Cursor supports these local CLI authentication paths:
-
-1. Run `cursor-agent login` once and verify it with `cursor-agent status`.
-   On macOS the default store is the login keychain (`cursor-access-token` /
-   `cursor-refresh-token`). `$HOME/.cursor/auth.json` is used only when
-   `AGENT_CLI_CREDENTIAL_STORE=file` was set **at login**; setting that
-   variable later does not migrate an existing keychain session. The CLI picks
-   its store from that variable on every run, so a file-store login also has to
-   reach the agent subprocess — the child environment is cleared, and an
-   unlisted name is absent:
-
-   ```toml
-   [execution.env]
-   pass = ["AGENT_CLI_CREDENTIAL_STORE"]
-   ```
-
-   Orbit's Cursor sandbox profile re-allows `$HOME/Library/Keychains` reads, so
-   the default keychain login needs neither of those.
-2. Generate a Cursor user API key and explicitly pass `CURSOR_API_KEY` to the
-   agent subprocess:
-
-   ```toml
-   [execution.env]
-   pass = ["CURSOR_API_KEY"]
-   ```
-
-Orbit deliberately does not add `CURSOR_API_KEY` to the provider's required
-environment and never places a key in argv. Credential values therefore do
-not enter task artifacts, audit argv, transcripts, or spawn errors; the
-operator must opt in through the same child-environment policy used by other
-secrets. Login itself is an unsandboxed setup action, not part of a workflow
-turn.
-
-### Model selection
-
-Every Cursor invocation receives `--model <id>` from its crew assignment. The
-shipped crew uses the model id shown by the current CLI help, `gpt-5`:
-
-```toml
-[crews.cursor]
-model = "gpt-5"
-provider = "cursor"
-```
-
-Use `cursor-agent models` (or `cursor-agent --list-models` on versions that
-advertise that flag) to inspect the ids available to the logged-in account.
-Choosing an Anthropic, OpenAI, Google, or Cursor model never changes the
-provider identity: the run remains a `cursor` run with Cursor authentication,
-state, audit attribution, and sandbox policy.
-
-### Headless execution, output, and sandbox
-
-The shipped direct-agent executor uses `--print --force --output-format json`.
-Print mode is non-interactive, `--force` lets the agent apply edits and commands
-without blocking for approval, and the enclosing Orbit macOS/Linux sandbox
-remains authoritative. The flag cannot grant a path the OS sandbox denied.
-
-The Orbit prompt travels on standard input, never as a positional argument.
-On success, Cursor emits one JSON object with `type: "result"`,
-`subtype: "success"`, `is_error: false`, and the assistant response in its
-`result` string. Orbit validates that terminal wrapper before reading the inner
-response envelope. A non-zero exit, malformed object, missing field, non-string
-result, or absent Orbit completion envelope fails closed.
-
-Only an active Cursor executor receives write access to `$HOME/.cursor` for
-CLI settings, permissions, and sessions. That directory is not the default
-macOS login store. Other providers do not inherit the write grant. The
-worktree and all other paths remain governed by the activity filesystem
-profile.
-
----
+| | |
+|---|---|
+| Install | `curl https://cursor.com/install -fsS \| bash`, then `cursor-agent --version`. Put `~/.local/bin` on `PATH`. Cloud agents are not used. |
+| Auth | `cursor-agent login` (check with `cursor-agent status`), stored in the macOS login keychain by default. A file-store login (`AGENT_CLI_CREDENTIAL_STORE=file` at login) also needs `pass = ["AGENT_CLI_CREDENTIAL_STORE"]`. Alternatively `pass = ["CURSOR_API_KEY"]`. |
+| Model | `cursor-agent models` (or `--list-models`). |
+| Flags | `--print --force --output-format json`. The terminal `{"type":"result","subtype":"success","is_error":false,"result":…}` object is validated before the envelope is read. |
+| Sandbox | Write: `~/.cursor`. macOS: read `~/Library/Keychains`. |
 
 ## Pi CLI
 
-The `pi` provider launches the local `pi` binary (npm package
-`@earendil-works/pi-coding-agent`) as an Orbit-supervised worker. Everything
-below was verified against **Pi 0.85.1**: the README option tables,
-`src/cli/args.ts`, `src/modes/print-mode.ts`, and `docs/json.md`.
+| | |
+|---|---|
+| Install | `npm install -g @earendil-works/pi-coding-agent`, then `pi --version`. |
+| Auth | `/login` in an interactive `pi` session (stored under `$PI_CODING_AGENT_DIR`, default `~/.pi/agent`), or a vendor key via `pass`. Orbit never renders `--api-key`. |
+| Model | `--model` takes a pattern that may carry a vendor prefix (`openai/gpt-4o`). List with `pi --list-models`. `effort` renders as `--thinking <level>`. |
+| Flags | `--mode json --no-session --no-approve --offline`: ephemeral sessions, no inherited project trust (so project-local `.pi` extensions don't run, while `AGENTS.md`/`CLAUDE.md` still load), and no startup network calls. |
+| Sandbox | Write: `$PI_CODING_AGENT_DIR`, else `~/.pi`. |
 
-### Installation and detection
-
-```sh
-npm install -g @earendil-works/pi-coding-agent
-pi --version
-```
-
-Ensure the install directory is on `PATH` before running `orbit init`. Fresh
-init detects `pi`, adds a `[crews.pi]` assignment, and can choose it only after
-every previously supported family in the preference order. Selecting `pi` when
-its binary is unavailable fails with a permanent diagnostic naming `pi`; Orbit
-never falls back to another provider.
-
-### Authentication and credential handling
-
-Pi supports two local authentication paths, and Orbit changes neither:
-
-1. Run `pi` once interactively and authenticate with its `/login` command. The
-   resulting credentials live under Pi's agent directory
-   (`$PI_CODING_AGENT_DIR`, default `$HOME/.pi/agent`).
-2. Export a vendor API key and explicitly pass it to the agent subprocess:
-
-   ```toml
-   [execution.env]
-   pass = ["ANTHROPIC_API_KEY"]
-   ```
-
-Orbit never renders Pi's `--api-key` flag and adds no `*_API_KEY` to the
-provider's required environment, so credential values do not enter task
-artifacts, audit argv, transcripts, or spawn errors. The operator opts in
-through the same child-environment policy used by every other secret. Logging
-in is an unsandboxed setup action, not part of a workflow turn.
-
-### Model and thinking selection
-
-Every Pi invocation receives `--model <pattern>` from its crew assignment.
-`--model` takes a *pattern*, which may carry a `provider/id` prefix, so the
-underlying vendor is selected inside the model string rather than through a
-second Orbit knob:
-
-```toml
-[crews.pi]
-model = "sonnet"
-provider = "pi"
-
-# Or pin the vendor explicitly:
-# model = "openai/gpt-4o"
-```
-
-Run `pi --list-models` to inspect the ids available to the authenticated
-account. **Choosing an Anthropic, OpenAI, or Google model never changes the
-provider identity**: the run remains a `pi` run with Pi authentication, state,
-audit attribution, and sandbox policy. Correspondingly, `anthropic`, `openai`,
-`google`, and `xai` remain deprecated aliases for *other* Orbit lanes and never
-resolve to `pi`.
-
-A crew `effort` is rendered as Pi's `--thinking <level>`. Pi validates that flag
-against a fixed, model-independent set — `off, minimal, low, medium, high,
-xhigh, max` — and rejects anything else with a diagnostic instead of ignoring
-it. Orbit's crew vocabulary (`low, medium, high, xhigh, max`) is a strict subset
-of that set, so every admissible crew effort reaches the CLI intact and an
-inadmissible one is refused at config load. Orbit renders `--thinking` as its
-own flag rather than using Pi's `<model>:<thinking>` shorthand, so the two crew
-fields stay independently readable in argv and audit records. Omitting `effort`
-omits the flag and leaves Pi's own default in place.
-
-### Headless execution, output, and session isolation
-
-The shipped direct-agent executor uses
-`--mode json --no-session --no-approve --offline`:
-
-- `--mode json` is Pi's non-interactive JSONL event stream.
-- `--no-session` makes every Orbit invocation an ephemeral session. Without it
-  Pi writes a session JSONL per run under its agent directory, and a later
-  `--continue` could resurrect one run's context inside another.
-- `--no-approve` denies project trust for the run rather than inheriting an
-  ambient decision from `~/.pi/agent/trust.json` or `defaultProjectTrust`. Pi
-  executes project-local `.pi` extensions once a checkout is trusted, and a
-  managed worktree is repository content Orbit does not vouch for. Context files
-  (`AGENTS.md` / `CLAUDE.md`) load *before* the trust decision, so repository
-  instructions still reach the agent. An operator who wants project-local Pi
-  resources overrides this on their own executor definition.
-- `--offline` suppresses Pi's startup network calls — the `pi.dev` version
-  check, package update checks, and the install/update telemetry ping. Model API
-  traffic is unaffected. Orbit sends no other outbound message on Pi's behalf.
-
-The Orbit prompt travels on standard input, never as a positional argument: Pi
-merges piped stdin into the initial prompt in every non-interactive mode.
-
-Orbit reads only terminal assistant `message_end` frames — the event Pi documents
-as the final authoritative message. The latest such frame controls completion:
-Orbit takes its `text` content blocks only when it is a clean answer, while a
-later failed, empty, or malformed assistant terminal frame invalidates earlier
-completion evidence. Everything else is dropped before any protocol read. That
-reduction is a correctness requirement, not tidying: Pi's `agent_end` frame
-replays the entire conversation including the user turn, and every Orbit prompt
-embeds a literal example response envelope, so a reverse envelope scan over the
-raw stream could read Orbit's own instructions back as the agent's completion
-evidence. `thinking` and `toolCall` blocks are dropped for the same reason. A
-non-zero exit, malformed JSONL, a `stopReason` of `error`/`aborted`, a stream
-with no terminal frame, or an absent Orbit completion envelope all fail closed.
-
-Because the reduction drops Pi's streaming control plane, Orbit does **not**
-claim provider-reported token usage for a Pi run; the invocation trace carries
-only what the Orbit response envelope itself declares. The raw stdout and stderr
-captures are still written to the audit blob store unmodified, so the full
-session log — including Pi's own authentication and policy diagnostics — remains
-available to an operator.
-
-### Tool integration: no native MCP
-
-**Pi ships no MCP client** ("No MCP" is an explicit design position in its
-README; MCP support would have to come from a third-party extension). Orbit does
-not inject one and does not claim to.
-
-This costs nothing for Orbit's own tools. A Pi run reaches them the same way
-every CLI agent path does: Orbit puts the dispatching `orbit` binary first on
-the child's `PATH` and exports `ORBIT_BIN`, and the execution envelope instructs
-the agent to call `orbit tool run <tool.name> --input '<json>'` through Pi's
-built-in `bash` tool. The same allowlist and caller-role gates apply as on the
-MCP surface, so the activity's tool grant is enforced identically.
-
-The practical limits, stated plainly:
-
-- Pi cannot receive an MCP-native tool schema, so tool discovery is what the
-  envelope names rather than a protocol-level list.
-- `orbit mcp setup` has no Pi client to configure and does not offer one.
-- An activity that grants `proc.spawn` must keep `bash` available; a crew that
-  narrowed Pi's tools with `--tools`/`--no-tools` on a custom executor
-  definition would cut off the Orbit tool path entirely.
-
-### Sandbox
-
-Only an active Pi executor receives write access to Pi's agent directory —
-`$PI_CODING_AGENT_DIR` when set, otherwise `$HOME/.pi` — for login credentials,
-settings, saved trust decisions, installed packages, and session state. Other
-providers do not inherit that grant, and Pi does not inherit theirs. The
-worktree and all other paths remain governed by the activity filesystem profile;
-Pi has no OS-level sandbox flag of its own, so the enclosing Orbit
-macOS/Linux sandbox is the only filesystem boundary and remains authoritative.
-
----
+Pi has no MCP client, and `orbit mcp setup` offers none. Keep Pi's `bash` tool available, because Orbit tools go through it. Orbit reads completion only from the final assistant `message_end` frame, and reports no provider token usage for Pi runs. Raw output is still kept in the audit blob store.
 
 ## Antigravity CLI
 
-The `antigravity` provider launches the local `agy` binary as an
-Orbit-supervised worker. This is Google's current terminal agent after the
-Gemini CLI transition for individual accounts (2026-06-18). It is **not** a
-rename of the `gemini` executor: the protocol, flags, MCP config, and model
-slugs are different.
+`antigravity` launches `agy`, Google's current terminal agent. It is a separate lane from `gemini` (the legacy Gemini CLI), with different flags, MCP config and model slugs. `gemini-*` models still attribute to the Gemini model family.
 
-Gemini remains a **model family**. `gemini-*` model ids still attribute as
-`gemini`. `provider = "gemini"` still means the legacy Gemini CLI, which
-enterprise Gemini Code Assist and API-key deployments continue to support.
-Do not treat every Gemini API deployment as shut down.
+| | |
+|---|---|
+| Install | See the [Antigravity CLI docs](https://www.antigravity.google/docs/cli/headless/), then `agy --version` and `agy models`. Init prefers it over `gemini` when both are present. |
+| Auth | One interactive `agy` login, cached under `~/.gemini/antigravity-cli/`. An unauthenticated headless run exits with `authentication required`. |
+| Model | A slug from `agy models`. `effort` accepts `low`/`medium`/`high` only. To migrate a `provider = "gemini"` crew, change the provider and switch to an `agy models` slug. |
+| Flags | `--input-format stream-json --output-format stream-json --dangerously-skip-permissions`, plus `--print-timeout` set to the activity deadline minus 30 s (a shorter custom value is kept). Don't add `agy --sandbox` or Gemini CLI flags. |
+| Sandbox | Write: `~/.gemini` (shared with the Gemini CLI). |
+| MCP | `~/.gemini/config/mcp_config.json` or `.agents/mcp_config.json`, not `.gemini/settings.json`. |
 
-### Installation and detection
-
-Install from [Antigravity CLI](https://www.antigravity.google/docs/cli/headless/)
-and verify:
-
-```sh
-agy --version    # this change was verified against 1.1.27
-agy models
-```
-
-Ensure the installed directory is on `PATH` before `orbit init`. Fresh init
-detects `agy`, adds a `[crews.antigravity]` assignment, and prefers it over
-the legacy Gemini CLI when both binaries are present. Selecting `antigravity`
-when `agy` is missing fails with a permanent diagnostic naming `agy`; Orbit
-never falls back to `gemini` or another vendor.
-
-### Authentication and credential handling
-
-Authenticate once with an interactive `agy` session. Headless runs use that
-cached login under `$HOME/.gemini/antigravity-cli/`. Orbit never runs `agy`
-login, never rewrites credentials, and does not pass API keys on argv. A
-non-interactive run that is not already authenticated exits with an
-`authentication required` error instead of hanging. Permission denials in
-headless mode are printed to stderr and name the tool plus how to allow it.
-
-### Model and effort
-
-Every Antigravity invocation receives `--model <slug>` from its crew. The
-shipped crew uses a slug from `agy models`:
-
-```toml
-[crews.antigravity]
-model = "gemini-3.8-flash-high"
-provider = "antigravity"
-```
-
-Official headless docs list `--effort low|medium|high`. `xhigh` and `max` fail
-closed with migration guidance; they are not dropped or remapped. Bare Gemini
-CLI ids such as `gemini-3.8-flash` also fail closed: use a slug from
-`agy models`. Unknown `--model` values fail at the CLI rather than falling
-back. Running a Claude or GPT slug through `agy` does not change the
-execution-lane identity: the run remains `antigravity`.
-
-Migrate an old crew with `provider = "gemini"` by changing the provider to
-`antigravity` and the model to a current `agy models` slug. Customized
-`gemini` executor definitions and credentials are left intact.
-
-### Headless execution, output, MCP, and sandbox
-
-The shipped executor uses `--input-format stream-json --output-format
-stream-json --dangerously-skip-permissions`. The Orbit prompt is one
-documented stdin `user` event, then stdin is closed, so the envelope never
-enters argv. `--dangerously-skip-permissions` is the unattended analog of
-interactive Ask; Orbit's OS sandbox remains the filesystem/network boundary.
-Do not copy Gemini CLI flags (`--approval-mode yolo`, `-o json`,
-`--allowed-mcp-server-names`). Do not pass `agy --sandbox`; the outer Orbit
-sandbox is authoritative.
-
-`agy --print-timeout` defaults to five minutes. Orbit always passes an
-explicit `--print-timeout` derived from the remaining activity wall-clock
-deadline minus a 30-second shutdown margin, so a three-hour activity is not
-cut off at five minutes. A custom executor that already sets the flag keeps a
-shorter value and is capped if it exceeds the derived budget; the flag is
-never duplicated. Orbit's outer process timeout and cleanup remain
-authoritative if the CLI ignores the flag.
-
-On success `agy` emits a terminal `result` with `status: "SUCCESS"`, the
-assistant text in `response`, and token counts in `usage`. Orbit rejects
-`ERROR` / malformed / missing terminal objects as missing completion evidence.
-When `agy` exits non-zero with empty stderr and a terminal `ERROR` (for
-example `timeout waiting for response`), Orbit surfaces that bounded, redacted
-`error` string in run/task diagnostics and does not copy `response` or prompt
-text into the message.
-MCP for Antigravity is configured at `~/.gemini/config/mcp_config.json`
-(home) or `.agents/mcp_config.json` (workspace), not the legacy Gemini
-`.gemini/settings.json` `mcpServers` map.
-
-`$HOME/.gemini` is already a sandbox write grant (shared with the legacy
-Gemini CLI). Other providers do not receive extra Antigravity-only roots.
-
----
+A terminal `result` with `status: "SUCCESS"` completes the step. On a non-zero exit with a terminal `ERROR`, Orbit surfaces the bounded, redacted `error` string.
 
 ## OpenCode CLI
 
-The `opencode` provider launches the local `opencode` binary as an
-Orbit-supervised worker. Everything below was verified against **opencode
-1.18.29**: the published [CLI reference](https://opencode.ai/docs/cli/) and the
-upstream `packages/opencode/src/cli/cmd/run.ts` and
-`packages/core/src/global.ts` sources. OpenCode's hosted/served modes
-(`opencode serve`, `--attach`, `opencode web`) are not used.
+| | |
+|---|---|
+| Install | `opencode --version`, then `opencode models`. Served modes (`serve`, `--attach`, `web`) are not used. |
+| Auth | `opencode auth login` (stored in `auth.json` under `$XDG_DATA_HOME/opencode`), or a vendor key via `pass`. |
+| Model | Must be a fully qualified `<vendor>/<model>`, for example `anthropic/claude-sonnet-4-5`. `effort` renders as `--variant` and accepts `high`/`max` only. |
+| Flags | `run --format json --auto`. `--auto` is required unattended (without it every permission request is auto-rejected) and is not a security boundary. `--continue`, `--session` and `--share` are never passed. |
+| Sandbox | Write: `$XDG_DATA_HOME/opencode`, the config root (`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`), `$XDG_STATE_HOME/opencode` and `$XDG_CACHE_HOME/opencode`. |
 
-### Installation and detection
-
-```sh
-opencode --version   # this change was verified against 1.18.29
-opencode models
-```
-
-Fresh init detects `opencode`, adds a `[crews.opencode]` assignment, and can
-choose it only after every previously supported family in the preference order,
-so adding this lane cannot change what an already-provisioned host picks.
-Selecting `opencode` when its binary is unavailable fails with a permanent
-diagnostic naming `opencode`; Orbit never substitutes another provider.
-
-### Authentication and credential handling
-
-OpenCode supports two local authentication paths, and Orbit changes neither:
-
-1. Run `opencode auth login` once. The resulting credentials live in
-   `auth.json` under OpenCode's XDG **data** directory — `$XDG_DATA_HOME/opencode`,
-   default `$HOME/.local/share/opencode`.
-2. Export a vendor API key and explicitly pass it to the agent subprocess:
-
-   ```toml
-   [execution.env]
-   pass = ["ANTHROPIC_API_KEY"]
-   ```
-
-Orbit adds no `*_API_KEY` to the provider's required environment and never puts
-a credential on argv. An interactive `opencode auth login` is a separate,
-unsandboxed setup action that no Orbit workflow turn performs.
-
-### Model and variant selection
-
-Every OpenCode invocation receives `--model <provider>/<model>` from its crew
-assignment. The coordinate must be **fully qualified**: OpenCode splits on the
-first `/` and looks the leading segment up in its own provider catalog, so a
-bare model id does not resolve.
-
-```toml
-[crews.opencode]
-model = "anthropic/claude-sonnet-4-5"
-provider = "opencode"
-effort = "high"
-description = "OpenCode through its local CLI"
-tags = ["implementation"]
-```
-
-The crew chooses the `opencode` executor. The `anthropic/` prefix names the
-**model vendor inside the OpenCode lane** and **never changes the provider
-identity**: the run remains an `opencode` run for its authentication, state
-directories, audit attribution, and sandbox policy. Orbit renders no separate
-provider flag, and `anthropic`, `openai`, and `google` continue to resolve to
-their own executors rather than to `opencode`. Run `opencode models` to inspect
-the coordinates available to the authenticated account.
-
-A crew `effort` is rendered as OpenCode's `--variant <value>`, documented as
-"model variant (provider-specific reasoning effort, e.g., high, max, minimal)".
-Because OpenCode forwards that value verbatim to whichever model provider
-`--model` selected and publishes no provider-independent vocabulary, Orbit
-admits only `high` and `max`. `low`, `medium`, and `xhigh` are **rejected at
-configuration load** with a diagnostic — they are not remapped onto `minimal` or
-`high`, and they are never silently dropped at spawn. Omitting `effort` omits
-the flag and leaves OpenCode's own default in place.
-
-### Headless execution, output, and permissions
-
-The shipped executor supplies only static non-interactive flags:
-
-- `run` is the non-interactive subcommand; without it the CLI starts its TUI.
-- `--format json` is OpenCode's raw event stream: one JSON object per line,
-  shaped `{type, timestamp, sessionID, ...}`.
-- `--auto` auto-approves permission requests that are not explicitly denied.
-  This is **required** for unattended runs: without it OpenCode *auto-rejects*
-  every request and the turn cannot touch the worktree. It is the documented
-  non-interactive analog of an interactive approval, **not** a security
-  boundary — see [Sandbox](#sandbox-1) below.
-
-`--continue`, `--session`, and `--share` are deliberately absent: the first two
-would let one run's context resurface inside another, and `--share` publishes
-the session. Every Orbit invocation is a fresh session.
-
-The Orbit prompt travels on standard input, never as a positional argument.
-OpenCode reads piped stdin whenever stdin is not a TTY and uses it as the whole
-message when no positional `[message..]` is supplied, which keeps the execution
-envelope out of process listings, audit argv, and spawn diagnostics.
-
-Orbit reads only the assistant `text` parts of the event stream, concatenated in
-order. Dropping the rest is a correctness requirement, not tidying: `tool_use`
-frames carry full tool input and output, so an agent that reads its own task
-record or echoes the prompt through a shell tool replays Orbit's own execution
-envelope — including the literal example envelope in the response contract —
-inside a tool payload, and `reasoning` frames are the model thinking aloud,
-where a draft envelope is not an answer. A terminal `error` event clears any
-answer text already accumulated, so a partially written envelope from before a
-failure cannot be projected as success. OpenCode also exits non-zero on session
-failure, and the v2 runner fails closed on a non-zero exit even when stdout
-contains success-looking JSON; exit status and envelope are independent
-evidence and both must be valid.
-
-Because the reduction drops OpenCode's `step_finish` frames, Orbit does **not**
-claim provider-reported token usage for an OpenCode run; the invocation trace
-carries whatever the Orbit response envelope itself declares. Full stdout and
-stderr are still captured in the run's audit record, so OpenCode's own
-diagnostics remain available for debugging. `--print-logs` is not passed;
-OpenCode writes logs to its data directory's `log/` tree.
-
-### Tool integration: MCP is not auto-configured
-
-OpenCode has a native MCP client configured through its own `opencode.json`.
-**Orbit does not write, merge, or manage that file**, and `orbit mcp setup` does
-not offer an OpenCode target. An operator who wants OpenCode's MCP client
-pointed at an Orbit server configures it themselves.
-
-This costs nothing for Orbit's own tools. An OpenCode run reaches them the same
-way every non-MCP lane does: the execution envelope directs the agent to call
-`orbit tool run <tool.name> --input '<json>'` through OpenCode's shell tool,
-using the `orbit` binary supplied on its `PATH`. Tool grants and caller-role
-gates are still enforced by `orbit tool run`, so the activity's scoped authority
-is unchanged. Two consequences follow:
-
-- OpenCode cannot receive an MCP-native tool schema for Orbit's tools, so tool
-  discovery is what the envelope states rather than a negotiated list.
-- The route depends on OpenCode's shell tool being available. An operator who
-  has disabled it on a custom executor or in `opencode.json` breaks Orbit tool
-  access for that lane.
-
-### Sandbox
-
-Only an active OpenCode executor receives write access to OpenCode's XDG roots:
-`$XDG_DATA_HOME/opencode` (default `$HOME/.local/share/opencode`, holding
-`auth.json`, the session and message stores, and logs), the config root
-(`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else
-`$HOME/.config/opencode`), `$XDG_STATE_HOME/opencode`, and
-`$XDG_CACHE_HOME/opencode`. All four are granted because OpenCode creates the
-data, config, and state roots during startup — before it ever reads Orbit's
-envelope. Other providers do not inherit that grant, and OpenCode does not
-inherit theirs.
-
-The worktree and all other paths remain governed by the activity filesystem
-profile. `--auto` cannot grant filesystem access the enclosing sandbox denies:
-the Orbit macOS/Linux sandbox is the only filesystem boundary and remains
-authoritative.
+Orbit does not write OpenCode's `opencode.json` MCP config, and `orbit mcp setup` has no OpenCode target. Orbit tools go through OpenCode's shell tool. Only assistant `text` parts are read, and a terminal `error` event or a non-zero exit fails the step. No provider token usage is reported.
 
 ---
 
 ## Per-task crew override
 
-`[workflow].default_crew` is the workspace fallback, not a global verdict. **Every task carries an optional `crew` field**, and `orbit run ship` resolves which crew to dispatch per task by the [resolution precedence](#resolution-precedence) above:
-
-1. explicit `--crew` / run-input `crew`, otherwise
-2. `task.crew` if set on the task artifact, otherwise
-3. `[workflow].default_crew` from `config.toml`, otherwise
-4. `CONSTELLATION_DEFAULT_PROVIDER` if set (environment tier), otherwise
-5. the canonical `claude` system-default crew.
-
-This means you can mix-and-match in a single ship run: route a tricky refactor to `claude` while routing routine cleanups to `codex` — both go through the same `orbit run ship` invocation, each picking its own crew at dispatch time. `orbit run ship` fans singleton child runs, so each task's `crew` is recorded on that child (`orbit run show` → `resolved_crew`) and used by `implement_one`. A single child pipeline whose `task_ids` name more than one distinct crew (or mix set and unset crews) fails closed rather than inheriting `[workflow].default_crew`.
+`workflow.default_crew` is only the fallback. Every task has an optional `crew` field, and `orbit run ship` resolves each task's crew by the [resolution precedence](#resolution-precedence), so one ship can mix crews. Each child run records its crew (`orbit run show` → `resolved_crew`). A single child pipeline whose tasks name different crews, or mix set and unset crews, fails rather than falling back to the default.
 
 ### Automatic crew pools by complexity
-
-Orbit can randomly select a crew for each task that has no explicit
-`task.crew`. The pools are the routing policy for every pipeline that carries a task —
-`orbit run auto`, `orbit run ship`, `orbit.workflow.ship`, and the
-`ship-sweep` routine alike — not just the unattended drain:
-
-```sh
-orbit run auto --medium-complexity-crews grok,terra
-```
-
-The equivalent configuration is:
 
 ```toml
 [workflow]
@@ -1012,453 +321,165 @@ hard_complexity_crews = ["astra"]
 xhard_complexity_crews = ["fable", "astra"]
 ```
 
-The tiers are `low`, `medium`, `hard` and `xhard`. `xhard` is the top tier: it
-exists to route the work judged worth the most capable — and most expensive —
-crews. The task pilot applies the complexity it assesses as-is, with one
-exception: a task that already carries `xhard` keeps that tier whatever the
-pilot recommends, so a scoping pass never demotes work out of the top pool —
-lowering it is an operator decision. To pin a crew outright, set `crew` on the
-task.
-
-A fresh `orbit init` scaffolds all four keys as `[]`. An empty pool is "no
-pool": a crew-less task of that complexity is routed to `workflow.default_crew`
-rather than failing, so the scaffold changes nothing until you name crews in
-it. `orbit config get workflow.low_complexity_crews` reads the empty pool back
-as `[]`.
+- **Crew is fixed when the task is created.** A task created without `crew` (via `orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, or an import) draws from the pool for its complexity, falling back to `default_crew`, and stores the result in `task.crew`. A `crew_assigned` history entry records the source: `explicit`, `pool:<complexity>` or `default`. A workspace with no crews configured leaves the field unset.
+- **Nothing re-routes afterward.** Status transitions never change `task.crew`, and neither does changing `--complexity`. Only [`task update --crew ""`](#setting-taskcrew) draws again.
+- **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
+- **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. Blank entries and unknown crew names fail before dispatch.
+- **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name.
+- **Legacy tasks.** At admission (drain or ship), a task still without a crew is routed through the pools as a fallback, and nothing is written back to the task.
+- **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that one pool for one drain, and the flag with no names disables it. `orbit run ship` has no override flags.
 
 #### Weighting a pool
-
-Each entry is written `name` or `name:weight`, so a pool can bias traffic
-without splitting workspaces:
 
 ```toml
 [workflow]
 low_complexity_crews    = ["luna:50", "sonnet:50"]
 medium_complexity_crews = ["grok:70", "opus:10", "sol:20"]
-hard_complexity_crews   = ["opus", "sol"]          # bare list = uniform
+hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 ```
 
-The grammar:
+- Weights are relative non-negative integers, so `["grok:7", "sol:3"]` gives the same odds as `["grok:70", "sol:30"]`.
+- A pool is either all bare or all weighted. Mixing them, or a suffix like `grok:-1` or `grok:2.5`, is an error. The same checks run at load, in `orbit config set`, and on the CLI flags.
+- Bare duplicates collapse to one ticket. A weighted pool names each crew once.
+- Weight `0` parks a crew, which is never drawn. At least one entry must weigh more than 0.
+- The draw walks the pool in canonical name order over `[0, total_weight)`.
 
-- Weights are relative non-negative whole numbers, not percentages. They need
-  not sum to 100; `["grok:7", "sol:3"]` and `["grok:70", "sol:30"]` draw the
-  same odds.
-- A pool is either all bare or all weighted. Mixing the two
-  (`["luna:50", "sonnet"]`) is a configuration error, as is a suffix that is
-  not a non-negative whole number (`grok:-1`, `grok:2.5`). The colon is
-  reserved by this grammar, so a crew may not be *named* with one either:
-  `[crews."gpt-5:codex"]` is refused where the crew is defined (see
-  [`[crews.<name>]`](#crewsname--which-provider-model-runs-the-task), and
-  [Repairing a config that already names a crew with a colon](#repairing-a-config-that-already-names-a-crew-with-a-colon)
-  for a config that already holds one).
-- A bare entry weighs one ticket, so a bare pool draws uniformly — exactly as
-  it did before weights existed. Bare duplicates still collapse to one ticket
-  per crew; a weighted pool names each crew once, and a repeat is an error.
-- Weight `0` parks a crew without deleting it from the pool: it is never
-  drawn. At least one entry must weigh more than `0`, or the pool is an error.
-- Entries are validated the same way wherever they are written — `config.toml`
-  at load, `orbit config set`, and the `--<tier>-complexity-crews` CLI
-  overrides — and the error names the setting.
+**Allowlists.** With `--allow-crew`, the draw renormalizes over the permitted members, preserving their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. The allowlist is checked against `task.crew`, and still applies to system and review activities at dispatch.
 
-The draw takes one ticket in `[0, total_weight)` and walks the pool in
-canonical name order, so `medium_complexity_crews = ["grok:70", "opus:10",
-"sol:20"]` sends 70% of unassigned medium work to `grok` and 10% to `opus`.
-
-Use `--low-complexity-crews`, `--medium-complexity-crews`,
-`--hard-complexity-crews`, and `--xhard-complexity-crews` for run overrides.
-Each provided CLI pool replaces only its matching configuration pool for that
-drain. They are `orbit run auto` options; a ship has no override flag and
-draws from configuration. Configuration arrays replace their corresponding
-global arrays when specified in the workspace file. Set/get/show use the same
-fields:
-
-```sh
-orbit config set workflow.medium_complexity_crews '["grok", "terra"]'
-orbit config get workflow.medium_complexity_crews
-orbit config show
-```
-
-For task admission — by a drain or by an ordinary ship — the order is an
-explicit run-input `crew`, an explicit task crew, the matching nonempty
-complexity pool, then the existing
-default crew resolution chain. Since a task now carries a crew from creation,
-the pool arm of that order is the fallback for records created before that
-behaviour existed. Low, medium, hard and xhard are the task
-complexity values; unset or `unassessed` complexity uses the default chain. An
-omitted pool inherits configuration; an absent or empty effective pool uses the
-default chain. `medium_complexity_crews = []` disables that configured pool;
-`orbit run auto --medium-complexity-crews` (with no names) disables it for one
-drain. Blank entries such as `""` and unknown crew names fail before dispatch.
-Names are trimmed and resolved against the configured registry; bare pools are
-deduplicated, so repeated entries never add draw weight.
-
-Pools are selection preferences. They do not install a crew allowlist or
-restrict manual assignments or explicit activity crews: a task with a
-`task.crew`, a run submitted with an explicit `crew`, and the system, review
-and preparation jobs all keep the crew they name, whichever pipeline admits
-them. When a separately supplied `--allow-crew` restricts the run, the draw
-renormalises over the pool's permitted members: their weights keep their
-ratios, and an excluded member's share is redistributed among them. A pool
-whose permitted members all weigh `0` has nothing to draw and counts as
-disjoint. A disjoint pool is ineligible
-and `orbit run readiness --allow-crew <crew>` diagnoses `crew_not_allowed`; an explicit task assignment
-outside the allowlist is also excluded. The allowlist still applies to system
-and review activities at dispatch.
-
-The admitting run captures the effective pools in run input
-`auto_crew_pools`: whichever of the drain, ship or delivery pipelines is
-submitted without a parent already carrying them freezes the policy, and every
-descendant inherits that frozen copy rather than re-reading configuration.
-Each admitted leaf records `crew` and `crew_selection`, including
-the task ID, complexity, source (`task.crew`, `run_input.<complexity>_complexity_crews`,
-`workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and the
-eligible pool as `[{name, weight}]` — the odds the draw actually ran on, after
-any allowlist renormalisation. Inspect these with `orbit run show <RUN_ID>`,
-which renders them on a `Crew Selection:` line. A pool captured before weights
-existed is stored as plain names and still resumes, each name weighing one
-ticket. Same-task pipeline children
-and retries/resumes retain the admitted selection even if configuration or
-the task assignment changes later. Different tasks, including a parent and its
-children, receive independent draws at their own admission.
-
-**Crew is fixed when the task is created.** A task created without a `crew` —
-by `orbit task add`, `orbit.task.add`, an auto-task mint whose template names
-no crew, or an import — draws one from the pool for its complexity, falling
-back to `default_crew`, and stores it in `task.crew` as part of the create.
-A `crew_assigned` history entry names the source: `explicit` for a crew the
-caller supplied (stored exactly as given), `pool:<complexity>` for a draw, or
-`default`. A workspace that configures no crew at all leaves the field unset.
-
-No status transition ever changes `task.crew`: approving, starting, blocking,
-retrying, re-queuing and completing all leave it byte-identical, and dispatch
-only reads it. The one post-creation re-route is
-[`task update --crew ""`](#setting-taskcrew), which is treated as "no crew
-supplied" and draws again for the task's complexity, with its own
-`crew_assigned` entry. Changing `--complexity` alone does not re-route —
-clear the crew when a re-draw is what you want.
-
-The pools are therefore consulted at creation (and on clear), not at dispatch.
-Admission still routes a crew-less task through them as a fallback for tasks
-created before this behaviour existed, but writes nothing back to the record;
-a run-window `--allow-crew` allowlist is checked against `task.crew`.
-`task.crew` is authoritative for every read surface (task list, task show,
-MCP, dashboard).
+**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, and descendants inherit that copy. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep the admitted selection.
 
 ### Setting `task.crew`
 
-Three equivalent surfaces:
-
 | Surface | How |
 |---|---|
-| **Web dashboard** | The crew dropdown on each task card (the chevron next to `default: <crew>` in [`orbit web serve`](../README.md#quick-start)) — selecting a crew calls `orbit.task.update` under the hood. |
-| **CLI** | `orbit task add --crew <name> …` at creation, or `orbit task update <id> --crew <name>` later. Omitting `--crew` at creation is not "no crew": the pools (then `default_crew`) assign one on the spot. Passing `--crew ""` to `task update` re-draws for the task's current complexity rather than leaving the field empty. |
-| **MCP / agent** | `orbit.task.add` and `orbit.task.update` accept a `crew` parameter; an empty string on update asks for a fresh draw the same way the CLI does. Useful when an agent is filing or amending tasks programmatically. |
-
-The dropdown label `default: codex` in the dashboard means *the task has no `crew` set* and will inherit `[workflow].default_crew`. Tasks created since crew assignment moved to creation time carry their own crew, so the label names it; the fallback label survives for older records and for workspaces that configure no crew. Picking a named crew writes it onto the task and the label updates accordingly.
+| Dashboard | The crew dropdown on each task card. The label `default: <crew>` means the task has no `crew` and inherits `default_crew`. |
+| CLI | `orbit task add --crew <name>`, or `orbit task update <id> --crew <name>`. Passing `--crew ""` to `update` re-draws for the current complexity. |
+| MCP | The `crew` parameter on `orbit.task.add` / `orbit.task.update`. An empty string on update re-draws. |
 
 ### What "ran" vs what "was selected"
 
-`orbit.task.show` returns both fields when a run exists:
-
-- `crew` — the task's own `crew` field (the *selection*).
-- `resolved_crew` + `crew_model` — what was actually dispatched (the *resolution*, including default-crew fallback). Pulled from the persisted job-run record so it stays accurate even if `default_crew` is edited later.
-
-`task.crew` is validated at write time, so you can't `orbit task add --crew <name>` with an unknown crew. The only way to end up with a stale task-level override is to delete a crew from `config.toml` after it was already written onto tasks. In that case `orbit run ship` fails fast at run start — before any agent dispatches and before the `JobRunStarted` event is emitted — so no work is wasted.
+`orbit.task.show` returns `crew` (the task's selection) and, once a run exists, `resolved_crew` plus `crew_model` (what was dispatched, read from the persisted run record). `task.crew` is validated on write. If you later delete a crew that tasks still name, `orbit run ship` fails at run start, before any agent dispatches.
 
 ---
 
 ## Sandbox write grants for the shared Cargo caches
 
-Both OS sandboxes — the macOS `sandbox-exec` profile and the Linux Bubblewrap
-namespace — confine an agent subprocess to its own worktree plus a named set of
-host paths. Cargo's download caches are on that set, so workers share one
-registry instead of re-downloading a dependency graph per run:
+Both OS sandboxes (macOS `sandbox-exec`, Linux Bubblewrap) let workers share one Cargo cache:
 
 | Path | Inside a worker |
 |---|---|
-| `$CARGO_HOME/registry` | read-write |
-| `$CARGO_HOME/git` | read-write |
-| `$CARGO_HOME/.package-cache`, `$CARGO_HOME/.package-cache-mutate` | read-write — cargo's own download locks |
-| `$CARGO_HOME/bin` | readable and executable, never writable |
+| `$CARGO_HOME/registry`, `$CARGO_HOME/git` | read-write |
+| `$CARGO_HOME/.package-cache`, `.package-cache-mutate` | read-write (cargo's download locks, so concurrent workers stay serialized) |
+| `$CARGO_HOME/bin` | read and execute, never write |
 | `$CARGO_HOME/credentials.toml`, `$CARGO_HOME/credentials` | read-denied |
-| `$CARGO_HOME` itself, `$CARGO_HOME/.global-cache` | read-only |
+| `$CARGO_HOME`, `$CARGO_HOME/.global-cache` | read-only |
 
-`$CARGO_HOME` resolves the way cargo resolves it: the variable when the child
-environment carries it (add it to `[execution.env].pass` to relocate the cache
-for workers), otherwise cargo's documented `$HOME/.cargo`.
-
-The grant reaches a worker whose `fsProfile` already grants some write
-(`implementer`, `unrestricted`, `docs_writer`, …). A profile whose `modify`
-rules are all negated — `reviewer`, `pure_compute` — keeps a fully immutable
-host and gets no cache grant, the same rule the global `~/.orbit/cache` root
-follows.
-
-**Why the caches are writable.** `cargo fetch` stores a downloaded `.crate`
-under `registry/cache`, unpacks it under `registry/src`, refreshes the index
-sidecar under `registry/index/<registry>/.cache`, and clones a git dependency
-under `git/`. With those paths read-only, a worker whose lockfile names a single
-crate the host has not cached yet fails its build with `failed to open
-.../registry/cache/<crate>.crate: Operation not permitted` (macOS) or
-`Read-only file system` (Linux) and exits 101. Nothing warns first: a fully warm
-cache needs no write at all, so the identical run succeeds on a host that
-happens to hold the crate, and fails the moment a lockfile moves. [ORB-12469]
-
-**Linux Landlock is a read boundary, not a write one.** The activity-scoped
-`proc.spawn` confinement handles `EXECUTE | READ_FILE | READ_DIR | REFER` and no
-write access right, so a scoped spawn could always populate the registry; what
-Landlock contributes is the *read* grant for `$CARGO_HOME` with the publish
-token carved back out. Write confinement on Linux is the Bubblewrap namespace,
-which binds the four cache paths above writable over its read-only bind of `/`.
-Both platforms therefore grant the same paths, for the same reason. On Linux a
-cache path that does not exist on the host is skipped rather than created —
-Bubblewrap cannot bind a missing source — which leaves cargo with the read-only
-cache it had before rather than a failed spawn.
-
-**What the grant is not.** `$CARGO_HOME/bin` stays read-only, so a worker cannot
-replace `cargo`, `rustc`, or any installed binary for the next run. The
-crates.io publish token is read-denied under both spellings; on macOS the deny
-is emitted after the profile's broad read allow, so it wins under SBPL's
-last-match-wins evaluation. `$CARGO_HOME/.global-cache`, cargo's cache-GC
-bookkeeping database, stays read-only; cargo skips that bookkeeping rather than
-failing the build.
-
-**Why the locks are granted.** Cargo treats a package-cache lock it cannot open
-as a read-only registry and continues *unlocked*. With the registry writable and
-the lock denied, concurrent workers would mutate one registry with no
-serialization; granting the two lock files keeps cargo's own single-writer
-protocol intact.
-
----
+- `$CARGO_HOME` is the child's variable if you pass it through `[execution.env].pass`, else `~/.cargo`.
+- The grant applies only to profiles that already grant some write (`implementer`, `unrestricted`, `docs_writer`, …). Read-only profiles such as `reviewer` and `pure_compute` get none.
+- On Linux, a cache path that doesn't exist on the host is skipped rather than created.
 
 ## Sandbox pseudo-tty allocation (macOS)
 
-The compiled macOS `sandbox-exec` profile includes `(allow pseudo-tty)` plus
-the device operations that Darwin requires to create and use a PTY:
-
-- `/dev/ptmx` is allowed for `file-read*`, `file-write*`, and `file-ioctl`.
-- A dedicated `/dev/ttys[0-9]+` slave-device read/write rule checks Seatbelt's
-  `com.apple.sandbox.pty` extension. The profile's broad `file-read*` and
-  `/dev` write grants also allow access without that extension.
-- `file-ioctl` is allowed on `/dev/ttys[0-9]+` so PTYs that existed before the
-  process entered the sandbox remain usable.
-
-Without these clauses, `openpty`/`posix_openpt` can fail with `EPERM` inside a
-worker even though the broad profile rules reach the device paths. A repository
-whose test suite opens a PTY (for example, a CLI smoke test that drives the
-binary through a real terminal) needs this complete grant to pass its full
-validation inside a worker.
-
-**Permission boundary.** The added allocation and ioctl permissions target
-PTY devices. The extension check on the dedicated read/write rule does not
-restrict the broader grants or confine access to PTYs created by the sandboxed
-process. Access to other PTYs remains subject to normal OS access checks.
-The Linux Bubblewrap sandbox
-needs no equivalent clause — its namespace does not gate `/dev/pts` behind a
-syscall-level policy the way SBPL does.
+The macOS profile allows `pseudo-tty`, `/dev/ptmx` (read, write, ioctl), and read, write and ioctl on `/dev/ttys[0-9]+`, so `openpty`/`posix_openpt` work inside a worker (for example, a test that drives a CLI through a real terminal). Access to other PTYs remains subject to normal OS checks. Linux needs no equivalent rule.
 
 ---
 
 ## `[execution.env]` — the agent subprocess environment
 
-Every agent subprocess — bare execution, the Linux Bubblewrap sandbox, and the
-macOS `sandbox-exec` sandbox alike — starts from a **cleared** environment and
-receives exactly four groups of variables, and nothing else:
+Every agent subprocess (bare, Bubblewrap or `sandbox-exec`) starts from a **cleared** environment and receives only:
 
 | Group | Contents |
 |---|---|
-| Baseline | `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `TZ`, `USER` — the minimum runtime context a provider CLI needs to start. `USER`/`LOGNAME` are resolved from the OS when the dispatching process has no login environment. |
-| `pass` | The names you list in `[execution.env].pass`. Default: `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (plus `__CF_USER_TEXT_ENCODING` on macOS). |
-| Provider extras | The variables the selected provider runtime declares it requires. |
-| Orbit envelope | Named execution-envelope variables Orbit actually exports — not every name that starts with `ORBIT_`. The set is run, task, and session identity (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`, `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`), locators (`ORBIT_ROOT`, `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`), activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, `ORBIT_TASK_ACTOR_KIND`). Privilege-bearing names in the same namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) are **not** admitted. `ORBIT_OPERATOR=1` remains the documented escape hatch for a non-interactive CLI or dashboard process that has no TTY; `orbit web serve --operator` grants the same operator capability through the server session without that env, and `orbit web connect` passes `--operator` by default (the SSH login is the operator act; `--no-operator` restores the previous read-only Operations surface). MCP is unchanged: `orbit mcp serve --operator` is the only operator path there, and `ORBIT_OPERATOR` in the MCP server's environment still grants nothing. `ORBIT_REGISTRY_ROOT` is emitted only for a managed child and locates the authoritative global registry without changing workspace discovery. `ORBIT_WORKSPACE` is the trusted logical `ws_*` selector for nested `orbit tool run` and `orbit mcp serve` calls; it is honored only with Orbit's managed marker and a nonblank `ORBIT_RUN_ID` or source-inspection `ORBIT_SESSION_ID`, and does not infer ownership from a linked-worktree cwd. An explicit `--workspace` or tool-payload selector still wins and still fails closed. The runner removes an inherited `ORBIT_ROOT` from that child: `ORBIT_ROOT` remains the operator-facing explicit data-root override, equivalent to `--root`, and pins global/shared/local roots when used on a direct command. The dispatching run's envelope values win over any inherited from an outer process. |
+| Baseline | `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `TZ`, `USER` |
+| `pass` | Names listed in `execution.env.pass`. Default: `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`, plus `__CF_USER_TEXT_ENCODING` on macOS. |
+| Provider extras | Variables the selected provider runtime declares it needs. |
+| Orbit envelope | Named `ORBIT_*` execution variables: run, task and session identity (`ORBIT_RUN_ID`, `ORBIT_TASK_ID`, `ORBIT_SESSION_ID`, …), locators (`ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_REGISTRY_ROOT`, …) and activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, …). Privilege-bearing names (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) are not admitted, and an inherited `ORBIT_ROOT` is removed. |
 
-A variable in none of those groups is **absent** from the child, whatever it is
-named. This is an allowlist, not a filter: Orbit does *not* forward "everything
-that does not look like a secret". A benignly named credential —
-`DATABASE_URL`, an internal service endpoint, a per-team API base URL — never
-reaches an agent subprocess unless you name it in `pass`. Agent subprocesses
-keep host network access, so this is the boundary that stops an accidental
-disclosure from becoming exfiltration.
+This is an allowlist, not a secret filter. A benignly named credential such as `DATABASE_URL` never reaches an agent unless you name it. Agents keep network access, so this is the boundary against accidental exfiltration.
 
 ```toml
 [execution.env]
 pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 ```
 
-Adding a name to `pass` forwards it *when the dispatching process holds it*; a
-listed name that is unset is simply absent rather than empty. `pass` replaces
-rather than extends the built-in default, so include the baseline names you
-still want, and keep credentials opt-in one at a time.
-
-`execution.env.inherit` is not a configurable key. It was removed in ORB-00365
-because a workspace `config.toml` could set `inherit = true` and — since
-workspace config *replaces* global for security keys — silently flip every
-agent subprocess to full inheritance. Inheritance is fixed off; a stale
-`inherit` key in a config file is accepted and ignored.
+- `pass` replaces the default instead of extending it, so restate the baseline names you want.
+- A listed name that is unset is absent, not empty. Names must be valid identifiers.
+- `pass` is a security key: a workspace file that omits it gets the built-in default, not the global value.
+- Inheriting the full environment is not configurable. A stale `execution.env.inherit` key is ignored.
 
 ---
 
-## `orbit plugin` and `.orbit/plugins.yaml` — machine installs, workspace pins
+## Other sections
 
-A plugin is one directory holding a `plugin.yaml` (`schemaVersion: 2`,
-`kind: Plugin`) that declares a namespace and a set of tools. The tools a
-plugin contributes register as `<ns>.<verb>`, are runnable with
-`orbit tool run <ns>.<verb>`, and — when the manifest gives them an
-`mcp_scope` — are advertised over MCP as `<ns>_<verb>`. See
-[the plugin standard](design/plugins/1_scope.md) for the full manifest.
+| Key | Default | What it does |
+|---|---|---|
+| `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. The file `orbit init` seeds sets `danger-full-access` globally. Security key, not inherited by a workspace file. |
+| `execution.codex.approval_policy` | unset | `untrusted`, `on-request` or `never`. Security key. |
+| `operation.review_policy` | `none` | Automatic review: `none`, `before-pr` (hold PR creation for a fresh reviewer, refused for local-only delivery) or `after-landing` (minted by the `delivery-code-review` auto-task with its own template crew). See [review-gate design](design/review-gate/2_design.md). |
+| `operation.review_crew` | unset | Reviewer crew for `before-pr`. |
+| `operation.review_reviewer_starts` | `2` | Fresh reviewer invocations per delivery candidate lineage (1–10). |
+| `operation.review_repair_cycles` | `2` | Repair/validation cycles per lineage (0–10). |
+| `operation.review_minutes` | `30` | Before-PR review, repair and final-validation minutes per lineage (1–1440). |
+| `tasks.id_start` | unset | Forward-only floor for this machine's task-ID allocator, raised on every runtime build and never lowered, so machines can hold disjoint ranges. For the first seed prefer `orbit workspace init --task-id-start N`. See [task migration](design/task-migration/1_overview.md). |
+| `automation.stall_window_minutes` | `60` | How long a delivery-automation consumer may sit on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) before a warning and one deduped friction (1–1440). Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). |
+| `scoring.enabled` | `true` | Record per-agent scoreboard metrics for task runs. |
+| `pr.task_url_template` | unset | URL template linking a task ID in PR descriptions. |
+| `runtime.log_retention_days` | `7` | Delete `~/.orbit/state/logs/orbit.jsonl` archives older than N days (≥ 1). |
+| `runtime.log_max_total_mb` | `500` | Total archive budget in MiB, pruned oldest first (≥ 1). |
+| `runtime.log_max_file_mb` | `100` | Roll the active log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
+| `plugin.legacy_callback_identity` | `false` | Deprecated. Also accept the environment token and process ancestry as a plugin callback credential. Removed next release. |
 
-**Installs are per machine; pins are per repository.** A plugin lives once
-under `~/.orbit/plugins/<ns>/<version>/` and every workspace on that machine
-shares it. Enable state, grants, install paths and
-manifest digests are host-local and never synced. A repository commits only
-the pin file, so a plugin tree is never vendored into a checkout — `orbit
-plugin add` refuses a source inside the current repository for that reason.
-It also refuses a directory, `git+` clone, or archive that contains a
-symbolic link, naming the entry: following the link would copy the target's
-bytes into the install root the plugin backend can read.
+Full log rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`). Short-lived commands roll only an oversized active file. `[operation]` keys resolve built-in → global → workspace, and unknown `[operation]` keys fail load.
 
-A source is a directory, a `git+<url>#<ref>` reference, a local
-`.tar.gz`/`.tgz`/`.tar`/`.zip` archive, or an `https://` URL naming one of
-those archives, which Orbit downloads itself. **A downloaded archive must be
-pinned by digest**: the pin file declares a `sha256:` digest, Orbit refuses an
-archive that hashes to anything else, and there is no trust-on-first-use path —
-an archive source with no digest is refused outright. The download is HTTPS
-only and never follows a redirect to another scheme, and extraction refuses a
-member with `..` in its path, an absolute member or a symbolic link, and is
-bounded in both total unpacked size and member count.
+## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
+
+Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`). Enable state and grants are host-local. A repository commits only its pin file, and `orbit plugin sync` installs what the pins name. The full operator guide is the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md), and the manifest spec is the [plugin standard](design/plugins/1_scope.md).
 
 ```yaml
 # .orbit/plugins.yaml — committed
 schemaVersion: 1
 plugins:
   - name: graph
-    version: "^0.4.1"                # optional: a version or a semver range
+    version: "^0.4.1"                # optional version or semver range
     source: git+https://github.com/constellation-works/orbit-graph#v0.4.1
     enabled: true
-  - name: chart                      # a compiled plugin, shipped as an archive
+  - name: chart
     source: https://github.com/constellation-works/orbit-chart/releases/download/v1.2.0/orbit-chart-1.2.0.tar.gz
-    digest: sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9
+    digest: sha256:0a1b2c3d…         # required for, and only allowed on, https:// archives
     enabled: true
 ```
 
-`digest` belongs to an `https://` archive source and only to one: every other
-form names bytes Orbit does not download, so a digest on it would claim a check
-the install never performs, and the pin file refuses it.
-
-| Command | What it does |
-|---|---|
-| `orbit plugin add <dir\|git+url#ref\|archive\|https-url>` | Install for this machine. `--digest sha256:…` is required for an `https://` archive source; `--enable` puts its tools on the surface immediately; `--grant` records requested permissions; `--force` replaces the same version. |
-| `orbit plugin upgrade <ns> [source]` | Replace an installed plugin (using its recorded source by default) and print its requested-permission diff. `--digest sha256:…` is required whenever the source is an `https://` archive, including a recorded one: the replacement is a fresh download. A widening disables it and clears carried grants unless `--grant` explicitly re-consents. |
-| `orbit plugin enable <ns> [--grant …]` / `disable <ns>` | Turn the plugin's tools on or off for this machine. The change takes effect on the next Orbit command, which is when the tool registry is next built. |
-| `orbit plugin remove <ns> --yes` | Uninstall after explicit confirmation. Only the tree under `~/.orbit/plugins/<ns>/` is deleted: a row whose recorded install path lies outside it is refused, and `--record-only` clears such a record without touching the recorded path. Data the plugin wrote elsewhere is retained. |
-| `orbit plugin list` / `show <ns>` | What is installed or pinned, its tools, and its **requested versus granted** permissions side by side. |
-| `orbit plugin doctor` | One row per plugin naming the step that would make it active, plus a finding for a pinned archive whose `digest` no longer matches the archive this machine installed from. |
-| `orbit plugin validate <dir>` | Check a manifest without installing it. Every rejection names the offending field. |
-| `orbit plugin sync [--dry-run] [--grant …]` | Converge `.orbit/plugins.yaml`: install missing plugins, apply its enabled/disabled state, and seed enabled contributions into this workspace. A grant-requesting plugin stays disabled until `--grant` supplies the complete reviewed set. |
-| `orbit plugin migrate <binary>` | Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. |
-
-Cloning a repository does not make its plugins available; `orbit plugin sync`
-is the step that does. Because enable state is host-global, syncing another
-workspace may change that shared toggle; the committed pin never authorizes
-manifest permission requests. A plugin a workspace pins but the machine has
-not installed, and one whose `requires.orbit` or `requires.host_api` no longer
-holds, is reported by `list`, `show` and `doctor` and leaves every built-in and
-every other plugin working.
-
-**The manifest declares placement, never permission.** `spec.permissions` is a
-*request*; `--grant` on an enabling add, enable, upgrade or sync is the only source of authority,
-and `orbit plugin show` prints both. Who may call a plugin tool comes from its
-`execution_kind`: a `read_only` tool is callable by any caller Orbit can
-identify (an agent envelope, an operator, or a sanctioned run), and a
-`mutating` tool by an operator or a run — an agent reaches one only when the
-task's `required_tools` or the activity's allowlist names it. A non-interactive
-caller with no identity at all is refused; set `ORBIT_OPERATOR=1` for a
-deliberate scripted operator call, exactly as for other governed operations.
-
-Grants are enforced: a plugin that requests `fs`, `network`, `env_pass`,
-`orbit_tools` or `backend.sandbox: none` and has not been granted it registers
-its tools inactive, and a call is refused with a diagnostic naming the grant.
-Backends run confined to the granted profile (Linux Landlock, macOS
-`sandbox-exec`); `backend.sandbox: none` needs the `unsandboxed` grant and is
-an `orbit plugin doctor` finding. `spec.web` parses and is accepted but
-contributes nothing in this release. `*.orbit-tool.yaml` sidecars and
-`orbit tool add` keep working unchanged.
-
-`plugin add --grant …` requires `--enable`; grants are never silently dropped.
-When `add` or `upgrade` changes a manifest, Orbit compares filesystem roots,
-network mode, environment names, Orbit-tool callbacks and sandbox mode. It
-preserves an existing enabled/granted row only when the request is unchanged or
-narrower. A widening disables the plugin, clears the grants and prints both the
-diff and the `plugin enable --grant …` command needed for explicit re-consent.
-`plugin upgrade <ns> [source]` uses the recorded source when omitted and prints
-the diff even when no request widened; its own `--grant …` explicitly
-authorizes and enables the replacement.
-
-**What else a plugin contributes.** Beyond tools:
-
-- **Activities and jobs** (`spec.definitions.activities`, `.jobs`) load as a
-  `plugin:<ns>` catalog layer. A workspace file of the same name shadows the
-  plugin's, and a shipped default is never displaced; `orbit run show` prints
-  the layer that resolved each `job:` / `activity:` reference and what it
-  shadowed. A plugin activity is `agent_loop`, or `deterministic` with the one
-  action `plugin.tool_call { tool: <ns>.<verb>, input: {…} }`, which dispatches
-  through the ordinary audited path with the plugin's provenance on the row.
-- **Routines and auto-tasks** (`.routines`, `.auto_tasks`) are *seeded*, not
-  loaded: `orbit plugin enable` writes `.orbit/routines/<ns>-<name>.yaml` and
-  `.orbit/auto_tasks/<ns>-<name>.yaml` with `enabled: false` and a
-  `# provenance: plugin:<ns>@<version>` header. Switching one on is the same
-  reviewed edit as for a shipped default — a plugin may not ship `enabled:
-  true`, and a routine may target only a job its own plugin ships or a shipped
-  default. An upgrade re-seeds a file that still matches what the plugin wrote;
-  a file you edited is preserved with a warning until `orbit plugin enable <ns>
-  --force`. While the plugin is disabled or removed the seeded files stay put
-  and are skipped with a reason naming the plugin, which `orbit routine list`
-  and `orbit auto-task list` show. A task minted by a plugin auto-task carries
-  `plugin:<ns>` beside `auto-task:<name>`.
-- **Skills** (`spec.skills`) are linked from the install directory into the
-  provider discovery roots beside the active global root on enable, under the
-  discovery ID `<plugin-namespace>-<skill-directory>`, and unlinked on disable.
-  The default `~/.orbit` root uses `~/.agents/skills` and
-  `~/.claude/skills`; `--root /path/to/root` or the equivalent `ORBIT_ROOT`
-  instead uses `/path/to/.agents/skills` and `/path/to/.claude/skills`. The
-  `orbit plugin validate` command reports those IDs before installation, and
-  linking never replaces a shipped, user-owned or other plugin's link. The
-  `orbit plugin doctor` command reports a link whose target is gone.
-- **Config** (`spec.config`) claims the `[plugins.<ns>]` section below.
-
-## Other sections (brief)
-
-| Section | Purpose |
-|---|---|
-| `[execution.env]` | Env vars passed to agent subprocesses. The child environment is *composed from an allowlist*, never filtered out of Orbit's own — see [`[execution.env]` — the agent subprocess environment](#executionenv--the-agent-subprocess-environment). |
-| `[execution.codex]` | Codex CLI sandbox mode. Valid: `read-only`, `workspace-write` (default), `danger-full-access`. Optional `approval_policy = "on-request"` enables escalation prompts. |
-| `[tasks]` | `id_start = N` sets a floor for the local task-id allocator: on runtime build the counter is raised to at least `N` (never lowered), so machines can hold disjoint id ranges (e.g. one `0–9999`, another `10000+`) and avoid cross-machine collisions. Capped by `ORB_TASK_ID_MAX` (99999) — setting it near the ceiling shrinks the usable range. Prefer the one-shot `orbit workspace init --task-id-start N` for the initial seed; the config key keeps the floor sticky across machines that share a config. See [task-migration overview](design/task-migration/1_overview.md). |
-| `[automation]` | `stall_window_minutes = N` (1..=1440, default `60`): how long a delivery-automation consumer may sit on a deferred reason before the evaluator logs it at `warn` and files one deduped friction. A stuck reason (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) suspends the consumer immediately and is escalated once this window elapses; transient backpressure is retried silently and never escalated. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). |
-| `[scoring]` | `enabled = true` records per-agent scoreboard counters under `.orbit/state/scoreboard/`. |
-| `[pr]` | PR creation defaults (template, labels, draft mode) for `orbit run ship --mode pr`. |
-| `[operation]` | Automatic review policy [ORB-11333]: `review_policy` (`none` default, `before-pr`, `after-landing`), `review_crew`, `review_reviewer_starts` (2), `review_repair_cycles` (2), `review_minutes` (30). `before-pr` holds PR creation for a fresh reviewer from `review_crew` on the PR route; `review_crew` applies to that reviewer only, while `after-landing` review is minted by the `delivery-code-review` auto-task with that definition's own template crew. Resolve built-in → global → workspace. Unknown keys and out-of-range values fail load; the operation-mode keys removed on 2026-09-21 (`preset`, `completion`, `preparation`, `preparation_due_seconds`, `promotion`, `leaf_ceiling`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, `delivery_cap`) are warned about by name and ignored. See [review-gate design](design/review-gate/2_design.md). |
-| `[plugins.<ns>]` | Settings owned by the installed plugin `<ns>`, validated against that plugin's own JSON Schema (`spec.config.schema`) with its `spec.config.defaults` applied underneath. Keys are dynamic like `[crews.<name>]`: `orbit config get`/`set plugins.<ns>.<key>` accepts only keys the plugin declares and suggests the ones that exist, values layer workspace-over-global with provenance in `orbit config show`, and `{{config.<key>}}` in the manifest resolves against the effective section. A value the schema rejects refuses **that plugin** at load, naming the key, and leaves every other plugin and all built-ins working. A section for a plugin this machine has not installed is warned about and ignored, so a workspace shared across machines still loads. See [`orbit plugin`](#orbit-plugin-and-orbitpluginsyaml--machine-installs-workspace-pins). |
-| `[runtime]` | **JSONL log rotation/retention** (`~/.orbit/state/logs/orbit.jsonl`): `log_retention_days` (default `7`) deletes archives older than N days; `log_max_total_mb` (default `500`) caps total archive size, pruning oldest first; `log_max_file_mb` (default `100`) rolls the active file to a dated archive once it exceeds N MiB. Full rotation (directory walk) runs from long-lived processes (`orbit mcp serve`, `orbit sweep` / `orbit clock tick`, `orbit web serve`). Short-lived commands rotate only when a single `metadata()` check on first JSONL write shows the active file is oversized; `orbit --help` does not open the log or walk the directory. Invalid values (`0`, or `log_max_file_mb > log_max_total_mb`) are rejected at config load. |
+- **Sources:** a directory outside the current repo, `git+<url>#<ref>`, a local `.tar.gz`/`.tgz`/`.tar`/`.zip`, or an `https://` archive pinned by `sha256` digest (no trust-on-first-use). Sources containing symlinks are refused.
+- **Permissions are requested, never implied.** `spec.permissions` in the manifest is a request. Only `--grant` on `plugin add --enable`, `enable`, `upgrade` or `sync` grants it, and an ungranted plugin's tools register inactive. An upgrade that widens the request disables the plugin until you re-grant it.
+- **`[plugins.<ns>]`** holds the plugin's own settings, validated against its `spec.config.schema` with its defaults underneath. `orbit config get`/`set plugins.<ns>.<key>` accepts only declared keys, and values layer workspace over global. An invalid value disables only that plugin. A section for a plugin this machine hasn't installed is warned about and ignored.
 
 ---
 
 ## Validation and errors
 
-Config is parsed at startup; invalid entries fail loud rather than silently falling back. Common failure modes:
+Config is parsed at startup, and invalid entries fail loud. Common errors:
 
-- `[workflow].default_crew = '<x>' is not defined under [crews]` — name a crew that exists.
-- `config schema changed in ORB-00058; remove [agent.<role>] tables` — migrate to crews.
-- `execution.codex.sandbox has invalid value` — must be `read-only`, `workspace-write`, or `danger-full-access`.
-- `tasks.id_start N exceeds maximum task id 99999` — the allocator start must fit the `ORB-00000` id space.
-- `tasks.id_start N would lower the allocator below its current position M` — the counter only moves forward (raised only via `orbit workspace init --task-id-start`; the config key is a silent forward-only floor).
-- `[operation] has unknown key 'x'` / `operation.review_policy has invalid value 'fast'` — the review keys are typed and closed; a misspelled or unknown setting is refused rather than silently resolving to a different policy. The operation-mode keys removed on 2026-09-21 are the exception: they warn and are ignored so an older file keeps loading.
+| Message | Fix |
+|---|---|
+| `crew '<x>' is not defined in [crews.*]` | Name a crew that exists. |
+| `[workflow].default_crew must be set when defining [crews.*]` | Set `default_crew`, or define an `opus` crew. |
+| `[crews.<name>].<field> must not be empty` | Give the crew a `model` and `provider`. |
+| `config schema no longer supports [agent.<role>] tables` | Migrate to `[crews.<name>]`. |
+| `execution.codex.sandbox has invalid value '<x>'` | Use `read-only`, `workspace-write` or `danger-full-access`. |
+| `[operation] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |
+| `[task] artifact_store is no longer supported` | Remove the key. |
 
-The removed `[docs]` table is accepted and ignored for one compatibility release; loading a file that still contains it emits one warning naming the file. `orbit config show` does not list docs keys. Existing configs containing `[duel]` and `[duel.models]` also load during their compatibility window and emit a warning naming both retired tables; remove them. The keys `execution.env.inherit`, `task.approval.delegate_approval`, and `task.approval.required_for_agent` are inert and should be removed; environment inheritance is fixed off, while agent approval is enforced by the capability/policy surfaces rather than these old flags.
+**Retired keys that warn and are ignored.** Delete them. `orbit config get`/`set` reject them with migration notes.
 
-When in doubt, start with a minimal workspace file containing only genuine overrides. The annotated default ([`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml)) is a reference for available settings, not a template that must be copied wholesale.
+| Retired | Note |
+|---|---|
+| `operation.preset`, `completion`, `preparation`, `preparation_due_seconds`, `promotion`, `leaf_ceiling`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, `delivery_cap` | Operation mode was removed. `[operation]` keeps only the review keys. |
+| `[docs]` | The docs corpus was removed. |
+| `[semantic]`, `search.model` | Search is lexical (SQLite FTS5) and needs no model. The legacy `semantic.db` path remains the lexical search database. |
+| `workflow.pilot_max_complexity` | Route a tier with `workflow.<tier>_complexity_crews`, or pin `crew` on the task. |
+| `[duel]`, `[duel.models]` | Retired. |
+| `[routines]` (`role = "source"`) | Every registered owner checkout is a routine source. |
+| `knowledge.task_id_pattern` | Deprecated. |
+| `execution.env.inherit` | Inheritance is fixed off. |
 
-### Retired search settings
-
-`[semantic]` and `search.model` are ignored with a warning for the removal
-release. Delete these keys; lexical FTS5 search requires no model configuration.
-`orbit config get`/`set` reject retired keys with migration guidance.
-The legacy `semantic.db` path remains the lexical search database.
+Start with a minimal workspace file that holds only genuine overrides.
