@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -11,9 +10,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
-use crate::executor::automation::vcs::git::git_command;
 
-use super::super::git::git_success;
+use super::super::git::{git_command_success, git_output, git_success};
 use super::cleanup::remove_worktree;
 use super::{
     WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
@@ -153,7 +151,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
 
     // This repairs already-stale Git administration entries. It is safe in
     // dry-run mode because it never removes a worktree directory or branch.
-    git(repo_root, &["worktree", "prune"])?;
+    git_success(repo_root, &["worktree", "prune"])?;
 
     reports.sort_by(|left, right| left.path.cmp(&right.path));
     let bytes_reclaimed = reports.iter().map(|report| report.bytes_reclaimed).sum();
@@ -376,7 +374,7 @@ fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
 }
 
 fn branch_exists(repo_root: &Path, branch: &str) -> bool {
-    git_command(
+    git_command_success(
         repo_root,
         &[
             "show-ref",
@@ -385,8 +383,7 @@ fn branch_exists(repo_root: &Path, branch: &str) -> bool {
             &format!("refs/heads/{branch}"),
         ],
     )
-    .status()
-    .is_ok_and(|status| status.success())
+    .unwrap_or(false)
 }
 
 fn directory_bytes(path: &Path) -> Result<u64, OrbitError> {
@@ -418,30 +415,4 @@ fn directory_bytes(path: &Path) -> Result<u64, OrbitError> {
         }
     }
     Ok(total)
-}
-
-fn git_output(cwd: &Path, args: &[&str]) -> Result<String, OrbitError> {
-    let output = git_raw(cwd, args)?;
-    String::from_utf8(output.stdout)
-        .map_err(|error| OrbitError::Execution(format!("git output was not UTF-8: {error}")))
-}
-
-fn git(cwd: &Path, args: &[&str]) -> Result<(), OrbitError> {
-    let _ = git_raw(cwd, args)?;
-    Ok(())
-}
-
-fn git_raw(cwd: &Path, args: &[&str]) -> Result<Output, OrbitError> {
-    let output = git_command(cwd, args)
-        .output()
-        .map_err(|error| OrbitError::Execution(format!("failed to run git: {error}")))?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    Err(OrbitError::Execution(format!(
-        "git {} failed in '{}': {}",
-        args.join(" "),
-        cwd.display(),
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
 }
