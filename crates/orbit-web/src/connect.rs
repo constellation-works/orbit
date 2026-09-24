@@ -40,6 +40,10 @@ const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 /// Per-probe TCP connect/read/write timeout for the `/healthz` check.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Largest probe response read. The read timeout applies per read, so without
+/// a cap a remote that keeps streaming would hold the probe indefinitely.
+const PROBE_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+
 /// How long to wait, when first probing for an already-running remote
 /// dashboard through a bare port forward, before concluding nothing is
 /// listening and falling back to spawning one ourselves. Short: it only needs
@@ -246,7 +250,10 @@ fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
     let request = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).ok()?;
     let mut response = String::new();
-    BufReader::new(stream).read_to_string(&mut response).ok()?;
+    BufReader::new(stream)
+        .take(PROBE_MAX_RESPONSE_BYTES)
+        .read_to_string(&mut response)
+        .ok()?;
     let (headers, body) = response.split_once("\r\n\r\n")?;
     let status_line = headers.lines().next().unwrap_or_default();
     if status_line.starts_with("HTTP/1.") && status_line.contains(" 200 ") {
