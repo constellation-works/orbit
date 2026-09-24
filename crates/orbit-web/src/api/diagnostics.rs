@@ -291,9 +291,6 @@ fn enclosing_step_id_for_event(
 }
 
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
-    if blob_ref.len() < 2 || blob_ref.starts_with("error:") {
-        return String::new();
-    }
     blob_store
         .read(blob_ref)
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())

@@ -14,10 +14,9 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use crate::fs::io::{atomic_write_private_bytes, create_private_dir_all};
 use crate::security::redaction::{PatternRedactor, redact_all};
+use crate::security::release::sha256_hex;
 
 pub struct BlobStore {
     root: PathBuf,
@@ -74,19 +73,36 @@ impl BlobStore {
     }
 
     pub fn read(&self, sha256: &str) -> io::Result<Vec<u8>> {
-        let path = self.root.join(&sha256[..2]).join(sha256);
-        fs::read(path)
+        fs::read(self.blob_path(sha256)?)
     }
 
     /// Read at most `max_bytes` from the blob, without loading the rest of
     /// the file. Callers that only need a preview window should use this
     /// instead of [`Self::read`].
     pub fn read_prefix(&self, sha256: &str, max_bytes: usize) -> io::Result<Vec<u8>> {
-        let path = self.root.join(&sha256[..2]).join(sha256);
-        let file = fs::File::open(path)?;
+        let file = fs::File::open(self.blob_path(sha256)?)?;
         let mut buf = Vec::new();
         file.take(max_bytes as u64).read_to_end(&mut buf)?;
         Ok(buf)
+    }
+
+    /// `{root}/{hash[..2]}/{hash}` for a stored reference.
+    ///
+    /// References come back from persisted audit rows, so anything other than
+    /// a lowercase SHA-256 digest is refused rather than sliced mid-character
+    /// or joined into a path outside the store.
+    fn blob_path(&self, sha256: &str) -> io::Result<PathBuf> {
+        let is_digest = sha256.len() == 64
+            && sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        if !is_digest {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid blob reference '{sha256}'"),
+            ));
+        }
+        Ok(self.root.join(&sha256[..2]).join(sha256))
     }
 }
 
@@ -96,15 +112,4 @@ fn path_matches_hash(path: &Path, expected_hash: &str) -> io::Result<bool> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push_str(&format!("{:02x}", byte));
-    }
-    out
 }
