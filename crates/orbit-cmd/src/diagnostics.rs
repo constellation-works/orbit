@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::reverse_lines::ReverseLines;
 use orbit_types::record::FrictionEntry;
 use orbit_types::telemetry::MetricsEntry;
 use serde::de::DeserializeOwned;
@@ -275,7 +276,9 @@ pub(crate) fn read_jsonl_month<T: DeserializeOwned>(
     Ok(entries)
 }
 
-fn read_jsonl_month_limited<T: DeserializeOwned>(
+// pub(crate) so sibling `src/tests/diagnostics.rs` can pin its newest-first,
+// cross-file order.
+pub(crate) fn read_jsonl_month_limited<T: DeserializeOwned>(
     root: &Path,
     category: &str,
     year_month: &str,
@@ -291,11 +294,14 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
     }
     let files = diagnostics_jsonl_files(root, &month_dir)?;
 
+    // Walk each file from its end so the bytes read scale with `limit`, not
+    // with the size of the month.
     let mut entries = Vec::new();
     for path in files.into_iter().rev() {
-        let raw = fs::read_to_string(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
-        let lines = raw.lines().collect::<Vec<_>>();
-        for (index, line) in lines.iter().enumerate().rev() {
+        let file = fs::File::open(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let lines = ReverseLines::new(file).map_err(|e| OrbitError::Io(e.to_string()))?;
+        for (lines_from_end, line) in lines.enumerate() {
+            let line = line.map_err(|e| OrbitError::Io(e.to_string()))?;
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -313,7 +319,7 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
                     tracing::warn!(
                         target: "orbit::diagnostics",
                         path = %path.display(),
-                        line = index + 1,
+                        lines_from_end,
                         error = %err,
                         "skipping malformed diagnostics line"
                     );
