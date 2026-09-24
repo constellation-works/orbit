@@ -527,14 +527,17 @@ fn strip_diff_prefix(path: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Decode a C-quoted Git path. Escapes and raw bytes are collected as bytes
+/// and decoded once, so an octal-escaped UTF-8 sequence (`\303\251`) yields
+/// the same path the status scan reports rather than one char per byte.
 fn unescape_git_c_quoted(input: &str) -> Option<(String, &str)> {
     let input = input.strip_prefix('"')?;
-    let mut decoded = String::new();
+    let mut decoded = Vec::new();
     let mut bytes = input.as_bytes();
     while let Some((head, rest)) = bytes.split_first() {
         match *head {
             b'"' => {
-                return Some((decoded, std::str::from_utf8(rest).ok()?));
+                return Some((lossy_path(&decoded), std::str::from_utf8(rest).ok()?));
             }
             b'\\' => {
                 let (escaped, remaining) = unescape_git_escape(rest)?;
@@ -542,7 +545,7 @@ fn unescape_git_c_quoted(input: &str) -> Option<(String, &str)> {
                 bytes = remaining;
             }
             byte => {
-                decoded.push(char::from(byte));
+                decoded.push(byte);
                 bytes = rest;
             }
         }
@@ -550,27 +553,25 @@ fn unescape_git_c_quoted(input: &str) -> Option<(String, &str)> {
     None
 }
 
-fn unescape_git_escape(bytes: &[u8]) -> Option<(char, &[u8])> {
+fn unescape_git_escape(bytes: &[u8]) -> Option<(u8, &[u8])> {
     let (head, rest) = bytes.split_first()?;
     match *head {
-        b'n' => Some(('\n', rest)),
-        b't' => Some(('\t', rest)),
-        b'r' => Some(('\r', rest)),
-        b'a' => Some(('\u{0007}', rest)),
-        b'b' => Some(('\u{0008}', rest)),
-        b'f' => Some(('\u{000c}', rest)),
-        b'v' => Some(('\u{000b}', rest)),
-        b'\\' => Some(('\\', rest)),
-        b'"' => Some(('"', rest)),
+        b'n' => Some((b'\n', rest)),
+        b't' => Some((b'\t', rest)),
+        b'r' => Some((b'\r', rest)),
+        b'a' => Some((0x07, rest)),
+        b'b' => Some((0x08, rest)),
+        b'f' => Some((0x0c, rest)),
+        b'v' => Some((0x0b, rest)),
         b'0'..=b'7' => {
             if bytes.len() < 3 {
                 return None;
             }
             let octal = std::str::from_utf8(&bytes[..3]).ok()?;
             let value = u8::from_str_radix(octal, 8).ok()?;
-            Some((char::from(value), &bytes[3..]))
+            Some((value, &bytes[3..]))
         }
-        byte => Some((char::from(byte), rest)),
+        byte => Some((byte, rest)),
     }
 }
 
