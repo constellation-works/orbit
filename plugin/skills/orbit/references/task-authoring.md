@@ -116,6 +116,22 @@ worker/operator. Do not silently expand an admitted footprint or invalidate live
 work. Re-prepare changed scope before another admission. Preserve existing user
 choices and delivery evidence.
 
+## Repairs that narrow a shared invariant
+
+A repair that narrows a shared invariant — what the host will create, what
+URLs are accepted, what counts as first-party, or any other predicate with
+more than one caller — must name every caller and fixture found by searching
+that predicate, and the acceptance criteria must require the same change to
+update all of them together. Scoping the fix to only the caller that
+surfaced the symptom leaves the other callers to fail the same way later,
+each discovered and repaired separately instead of once.
+
+A pull request that is green only against its own base is not evidence the
+merged tree is green. When the change shares an invariant with other
+in-flight work, require comparing the per-commit suite on the integration
+branch against its parent commit, not just the PR's own base, before trusting
+the result.
+
 ## Description template
 
 Use only the sections that help this task:
