@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Once;
 
-use orbit_config::{MemoryLimit, WorkerContainmentSettings};
+use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
 
 /// Error code on the diagnostic step of a run that failed after its worker
 /// scope hit a memory or task limit.
@@ -59,11 +59,31 @@ impl WorkerLimits {
     /// The unit properties, in `systemd-run --property=` form.
     fn properties(&self) -> [String; 4] {
         [
-            format!("MemoryHigh={}", self.memory_high),
-            format!("MemoryMax={}", self.memory_max),
+            memory_property("MemoryHigh", self.memory_high),
+            memory_property("MemoryMax", self.memory_max),
             format!("TasksMax={}", self.tasks_max),
             "OOMPolicy=continue".to_string(),
         ]
+    }
+}
+
+/// Build a property only from the admitted numeric fields and fixed tokens.
+/// Formatting the entire `MemoryLimit` would also carry its enclosing
+/// configuration object into the command argument in taint analysis.
+fn memory_property(name: &str, limit: MemoryLimit) -> String {
+    match limit {
+        MemoryLimit::Bytes { amount, unit } => {
+            let suffix = match unit {
+                None => "",
+                Some(MemoryUnit::K) => "K",
+                Some(MemoryUnit::M) => "M",
+                Some(MemoryUnit::G) => "G",
+                Some(MemoryUnit::T) => "T",
+            };
+            format!("{name}={amount}{suffix}")
+        }
+        MemoryLimit::Percent(percent) => format!("{name}={percent}%"),
+        MemoryLimit::Infinity => format!("{name}=infinity"),
     }
 }
 
