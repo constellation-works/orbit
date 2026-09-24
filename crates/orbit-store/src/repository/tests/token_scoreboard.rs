@@ -98,3 +98,53 @@ fn refresh_after_a_new_invocation_rewrites_metrics_without_changing_schema() {
     assert!(second.contains("claude"), "{second}");
     assert!(second.contains("codex"), "{second}");
 }
+
+fn insert_task_trace(store: &Store, task_ids: &[&str], input: u64, output: u64) {
+    store
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: "jrun-tasks".to_string(),
+            activity_id: "implement".to_string(),
+            agent: "codex".to_string(),
+            model: Some("gpt-test".to_string()),
+            task_ids: task_ids.iter().map(ToString::to_string).collect(),
+            trace: InvocationTrace {
+                usage: TokenUsage {
+                    input,
+                    output,
+                    ..TokenUsage::default()
+                },
+                ..InvocationTrace::default()
+            },
+        })
+        .expect("insert invocation");
+}
+
+#[test]
+fn top_task_metrics_sum_per_task_heaviest_first_within_the_limit() {
+    let store = Store::open_in_memory().expect("open store");
+    insert_task_trace(&store, &["light"], 5, 1);
+    insert_task_trace(&store, &["heavy", "light"], 100, 20);
+    insert_task_trace(&store, &["heavy"], 30, 0);
+    insert_task_trace(&store, &["dropped"], 1, 0);
+
+    let top = store
+        .list_top_task_invocation_metrics(2)
+        .expect("top tasks");
+
+    let ids: Vec<&str> = top.iter().map(|row| row.task_id.as_str()).collect();
+    assert_eq!(ids, ["heavy", "light"]);
+    assert_eq!(top[0].invocation_count, 2);
+    assert_eq!(top[0].total_input_tokens, 130);
+    assert_eq!(top[0].total_output_tokens, 20);
+    assert_eq!(top[0].total_tokens, 150);
+    assert_eq!(top[1].total_tokens, 126);
+
+    let one = store
+        .get_task_invocation_metrics("light")
+        .expect("one task");
+    assert_eq!(one.invocation_count, 2);
+    let missing = store
+        .get_task_invocation_metrics("absent")
+        .expect("absent task");
+    assert_eq!(missing.invocation_count, 0);
+}

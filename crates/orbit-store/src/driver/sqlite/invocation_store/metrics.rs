@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use rusqlite::params;
 
@@ -44,16 +44,6 @@ impl MetricBucket {
         self.totals
             .push(sample.input_tokens.saturating_add(sample.output_tokens));
     }
-}
-
-#[derive(Debug, Clone)]
-struct TaskSample {
-    task_id: String,
-    input_tokens: u64,
-    cache_read_tokens: u64,
-    cache_create_tokens: u64,
-    output_tokens: u64,
-    tool_call_count: u64,
 }
 
 impl Store {
@@ -147,19 +137,16 @@ impl Store {
         &self,
         task_id: &str,
     ) -> Result<TaskInvocationMetrics, OrbitError> {
-        let mut rows = self.list_task_invocation_metrics(Some(task_id))?;
+        let mut rows = self.list_task_invocation_metrics(Some(task_id), 0)?;
         Ok(rows.pop().unwrap_or_else(|| empty_task_metrics(task_id)))
     }
 
+    /// Per-task totals, heaviest first; `limit == 0` means no limit.
     pub fn list_top_task_invocation_metrics(
         &self,
         limit: usize,
     ) -> Result<Vec<TaskInvocationMetrics>, OrbitError> {
-        let mut rows = self.list_task_invocation_metrics(None)?;
-        if limit > 0 && rows.len() > limit {
-            rows.truncate(limit);
-        }
-        Ok(rows)
+        self.list_task_invocation_metrics(None, limit)
     }
 
     pub fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError> {
@@ -249,75 +236,52 @@ impl Store {
         grouped
     }
 
+    /// Aggregates in SQL so the top-N scoreboard reads N rows, not the
+    /// whole invocation join.
     fn list_task_invocation_metrics(
         &self,
         task_id: Option<&str>,
+        limit: usize,
     ) -> Result<Vec<TaskInvocationMetrics>, OrbitError> {
         let conn = self.read()?;
-
-        let sql = if task_id.is_some() {
-            r#"
-            SELECT it.task_id, i.input_tokens, i.cache_read_tokens, i.cache_create_tokens,
-                   i.output_tokens, i.tool_call_count
-            FROM invocation_tasks it
-            INNER JOIN invocations i ON i.id = it.invocation_id
-            WHERE it.task_id = ?1
-            ORDER BY it.task_id ASC, i.id ASC
-            "#
+        let limit = if limit == 0 {
+            -1
         } else {
-            r#"
-            SELECT it.task_id, i.input_tokens, i.cache_read_tokens, i.cache_create_tokens,
-                   i.output_tokens, i.tool_call_count
-            FROM invocation_tasks it
-            INNER JOIN invocations i ON i.id = it.invocation_id
-            ORDER BY it.task_id ASC, i.id ASC
-            "#
+            i64::try_from(limit).unwrap_or(i64::MAX)
         };
-
         let mut stmt = conn
-            .prepare(sql)
+            .prepare(
+                r#"
+                SELECT it.task_id, COUNT(*),
+                       COALESCE(SUM(i.input_tokens), 0), COALESCE(SUM(i.cache_read_tokens), 0),
+                       COALESCE(SUM(i.cache_create_tokens), 0), COALESCE(SUM(i.output_tokens), 0),
+                       COALESCE(SUM(i.input_tokens + i.output_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(i.tool_call_count), 0)
+                FROM invocation_tasks it
+                INNER JOIN invocations i ON i.id = it.invocation_id
+                WHERE ?1 IS NULL OR it.task_id = ?1
+                GROUP BY it.task_id
+                ORDER BY total_tokens DESC, it.task_id ASC
+                LIMIT ?2
+                "#,
+            )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<TaskSample> {
-            Ok(TaskSample {
-                task_id: row.get(0)?,
-                input_tokens: row.get::<_, i64>(1)? as u64,
-                cache_read_tokens: row.get::<_, i64>(2)? as u64,
-                cache_create_tokens: row.get::<_, i64>(3)? as u64,
-                output_tokens: row.get::<_, i64>(4)? as u64,
-                tool_call_count: row.get::<_, i64>(5)? as u64,
+        let rows = stmt
+            .query_map(params![task_id, limit], |row| {
+                Ok(TaskInvocationMetrics {
+                    task_id: row.get(0)?,
+                    invocation_count: row.get::<_, i64>(1)? as u64,
+                    total_input_tokens: row.get::<_, i64>(2)? as u64,
+                    total_cache_read_tokens: row.get::<_, i64>(3)? as u64,
+                    total_cache_create_tokens: row.get::<_, i64>(4)? as u64,
+                    total_output_tokens: row.get::<_, i64>(5)? as u64,
+                    total_tokens: row.get::<_, i64>(6)? as u64,
+                    total_tool_calls: row.get::<_, i64>(7)? as u64,
+                })
             })
-        };
-
-        let rows = if let Some(task_id) = task_id {
-            stmt.query_map(params![task_id], mapper)
-        } else {
-            stmt.query_map([], mapper)
-        }
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        let mut grouped: HashMap<String, TaskInvocationMetrics> = HashMap::new();
-        for row in rows {
-            let row = row.map_err(|e| OrbitError::Store(e.to_string()))?;
-            let entry = grouped
-                .entry(row.task_id.clone())
-                .or_insert_with(|| empty_task_metrics(&row.task_id));
-            entry.invocation_count += 1;
-            entry.total_input_tokens += row.input_tokens;
-            entry.total_cache_read_tokens += row.cache_read_tokens;
-            entry.total_cache_create_tokens += row.cache_create_tokens;
-            entry.total_output_tokens += row.output_tokens;
-            entry.total_tokens += row.input_tokens.saturating_add(row.output_tokens);
-            entry.total_tool_calls += row.tool_call_count;
-        }
-
-        let mut values = grouped.into_values().collect::<Vec<_>>();
-        values.sort_by(|left, right| {
-            right
-                .total_tokens
-                .cmp(&left.total_tokens)
-                .then_with(|| left.task_id.cmp(&right.task_id))
-        });
-        Ok(values)
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| OrbitError::Store(e.to_string()))
     }
 }
 
