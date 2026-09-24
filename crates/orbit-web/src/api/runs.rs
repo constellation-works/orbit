@@ -404,21 +404,24 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // [ORB-10971] Read the run's pipeline state. This projection used to drop
     // it entirely, so the dashboard could not see the waiting reasons or the
     // child-dispatch lineage the CLI already showed.
-    let state = runtime.read_run_state(&run.run_id).ok().flatten();
-    let evidence = runtime
-        .invocation_records(InvocationQuery {
+    let run_id = run.run_id.as_str();
+    let state = or_warn(runtime.read_run_state(run_id), run_id, "pipeline state");
+    let evidence = or_warn(
+        runtime.invocation_records(InvocationQuery {
             job_run_id: Some(run.run_id.clone()),
             limit: 1_000,
             ..InvocationQuery::default()
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|record| ActivityInvocationEvidence {
-            activity_id: record.activity_id,
-            provider: record.agent,
-            model: record.model,
-        })
-        .collect::<Vec<_>>();
+        }),
+        run_id,
+        "invocation evidence",
+    )
+    .into_iter()
+    .map(|record| ActivityInvocationEvidence {
+        activity_id: record.activity_id,
+        provider: record.agent,
+        model: record.model,
+    })
+    .collect::<Vec<_>>();
     let mut full = job_run_to_json_with_activity_provenance(run, state.as_ref(), &evidence);
     // Reshape into `{run, steps}` per the dashboard contract: peel the
     // `steps` array off the flat `job_run_to_json` output.
@@ -427,9 +430,11 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         .and_then(|m| m.remove("steps"))
         .unwrap_or(Value::Array(Vec::new()));
 
-    let audit_steps = runtime
-        .collect_run_audit_steps(&run.run_id)
-        .unwrap_or_default();
+    let audit_steps = or_warn(
+        runtime.collect_run_audit_steps(run_id),
+        run_id,
+        "audit steps",
+    );
     let steps = if audit_steps.is_empty() {
         stored_steps
     } else {
@@ -445,9 +450,11 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // liveness verdict for any that have not reported an exit. Without this a
     // healthy long-running ship-pipeline implementation agent is
     // indistinguishable from a dead child without shell access to the host.
-    let provider_processes = runtime
-        .collect_run_provider_processes(&run.run_id)
-        .unwrap_or_default();
+    let provider_processes = or_warn(
+        runtime.collect_run_provider_processes(run_id),
+        run_id,
+        "provider processes",
+    );
 
     json!({
         "run": full,
@@ -456,6 +463,19 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             .iter()
             .map(run_provider_process_to_json)
             .collect::<Vec<_>>(),
+    })
+}
+
+/// The run detail still renders when one supplementary read fails, but the
+/// failure is logged so it is not mistaken for "nothing recorded".
+fn or_warn<T: Default>(
+    result: Result<T, orbit_core::OrbitError>,
+    run_id: &str,
+    section: &str,
+) -> T {
+    result.unwrap_or_else(|error| {
+        tracing::warn!(run_id, section, %error, "run detail omitted a section");
+        T::default()
     })
 }
 
