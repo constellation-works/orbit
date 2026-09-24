@@ -27,6 +27,7 @@ use super::{
 };
 use crate::parse::parse_since;
 use crate::projections::audit_event_to_json;
+use crate::runtime_memo::AUDIT_SUMMARY_TTL;
 
 /// Default header-tile alert threshold for the denials counter. Surfaced via
 /// `?denial_threshold=` and echoed back in the response so the dashboard can
@@ -253,16 +254,20 @@ pub(super) async fn audit_summary(
         Err(e) => return map_runtime_error(e),
     };
     let denial_threshold = q.denial_threshold.unwrap_or(DEFAULT_DENIAL_THRESHOLD);
-    let window_key = raw_since.to_string();
-    let window_json = window_key.clone();
+    let window_json = raw_since.to_string();
     let runtime_for_compute = runtime.clone();
 
     let cached = match state
         .audit_summary_memo()
-        .get_or_compute(&runtime, &window_key, move || {
-            let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
-            Ok(summary_payload(&bundle, since, &window_json))
-        })
+        .get_or_compute(
+            &runtime,
+            raw_since.to_string(),
+            AUDIT_SUMMARY_TTL,
+            move || {
+                let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
+                Ok(summary_payload(&bundle, since, &window_json))
+            },
+        )
         .await
     {
         Ok(body) => body,

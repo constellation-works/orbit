@@ -12,13 +12,12 @@
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;
-mod audit_summary_memo;
 mod connect;
 mod health;
 mod log_format;
 mod parse;
-mod plugin_panel_memo;
 mod projections;
+mod runtime_memo;
 mod ssh_tunnel;
 mod state;
 
