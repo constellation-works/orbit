@@ -88,6 +88,7 @@ fn probe_forward_never_carries_a_remote_command() {
             "ExitOnForwardFailure=yes".to_string(),
             "-L".to_string(),
             "127.0.0.1:9999:localhost:7878".to_string(),
+            "--".to_string(),
             "box".to_string(),
         ]
     );
@@ -104,6 +105,7 @@ fn command_forward_allocates_a_pty_and_carries_the_command() {
             "ExitOnForwardFailure=yes".to_string(),
             "-L".to_string(),
             "127.0.0.1:7000:localhost:9000".to_string(),
+            "--".to_string(),
             "user@host".to_string(),
             "orbit web serve --no-open".to_string(),
         ]
