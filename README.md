@@ -171,7 +171,7 @@ Backups, stuck runs, database recovery, and upgrades are covered in the [runbook
 
 ## Contributing
 
-Contributions are welcome, especially on locking, worktree management, execution primitives, reconciliation, audit coverage, and tool interfaces. Start with [CONTRIBUTING.md](CONTRIBUTING.md), [docs/design/CONVENTIONS.md](docs/design/CONVENTIONS.md), and [CLAUDE.md](CLAUDE.md). PRs target `agent-main`.
+Pull requests are welcome, from typo fixes to new executors. Small fixes can go straight to a PR, and bigger changes start with an issue. See [CONTRIBUTING.md](CONTRIBUTING.md) to get set up.
 
 ## License
 

@@ -3,16 +3,12 @@ Thanks for sending a pull request. Fill in the sections below so reviewers can
 verify scope, run the same validation locally, and confirm docs were updated when needed.
 -->
 
-## Linked Orbit task(s)
+## Linked issue or task
 
 <!--
-Required. List the Orbit task ID(s) this PR implements, one per line.
-Example: [ORB-NNNNN] — short title
-If the task has a linked external tracker ref (Jira / Linear / GitHub issue),
-include that tag too: [ORB-NNNNN] [ENG-1234] — short title
+Link the issue this PR addresses (Fixes #123), or the Orbit task ID if you have
+one. Small fixes such as typos and docs can leave this blank.
 -->
-
-- [ORB-NNNNN]
 
 ## Summary
 
@@ -23,10 +19,10 @@ What changed and why, in 1–3 sentences. Focus on intent, not a diff dump.
 ## Test plan
 
 <!--
-Commands you actually ran, with results. At minimum:
+Commands you actually ran, with results. The full `make ci` runs in CI.
 -->
 
-- [ ] `make ci` passes locally (runs fmt-check, build, clippy `-D warnings`, tests)
+- [ ] `make ci-fast`, `make ci-lint`, and `make goldens` pass
 - [ ] Targeted tests for the affected crate(s) pass
 - [ ] Manual verification steps (if applicable):
 
@@ -34,8 +30,7 @@ Commands you actually ran, with results. At minimum:
 
 <!--
 If this PR touches behavior described in `docs/design/*`, update the affected
-docs in the SAME PR: flip ADR statuses, bump `**Last updated:**`, add new ADRs
-for non-obvious decisions.
+docs in the same PR.
 -->
 
 - [ ] N/A — this PR does not touch any code referenced by `docs/design/*`

@@ -6,12 +6,12 @@
 # NOT consulted by `make ci-fast` (which stays no-compile).
 #
 # Adding an advisory exception or a new license requires review — see the
-# "Supply-chain" section of CONTRIBUTING.md for the process (justification +
+# "Supply-chain" section of docs/DEVELOPMENT.md for the process (justification +
 # expiry).
 
 [advisories]
 # Deny crates with an open RUSTSEC advisory (the default) and yanked crates.
-# Time-boxed exceptions live in `ignore` with a rationale; see CONTRIBUTING.md.
+# Time-boxed exceptions live in `ignore` with a rationale; see docs/DEVELOPMENT.md.
 # Each entry below has no available safe upgrade at time of writing and is
 # tagged with a re-review date — drop it once an upstream fix lands.
 yanked = "deny"
