@@ -27,8 +27,9 @@ usage and then usage credits. Orbit has no way to use them.
 
 The obvious spelling, `claude -p --cloud "<task>"`, does not exist for this purpose. The CLI
 rejects `--cloud <description>` in non-interactive runs. With `-p`, `--cloud <session_id>`
-only queues a follow-up message into an existing session. There is also no documented API
-to read a cloud session's status.
+only queues a follow-up message into an existing session. Plain `claude --cloud "<task>"`
+does work, but only with a TTY (§1). There is also no documented API to read a cloud
+session's status.
 
 ## Goal
 
@@ -52,13 +53,57 @@ The host spends one sleeping poll per in-flight cloud task, not one agent.
 - Self-hosted runners (`--environment ccpool_…`). They are Team/Enterprise only; see §6.
 - Merging from inside the cloud session. Orbit owns the merge: after review, the PR lands
   through `pr_complete`, which reads merged state back from GitHub (§5.1).
-- Parsing session output. Orbit never reads the routine's transcript or its final message.
+- Reading session content. Orbit parses only the session ID the dispatch command prints. It
+  never reads the session's transcript or its final message.
 
 ## 1. Dispatch mechanism
 
-**Chosen: an API-triggered routine.** A routine is a saved cloud-session configuration: a
-prompt, repositories, an environment and connectors. An API trigger gives it a per-routine
-endpoint:
+**Chosen: interactive `claude --cloud` under a PTY.** Verified 2026-09-23 with CLI 2.1.280
+on a Max plan. Run from a checkout with a TTY, it creates the session, prints three lines
+and exits 0 without waiting for the session:
+
+```
+Created cloud session: <first line of the description>
+View: https://claude.ai/code/session_01Wrd4C2SNZ1qwdRbdbRuMoW?from=cli&m=0
+Resume with: claude --teleport session_01Wrd4C2SNZ1qwdRbdbRuMoW
+```
+
+Without a TTY it refuses with `Error: --cloud requires an interactive terminal` and exits 1.
+With `-p`, `--cloud` accepts only an existing session ID. So Orbit allocates a PTY, the same
+mechanism its deterministic steps already have, and parses the session ID from the
+`Resume with:` line. Checking the `View:` URL's ID against it catches an output-format
+change before anything is checkpointed.
+
+Why this route:
+
+- **Credits.** Promotional cloud-session credits apply to sessions started this way. They
+  don't apply to routines or projects, which draw normal subscription usage instead. That
+  is what decided the choice.
+- **The description is a real prompt.** It is not wrapped as untrusted, so there is no saved
+  routine prompt to keep in sync. Orbit puts the delivery rules at the top of the payload
+  (§3).
+- **No per-repository setup** on claude.ai, and no token to store.
+
+Properties the design depends on:
+
+- **The CLI clones the checkout's GitHub remote at its current branch**, not the local
+  working tree. Orbit runs the command from a dedicated clean worktree detached at
+  `origin/<base_branch>`, never from the primary checkout, which would trip
+  `primary_checkout_drift`. The branch name still comes from the payload.
+- **A claude.ai OAuth login on the dispatching host**, the same `user:sessions:claude_code`
+  scope the follow-up message needs. Its refresh grant is capped at 30 days. On the Mac the
+  desktop app has repeatedly revoked the CLI's login (probe: `claude auth status` →
+  `loggedIn: false`, then `--cloud` fails with `401`). Dispatch therefore runs from
+  `dk-server-1`. `cloud_admit` runs `claude auth status` and blocks the dispatch with a
+  clear "run `claude auth login`" message instead of firing into a `401`.
+- **The output is an interactive UI, not a contract.** The three lines are stable today, but
+  the format isn't documented. The parser is strict (§4.1) and fails closed, and a fixture
+  test pins the current shape.
+- **The payload travels in argv.** It holds no secrets by construction (§3), and it stays
+  far below `ARG_MAX`. It is visible in `ps` while the command runs.
+
+**Fallback: an API-triggered routine.** The same poll and adopt contract works with a
+routine's `/fire` endpoint:
 
 ```
 POST https://api.anthropic.com/v1/claude_code/routines/<trig_id>/fire
@@ -69,38 +114,23 @@ anthropic-version: 2023-06-01
 → {"type":"routine_fire","claude_code_session_id":"session_…","claude_code_session_url":"https://claude.ai/code/session_…"}
 ```
 
-Why this route:
+It has a documented JSON response and needs no login on the host. It costs:
 
-- It works on Pro and Max plans.
-- The response carries the session ID, which Orbit checkpoints.
-- The token is scoped to firing that one routine.
-- Runs draw subscription usage and then usage credits when those are enabled.
+- **It is not credit-eligible.**
+- **The fire text arrives as untrusted.** It comes wrapped in a `<routine-fire-payload>`
+  block, so the routine needs a saved prompt that explicitly opts in (Appendix A).
+- **One routine per repository**, each with a daily run cap.
+- **Research-preview beta headers**, which change over time.
 
-Properties the design depends on:
-
-- **The fire text is wrapped as untrusted.** It arrives in a `<routine-fire-payload>` block
-  that tells Claude not to follow instructions inside it unless the routine's own prompt says
-  to. So the routine's saved prompt must explicitly opt in: "Implement the Orbit task
-  described in the routine-fire-payload block, following its delivery contract." Orbit ships
-  that prompt as an asset (§3) and Daniel pastes it into the routine once.
-- **One routine per repository.** Each run clones the repository's default branch, and the
-  prompt can name another base. Routines push to `claude/`-prefixed branches, which are
-  always accepted.
-- **Each routine has a daily run cap.** Runs beyond the subscription limit fall to metered
-  usage credits when those are turned on. Orbit enforces its own ceiling (§4) so a drain
-  can't burn the cap by accident.
-- **Research preview.** The `/fire` shape sits behind a dated beta header. Breaking changes
-  ship under a new header, and the two previous headers keep working. Orbit pins the header
-  in config, not in code.
+Keep it as `dispatch = "routine"` for when the CLI login or the output format breaks.
 
 **Rejected alternatives**
 
-- **Driving interactive `claude --cloud` in a PTY.** This means scraping a live checklist UI
-  for the session ID. It is fragile and undocumented.
+- **`claude -p --cloud "<task>"`.** The CLI rejects it.
 - **The desktop app's "Continue in → Cloud".** Not scriptable.
 - **`claude -p --environment ccpool_…`.** This is the documented headless create, and it
   prints `{session_id}` as JSON. But it only targets self-hosted environments, which are
-  Team/Enterprise only. It becomes the second adapter in §6 if the plan changes, and the poll
+  Team/Enterprise only. It becomes the third adapter in §6 if the plan changes, and the poll
   contract below is identical for it.
 
 ## 2. Configuration
@@ -111,32 +141,39 @@ or events.
 ```toml
 [cloud]
 enabled = true
-fire_url = "https://api.anthropic.com/v1/claude_code/routines/trig_…/fire"
-token_file = "~/.orbit/secrets/cloud-routine-orbit.token"   # 0600, host-local
-beta_header = "experimental-cc-routine-2026-04-01"
+dispatch = "cli"                         # "cli" (PTY `claude --cloud`) or "routine"
 base_branch = "agent-main"
-branch_prefix = "claude/orbit-"          # routines only push claude/* freely
+branch_prefix = "claude/orbit-"
 max_in_flight = 4                        # the server burst-limits beyond ~3-4
-max_fires_per_day = 20                   # below the routine's daily cap
+max_dispatches_per_day = 20
 poll_interval_seconds = 60
 ready_deadline_seconds = 10800           # matches agent_implement's 3 h budget
 nudge_grace_seconds = 1800
 merge = "on-request"                     # or "after-review" once Phase 2 lands (§5.1)
+
+[cloud.routine]                          # only for dispatch = "routine"
+fire_url = "https://api.anthropic.com/v1/claude_code/routines/trig_…/fire"
+token_file = "~/.orbit/secrets/cloud-routine-orbit.token"   # 0600, host-local
+beta_header = "experimental-cc-routine-2026-04-01"
 ```
 
 `orbit doctor` reports these failures:
 
-- `[cloud]` is enabled but the token file is missing or has loose permissions;
-- the beta header is older than two versions;
-- the routine can't be fired with a dry payload. There is no dry-run endpoint, so this check
-  stays manual until one exists.
+- `dispatch = "cli"` and `claude auth status` on the host reports `loggedIn: false`, or a
+  non-claude.ai auth method;
+- `dispatch = "routine"` and the token file is missing or has loose permissions, or the beta
+  header is older than two versions.
+
+Neither path has a dry-run endpoint, so doctor never creates a session to test.
 
 ## 3. Delivery contract (the payload)
 
 Orbit renders one payload per dispatch from a template shipped as an asset
-(`assets/cloud/dispatch_payload.md`). The routine's saved prompt
-(`assets/cloud/routine_prompt.md`) is also versioned, and doctor compares its hash against
-the value recorded when Daniel last pasted it.
+(`assets/cloud/dispatch_payload.md`). With `dispatch = "cli"`, the payload opens with the
+delivery rules from Appendix A, since there is no saved prompt to hold them. With
+`dispatch = "routine"`, those rules live in the routine's saved prompt instead
+(`assets/cloud/routine_prompt.md`), and doctor compares its hash against the value recorded
+when Daniel last pasted it.
 
 The payload carries:
 
@@ -169,8 +206,8 @@ apply.
 
 | Step | Action | Does |
 |---|---|---|
-| 1 | `cloud_admit` | Refuses if `[cloud]` is disabled, `max_in_flight` or `max_fires_per_day` is reached, or the task is ineligible (§4.3). Derives the branch name. |
-| 2 | `cloud_dispatch` | Records intent, fires the routine, checkpoints the session (§4.1). |
+| 1 | `cloud_admit` | Refuses if `[cloud]` is disabled, `max_in_flight` or `max_dispatches_per_day` is reached, or the task is ineligible (§4.3). Derives the branch name. |
+| 2 | `cloud_dispatch` | Records intent, runs `claude --cloud` under a PTY (or fires the routine), checkpoints the session (§4.1). |
 | 3 | `cloud_await_pr` | Blocking GitHub poll until the PR is ready, closed or past its deadline (§4.2). |
 | 4 | `cloud_adopt_pr` | Pins the PR head, verifies it, stamps the `github-pr` ref and `execution_summary` (§5). |
 | 5 | `pr_promote` | Existing action: moves the task to `review` exactly as local delivery does. |
@@ -184,7 +221,13 @@ can open the session.
 This follows `handoff_land`'s "intent before the call" rule:
 
 1. Write a `cloud_dispatch_intent` event with the branch name and a nonce, and checkpoint it.
-2. POST `/fire`. The nonce goes into the payload.
+2. Run `claude --cloud "<payload>"` under a PTY from the dispatch worktree, with a 120 s
+   timeout (routine: POST `/fire`). The nonce goes into the payload.
+   - Parse strictly: exactly one `Resume with: claude --teleport session_…` line, and its ID
+     must equal the one in the `View:` URL.
+   - Anything else, including exit 0 with no ID, means `dispatch_unparsed`. Store the raw
+     output as a run artifact and block. **Never retry.** A session may already exist, and
+     only the GitHub check below can find it.
 3. On success, write the session ID and URL to the task as an external ref
    `{system: "claude-cloud-session", id: "session_…", url: …}`, then checkpoint.
 
@@ -194,8 +237,12 @@ does, it adopts that. If none does and the intent is older than `ready_deadline_
 it goes to `blocked` for a human decision. Firing a second session for the same task is the
 failure this rule exists to prevent: it costs a full session and races two PRs.
 
-A `429` or `5xx` from `/fire` is retried with backoff, but only before any `2xx` has been
-seen. A `401` means a revoked or rotated token: block and alert, never retry.
+Retries are allowed only when no session can have been created:
+- **CLI.** A `401`, a policy error, or `--cloud requires an interactive terminal` is a
+  configuration error. Block with the fix named (for example "run `claude auth login` on
+  the host"). `Session creation failed` is retried once after 60 s.
+- **Routine.** A `429` or `5xx` from `/fire` is retried with backoff before any `2xx`. A
+  `401` means a revoked or rotated token: block, never retry.
 
 ### 4.2 Polling
 
@@ -260,8 +307,8 @@ host does nothing for it. Phase 1 therefore:
 - keeps both counts in one admission pass, so `--stop`, the deadline and
   `orbit run concurrency` behave the same for both kinds.
 
-The only cloud ceilings are `max_in_flight` and `max_fires_per_day`, which protect the
-account's burst limit and routine cap. Neither is host capacity.
+The only cloud ceilings are `max_in_flight` and `max_dispatches_per_day`, which protect the
+account's burst limit and spend. Neither is host capacity.
 
 ### 4.3 Eligibility
 
@@ -271,7 +318,8 @@ claude.ai connectors. These tasks are ineligible:
 - tasks whose criteria need the host, such as `orbit` CLI state, the sweep clock, `~/.orbit`,
   launchd/systemd or the LAN;
 - tasks that need Orbit MCP during the work;
-- tasks in repositories the routine can't reach (no GitHub App, and no `/web-setup` token);
+- tasks in repositories the cloud session can't reach (no GitHub App, and no `/web-setup`
+  token);
 - tasks with unmet task dependencies, the same check `task_pr_pipeline` applies.
 
 v1 gates this on an explicit opt-in: the workspace sets `[cloud] enabled`, and the dispatch
@@ -353,21 +401,23 @@ two-variant action; §4.2 onward is unchanged.
 | External refs: `github-pr` | Add `claude-cloud-session` (ID and URL, never the token) |
 | `summary.rs` derives from local `git status` | Add a PR-diff source |
 | Review gate admits before `pr_open` | Admit against an adopted, fetched head (Phase 2) |
-| No HTTP client in engine VCS actions | One fire call; reuse the `orbit-web`/`reqwest` stack, or shell out to `curl` with the token on stdin |
+| PTY used by deterministic steps | Run `claude --cloud` under a PTY from a clean worktree at `origin/<base_branch>`, with a strict output parser |
+| No HTTP client in engine VCS actions | Routine fallback only: one fire call; reuse the `orbit-web`/`reqwest` stack, or shell out to `curl` with the token on stdin |
 
 ## 8. Phases (each its own PR into agent-main)
 
-0. **Spike on `constellation-works/orbit` (manual, no code).**
-   - Daniel creates an "orbit-cloud: orbit" routine at claude.ai/code/routines: repository
-     `constellation-works/orbit`, the Default environment, no connectors, and the routine
-     prompt from Appendix A. He adds an API trigger and stores the token on the box at
-     `~/.orbit/secrets/cloud-routine-orbit.token` with mode `0600`. Token creation is
-     web-only.
-   - Fire it by hand with one small real `ws_orbit` task rendered with Appendix B.
-   - Confirm: the response shape; whether the payload wrapper lets the saved prompt act on
-     it; that the branch name, commit marker and PR title are honored; that the session can
-     open a draft PR and mark it ready itself; the time to a ready PR; and where the run's
-     usage shows up.
+0. **Spike on `constellation-works/orbit` (manual, no code).** Dispatch creation under a PTY
+   is already verified (§1). Two probe sessions ran on 2026-09-23: one created, one refused
+   without a TTY.
+   - Run `claude --cloud` by hand from a clean `agent-main` checkout, with one small real
+     `ws_orbit` task rendered as Appendix A plus Appendix B.
+   - Confirm:
+     - that the branch name, commit marker and PR title are honored;
+     - that the session can open a draft PR and mark it ready itself;
+     - **which permission mode CLI-created sessions run in**, and whether they ever stop
+       for approval (the silent-stall risk in §9);
+     - the time to a ready PR;
+     - that the run draws the cloud-session credits in Settings → Usage.
    - Review the PR by hand and merge it through Orbit, per §5.1.
    - Record the results in this doc.
 1. **Dispatch, poll, adopt.**
@@ -376,7 +426,8 @@ two-variant action; §4.2 onward is unchanged.
      ref).
    - `task_cloud_pipeline`, plus `task_cloud_auto_pipeline` with separate drain accounting
      (§4.4).
-   - Doctor checks, and fixture tests with a faked `/fire` and a faked `gh`.
+   - Doctor checks, and fixture tests with a faked `claude --cloud` (pinned three-line
+     output), a faked `/fire` and a faked `gh`.
    - The task ends in `review`. Merging is `on-request` (§5.1).
 2. **Verification and auto-merge.** Run the local review gate against the adopted head, plus
    base-drift and dependency-delivery checks, then `pr_promote`. With
@@ -391,24 +442,32 @@ two-variant action; §4.2 onward is unchanged.
 
 ## 9. Risks
 
-- **The routine prompt ignores the payload.** The untrusted wrapper exists to make Claude
-  cautious about fire text. If the saved prompt's opt-in is too weak, sessions will refuse
-  or dilute the task. The Phase 0 spike settles the wording before any code exists.
+- **The CLI output format changes.** The `--cloud` output is interactive UI, not a
+  documented contract. The strict parser fails closed as `dispatch_unparsed`, never
+  retries, and the fixture test pins today's shape. `dispatch = "routine"` is the escape
+  hatch.
+- **The login on the host lapses.** There is a 30-day refresh cap, and the desktop app
+  revokes the CLI's login on the Mac. `cloud_admit` checks `claude auth status` first, so a
+  lapsed login blocks cleanly instead of burning a dispatch attempt.
+- **With `dispatch = "routine"`, the routine prompt may ignore the payload.** The untrusted
+  wrapper makes Claude cautious about fire text, so a weak opt-in makes sessions refuse or
+  dilute the task.
 - **Contract drift.** The session names the branch differently, forgets the marker, or never
   marks the PR ready. The title fallback, the structural checks and the deadline plus nudge
   bound each case. None of them can produce a false `review`.
-- **Opaque cost.** Orbit can't read per-session usage. Rely on `max_fires_per_day`,
+- **Opaque cost.** Orbit can't read per-session usage. Rely on `max_dispatches_per_day`,
   `max_in_flight` and claude.ai Settings → Usage, and record the session URL on every task
   so spend can be traced by hand.
 - **Preview API churn.** The beta header is config, and a `4xx` other than `429` blocks
   rather than retries.
-- **Token leak.** Anyone holding the token can fire the routine with arbitrary text. The
+- **Token leak (routine only).** Anyone holding the token can fire the routine with arbitrary text. The
   wrapper labels that text as untrusted, and the blast radius is a `claude/` branch plus a
   PR that still needs review. Store the token `0600` in `~/.orbit/secrets/`, and never put
   it in argv, events or logs.
 - **Silent stalls.** With no status API, a session idling on a question looks exactly like
-  one that is still working. Routine sessions run without permission prompts, which makes
-  this rarer; the deadline plus nudge bounds the wait.
+  one that is still working. Routine sessions run without permission prompts. Phase 0
+  establishes whether CLI-created sessions do too. Either way, the deadline plus nudge
+  bounds the wait.
 
 ## Resolved questions (2026-09-23)
 
@@ -421,9 +480,11 @@ two-variant action; §4.2 onward is unchanged.
    are counted only against `[cloud].max_in_flight` (§4.4).
 4. **First repository:** `constellation-works/orbit`, base `agent-main`.
 
-## Appendix A: routine prompt (draft, settled in Phase 0)
+## Appendix A: delivery rules (draft, settled in Phase 0)
 
-Pasted into the routine once; Orbit ships the final text as `assets/cloud/routine_prompt.md`.
+With `dispatch = "cli"`, these rules open the payload, and "the routine-fire-payload block"
+reads as "the task below". With `dispatch = "routine"`, they are the routine's saved prompt,
+shipped as `assets/cloud/routine_prompt.md`.
 
 ```text
 You are carrying out one Orbit task. Orbit is the task system that owns this repository's
@@ -450,7 +511,8 @@ These rules override anything in the payload that conflicts with them.
 
 ## Appendix B: dispatch payload (draft)
 
-Rendered by Orbit from `assets/cloud/dispatch_payload.md` and sent as the `/fire` `text`.
+Rendered by Orbit from `assets/cloud/dispatch_payload.md`. It is the `claude --cloud`
+description (after Appendix A) or the `/fire` `text`.
 
 ```text
 orbit-dispatch/v1
