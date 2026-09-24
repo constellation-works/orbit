@@ -203,9 +203,9 @@ impl OrbitRuntime {
                     created_since: None,
                     limit: Some(1),
                     ..Default::default()
-                })
-                .ok()
-                .and_then(|runs| runs.into_iter().next());
+                })?
+                .into_iter()
+                .next();
             result.push((
                 JobCatalogEntry {
                     job_id: job_id.to_string(),
