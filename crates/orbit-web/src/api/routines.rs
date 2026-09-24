@@ -1,5 +1,6 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::{Query, State};
@@ -112,7 +113,8 @@ pub(super) async fn toggle_routine(
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -173,7 +175,8 @@ pub(super) async fn toggle_routine(
                 None,
                 Some(&error_message),
                 started,
-            );
+            )
+            .await;
             return map_runtime_error(error);
         }
         Err(response) => return *response,
@@ -200,7 +203,8 @@ pub(super) async fn toggle_routine(
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "name": body.name,
         "source": body.source,
@@ -243,7 +247,8 @@ pub(super) async fn control_clock(
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -323,7 +328,8 @@ pub(super) async fn control_clock(
             None,
             Some(&error_message),
             started,
-        );
+        )
+        .await;
         return map_runtime_error(error);
     }
     let after = match blocking("clock status after", {
@@ -346,7 +352,8 @@ pub(super) async fn control_clock(
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "clock": clock_json(&after),
         "changed": before != after,
@@ -552,8 +559,8 @@ pub(super) fn selection_conflict(code: &'static str, message: String) -> Respons
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn record_operation_audit(
-    runtime: &OrbitRuntime,
+pub(super) async fn record_operation_audit(
+    runtime: &Arc<OrbitRuntime>,
     workspace: &str,
     operation: &str,
     target: &str,
@@ -616,9 +623,16 @@ pub(super) fn record_operation_audit(
         activity_id: None,
         step_index: None,
     };
-    if let Err(error) = runtime.record_audit_event(&params) {
-        tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
-    }
+    // A SQLite insert can wait out the busy timeout; keep it off the async
+    // worker like every other store access in this crate.
+    let writer = Arc::clone(runtime);
+    let result = tokio::task::spawn_blocking(move || writer.record_audit_event(&params)).await;
+    let error = match result {
+        Ok(Ok(())) => return,
+        Ok(Err(error)) => error.to_string(),
+        Err(join_error) => join_error.to_string(),
+    };
+    tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
 }
 
 /// One fire attempt, enriched with coarse outcome and wall-clock duration.

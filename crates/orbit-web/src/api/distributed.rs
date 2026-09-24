@@ -334,7 +334,8 @@ where
                 Some(&denial),
                 None,
                 started,
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -353,7 +354,8 @@ where
                 None,
                 None,
                 started,
-            );
+            )
+            .await;
             Json(json!({ "ok": true, "result": value })).into_response()
         }
         Ok(Err(error)) => {
@@ -369,7 +371,8 @@ where
                 None,
                 Some(&error.to_string()),
                 started,
-            );
+            )
+            .await;
             response
         }
         Err(join_err) => server_error(OrbitError::Execution(format!(

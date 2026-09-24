@@ -252,7 +252,8 @@ where
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -279,7 +280,8 @@ where
                 None,
                 Some(&failure),
                 started,
-            );
+            )
+            .await;
             return map_runtime_error(error);
         }
         Err(join_error) => {
@@ -304,7 +306,8 @@ where
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "key": target,
         "scope": outcome.scope,

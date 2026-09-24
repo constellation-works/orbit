@@ -119,7 +119,8 @@ pub(super) async fn toggle_auto_task(
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -182,7 +183,8 @@ pub(super) async fn toggle_auto_task(
                 None,
                 Some(&error_message),
                 started,
-            );
+            )
+            .await;
             return map_runtime_error(error);
         }
         Err(response) => return *response,
@@ -198,7 +200,8 @@ pub(super) async fn toggle_auto_task(
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "name": updated.name,
         "enabled": updated.enabled,
@@ -246,7 +249,8 @@ pub(super) async fn mint_auto_task(
                 Some(&denial),
                 None,
                 Instant::now(),
-            );
+            )
+            .await;
             return authorization_denied(denial);
         }
     };
@@ -272,7 +276,8 @@ pub(super) async fn mint_auto_task(
                 None,
                 Some(&error_message),
                 started,
-            );
+            )
+            .await;
             return map_runtime_error(error);
         }
         Err(response) => return *response,
@@ -291,7 +296,8 @@ pub(super) async fn mint_auto_task(
         None,
         None,
         started,
-    );
+    )
+    .await;
     Json(json!({
         "name": body.name,
         "task_id": minted.id.to_string(),
