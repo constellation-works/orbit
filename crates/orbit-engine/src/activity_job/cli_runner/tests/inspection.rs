@@ -194,6 +194,13 @@ fn rejects_invalid_revision_and_write_profiles_and_detects_edits() {
         .is_err()
     );
     let non_git = tempdir().unwrap();
+    // TMPDIR can sit inside a managed worktree. Stop Git from discovering
+    // that ancestor so this fixture still has no usable repository.
+    fs::write(
+        non_git.path().join(".git"),
+        "gitdir: missing-fixture-gitdir\n",
+    )
+    .unwrap();
     assert!(
         SourceInspection::from_input(
             &json!({"inspection_revision": null}),
