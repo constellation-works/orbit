@@ -115,9 +115,6 @@ pub mod dependabot_alerts;
 mod diagnostic;
 pub use diagnostic::strip_ansi_sequences;
 pub mod logs;
-pub mod pr_checkout;
-pub mod pr_checks;
-pub mod pr_close;
 pub mod pr_list;
 pub mod repo;
 pub mod run_list;
@@ -131,8 +128,7 @@ pub mod run_view;
 /// tool, and its output is redacted and bounded on the way back out. A body
 /// that shells out to `gh` itself gets none of that.
 ///
-/// Nothing that mutates GitHub is registered. `pr_checkout`, `pr_checks`,
-/// `pr_close`, and `repo` stay unregistered — the PR pipeline drives those
+/// Nothing that mutates GitHub is registered: the PR pipeline drives those
 /// operations directly from `orbit-engine`.
 pub fn register(registry: &mut ToolRegistry) {
     registry.register(auth::GithubAuthStatusTool);
@@ -140,29 +136,6 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register(run_list::GithubRunListTool);
     registry.register(run_logs::GithubRunLogsTool);
     registry.register(run_view::GithubRunViewTool);
-}
-
-/// Extract a non-empty `pr` field from the tool input.
-/// Accepts a numeric PR number or a GitHub PR URL (extracts the number from the path).
-pub(super) fn require_pr(input: &Value) -> Result<String, OrbitError> {
-    let pr = require_str(input, "pr")?;
-    // Already numeric — use directly.
-    if !pr.is_empty() && pr.chars().all(|c| c.is_ascii_digit()) {
-        return Ok(pr);
-    }
-    // Try to extract PR number from a GitHub URL like
-    // https://github.com/owner/repo/pull/123
-    if pr.contains("github.com/")
-        && pr.contains("/pull/")
-        && let Some(num) = pr.rsplit('/').next()
-        && !num.is_empty()
-        && num.chars().all(|c| c.is_ascii_digit())
-    {
-        return Ok(num.to_string());
-    }
-    Err(OrbitError::InvalidInput(format!(
-        "invalid `pr`: \"{pr}\"; must be a numeric PR number or GitHub PR URL"
-    )))
 }
 
 /// Extract a required numeric GitHub identifier (a workflow-run or job ID).

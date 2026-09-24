@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 use orbit_exec::ExecRequest;
 use serde_json::{Value, json};
 
-use crate::{TIMEOUT_DEFAULT_MS, check_exec_result};
+use crate::TIMEOUT_DEFAULT_MS;
 
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec!["repo".to_string(), "view".to_string()];
@@ -29,30 +29,4 @@ pub fn project_repo_view(parsed: &Value) -> Value {
         "full_name": parsed["nameWithOwner"],
         "default_branch": parsed["defaultBranchRef"]["name"],
     })
-}
-
-super::gh_tool! {
-    pub struct GithubRepoViewTool;
-    name: "github.repo.view";
-    description: "Retrieve repository metadata including name and default branch";
-    parameters: [
-        super::tool_param(
-            "repo",
-            "Repository in owner/name format (uses current directory if omitted)",
-            "string",
-            false,
-        ),
-    ];
-    request: |_ctx, input| {
-        build_exec_request(input)
-    }
-    response: |_ctx, _input, result| {
-        check_exec_result(result, "gh repo view")?;
-
-        let parsed: Value = serde_json::from_str(&result.stdout).map_err(|e| {
-            OrbitError::Execution(format!("failed to parse gh repo view output: {e}"))
-        })?;
-
-        Ok(project_repo_view(&parsed))
-    }
 }
