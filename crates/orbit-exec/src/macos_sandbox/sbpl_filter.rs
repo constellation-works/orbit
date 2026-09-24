@@ -134,13 +134,15 @@ pub(super) fn push_regex_escaped_str(out: &mut String, value: &str) {
 /// Strip glob suffixes from a rule so it can be used as a `subpath` root.
 /// `subpath` matches a directory and everything beneath, so `**` wildcards
 /// are redundant and `*` segments cannot be expressed in SBPL — we collapse
-/// them to the longest non-glob prefix.
+/// them to the deepest directory above the first glob. Cutting at the glob
+/// itself would leave a partial component (`Key` for `Key*`) that no path
+/// under `Keychains` starts with.
 fn subpath_root(rule: &str) -> String {
     let trimmed = rule.trim_end_matches('/');
     let trimmed = trimmed.trim_end_matches("/**");
     if let Some(idx) = trimmed.find(['*', '?']) {
         let prefix = &trimmed[..idx];
-        let prefix = prefix.trim_end_matches('/');
+        let prefix = prefix.rfind('/').map_or("", |slash| &prefix[..slash]);
         if prefix.is_empty() {
             "/".to_string()
         } else {

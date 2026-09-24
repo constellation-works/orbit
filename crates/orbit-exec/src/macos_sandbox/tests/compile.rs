@@ -228,6 +228,25 @@ fn compile_orders_activity_read_denies_after_the_provider_keychain_reallow() {
     }
 }
 
+/// A glob inside a path component still covers the keychain directory it can
+/// match, so the reported access agrees with the regex clause the sandbox
+/// enforces.
+#[test]
+fn keychain_access_reports_a_deny_with_a_glob_inside_a_component() {
+    let deny = "!/Users/test/Library/Key*";
+    let resolved = profile("default", &["/Users/test/repo", deny], &[]);
+    assert_eq!(
+        macos_login_keychain_access(
+            "claude",
+            Some(std::ffi::OsStr::new("/Users/test")),
+            &resolved
+        ),
+        MacosLoginKeychainAccess::DeniedByActivityRule {
+            rule: deny.to_string()
+        }
+    );
+}
+
 /// The narrowing above must not become the default: with no overlapping
 /// activity deny, Claude keeps the OAuth read that ORB-10929 delivered.
 #[test]
