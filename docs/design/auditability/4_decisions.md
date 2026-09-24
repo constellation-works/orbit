@@ -3,7 +3,7 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-08-11
+last_updated: 2026-09-24
 last_validated: 2026-09-16
 status: Draft
 feature: auditability
@@ -387,42 +387,6 @@ Store friction reports under `.orbit/frictions/{yyyy}-{mm}/F{nnn}.md` with YAML 
 - The migration window is closed; task CLI, MCP, dashboard, and workflow surfaces no longer expose a friction status.
 - Cost: workspaces with unmigrated legacy friction tasks must migrate them before upgrading because task deserialization no longer accepts `status: friction`.
 
----
-
-## Task References
-
-- **[T20260419-0002]** — Add workspace provenance and v2 audit envelope events for activity/job execution.
-- **[T20260426-0519]** — Move file-backed activity/job audit traces under workspace state.
-- **[T20260426-0526]** — Persist v2 invocation traces for metrics beside audit.
-- **[T20260426-0605]** — Add this auditability design folder and record initial ADRs.
-- **[T20260426-0705]** — Expose v2 run audit events through `orbit run events` and `orbit run trace`.
-- **[T20260426-0709]** — Align run step selectors on activity `step.id` and move CLI invocation log reading behind orbit-core runtime accessors.
-- **[T20260426-2313]** — Stream CLI subprocess stdout/stderr through structured tracing events.
-- **[T20260426-2343]** — Add the global process tracing JSONL feed at `~/.orbit/state/logs/orbit.jsonl`.
-- **[T20260426-2349]** — Apply tracing-layer redaction before stderr and global JSONL output.
-- **[T20260427-0023]** — Project policy denials and friction task submissions into the global tracing feed.
-- **[T20260427-27]** — Close out the unified-log story: job lifecycle dual-write, library print migration with workspace lint gate, and `orbit log tail` reader CLI.
-- **[T20260427-43]** — Add `status: friction`, creation-time friction routing, migration, and history-derived friction bounty refresh.
-- **[T20260427-44]** — Add shared log formatter extraction and dashboard backend `/api/log` snapshot/SSE endpoints.
-- **[T20260427-46]** — Implement the Gemini-owned Tasks-tab `orbit.log` panel using the shared dashboard backend API.
-- **[T20260427-47]** — Allow explicit task attribution correction for `planned_by` and `implemented_by` through task update paths.
-- **[T20260427-52]** — Deprecate `agent` in normal tool-call JSON, infer agent family from `model`, and reject inconsistent legacy pairs.
-- **[T20260428-4]** — Record audit events for MCP tool invocations by moving ownership into the runtime, adding the entry-point discriminator, and bracketing MCP preflight.
-- **[T20260428-7]** — Correlate command-audit rows with originating run/task/activity by adding nullable correlation columns and surfacing them on the dashboard.
-- **[T20260428-11]** — Derive compact scoreboard all/failed tool-call counts from command-audit tool-run rows.
-- **[T20260428-17]** — Split local Orbit task-review scoring from PR review-comment scoring and surface both in compact scoreboards.
-- **[T20260430-4]** — Count local task-review score by review-thread creations, not replies, and rename the task-review summary field to `threads`.
-- **[T20260430-5]** — Tighten task and PR review-message scoring so only exact configured orchestrator/helper model identities score; typo-prefixed labels are ignored.
-- **[T20260430-20]** — Shorten the auditability docs while preserving required guarantees.
-- **[T20260505-6]** — Replace timestamp-only command-audit execution ids with process-disambiguated generated ids for parallel tool runs.
-- **[T20260506-2]** — Lazily materialize loop audit JSONL files only when loop-level events are emitted.
-- **[T20260508-22]** — Use `task.implemented_by` to set git commit authors for automated task commits.
-- **[T20260509-12]** — Scope workflow git author and committer identity to the spawned commit process without writing repo-local Git config.
-- **[T20260510-13]** — Move friction reports from task lifecycle state to append-only `.orbit/frictions/` records.
-- **[ORB-10202]** — Remove legacy friction from the task status taxonomy.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
 ## Keep frictions as distinct workspace-scoped records backed by SQLite
 
 **Recorded:** 2026-08-09 19:30:11.118493Z · [ORB-10680]
@@ -441,40 +405,6 @@ Keep friction as a first-class operational artifact outside the task lifecycle, 
 - Identical friction IDs may safely coexist in different workspaces and every read/write remains explicitly workspace-scoped.
 - Legacy Markdown records remain migration evidence for one release but cease to be a live source after a workspace import commits.
 - Cost: Raw per-record file inspection and Git diffs are no longer the persistence interface; operators depend on SQLite backup/integrity tooling and Orbit export surfaces for recovery and review.
-
-## Task References
-
-- **[T20260419-0002]** — Add workspace provenance and v2 audit envelope events for activity/job execution.
-- **[T20260426-0519]** — Move file-backed activity/job audit traces under workspace state.
-- **[T20260426-0526]** — Persist v2 invocation traces for metrics beside audit.
-- **[T20260426-0605]** — Add this auditability design folder and record initial ADRs.
-- **[T20260426-0705]** — Expose v2 run audit events through `orbit run events` and `orbit run trace`.
-- **[T20260426-0709]** — Align run step selectors on activity `step.id` and move CLI invocation log reading behind orbit-core runtime accessors.
-- **[T20260426-2313]** — Stream CLI subprocess stdout/stderr through structured tracing events.
-- **[T20260426-2343]** — Add the global process tracing JSONL feed at `~/.orbit/state/logs/orbit.jsonl`.
-- **[T20260426-2349]** — Apply tracing-layer redaction before stderr and global JSONL output.
-- **[T20260427-0023]** — Project policy denials and friction task submissions into the global tracing feed.
-- **[T20260427-27]** — Close out the unified-log story: job lifecycle dual-write, library print migration with workspace lint gate, and `orbit log tail` reader CLI.
-- **[T20260427-43]** — Add `status: friction`, creation-time friction routing, migration, and history-derived friction bounty refresh.
-- **[T20260427-44]** — Add shared log formatter extraction and dashboard backend `/api/log` snapshot/SSE endpoints.
-- **[T20260427-46]** — Implement the Gemini-owned Tasks-tab `orbit.log` panel using the shared dashboard backend API.
-- **[T20260427-47]** — Allow explicit task attribution correction for `planned_by` and `implemented_by` through task update paths.
-- **[T20260427-52]** — Deprecate `agent` in normal tool-call JSON, infer agent family from `model`, and reject inconsistent legacy pairs.
-- **[T20260428-4]** — Record audit events for MCP tool invocations by moving ownership into the runtime, adding the entry-point discriminator, and bracketing MCP preflight.
-- **[T20260428-7]** — Correlate command-audit rows with originating run/task/activity by adding nullable correlation columns and surfacing them on the dashboard.
-- **[T20260428-11]** — Derive compact scoreboard all/failed tool-call counts from command-audit tool-run rows.
-- **[T20260428-17]** — Split local Orbit task-review scoring from PR review-comment scoring and surface both in compact scoreboards.
-- **[T20260430-4]** — Count local task-review score by review-thread creations, not replies, and rename the task-review summary field to `threads`.
-- **[T20260430-5]** — Tighten task and PR review-message scoring so only exact configured orchestrator/helper model identities score; typo-prefixed labels are ignored.
-- **[T20260430-20]** — Shorten the auditability docs while preserving required guarantees.
-- **[T20260505-6]** — Replace timestamp-only command-audit execution ids with process-disambiguated generated ids for parallel tool runs.
-- **[T20260506-2]** — Lazily materialize loop audit JSONL files only when loop-level events are emitted.
-- **[T20260508-22]** — Use `task.implemented_by` to set git commit authors for automated task commits.
-- **[T20260509-12]** — Scope workflow git author and committer identity to the spawned commit process without writing repo-local Git config.
-- **[T20260510-13]** — Move friction reports from task lifecycle state to append-only `.orbit/frictions/` records.
-- **[ORB-10202]** — Remove legacy friction from the task status taxonomy.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
 
 ## Ship PR transitions preserve task implementer attribution
 
@@ -672,52 +602,39 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 
 ## Task References
 
-- **[T20260419-0002]** — Add workspace provenance and v2 audit envelope events for activity/job execution.
-- **[T20260426-0519]** — Move file-backed activity/job audit traces under workspace state.
-- **[T20260426-0526]** — Persist v2 invocation traces for metrics beside audit.
-- **[ORB-00190]** — Retire the metrics CLI and make dashboard endpoints canonical for invocation metrics.
-- **[T20260426-0605]** — Add this auditability design folder and record initial ADRs.
-- **[T20260426-0705]** — Expose v2 run audit events through `orbit run events` and `orbit run trace`.
-- **[T20260426-0709]** — Align run step selectors on activity `step.id` and move CLI invocation log reading behind orbit-core runtime accessors.
-- **[T20260426-2313]** — Stream CLI subprocess stdout/stderr through structured tracing events.
-- **[T20260426-2343]** — Add the global process tracing JSONL feed at `~/.orbit/state/logs/orbit.jsonl`.
-- **[T20260426-2349]** — Apply tracing-layer redaction before stderr and global JSONL output.
-- **[T20260427-0023]** — Project policy denials and friction task submissions into the global tracing feed.
-- **[T20260427-27]** — Close out the unified-log story: job lifecycle dual-write, library print migration with workspace lint gate, and `orbit log tail` reader CLI.
-- **[T20260427-43]** — Add `status: friction`, creation-time friction routing, migration, and history-derived friction bounty refresh.
-- **[T20260427-44]** — Add shared log formatter extraction and dashboard backend `/api/log` snapshot/SSE endpoints.
-- **[T20260427-46]** — Implement the Gemini-owned Tasks-tab `orbit.log` panel using the shared dashboard backend API.
-- **[T20260427-47]** — Allow explicit task attribution correction for `planned_by` and `implemented_by` through task update paths.
-- **[T20260427-52]** — Deprecate `agent` in normal tool-call JSON, infer agent family from `model`, and reject inconsistent legacy pairs.
-- **[T20260428-4]** — Record audit events for MCP tool invocations by moving ownership into the runtime, adding the entry-point discriminator, and bracketing MCP preflight.
-- **[T20260428-7]** — Correlate command-audit rows with originating run/task/activity by adding nullable correlation columns and surfacing them on the dashboard.
-- **[ORB-10228]** — Supersede [Command-audit rows carry task / run / activity correlation IDs](#command-audit-rows-carry-task-run-activity-correlation-ids) caller-JSON precedence for MCP; add trusted caller/process provenance, capability sets, and call/lease correlation.
-- **[T20260428-11]** — Derive compact scoreboard all/failed tool-call counts from command-audit tool-run rows.
-- **[T20260428-17]** — Split local Orbit task-review scoring from PR review-comment scoring and surface both in compact scoreboards.
-- **[T20260430-4]** — Count local task-review score by review-thread creations, not replies, and rename the task-review summary field to `threads`.
-- **[T20260430-5]** — Tighten task and PR review-message scoring so only exact configured orchestrator/helper model identities score; typo-prefixed labels are ignored.
-- **[T20260430-20]** — Shorten the auditability docs while preserving required guarantees.
-- **[T20260505-6]** — Replace timestamp-only command-audit execution ids with process-disambiguated generated ids for parallel tool runs.
-- **[T20260506-2]** — Lazily materialize loop audit JSONL files only when loop-level events are emitted.
-- **[T20260508-22]** — Use `task.implemented_by` to set git commit authors for automated task commits.
-- **[T20260509-12]** — Scope workflow git author and committer identity to the spawned commit process without writing repo-local Git config.
-- **[T20260510-13]** — Move friction reports from task lifecycle state to append-only `.orbit/frictions/` records.
-- **[ORB-00067]** — Earlier automation attribution work that did not close the ship batch PR Done transition gap.
-- **[ORB-00089]** — Earlier system-attribution gap that informed the ship-path fallback rule.
-- **[ORB-00091]** — Prior fix for automation-driven status attribution that did not cover the ship merge loop.
-- **[ORB-00080]** — Collapse Orbit agent identity to family and isolate exact model strings to invocation/configuration surfaces.
-- **[ORB-00090]** — Align agent-facing docs and tool descriptions with the family-as-identity convention.
-- **[ORB-00106]** — Preserve per-task implementer attribution when `orbit run ship` moves batch PR tasks from Review to Done.
-- **[ORB-10202]** — Remove the retired friction task status and consolidate task mutation attribution and record-parameter construction.
-- **[ORB-10338]** — Add the versioned model price table and query-time `derived_cost_usd`, plus a persisted `provider_cost_usd` column for reconciliation.
-- **[ORB-10370]** — Fill provider model/cost trace fields from CLI result JSON and prefer reported model identity at invocation ingest.
-- **[ORB-10579]** — Correct GPT-5.6 price periods, cache-write rates, gross-input accounting, and standard short-context estimate boundaries.
-- **[ORB-10519]** — Keep the persisted crew-model author and process-scoped Orbit committer while removing hook-specific trailer input and provider-commit adoption ([Workflow alone creates shipment commits while dirty failures remain recoverable](#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable), superseding [Workflow commit authors use the persisted crew model](#workflow-commit-authors-use-the-persisted-crew-model) and [Preserve failed worktree state before cleanup and admit only proven task commits](../activity-job/4_decisions.md#preserve-failed-worktree-state-before-cleanup-and-admit-only-proven-task-commits)).
-- **[ORB-10369]** — Introduce the persisted resolved crew model as the pipeline commit author with generic fallback and no alias resolver ([Workflow commit authors use the persisted crew model](#workflow-commit-authors-use-the-persisted-crew-model), superseded by [Workflow alone creates shipment commits while dirty failures remain recoverable](#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable)).
-- **[ORB-10496]** — Record the spawned provider subprocess PID as its own audit event and expose read-time liveness through run status and `orbit run show`.
-
-- **[ORB-10590]** — Make the friction record handle an author-settable field and derive it structurally when omitted ([Friction records carry an author-settable title; derivation is a structural fallback](#friction-records-carry-an-author-settable-title-derivation-is-a-structural-fallback)).
-- **[ORB-10680]** — Moved hub friction records into the host-global SQLite store to bound scan memory ([Friction records move to SQLite with a legacy-evidence path projection](#friction-records-move-to-sqlite-with-a-legacy-evidence-path-projection)).
-- **[ORB-10890]** — Record an explicitly-untrusted self-reported actor beside the trusted `role` so unauthenticated MCP traffic is attributable-but-labelled ([Unauthenticated MCP callers get a second, explicitly-untrusted identity field](#unauthenticated-mcp-callers-get-a-second-explicitly-untrusted-identity-field)).
+- [T20260419-0002] — add workspace provenance and v2 audit envelope events for activity/job execution.
+- [T20260426-0519] — move file-backed activity/job audit traces under workspace state.
+- [T20260426-0526] — persist v2 invocation traces for metrics beside audit.
+- [T20260426-0605] — add this auditability design folder and record initial ADRs.
+- [T20260426-0705] — expose v2 run audit events through `orbit run events` and `orbit run trace`.
+- [T20260426-0709] — align run step selectors on activity `step.id` and move CLI invocation log reading behind orbit-core runtime accessors.
+- [T20260426-2313] — stream CLI subprocess stdout/stderr through structured tracing events.
+- [T20260426-2343] — add the global process tracing JSONL feed at `~/.orbit/state/logs/orbit.jsonl`.
+- [T20260426-2349] — apply tracing-layer redaction before stderr and global JSONL output.
+- [T20260427-0023] — project policy denials and friction task submissions into the global tracing feed.
+- [T20260427-27] — close out the unified-log story: job lifecycle dual-write, library print migration with workspace lint gate, and `orbit log tail` reader CLI.
+- [T20260427-44] — add shared log formatter extraction and dashboard backend `/api/log` snapshot/SSE endpoints.
+- [T20260427-46] — implement the Gemini-owned Tasks-tab `orbit.log` panel using the shared dashboard backend API.
+- [T20260427-47] — allow explicit task attribution correction for `planned_by` and `implemented_by` through task update paths.
+- [T20260427-52] — deprecate `agent` in normal tool-call JSON, infer agent family from `model`, and reject inconsistent legacy pairs.
+- [T20260428-4] — record audit events for MCP tool invocations by moving ownership into the runtime, adding the entry-point discriminator, and bracketing MCP preflight.
+- [T20260428-7] — correlate command-audit rows with originating run/task/activity by adding nullable correlation columns and surfacing them on the dashboard.
+- [T20260428-11] — derive compact scoreboard all/failed tool-call counts from command-audit tool-run rows.
+- [T20260428-17] — split local Orbit task-review scoring from PR review-comment scoring and surface both in compact scoreboards.
+- [T20260430-4] — count local task-review score by review-thread creations, not replies, and rename the task-review summary field to `threads`.
+- [T20260430-5] — tighten task and PR review-message scoring so only exact configured orchestrator/helper model identities score; typo-prefixed labels are ignored.
+- [T20260505-6] — replace timestamp-only command-audit execution ids with process-disambiguated generated ids for parallel tool runs.
+- [T20260506-2] — lazily materialize loop audit JSONL files only when loop-level events are emitted.
+- [T20260510-13] — move friction reports from task lifecycle state to append-only `.orbit/frictions/` records.
+- [ORB-00190] — retire the metrics CLI and make dashboard endpoints canonical for invocation metrics.
+- [ORB-00080] — collapse Orbit agent identity to family and isolate exact model strings to invocation/configuration surfaces.
+- [ORB-00106] — preserve per-task implementer attribution when `orbit run ship` moves batch PR tasks from Review to Done.
+- [ORB-10338] — add the versioned model price table and query-time `derived_cost_usd`, plus a persisted `provider_cost_usd` column for reconciliation.
+- [ORB-10519] — keep the persisted crew-model author and process-scoped Orbit committer while removing hook-specific trailer input and provider-commit adoption.
+- [ORB-10369] — introduce the persisted resolved crew model as the pipeline commit author with generic fallback and no alias resolver.
+- [ORB-10496] — record the spawned provider subprocess PID as its own audit event and expose read-time liveness through run status and `orbit run show`.
+- [ORB-10590] — make the friction record handle an author-settable field and derive it structurally when omitted.
+- [ORB-10680] — moved hub friction records into the host-global SQLite store to bound scan memory.
+- [ORB-10890] — record an explicitly-untrusted self-reported actor beside the trusted `role` so unauthenticated MCP traffic is attributable-but-labelled.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

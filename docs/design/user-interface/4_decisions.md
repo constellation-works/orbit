@@ -3,7 +3,7 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-09-12
+last_updated: 2026-09-24
 last_validated: 2026-09-12
 status: Draft
 feature: user-interface
@@ -79,16 +79,6 @@ Keep the Tasks view in a two-column layout and size `#log-panel` to the availabl
 - Operators get one clear scroll target for raw log rows while live-tail controls stay visible during short-screen monitoring.
 - Cost: The Tasks view trades narrow-screen stacking for denser columns so the live log remains in the first viewport.
 
-## Task References
-
-- [T20260427-29] introduced the Canon Refined UI direction.
-- [T20260428-13] unified policy-denial sources for the dashboard.
-- [T20260428-15] compacted scoreboard ratio columns.
-- [T20260430-24] tightened this decision log without changing decisions.
-- [T20260430-29] bounded the live `orbit.log` tail panel.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
 ## Grouped Scoreboard Sections
 
 **Recorded:** 2026-05-18 02:58:43.428001Z · [ORB-00144]
@@ -104,16 +94,6 @@ Render the dashboard scoreboard as focused sections: Delivery, Review, Knowledge
 - Non-canonical attribution rows stay visible but no longer compete with canonical agent families in primary sections.
 - No single Rust code anchor; this is enforced by dashboard rendering and design review, and workspace-local ADR comments should not be embedded in shipped dashboard assets.
 - Cost: Cross-section comparison now requires scanning multiple tables instead of one row, and future metrics must choose an explicit section before being added.
-
-## Task References
-
-- [T20260427-29] introduced the Canon Refined UI direction.
-- [T20260428-13] unified policy-denial sources for the dashboard.
-- [T20260428-15] compacted scoreboard ratio columns.
-- [T20260430-24] tightened this decision log without changing decisions.
-- [T20260430-29] bounded the live `orbit.log` tail panel.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
 
 ## Extract Dashboard + JSON API to orbit-dashboard Crate
 
@@ -256,17 +236,16 @@ end, `model` becomes declared provenance, and `agent` is a trap field pointing a
 
 ## Task References
 
-- [T20260427-29] introduced the Canon Refined UI direction.
-- [T20260428-13] unified policy-denial sources for the dashboard.
-- [T20260428-15] compacted scoreboard ratio columns.
-- [T20260430-24] tightened this decision log without changing decisions.
-- [T20260430-29] bounded the live `orbit.log` tail panel.
-- [ORB-00144] grouped scoreboard metrics and added knowledge counters plus duel matrix data.
-- [ORB-00146] extracted the dashboard and JSON API into the new `orbit-dashboard` internal crate (this document).
-- [ORB-00154] unified the Scoreboard tab into a metric-major leaderboard matrix.
-- [ORB-00030] made the dashboard global/multi-workspace (workspace-keyed state, `Ws` extractor, serve-from-anywhere, aggregate endpoints).
-- [ORB-10444] retired the deprecated tab, folded Scoreboard under Diagnostics, pinned the Knowledge detail pane, and added task ship + comments.
-- [ORB-10588] added the Reliability subtab: job-run failure rate and recovery invocation rate from durable run state.
-- [ORB-10648] made the task create/update bodies reject unsupported fields instead of discarding them silently.
+- [T20260427-29] — introduced the Canon Refined UI direction.
+- [T20260428-13] — unified policy-denial sources for the dashboard.
+- [T20260428-15] — compacted scoreboard ratio columns.
+- [T20260430-29] — bounded the live `orbit.log` tail panel.
+- [ORB-00144] — grouped scoreboard metrics and added knowledge counters plus duel matrix data.
+- [ORB-00146] — extracted the dashboard and JSON API into the new `orbit-dashboard` internal crate (this document).
+- [ORB-00154] — unified the Scoreboard tab into a metric-major leaderboard matrix.
+- [ORB-00030] — made the dashboard global/multi-workspace (workspace-keyed state, `Ws` extractor, serve-from-anywhere, aggregate endpoints).
+- [ORB-10444] — retired the deprecated tab, folded Scoreboard under Diagnostics, pinned the Knowledge detail pane, and added task ship + comments.
+- [ORB-10588] — added the Reliability subtab: job-run failure rate and recovery invocation rate from durable run state.
+- [ORB-10648] — made the task create/update bodies reject unsupported fields instead of discarding them silently.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

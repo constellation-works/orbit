@@ -3,7 +3,7 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-09-08
+last_updated: 2026-09-24
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
@@ -265,25 +265,6 @@ Resolve the wrapper only from trusted absolute locations, currently `/usr/bin/sa
 - Availability messages describe the trusted absolute location instead of implying arbitrary `PATH` lookup.
 - Cost: the implementation is intentionally macOS-location-specific; if Apple moves or removes the binary, Orbit must update the trusted location list or add a new backend rather than silently accepting a user-supplied replacement.
 
----
-
-## Task References
-
-- **[T20260328-221810]** — Subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- **[T20260416-0728]** — Aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- **[T20260417-0550]** — Decomposed `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened `orbit-exec` supervision (process-group reaping, signal-pipe handler).
-- **[T20260419-0503]** — Enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- **[T20260426-0622]** — Add this design folder and record the initial ADR set.
-- **[T20260427-51]** — Wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
-- **[T20260428-10]** — Allow Codex CLI state writes under the macOS sandbox.
-- **[T20260428-14]** — Extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[T20260508-13]** — Add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
-- **[T20260509-30]** — Resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
 ## Use Bubblewrap for shipped Linux CLI write confinement
 
 **Recorded:** 2026-08-01 23:26:11.357573Z · [ORB-10552]
@@ -424,42 +405,20 @@ Keep `.orbit/config.yaml` beneath the default `.orbit/**` agent-write deny. The 
 
 ## Task References
 
-- **[T20260328-221810]** — Subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- **[T20260416-0728]** — Aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- **[T20260417-0550]** — Decomposed `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened `orbit-exec` supervision (process-group reaping, signal-pipe handler).
-- **[T20260419-0503]** — Enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- **[T20260426-0622]** — Add this design folder and record the initial ADR set.
-- **[T20260427-51]** — Wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
-- **[T20260428-10]** — Allow Codex CLI state writes under the macOS sandbox.
-- **[T20260428-14]** — Extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[T20260508-13]** — Add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
-- **[T20260509-30]** — Resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
-## Task References
-
-- **[T20260328-221810]** — Subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- **[T20260416-0728]** — Aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- **[T20260417-0550]** — Decomposed `orbit-exec` supervision modules.
-- **[T20260417-0558-4]** / **[T20260417-0558-5]** — Hardened `orbit-exec` supervision (process-group reaping, signal-pipe handler).
-- **[T20260419-0503]** — Enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- **[T20260426-0622]** — Add this design folder and record the initial ADR set.
-- **[T20260427-51]** — Wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
-- **[T20260428-10]** — Allow Codex CLI state writes under the macOS sandbox.
-- **[T20260428-14]** — Extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
-- **[T20260430-23]** — Shorten the policy sandbox design docs while preserving the shipped contract and ADR history.
-- **[T20260508-13]** — Add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
-- **[T20260509-30]** — Resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-- **[ORB-00048]** — Extend the unconditional provider state-dir allowance set to include Grok's `$HOME/.grok` state directory while hardening fourth-family scoreboards and analytics.
-- **[ORB-10552]** — Implement fail-closed Linux Bubblewrap write confinement and preserve the explicit read-policy limitation.
-- **[ORB-10560]** — Amend global deny resolution with profile-intersected host modify exceptions for versioned `.orbit` configuration.
-- **[ORB-10573]** — Amend Linux delivery with trusted, two-gate preparation of missing versioned-config mount anchors.
-- **[ORB-10602]** — Derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate. [Derive Linux sandbox write-grant anchors from the effective profile at each spawn](#derive-linux-sandbox-write-grant-anchors-from-the-effective-profile-at-each-spawn-1)
-- **[ORB-10607]** — Enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution. [Derive Linux sandbox write-grant anchors from the effective profile at each spawn](#derive-linux-sandbox-write-grant-anchors-from-the-effective-profile-at-each-spawn-1)
-- **[ORB-10833]** — Retire the remaining unregistered `fs.*` builtins and their private policy helpers. [Retire the remaining unregistered fs builtins and their policy helpers](#retire-the-remaining-unregistered-fs-builtins-and-their-policy-helpers)
-- **[ORB-11376]** — Protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery. [Keep checkout identity outside managed-agent write grants](#keep-checkout-identity-outside-managed-agent-write-grants)
+- [T20260328-221810] — subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
+- [T20260416-0728] — aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
+- [T20260417-0550] — decomposed `orbit-exec` supervision modules.
+- [T20260419-0503] — enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
+- [T20260426-0622] — add this design folder and record the initial ADR set.
+- [T20260427-51] — wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
+- [T20260428-10] — allow Codex CLI state writes under the macOS sandbox.
+- [T20260428-14] — extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
+- [T20260508-13] — add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
+- [T20260509-30] — resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
+- [ORB-10552] — implement fail-closed Linux Bubblewrap write confinement and preserve the explicit read-policy limitation.
+- [ORB-10602] — derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate.
+- [ORB-10607] — enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution.
+- [ORB-10833] — retire the remaining unregistered `fs.*` builtins and their private policy helpers.
+- [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
