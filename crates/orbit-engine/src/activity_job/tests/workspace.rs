@@ -964,3 +964,29 @@ fn one_matched_test_is_accepted() {
         test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
     assert_exactly_one_test_ran("module::real_test", stdout);
 }
+
+/// Git C-quotes non-ASCII diff paths as octal UTF-8 bytes. The patch identity
+/// must land on the same decoded path the status scan reports.
+#[test]
+fn fingerprint_patch_identity_covers_non_ascii_paths() {
+    let temp = tempdir().expect("tempdir");
+    let repo = temp.path();
+    git_ok(repo, &["init", "-q"]);
+    git_ok(repo, &["config", "user.name", "Orbit Test"]);
+    git_ok(repo, &["config", "user.email", "orbit-test@example.com"]);
+    fs::write(repo.join("café.md"), "one\n").expect("write file");
+    git_ok(repo, &["add", "café.md"]);
+    git_ok(repo, &["commit", "-qm", "add"]);
+    fs::write(repo.join("café.md"), "two\n").expect("edit file");
+
+    let fingerprint = git_fingerprint(repo).expect("fingerprint");
+
+    let state = fingerprint
+        .path_states
+        .get("café.md")
+        .expect("status reports the decoded path");
+    assert!(
+        state.worktree_patch_sha256.is_some(),
+        "the worktree patch must be keyed by the same decoded path: {state:?}"
+    );
+}
