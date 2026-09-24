@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-09-04
-last_validated: 2026-09-04
+last_updated: 2026-09-24
+last_validated: 2026-09-24
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -87,10 +87,10 @@ v1 puts `machine_id` on the envelope (`{"machine_id", "workspaces":[…]}`) and 
 Each descriptor keeps today's v1 workspace fields (`id`, `name`, `ship_mode`, `owner_machine_id`, `git_remote`, `base_branch`, `status`, timestamps) plus:
 
 - `selector` — structured, caller-uninterpreted host-qualified route token (`hm_<id>/ws_*`);
-- `host` — destination display identity (local `host_id`, or the remote's configured SSH target);
+- `machine_name` — destination display identity (the local machine name, or the remote's configured SSH target);
 - `machine_id` — destination stable identity;
-- host-reachability — SSH/MCP reachability of the configured destination;
-- workspace checkout-health — repo-root presence at that destination, the same narrow rule as host-registry;
+- `reachability` — SSH/MCP reachability of the configured destination;
+- `checkout_health` — repo-root presence at that destination, or `unknown` when it could not be probed;
 - `capabilities` — classes the destination currently advertises for that workspace (a hint).
 
 Do not overload one `health` field with both SSH reachability and repo-root presence. A down or unreachable host is **included** with an explicit unreachable/unhealthy projection, not omitted. Omission makes every later call a stale-route surprise.
