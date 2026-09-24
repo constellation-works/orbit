@@ -22,11 +22,9 @@ pub enum ExecutorType {
     /// re-serialized under the canonical `local_shell` name.
     #[serde(alias = "cli_command")]
     LocalShell,
-    /// Generic out-of-process executor speaking the External Executor Protocol
-    /// v1 (see `docs/design/executors/specs/external-executor-protocol.md`).
-    /// Lets operators register a homegrown binary/script without forking core.
-    /// Shares the `direct_agent` subprocess transport but carries no
-    /// agent-family `model_pair` semantics. See ADR-0196 / [ORB-00384].
+    /// Retired External Executor Protocol v1 (see
+    /// `docs/design/executors/specs/external-executor-protocol.md`). Still
+    /// deserializes so pre-existing defs load, but nothing dispatches it.
     External,
 }
 
