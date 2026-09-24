@@ -27,8 +27,8 @@ template:
       Use the task's status-entry event in `history` to age blocked, in-progress,
       and review states; use `created_at` for proposed age. If history is absent,
       say which timestamp was substituted rather than implying certainty.
-    - Read job runs through `orbit run history --limit <n> --json` and
-      `orbit run show <run-id> --json`. Increase the history limit until it
+    - Read job runs through `orbit run history --limit <n> --no-reconcile --json` and
+      `orbit run show <run-id> --no-reconcile --json`. Increase the history limit until it
       covers every candidate's linked `job_run_id` and the seven-day lookback;
       use the task's linked run as primary evidence. A missing run is unknown,
       not proof of failure. Do not read or edit the Orbit database.
