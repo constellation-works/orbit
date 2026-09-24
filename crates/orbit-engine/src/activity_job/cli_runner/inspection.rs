@@ -17,6 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use orbit_common::fs::git::run_git;
+use orbit_common::fs::io::atomic_write_text;
 use serde_json::Value;
 
 use super::super::dispatcher::DispatchError;
@@ -120,7 +121,9 @@ impl SourceInspection {
                 if root.symlink_metadata().is_ok() {
                     return Err(failure("refusing to remove an unowned inspection checkout"));
                 }
-                fs::write(&marker, OWNER).map_err(io_failure)?;
+                // Atomic: a crash mid-write must not leave an empty marker that
+                // every later lease would reject as an unrecognized owner.
+                atomic_write_text(&marker, OWNER).map_err(io_failure)?;
             }
             let inspection = Self {
                 root,
