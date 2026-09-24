@@ -57,6 +57,38 @@ impl OrbitRuntime {
             })
     }
 
+    /// Every matching event, newest first, read in pages so an export is
+    /// never cut at the store's default page size.
+    pub fn export_audit_events(
+        &self,
+        since: Option<DateTime<Utc>>,
+        tool: Option<String>,
+    ) -> Result<Vec<AuditEvent>, OrbitError> {
+        const PAGE: usize = 1000;
+        let mut filter = AuditEventFilter {
+            since,
+            tool_name: tool,
+            limit: PAGE,
+            ..AuditEventFilter::default()
+        };
+        let mut events: Vec<AuditEvent> = Vec::new();
+        loop {
+            let page = self.stores().audit_events().list_audit_events(&filter)?;
+            let fetched = page.len();
+            // Pages run newest first by id; an event recorded mid-export
+            // shifts later pages, so skip rows an earlier page returned.
+            let oldest_seen = events.last().map(|event| event.id);
+            events.extend(
+                page.into_iter()
+                    .filter(|event| oldest_seen.is_none_or(|oldest| event.id < oldest)),
+            );
+            if fetched < PAGE {
+                return Ok(events);
+            }
+            filter.offset += fetched;
+        }
+    }
+
     pub fn list_audit_events_filtered(
         &self,
         filter: &AuditEventFilter,
