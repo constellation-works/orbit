@@ -3,6 +3,9 @@
 
 use super::*;
 
+/// Upper bound on rendered `fan_out.items`; see [`run_fan_out`].
+const MAX_FAN_OUT_ITEMS: usize = 256;
+
 pub(super) fn run_fan_out(
     step: &JobV2Step,
     block: &FanOutBlock,
@@ -10,6 +13,15 @@ pub(super) fn run_fan_out(
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
     let items = render_items_expression(&block.items, &ctx.template_ctx(), "fan_out.items")?;
+    // Each item gets its own scoped thread (`max_workers` only gates the work
+    // inside them), and a refused thread spawn panics the executor, so a
+    // rendered list is bounded like `loop.items` is by `max_iterations`.
+    if items.len() > MAX_FAN_OUT_ITEMS {
+        return Err(DispatchError::JobExecution(format!(
+            "fan_out.items produced {} entries, exceeding the limit of {MAX_FAN_OUT_ITEMS}",
+            items.len()
+        )));
+    }
     let worker_count = items.len() as u32;
 
     emit_job_event_lossy(
