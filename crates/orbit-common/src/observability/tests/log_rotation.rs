@@ -312,4 +312,8 @@ fn from_parts_validates_and_converts_units() {
         LogRotationConfig::from_parts(None, Some(10), Some(50)).is_err(),
         "a per-file budget larger than the total budget must be rejected"
     );
+    assert!(
+        LogRotationConfig::from_parts(None, Some(1 << 44), Some(1)).is_err(),
+        "a total budget that overflows bytes must be rejected, not wrapped to zero"
+    );
 }
