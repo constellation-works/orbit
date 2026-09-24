@@ -21,10 +21,10 @@ pub(super) fn run_action(
         match action {
             McpAction::Init(launch) => match provider {
                 McpProvider::Claude => apply_claude_init(&target, launch)?,
-                McpProvider::Codex => apply_codex_init(&target, launch)?,
+                McpProvider::Codex => apply_toml_init(&target, launch)?,
                 McpProvider::Gemini => apply_gemini_init(&target, launch)?,
                 McpProvider::Antigravity => apply_simple_json_init(&target, "mcpServers", launch)?,
-                McpProvider::Grok => apply_grok_init(&target, launch)?,
+                McpProvider::Grok => apply_toml_init(&target, launch)?,
                 McpProvider::Cursor => apply_simple_json_init(&target, "mcpServers", launch)?,
                 McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch)?,
                 McpProvider::Windsurf => apply_simple_json_init(&target, "mcpServers", launch)?,
@@ -37,12 +37,12 @@ pub(super) fn run_action(
                 };
                 match provider {
                     McpProvider::Claude => apply_claude_remove(&target, server_id)?,
-                    McpProvider::Codex => apply_codex_remove(&target, server_id)?,
+                    McpProvider::Codex => apply_toml_remove(&target, server_id)?,
                     McpProvider::Gemini => apply_gemini_remove(&target, server_id)?,
                     McpProvider::Antigravity => {
                         apply_simple_json_remove(&target, "mcpServers", server_id)?
                     }
-                    McpProvider::Grok => apply_grok_remove(&target, server_id)?,
+                    McpProvider::Grok => apply_toml_remove(&target, server_id)?,
                     McpProvider::Cursor => {
                         apply_simple_json_remove(&target, "mcpServers", server_id)?
                     }

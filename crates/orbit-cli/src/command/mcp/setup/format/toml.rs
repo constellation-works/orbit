@@ -1,54 +1,48 @@
+//! Comment-preserving edits to provider TOML configs (`~/.codex/config.toml`,
+//! `~/.grok/config.toml`). These are the user's own files, so only Orbit's
+//! server entry changes; comments, key order, and formatting survive.
+
 use std::fs;
 use std::path::Path;
 
 use orbit_core::OrbitError;
-use toml::{Table as TomlTable, Value as TomlValue};
+use toml_edit::{DocumentMut, Item, Table, TableLike};
 
-pub(in crate::command::mcp::setup) fn load_toml_table(
+pub(in crate::command::mcp::setup) fn load_toml_document(
     path: &Path,
-) -> Result<TomlTable, OrbitError> {
+) -> Result<DocumentMut, OrbitError> {
     if !path.exists() {
-        return Ok(TomlTable::new());
+        return Ok(DocumentMut::new());
     }
-
     let raw = fs::read_to_string(path)
         .map_err(|err| OrbitError::Io(format!("failed to read '{}': {err}", path.display())))?;
-    if raw.trim().is_empty() {
-        return Ok(TomlTable::new());
-    }
-
-    let value: TomlValue = toml::from_str(&raw).map_err(|err| {
+    raw.parse::<DocumentMut>().map_err(|err| {
         OrbitError::InvalidInput(format!("invalid TOML '{}': {err}", path.display()))
-    })?;
-    value.as_table().cloned().ok_or_else(|| {
-        OrbitError::InvalidInput(format!(
-            "expected top-level TOML table in '{}'",
-            path.display()
-        ))
     })
 }
 
-pub(in crate::command::mcp::setup) fn write_toml_table(
+/// Write `doc` in place. Deliberately not an atomic rename: a config symlinked
+/// from a dotfiles repository must stay a symlink.
+pub(in crate::command::mcp::setup) fn write_toml_document(
     path: &Path,
-    root: &TomlTable,
+    doc: &DocumentMut,
 ) -> Result<(), OrbitError> {
     let parent = path.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!("path has no parent: {}", path.display()))
     })?;
     fs::create_dir_all(parent)
         .map_err(|err| OrbitError::Io(format!("failed to create '{}': {err}", parent.display())))?;
-    let rendered = toml::to_string_pretty(&TomlValue::Table(root.clone())).map_err(|err| {
-        OrbitError::Execution(format!("serialize TOML '{}': {err}", path.display()))
-    })?;
-    fs::write(path, rendered)
+    fs::write(path, doc.to_string())
         .map_err(|err| OrbitError::Io(format!("failed to write '{}': {err}", path.display())))
 }
 
-pub(in crate::command::mcp::setup) fn write_or_remove_toml_table(
+/// Like [`write_toml_document`], but delete the file once nothing but
+/// whitespace would remain.
+pub(in crate::command::mcp::setup) fn write_or_remove_toml_document(
     path: &Path,
-    root: &TomlTable,
+    doc: &DocumentMut,
 ) -> Result<(), OrbitError> {
-    if root.is_empty() {
+    if doc.to_string().trim().is_empty() {
         if path.exists() {
             fs::remove_file(path).map_err(|err| {
                 OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
@@ -56,17 +50,20 @@ pub(in crate::command::mcp::setup) fn write_or_remove_toml_table(
         }
         return Ok(());
     }
-    write_toml_table(path, root)
+    write_toml_document(path, doc)
 }
 
+/// The table at top-level `key`, created (as an implicit `[key.*]` parent)
+/// when absent. An inline table is accepted as-is.
 pub(in crate::command::mcp::setup) fn ensure_toml_table<'a>(
-    root: &'a mut TomlTable,
+    doc: &'a mut DocumentMut,
     key: &str,
-) -> Result<&'a mut TomlTable, OrbitError> {
-    let value = root
-        .entry(key.to_string())
-        .or_insert_with(|| TomlValue::Table(TomlTable::new()));
-    value
-        .as_table_mut()
+) -> Result<&'a mut dyn TableLike, OrbitError> {
+    let item = doc.entry(key).or_insert_with(|| {
+        let mut table = Table::new();
+        table.set_implicit(true);
+        Item::Table(table)
+    });
+    item.as_table_like_mut()
         .ok_or_else(|| OrbitError::InvalidInput(format!("expected '{key}' to be a TOML table")))
 }
