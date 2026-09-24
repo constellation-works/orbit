@@ -7,7 +7,7 @@
 //! `/api/tasks/all` returns that workspace's tasks.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
@@ -40,7 +40,7 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
     // reflect the same generation (add/remove/rebind observed atomically).
     let pinned = state.pin();
     let default = pinned.default_workspace();
-    let home = home_dir();
+    let home = orbit_common::fs::path::home_dir().ok();
     pinned
         .entries()
         .iter()
@@ -272,7 +272,7 @@ fn all_tasks_json(
     query: &TaskPageQuery,
     scope: &str,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let home = home_dir();
+    let home = orbit_common::fs::path::home_dir().ok();
     let mut candidates = Vec::new();
     let mut total = 0;
     let mut remaining = 0;
@@ -361,13 +361,4 @@ pub(super) fn abbreviate_home(path: &Path, home: Option<&Path>) -> String {
         }
     }
     path.display().to_string()
-}
-
-/// The current user's home directory from `$HOME`, ignoring an empty value.
-/// Used only to abbreviate paths for display; absence just disables the `~`
-/// collapse (paths render verbatim).
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
 }

@@ -10,6 +10,7 @@ use std::process::Command;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::path::home_dir;
 use serde::{Deserialize, Serialize};
 
 use super::clock_unit::{
@@ -1500,11 +1501,4 @@ fn clock_status_from(
             .flatten(),
         platform: platform.name(),
     }
-}
-
-fn home_dir() -> Result<PathBuf, OrbitError> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
-        .ok_or_else(|| OrbitError::InvalidInput("HOME is not set".to_string()))
 }

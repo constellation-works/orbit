@@ -20,8 +20,8 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{
     atomic_write_text, is_readonly_or_access_error, write_text_with_parent,
 };
+use orbit_common::security::release::sha256_hex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 /// Audit identity used for system-initiated (non-agent) mutations.
 /// `pub` because the direct v2 activity runner moved to `orbit-cmd`
@@ -692,10 +692,6 @@ fn ambiguous_legacy_yaml_files(
     }
     ambiguous.sort();
     Ok(ambiguous)
-}
-
-fn sha256_hex(content: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(content))
 }
 
 pub(crate) mod activity_catalog_health;
