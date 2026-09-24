@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Color and Styling"
-last_validated: 2026-08-31
+last_validated: 2026-09-24
 ---
 
 # Spec: Color and Styling
@@ -31,14 +31,15 @@ Mapping from domain values to roles is defined once, in one table, covering task
 
 ## 2. When Color Is Emitted
 
-Resolved once, at the sink, in this precedence:
+Resolved once, at the sink:
 
-1. `--no-color` → off.
-2. `NO_COLOR` set to any non-empty value → off.
-3. `CLICOLOR_FORCE` non-empty → on.
-4. Otherwise: on if and only if `is_tty`.
+1. A non-terminal sink → off.
+2. `TERM=dumb` → off.
+3. `NO_COLOR` set to any non-empty value → off.
+4. `CLICOLOR_FORCE` set to any non-empty value → on.
+5. Otherwise: on for a terminal.
 
-`TERM=dumb` forces off regardless of 2 and 3. There are no command-line color override flags; the sink owns this environment-based policy.
+There are no command-line color override flags; the sink owns this environment-based policy.
 
 **Invariant:** exactly one place in the crate reads these — `output/sink.rs`, enforced by `scripts/check-terminal-state-guard.sh`. A call site that consults them itself is a defect. Because the two styling crates each ship their own probe, "one place" also means the sink must *override* them rather than agree with them: `OutputSink::apply_color_policy` sets `colored`'s global override, and `output::table` passes `enforce_styling`/`force_no_tty` per render. Neither backend is left to ask.
 

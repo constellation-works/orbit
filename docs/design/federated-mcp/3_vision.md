@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Vision
 owner: grok
-last_updated: 2026-09-04
-last_validated: 2026-09-04
+last_updated: 2026-09-24
+last_validated: 2026-09-24
 status: Draft
 feature: federated-mcp
 doc_role: vision
@@ -16,7 +16,7 @@ related_artifacts: [ORB-11184, ORB-11053, ORB-11052, ORB-11010, ORB-11009, ORB-1
 
 # Federated MCP — Vision
 
-Forward-looking only. The contract in [specs/federated-workspace-mcp.md](./specs/federated-workspace-mcp.md) is proposed and not shipped. These questions must not be fake-resolved in the spec; an implementation task answers them with evidence.
+Forward-looking only. The contract in [specs/federated-workspace-mcp.md](./specs/federated-workspace-mcp.md) defines the shipped federated MCP surface. The questions below remain open and must not be fake-resolved in that contract; future implementation work should answer them with evidence.
 
 ## 1. Open Questions
 

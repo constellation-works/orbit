@@ -2,7 +2,7 @@
 title: Operations as Data — Migration Cookbook
 owner: claude
 last_updated: 2026-07-26
-last_validated: 2026-08-31
+last_validated: 2026-09-24
 status: Accepted
 feature: operations-as-data
 doc_role: reference

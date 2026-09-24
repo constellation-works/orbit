@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-08-31
+last_validated: 2026-09-24
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -37,7 +37,7 @@ Precedence, first match wins:
 
 `auto` resolves to `table` when `is_tty`, and to the **plain** form otherwise. Plain is `table` with the header suppressed, borders and ANSI absent, truncation disabled, and single-tab field separators — the form `cut -f` expects. Plain is a rendering of `table`, not a fourth mode a command can request.
 
-`--format` is one global user-facing argument installed across the command tree so it is accepted at the root and after subcommands; command-local `--format` arguments keep their own meaning. The existing per-command `--json` booleans remain accepted and hidden from help; they are not removed [Terminal Output Is a Rendering of a Structured Payload](../4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload).
+`--format` is one global user-facing argument installed across the command tree so it is accepted at the root and after subcommands; command-local `--format` arguments keep their own meaning. The existing per-command `--json` flags remain accepted as legacy aliases, and their visibility in help follows each command's declaration.
 
 ## 3. Mode Contracts
 
@@ -48,8 +48,8 @@ Precedence, first match wins:
 | `json` | one document | no | no | no |
 | `ndjson` | one document per line | no | no | **yes** |
 
-- `json` for a list command emits a single array; for a detail command, a single object. It is pretty-printed only when `is_tty`.
-- `ndjson` emits one complete JSON value per line and flushes per record. It is the only mode that may produce output before the command has finished collecting results, and the only correct choice for a long or unbounded list.
+- `json` for a list command emits a single array; for a detail command, a single object. `--format json` is pretty-printed only when `is_tty`; legacy `--json` keeps its historical pretty form (see Migration). Commands with no table or plain view preserve pretty JSON in those human modes.
+- `ndjson` emits one complete JSON value per line and flushes per record. List commands assemble their record payload before rendering, so records flush incrementally only after collection. Command-specific stream payloads such as `orbit log tail` emit as data arrives using their selected line format.
 - `table` and `json` for the same invocation describe the same records. The table may omit fields and reformat values; it may not contain a value absent from the payload, and it may not omit a record the payload includes.
 
 ## 4. Payload Rules
