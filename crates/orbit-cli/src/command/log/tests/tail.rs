@@ -686,3 +686,22 @@ impl Write for BrokenPipeWriter {
         Ok(())
     }
 }
+
+#[test]
+fn a_non_utf8_line_is_skipped_rather_than_ending_the_tail() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    let lines = fixture_lines();
+    let mut content = Vec::new();
+    content.extend_from_slice(lines[0].as_bytes());
+    content.extend_from_slice(b"\n{\"torn\":\"\xe2\x82\n");
+    content.extend_from_slice(lines[1].as_bytes());
+    content.push(b'\n');
+    std::fs::write(&path, content).expect("write fixture");
+
+    let mut args = make_args(path.clone());
+    args.json = true;
+    let output = capture(&path, args);
+
+    assert_eq!(output.lines().collect::<Vec<_>>(), [&lines[0], &lines[1]]);
+}
