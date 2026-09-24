@@ -17,7 +17,7 @@ pub(super) fn output_capture_limit() -> usize {
 }
 
 pub(super) fn spawn_stdout_drain<R>(
-    mut out: R,
+    out: R,
     debug: bool,
     limit: usize,
     limit_tx: Sender<&'static str>,
@@ -25,84 +25,101 @@ pub(super) fn spawn_stdout_drain<R>(
 where
     R: Read + Send + 'static,
 {
+    spawn_drain(out, debug, limit, limit_tx, "stdout")
+}
+
+pub(super) fn spawn_stderr_drain<R>(
+    err: R,
+    debug: bool,
+    limit: usize,
+    limit_tx: Sender<&'static str>,
+) -> JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    spawn_drain(err, debug, limit, limit_tx, "stderr")
+}
+
+/// Capture a child stream's raw bytes up to `limit`; in debug mode also echo
+/// it to Orbit's stderr with sensitive values redacted.
+fn spawn_drain<R>(
+    mut reader: R,
+    debug: bool,
+    limit: usize,
+    limit_tx: Sender<&'static str>,
+    stream: &'static str,
+) -> JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
     thread::spawn(move || {
         let mut capture = BoundedOutputCapture::new(limit);
+        let mut echo = debug.then(|| RedactingEcho::new(std::io::stderr()));
         let mut chunk = [0u8; 4096];
-        if debug {
-            loop {
-                match out.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        // Redact sensitive env values before printing to stderr
-                        // so tokens/secrets are never shown in debug output.
-                        let raw = String::from_utf8_lossy(&chunk[..n]);
-                        let redacted = redact_sensitive_env_text(&raw);
-                        let _ = std::io::stderr().write_all(redacted.as_bytes());
-                        if capture.push(&chunk[..n]) {
-                            let _ = limit_tx.send("stdout");
-                            break;
-                        }
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if let Some(echo) = echo.as_mut() {
+                        echo.push(&chunk[..n]);
+                    }
+                    if capture.push(&chunk[..n]) {
+                        let _ = limit_tx.send(stream);
+                        break;
                     }
                 }
             }
-        } else {
-            loop {
-                match out.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if capture.push(&chunk[..n]) {
-                            let _ = limit_tx.send("stdout");
-                            break;
-                        }
-                    }
-                }
-            }
+        }
+        if let Some(echo) = echo {
+            echo.finish();
         }
         capture.into_bytes()
     })
 }
 
-pub(super) fn spawn_stderr_drain<R>(
-    mut err: R,
-    debug: bool,
-    limit: usize,
-    limit_tx: Sender<&'static str>,
-) -> JoinHandle<Vec<u8>>
-where
-    R: Read + Send + 'static,
-{
-    thread::spawn(move || {
-        let mut capture = BoundedOutputCapture::new(limit);
-        let mut chunk = [0u8; 4096];
-        if debug {
-            loop {
-                match err.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let redacted = redact_chunk(&chunk[..n]);
-                        let _ = std::io::stderr().write_all(&redacted);
-                        if capture.push(&redacted) {
-                            let _ = limit_tx.send("stderr");
-                            break;
-                        }
-                    }
-                }
-            }
-        } else {
-            loop {
-                match err.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if capture.push(&chunk[..n]) {
-                            let _ = limit_tx.send("stderr");
-                            break;
-                        }
-                    }
-                }
-            }
+/// A partial line held longer than this is echoed anyway, so a child that
+/// never writes a newline cannot grow the buffer without bound.
+const MAX_PENDING_ECHO_BYTES: usize = 64 * 1024;
+
+/// Debug echo that redacts whole lines. Redacting each read on its own would
+/// miss a secret split across two reads and garble a multi-byte character
+/// split across them.
+pub(super) struct RedactingEcho<W: Write> {
+    sink: W,
+    pending: Vec<u8>,
+}
+
+impl<W: Write> RedactingEcho<W> {
+    pub(super) fn new(sink: W) -> Self {
+        Self {
+            sink,
+            pending: Vec::new(),
         }
-        capture.into_bytes()
-    })
+    }
+
+    pub(super) fn push(&mut self, bytes: &[u8]) {
+        self.pending.extend_from_slice(bytes);
+        let cut = match self.pending.iter().rposition(|&byte| byte == b'\n') {
+            Some(newline) => newline + 1,
+            None if self.pending.len() >= MAX_PENDING_ECHO_BYTES => self.pending.len(),
+            None => return,
+        };
+        let complete: Vec<u8> = self.pending.drain(..cut).collect();
+        self.write_redacted(&complete);
+    }
+
+    pub(super) fn finish(mut self) -> W {
+        let rest = std::mem::take(&mut self.pending);
+        if !rest.is_empty() {
+            self.write_redacted(&rest);
+        }
+        self.sink
+    }
+
+    fn write_redacted(&mut self, bytes: &[u8]) {
+        let redacted = redact_sensitive_env_text(&String::from_utf8_lossy(bytes));
+        let _ = self.sink.write_all(redacted.as_bytes());
+    }
 }
 
 pub(super) fn spawn_stdin_write<W>(
@@ -119,8 +136,4 @@ where
             .map_err(|e| format!("failed to write process stdin: {e}"));
         let _ = result_tx.send(result);
     })
-}
-
-fn redact_chunk(chunk: &[u8]) -> Vec<u8> {
-    redact_sensitive_env_text(&String::from_utf8_lossy(chunk)).into_bytes()
 }
