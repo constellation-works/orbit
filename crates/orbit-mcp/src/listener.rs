@@ -3,8 +3,11 @@
 //! The protocol handler performs no IO of its own, so serving it over a socket
 //! is only a question of where the byte stream comes from, who owns the session
 //! behind it, and which addresses may be bound. Framing, dispatch, and the
-//! trusted session envelope are shared verbatim with stdio: this module adds no
-//! capability, placement, routing, or authorization step of its own.
+//! trusted session envelope are shared with stdio. Before handing a socket to
+//! rmcp, this module rejects streams that do not start with a JSON object.
+//! Without that guard, rmcp skips HTTP request lines and headers, then dispatches
+//! JSON-RPC lines in a browser's HTTP POST body. Loopback alone does not stop a
+//! page visited on the same machine from reaching the socket.
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -36,10 +39,10 @@ const ACCEPT_EXHAUSTION_BACKOFF: Duration = Duration::from_millis(250);
 
 /// How far a listener is allowed to be reachable.
 ///
-/// The listener authenticates no one: whoever reaches the socket gets the
-/// accepting machine's full tool surface. Restricting who can reach it is
-/// therefore a deployment decision, and the safe default is the one that cannot
-/// be reached off-box at all.
+/// The listener authenticates no one: a local process that reaches the socket
+/// gets the accepting machine's agent tool surface. Loopback blocks remote TCP
+/// peers, but a browser page can send HTTP requests to loopback. The framing
+/// guard below closes those requests before rmcp can dispatch their bodies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ListenerExposure {
     /// Refuse any bind address that is not a loopback address.
@@ -171,6 +174,21 @@ async fn serve_connection(
     peer: SocketAddr,
     _permit: OwnedSemaphorePermit,
 ) {
+    // rmcp ignores unparsable lines. An HTTP request line and its headers are
+    // unparsable, but JSON-RPC lines in a POST body are not. Check the first
+    // byte without consuming it so only a JSON object can start a session.
+    let mut first = [0];
+    match stream.peek(&mut first).await {
+        Ok(1) if first[0] == b'{' => {}
+        Ok(_) => {
+            tracing::debug!(peer = %peer, "mcp listener rejected non-JSON framing");
+            return;
+        }
+        Err(error) => {
+            tracing::debug!(peer = %peer, error = %error, "mcp listener could not read first byte");
+            return;
+        }
+    }
     let running = match server.serve(stream).await {
         Ok(running) => running,
         Err(error) => {

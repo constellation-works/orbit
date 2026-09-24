@@ -123,6 +123,15 @@ fn plugin_help_matches_the_shipped_surface() {
     }
 }
 
+#[test]
+fn mcp_listen_help_matches_the_shipped_surface() {
+    assert_help_matches_golden(
+        &["orbit", "mcp", "listen"],
+        "mcp_help/listen.txt",
+        include_str!("mcp_help/listen.txt"),
+    );
+}
+
 /// `orbit --help`'s sections, in order, each with the commands it lists.
 fn root_help_sections(help: &str) -> Vec<(String, Vec<String>)> {
     let mut sections: Vec<(String, Vec<String>)> = Vec::new();

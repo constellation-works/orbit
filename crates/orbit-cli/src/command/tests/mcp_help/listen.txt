@@ -1,0 +1,26 @@
+Serve the Orbit tool registry over Model Context Protocol on a TCP socket
+
+This is the transport for deployments that need a socket — a server-side Orbit reached through an SSH tunnel, for example. `orbit mcp serve` remains the stdio server that MCP clients launch directly.
+
+Each accepted connection is an independent MCP session against the same server-local tool surface, resolved and audited exactly as a stdio session is. The socket authenticates no client, so it binds loopback unless a wider bind is asked for explicitly. Local processes can still connect to loopback. HTTP requests, including those sent by browser pages, are closed before their bodies can be dispatched as MCP messages.
+
+Usage: orbit mcp listen [OPTIONS] [ADDR]
+
+Arguments:
+  [ADDR]
+          Address to bind, written `IP:PORT`. Defaults to loopback. Local processes can connect without authentication; browser HTTP requests are rejected before MCP dispatch
+          
+          [default: 127.0.0.1:7879]
+
+Options:
+      --allow-non-loopback
+          Allow a bind address other hosts can reach. Anyone who reaches the socket gets this machine's agent-accessible tools, so pass this only where the network path is already restricted
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -131,7 +131,10 @@ orbit mcp listen [ADDR] [--allow-non-loopback]
 The listener binds before it accepts, so the bind policy is applied and the
 assigned address is known before any client can arrive. A non-loopback address is
 refused unless the operator asked for it explicitly, because the socket
-authenticates no client: whoever reaches it reaches the accepting machine's full
+authenticates no client: local processes can reach its agent tool surface even
+when it binds loopback. A browser page can send HTTP requests to loopback, so
+the listener closes a connection unless its first byte is `{`. This check runs
+before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body.
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state
@@ -141,7 +144,7 @@ response computed against the other client's workspace. Every session also mints
 its own origin session id, since a listener-wide id would collapse concurrent
 clients into one audit identity.
 
-Past that point the session follows the direct local request flow exactly: the
+Past that framing check the session follows the direct local request flow: the
 same host, the same workspace resolution, and the same single Core dispatch and
 audit boundary. The listener adds no broker, checkout preflight, placement
 decision, capability filter, or authorization step of its own; it is hardcoded
@@ -233,8 +236,9 @@ contract to source and focused tests. The important behavioral gates are:
 - exact tool-surface snapshot;
 - protocol and production MCP round trips;
 - direct SSH command construction and inherited stdio;
-- the listener bind policy, and a loopback listener round trip that shows the
-  accepted peer's IP reaching the audit context;
+- the listener bind policy, a loopback MCP round trip that shows the accepted
+  peer's IP reaching the audit context, and an HTTP POST that is closed before
+  any JSON-RPC body line is dispatched;
 - server identity and SSH caller-IP parsing;
 - discovery and unknown-name denial through one Core audit boundary; and
 - crate dependency-direction checks.
