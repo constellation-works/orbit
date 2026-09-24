@@ -6,14 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::process::Command;
 
-use crate::{
-    DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_config_js, serve_dashboard_css, serve_diagnostics_js, serve_distributed_js,
-    serve_field_editor_js, serve_index, serve_index_with_headers, serve_inter_font,
-    serve_jetbrains_mono_font, serve_log_tail_js, serve_markdown_js, serve_marked_js,
-    serve_operations_js, serve_plugins_js, serve_purify_js, serve_reliability_js, serve_router_js,
-    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
-};
+use crate::{DASHBOARD_CSP, DASHBOARD_FILES, serve_dashboard_file};
 
 // The recent-history, aggregate-request, and route-selection assertions
 // addressed by this task have three dispositions:
@@ -54,47 +47,21 @@ fn run_dashboard_javascript_test(script: &str) {
     );
 }
 
-#[tokio::test]
-async fn dashboard_html_and_js_routes_emit_csp() {
-    let routes = [
-        ("index", serve_index().await),
-        ("dashboard_css", serve_dashboard_css().await),
-        ("inter", serve_inter_font().await),
-        ("jetbrains_mono", serve_jetbrains_mono_font().await),
-        ("marked", serve_marked_js().await),
-        ("purify", serve_purify_js().await),
-        ("app", serve_app_js().await),
-        ("common", serve_common_js().await),
-        ("config", serve_config_js().await),
-        ("markdown", serve_markdown_js().await),
-        ("tasks", serve_tasks_js().await),
-        ("field_editor", serve_field_editor_js().await),
-        ("audit", serve_audit_js().await),
-        ("scoreboard", serve_scoreboard_js().await),
-        ("reliability", serve_reliability_js().await),
-        ("log_tail", serve_log_tail_js().await),
-        ("diagnostics", serve_diagnostics_js().await),
-        ("router", serve_router_js().await),
-        ("runs", serve_runs_js().await),
-        ("run_detail", serve_run_detail_js().await),
-        ("distributed", serve_distributed_js().await),
-        ("operations", serve_operations_js().await),
-        ("automation", serve_automation_js().await),
-        ("plugins", serve_plugins_js().await),
-    ];
-
-    for (name, response) in routes {
+#[test]
+fn dashboard_routes_emit_csp() {
+    for &(route, _, _) in DASHBOARD_FILES {
+        let response = serve_dashboard_file(route, &HeaderMap::new());
         assert_eq!(
             response.headers().get(header::CONTENT_SECURITY_POLICY),
             Some(&HeaderValue::from_static(DASHBOARD_CSP)),
-            "{name} route must emit the dashboard CSP"
+            "{route} route must emit the dashboard CSP"
         );
     }
 }
 
 #[tokio::test]
 async fn dashboard_assets_emit_validators_and_revalidate() {
-    let initial = serve_index().await;
+    let initial = serve_dashboard_file("/", &HeaderMap::new());
     let etag = initial
         .headers()
         .get(header::ETAG)
@@ -109,7 +76,7 @@ async fn dashboard_assets_emit_validators_and_revalidate() {
 
     let mut request_headers = HeaderMap::new();
     request_headers.insert(header::IF_NONE_MATCH, etag.clone());
-    let revalidated = serve_index_with_headers(request_headers).await;
+    let revalidated = serve_dashboard_file("/", &request_headers);
 
     assert_eq!(revalidated.status(), axum::http::StatusCode::NOT_MODIFIED);
     assert_eq!(revalidated.headers().get(header::ETAG), Some(&etag));
@@ -127,16 +94,19 @@ async fn dashboard_assets_emit_validators_and_revalidate() {
 
 #[tokio::test]
 async fn dashboard_assets_serve_precompressed_gzip_bodies() {
-    let plain = to_bytes(serve_index().await.into_body(), usize::MAX)
-        .await
-        .expect("read uncompressed dashboard body");
+    let plain = to_bytes(
+        serve_dashboard_file("/", &HeaderMap::new()).into_body(),
+        usize::MAX,
+    )
+    .await
+    .expect("read uncompressed dashboard body");
     let mut request_headers = HeaderMap::new();
     request_headers.insert(
         header::ACCEPT_ENCODING,
         HeaderValue::from_static("br, gzip;q=1.0"),
     );
 
-    let compressed = serve_index_with_headers(request_headers).await;
+    let compressed = serve_dashboard_file("/", &request_headers);
     assert_eq!(
         compressed.headers().get(header::CONTENT_ENCODING),
         Some(&HeaderValue::from_static("gzip"))
@@ -159,7 +129,7 @@ async fn dashboard_assets_serve_precompressed_gzip_bodies() {
 
 #[tokio::test]
 async fn dashboard_index_self_hosts_markdown_runtime() {
-    let body = response_body(serve_index().await).await;
+    let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
 
     assert!(body.contains(r#"<script src="/static/marked.umd.js"></script>"#));
     assert!(body.contains(r#"<script src="/static/purify.min.js"></script>"#));
@@ -168,8 +138,12 @@ async fn dashboard_index_self_hosts_markdown_runtime() {
 
 #[tokio::test]
 async fn dashboard_self_hosts_fonts_without_google_requests() {
-    let index = response_body(serve_index().await).await;
-    let css = response_body(crate::serve_dashboard_css().await).await;
+    let index = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
+    let css = response_body(serve_dashboard_file(
+        "/static/dashboard.css",
+        &HeaderMap::new(),
+    ))
+    .await;
 
     assert!(!index.contains("fonts.googleapis.com"));
     assert!(!index.contains("fonts.gstatic.com"));
@@ -180,7 +154,13 @@ async fn dashboard_self_hosts_fonts_without_google_requests() {
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     );
 
-    for response in [serve_inter_font().await, serve_jetbrains_mono_font().await] {
+    for response in [
+        serve_dashboard_file("/static/fonts/inter-latin.woff2", &HeaderMap::new()),
+        serve_dashboard_file(
+            "/static/fonts/jetbrains-mono-latin.woff2",
+            &HeaderMap::new(),
+        ),
+    ] {
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
             Some(&HeaderValue::from_static("font/woff2"))
@@ -517,7 +497,7 @@ fn dashboard_task_detail_shows_orchestrator_as_attribution_not_execution_crew() 
 /// router's tab list is asserted alongside the markup.
 #[tokio::test]
 async fn dashboard_top_level_nav_matches_the_operator_tabs() {
-    let body = response_body(serve_index().await).await;
+    let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
 
     let nav: Vec<&str> = body
         .match_indices(r#"<button class="tab" data-tab=""#)
@@ -1098,7 +1078,7 @@ fn dashboard_operations_subtabs_compute_exactly_one_rendered_main() {
 /// diagnostics pane.
 #[tokio::test]
 async fn dashboard_scoreboard_is_reachable_under_diagnostics() {
-    let body = response_body(serve_index().await).await;
+    let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
     let router = include_str!("../../assets/dashboard/router.js");
     let app = include_str!("../../assets/dashboard/app.js");
 
@@ -1153,7 +1133,7 @@ async fn dashboard_scoreboard_is_reachable_under_diagnostics() {
 /// ids `reliability.js` renders into.
 #[tokio::test]
 async fn dashboard_reliability_is_reachable_under_diagnostics() {
-    let body = response_body(serve_index().await).await;
+    let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
     let router = include_str!("../../assets/dashboard/router.js");
     let app = include_str!("../../assets/dashboard/app.js");
 
