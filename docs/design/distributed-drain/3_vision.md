@@ -105,7 +105,7 @@ CI, and landing before adding placement policy or automatic recovery.
 **Orbit-internal**
 
 - [federated-mcp specs/federated-workspace-mcp.md](../federated-mcp/specs/federated-workspace-mcp.md)
-- [federated-mcp 4_decisions.md — An SSH login to a destination is ownership of it](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) (supersedes the withdrawn [specs/caller-authorization.md](../federated-mcp/specs/caller-authorization.md))
+- [federated-mcp 4_decisions.md — An SSH login to a destination is ownership of it](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) (supersedes the removed destination-side caller-authorization spec)
 - [host-registry 3_vision.md](../host-registry/3_vision.md) — "checkoutless operations" gate
 - [runbooks/build-budget.md](../../runbooks/build-budget.md)
 
