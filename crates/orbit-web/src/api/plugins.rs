@@ -65,8 +65,7 @@ pub(super) async fn read_panel(
         .plugin_panel_memo()
         .get_or_compute(
             &runtime,
-            &namespace,
-            &panel,
+            (namespace, panel),
             Duration::from_millis(refresh_ms),
             move || {
                 compute_runtime

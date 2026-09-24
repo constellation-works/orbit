@@ -52,8 +52,7 @@ use orbit_registry::workspace_registry;
 use orbit_types::workspace::WorkspaceStatus;
 use serde_json::json;
 
-use crate::audit_summary_memo::AuditSummaryMemo;
-use crate::plugin_panel_memo::PluginPanelMemo;
+use crate::runtime_memo::RuntimeMemo;
 
 /// Synthetic workspace id used by [`DashboardState::single`].
 pub(crate) const SINGLE_WORKSPACE_ID: &str = "default";
@@ -348,9 +347,10 @@ struct StateInner {
     generation_counter: AtomicU64,
     /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
     /// and the raw `since` window so relative cutoffs (`24h`) still hit.
-    audit_summary: AuditSummaryMemo,
+    audit_summary: RuntimeMemo<String>,
     /// Per-server single-flight TTL memo for audited plugin panel reads.
-    plugin_panels: PluginPanelMemo,
+    /// Keyed by `(namespace, panel)`.
+    plugin_panels: RuntimeMemo<(String, String)>,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope regardless of TTY
     /// or `ORBIT_OPERATOR`.
@@ -677,8 +677,8 @@ impl DashboardState {
                 last_checkout_fingerprints: Mutex::new(checkout_fingerprints),
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
-                audit_summary: AuditSummaryMemo::new(),
-                plugin_panels: PluginPanelMemo::new(),
+                audit_summary: RuntimeMemo::new("audit summary aggregation"),
+                plugin_panels: RuntimeMemo::new("plugin panel execution"),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
@@ -705,12 +705,12 @@ impl DashboardState {
     }
 
     /// Process-local `/api/audit/summary` memo for this server instance.
-    pub(crate) fn audit_summary_memo(&self) -> &AuditSummaryMemo {
+    pub(crate) fn audit_summary_memo(&self) -> &RuntimeMemo<String> {
         &self.inner.audit_summary
     }
 
     /// Process-local plugin panel memo shared by every dashboard tab.
-    pub(crate) fn plugin_panel_memo(&self) -> &PluginPanelMemo {
+    pub(crate) fn plugin_panel_memo(&self) -> &RuntimeMemo<(String, String)> {
         &self.inner.plugin_panels
     }
 
