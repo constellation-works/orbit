@@ -73,7 +73,6 @@ See [Delivery Workflows](../../getting-started/workflows/).
 
 | Command | Purpose |
 |---|---|
-| `orbit docs list` \| `show` \| `add` \| `index` \| `migrate` | Manage the indexed Markdown docs corpus. |
 | `orbit friction add` \| `list` \| `show` \| `stats` \| `tags` \| `update` \| `resolve` | Report and triage friction records. |
 
 ### Maintenance

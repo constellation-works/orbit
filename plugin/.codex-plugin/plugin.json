@@ -1,7 +1,7 @@
 {
   "name": "orbit",
   "version": "0.24.0",
-  "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP task and knowledge surface plus workflow skills to Codex.",
+  "description": "Durable tasks, sandboxed parallel runs, and PR-gated delivery for AI coding agents. Adds Orbit's MCP tools and workflow skills to Codex.",
   "author": {
     "name": "constellation-works",
     "url": "https://github.com/constellation-works"
@@ -25,15 +25,15 @@
   },
   "interface": {
     "displayName": "Orbit",
-    "shortDescription": "Task, docs search, and workflow tools.",
-    "longDescription": "Orbit adds a local task lifecycle, searchable project documentation, and auditable workflows for Codex workspaces.",
+    "shortDescription": "Tasks, parallel runs, and PR delivery.",
+    "longDescription": "Orbit adds a durable task lifecycle, sandboxed worktree runs that end in a pull request, searchable task history, and an audit log of every step to Codex workspaces.",
     "developerName": "constellation-works",
     "category": "Developer Tools",
     "capabilities": ["MCP", "Skills", "Agent Workflows"],
     "websiteURL": "https://github.com/constellation-works/orbit",
     "defaultPrompt": [
       "Create an Orbit task for this change.",
-      "Search Orbit for related decisions.",
+      "Search Orbit for related tasks.",
       "Run the default Orbit workflow for this task."
     ],
     "brandColor": "#2563EB"

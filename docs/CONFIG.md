@@ -1065,9 +1065,8 @@ canonical name order, so `medium_complexity_crews = ["grok:70", "opus:10",
 "sol:20"]` sends 70% of unassigned medium work to `grok` and 10% to `opus`.
 
 Use `--low-complexity-crews`, `--medium-complexity-crews`,
-`--hard-complexity-crews`, and `--xhard-complexity-crews` for run overrides,
-including with `--grant`. Each
-provided CLI pool replaces only its matching configuration pool for that
+`--hard-complexity-crews`, and `--xhard-complexity-crews` for run overrides.
+Each provided CLI pool replaces only its matching configuration pool for that
 drain. They are `orbit run auto` options; a ship has no override flag and
 draws from configuration. Configuration arrays replace their corresponding
 global arrays when specified in the workspace file. Set/get/show use the same
