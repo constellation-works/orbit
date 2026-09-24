@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::command::{CommandOut, Execute, Payload};
 
 use super::format::format_timestamp;
-use super::steps::{resolve_run, resolve_step_filter};
+use super::steps::{RunRead, resolve_run, resolve_step_filter};
 
 #[derive(Args)]
 #[command(
@@ -27,6 +27,12 @@ pub struct RunEventsArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Report stored run records as-is: skip stale-run reconciliation, which
+    /// finalizes an orphaned pending or running run as interrupted and
+    /// releases its task reservations
+    #[arg(long)]
+    pub no_reconcile: bool,
 }
 
 impl Execute for RunEventsArgs {
@@ -36,6 +42,7 @@ impl Execute for RunEventsArgs {
             self.run_id.as_deref(),
             self.step_id.as_deref(),
             self.event_type.as_deref(),
+            RunRead::from_no_reconcile(self.no_reconcile),
         )
     }
 }
@@ -45,8 +52,9 @@ fn run_events_payload(
     run_id: Option<&str>,
     step_id: Option<&str>,
     event_type: Option<&str>,
+    read: RunRead,
 ) -> CommandOut {
-    let run = resolve_run(runtime, run_id)?;
+    let run = resolve_run(runtime, run_id, read)?;
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
     let events = filter_run_audit_events(

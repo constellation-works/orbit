@@ -13,24 +13,67 @@ use super::format::{
     format_worker_limit_line, summarize_error_message,
 };
 
+/// Whether a run read may reconcile stale runs before reporting them.
+///
+/// `Reconcile` is the operator default: an orphaned `pending`/`running` run
+/// is finalized as `interrupted`, releasing its task reservations, so the
+/// view shows what actually happened. `Observe` reports stored records
+/// untouched, for readers that promise not to mutate run state [ORB-12941].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunRead {
+    Reconcile,
+    Observe,
+}
+
+impl RunRead {
+    pub(crate) fn from_no_reconcile(no_reconcile: bool) -> Self {
+        if no_reconcile {
+            Self::Observe
+        } else {
+            Self::Reconcile
+        }
+    }
+
+    pub(crate) fn show(self, runtime: &OrbitRuntime, run_id: &str) -> Result<JobRun, OrbitError> {
+        match self {
+            Self::Reconcile => runtime.show_job_run(run_id),
+            Self::Observe => runtime.show_job_run_observed(run_id),
+        }
+    }
+
+    pub(crate) fn list(
+        self,
+        runtime: &OrbitRuntime,
+        params: JobRunListParams,
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        match self {
+            Self::Reconcile => runtime.list_job_runs(params),
+            Self::Observe => runtime.list_job_runs_observed(params),
+        }
+    }
+}
+
 pub(crate) fn resolve_run(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
+    read: RunRead,
 ) -> Result<JobRun, OrbitError> {
     if let Some(run_id) = run_id {
-        return runtime
-            .show_job_run(run_id)
+        return read
+            .show(runtime, run_id)
             .map_err(|_| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()));
     }
 
-    runtime
-        .list_job_runs(JobRunListParams {
+    read.list(
+        runtime,
+        JobRunListParams {
             limit: Some(1),
             ..Default::default()
-        })?
-        .into_iter()
-        .next()
-        .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, "latest".to_string()))
+        },
+    )?
+    .into_iter()
+    .next()
+    .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, "latest".to_string()))
 }
 
 pub(crate) fn resolve_run_step(

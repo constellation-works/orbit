@@ -440,8 +440,8 @@ fn run_show_projects_parallel_provider_completion_by_invocation_parent() {
             .expect("insert event");
     }
 
-    let output =
-        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let output = super::run_show_payload(&runtime, Some(&run.run_id), None, RunRead::Reconcile)
+        .expect("show run payload");
     let CommandOutput::Payload(payload) = output else {
         panic!("show should produce a payload");
     };
@@ -526,8 +526,8 @@ fn run_show_recovers_steps_from_the_audit_trail_when_the_record_stores_none() {
             .expect("insert event");
     }
 
-    let output =
-        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let output = super::run_show_payload(&runtime, Some(&run.run_id), None, RunRead::Reconcile)
+        .expect("show run payload");
     let CommandOutput::Payload(payload) = output else {
         panic!("show should produce a payload");
     };
@@ -632,8 +632,8 @@ fn run_show_human_view_reports_backlog_exclusions() {
         .write_run_state(&run.run_id, &state)
         .expect("write pipeline state");
 
-    let output =
-        super::run_show_payload(&runtime, Some(&run.run_id), None).expect("show run payload");
+    let output = super::run_show_payload(&runtime, Some(&run.run_id), None, RunRead::Reconcile)
+        .expect("show run payload");
     let CommandOutput::Payload(payload) = output else {
         panic!("show should produce a payload");
     };
@@ -738,7 +738,8 @@ fn run_logs_falls_back_to_worker_log_when_no_cli_invocations_are_recorded() {
     .expect("write worker log");
 
     let output =
-        super::logs::run_logs_payload(&runtime, Some(&run.run_id), None).expect("logs payload");
+        super::logs::run_logs_payload(&runtime, Some(&run.run_id), None, RunRead::Reconcile)
+            .expect("logs payload");
     let CommandOutput::Payload(payload) = output else {
         panic!("logs should produce a payload");
     };
