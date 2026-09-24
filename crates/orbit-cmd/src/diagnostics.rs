@@ -10,6 +10,7 @@
 //! a dashboard that crashes on one bad line is worse than one that omits it.
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -253,8 +254,9 @@ pub(crate) fn read_jsonl_month<T: DeserializeOwned>(
 
     let mut entries = Vec::new();
     for path in files {
-        let raw = fs::read_to_string(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
-        for (index, line) in raw.lines().enumerate() {
+        let file = fs::File::open(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        for (index, line) in BufReader::new(file).lines().enumerate() {
+            let line = line.map_err(|e| OrbitError::Io(e.to_string()))?;
             let line = line.trim();
             if line.is_empty() {
                 continue;

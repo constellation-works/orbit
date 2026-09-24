@@ -165,7 +165,10 @@ fn oldest_first_windows_page_forward_from_the_first_event() {
     };
 
     assert_eq!(page(true, 0), ["evt-0", "evt-1"]);
-    assert!(page(true, usize::MAX).is_empty(), "a huge offset is past the end");
+    assert!(
+        page(true, usize::MAX).is_empty(),
+        "a huge offset is past the end"
+    );
     assert_eq!(page(true, 3), ["evt-3", "evt-4"]);
     assert_eq!(page(false, 0), ["evt-4", "evt-3"]);
 }
