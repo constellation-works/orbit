@@ -30,7 +30,7 @@ use super::super::orchestrator::{
 };
 use super::super::run_cli_backend;
 use super::test_support::{
-    RecordingSink, TestHost, capture_events, sandbox_for_test, test_agent_loop_spec,
+    RecordingSink, TestHost, capture_events, sandbox_for_test, sh_args, test_agent_loop_spec,
     test_agent_loop_spec_for, write_executable,
 };
 use orbit_common::security::redaction::argv_redactor;
@@ -473,9 +473,10 @@ fn run_cli_backend_projects_copilot_final_answer_and_keeps_usage() {
 #[test]
 fn run_cli_backend_rejects_copilot_terminal_failed_or_timeout_after_commentary() {
     let temp = tempdir().expect("tempdir");
+    let launcher = temp.path().join("copilot");
+    std::os::unix::fs::symlink("/bin/sh", &launcher).expect("link stable shell as copilot");
 
     for status in ["failed", "timeout"] {
-        let script = temp.path().join("copilot");
         let commentary = serde_json::json!({
             "type": "assistant.message",
             "data": {"content": "Commentary: I updated the files."},
@@ -490,12 +491,12 @@ fn run_cli_backend_rejects_copilot_terminal_failed_or_timeout_after_commentary()
             "type": "assistant.message",
             "data": {"content": envelope.to_string()},
         });
-        write_executable(
-            &script,
-            &format!(
-                "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{commentary}'\nprintf '%s\\n' '{terminal}'\n"
-            ),
-        );
+        // Preserve the copilot launcher name while executing a stable shell:
+        // freshly written scripts can race inherited writable descriptors.
+        let mut host = TestHost::with_command(launcher.display().to_string());
+        host.executor_args = sh_args(&format!(
+            "cat > /dev/null\nprintf '%s\\n' '{commentary}'\nprintf '%s\\n' '{terminal}'\n"
+        ));
 
         let sink = Arc::new(RecordingSink::default());
         let sink_for_writer: Arc<dyn AuditSink> = sink;
@@ -504,7 +505,6 @@ fn run_cli_backend_rejects_copilot_terminal_failed_or_timeout_after_commentary()
             "copilot:gpt-5.5",
             sink_for_writer,
         ));
-        let host = TestHost::with_command(script.display().to_string());
         let mut spec = test_agent_loop_spec(Duration::from_secs(5));
         spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
 
