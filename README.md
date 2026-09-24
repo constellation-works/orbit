@@ -2,10 +2,12 @@
 
 **Your agent files the work. Orbit ships it. You review the pull request.**
 
-[![Release](https://img.shields.io/github/v/release/constellation-works/orbit)](https://github.com/constellation-works/orbit/releases)
-[![npm](https://img.shields.io/npm/v/@orbit-tools/cli)](https://www.npmjs.com/package/@orbit-tools/cli)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
-[![Docs](https://img.shields.io/badge/docs-orbit--cli.com-informational)](https://orbit-cli.com)
+<p align="center">
+  <a href="https://github.com/constellation-works/orbit/releases"><img src="https://img.shields.io/github/v/release/constellation-works/orbit" alt="Release" /></a>
+  <a href="https://www.npmjs.com/package/@orbit-tools/cli"><img src="https://img.shields.io/npm/v/@orbit-tools/cli" alt="npm" /></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
+  <a href="https://orbit-cli.com"><img src="https://img.shields.io/badge/docs-orbit--cli.com-informational" alt="Docs" /></a>
+</p>
 
 <p align="center">
   <img src="docs/assets/orbit-dashboard-hero.gif" alt="Orbit dashboard: task backlog, agent execution, and live audit log" width="600" />
