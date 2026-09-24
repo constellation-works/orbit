@@ -167,3 +167,25 @@ fn real_template_round_trips_byte_stably() {
     let after_two = read(&claude);
     assert_eq!(after_one, after_two);
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_target_is_written_through_once_and_stays_a_link() {
+    let dir = tempdir().expect("tempdir");
+    let agents = dir.path().join("AGENTS.md");
+    let claude = dir.path().join("CLAUDE.md");
+    std::fs::write(&agents, "# Guide\n").expect("write AGENTS.md");
+    std::os::unix::fs::symlink("AGENTS.md", &claude).expect("link CLAUDE.md");
+
+    let result = inject_agent_rules(dir.path()).expect("inject");
+
+    assert_eq!(result.outcomes.len(), 1, "one real file, one write");
+    assert!(
+        std::fs::symlink_metadata(&claude)
+            .expect("CLAUDE.md metadata")
+            .file_type()
+            .is_symlink(),
+        "CLAUDE.md must remain a symlink"
+    );
+    assert_eq!(read(&agents).matches(START_MARKER).count(), 1);
+}
