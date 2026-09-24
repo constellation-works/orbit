@@ -38,7 +38,7 @@ pub struct AuditExportArgs {
 impl Execute for AuditExportArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
-        let events = runtime.list_audit_events(since, self.tool, None, None, 0)?;
+        let events = runtime.export_audit_events(since, self.tool)?;
 
         match self.format {
             ExportFormat::Json => {
