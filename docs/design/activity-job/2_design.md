@@ -755,7 +755,7 @@ The executor emits `StepJoin` with per-branch outcomes. If the join policy fails
 
 ### 8.4 `fan_out` / `fan_in`
 
-`fan_out.items` is template-rendered into an array. Workers run concurrently behind a counting semaphore, so `max_workers` is a true concurrency bound, not just metadata. `fan_in.collect` can persist the ordered worker outputs under a separate pipeline key in addition to the step id itself.
+`fan_out.items` is template-rendered into an array of at most 256 entries (each item gets its own scoped thread, so a larger list fails the step rather than exhausting OS threads). Workers run concurrently behind a counting semaphore, so `max_workers` is a true concurrency bound, not just metadata. `fan_in.collect` can persist the ordered worker outputs under a separate pipeline key in addition to the step id itself.
 
 Collection does not itself interpret a successful activity call whose payload
 reports a failed child run. A parent that waits on child workflows must pass
