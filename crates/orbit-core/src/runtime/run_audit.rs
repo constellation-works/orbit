@@ -1038,20 +1038,11 @@ fn bounded_recovery_diagnostic(raw: &str) -> (String, bool) {
     (bounded, truncated)
 }
 
-fn read_blob_text(blob_store: &BlobStore, blob_ref: &str) -> Result<String, OrbitError> {
-    if blob_ref.len() < 2 || blob_ref.starts_with("error:") {
-        return Err(OrbitError::Store(format!(
-            "invalid audit blob reference '{blob_ref}'"
-        )));
-    }
-    let bytes = blob_store
-        .read(blob_ref)
-        .map_err(|err| OrbitError::Io(format!("read audit blob '{blob_ref}': {err}")))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
-    read_blob_text(blob_store, blob_ref).unwrap_or_default()
+    blob_store
+        .read(blob_ref)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default()
 }
 
 /// Returns the blob text and whether the blob has bytes beyond what was
@@ -1085,9 +1076,6 @@ fn read_blob_text_preview_best_effort(
     blob_ref: &str,
     max_bytes: usize,
 ) -> (String, bool) {
-    if blob_ref.len() < 2 || blob_ref.starts_with("error:") {
-        return (String::new(), false);
-    }
     let cap = max_bytes.saturating_add(max_bytes);
     let bytes = match blob_store.read_prefix(blob_ref, cap) {
         Ok(bytes) => bytes,

@@ -156,6 +156,36 @@ fn read_prefix_returns_the_whole_blob_when_shorter_than_max() {
 }
 
 #[test]
+fn reads_refuse_references_that_are_not_sha256_digests() {
+    let dir = tempdir().expect("tempdir");
+    let store = BlobStore::new(dir.path().join("blobs"));
+    let hash = store.write(b"payload").expect("write blob");
+    assert_eq!(store.read(&hash).expect("read blob"), b"payload");
+
+    for reference in [
+        "",
+        "a",
+        "a\u{e9}",
+        "../../etc/passwd",
+        "error: write failed",
+        &hash.to_uppercase(),
+    ] {
+        for error in [
+            store.read(reference).expect_err("read must refuse"),
+            store
+                .read_prefix(reference, 4)
+                .expect_err("read_prefix must refuse"),
+        ] {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::InvalidInput,
+                "{reference:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn write_repairs_a_corrupt_existing_blob() {
     let temp = tempdir().expect("tempdir");
     let store = BlobStore::new(temp.path());
