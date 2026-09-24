@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use chrono::Utc;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
@@ -42,6 +43,25 @@ pub(crate) fn seeded_runtime_with_executor(sandbox: Option<ExecutorSandboxKind>)
 
 pub(crate) fn runtime_with_workspace_layout() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
     runtime_with_workspace_config(None)
+}
+
+/// A non-worktree fixture with a local Git discovery boundary. When the test
+/// temp directory is nested under a managed checkout, Git must not discover
+/// that checkout's shared metadata while preparing a task pilot.
+pub(crate) fn runtime_with_non_git_workspace_layout() -> (tempfile::TempDir, OrbitRuntime, PathBuf)
+{
+    let (root, runtime, repo_root) = runtime_with_workspace_layout();
+    let output = Command::new("git")
+        .args(["init", "--bare", "--quiet"])
+        .arg(repo_root.join(".git"))
+        .output()
+        .expect("initialize isolated Git boundary");
+    assert!(
+        output.status.success(),
+        "initialize isolated Git boundary: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (root, runtime, repo_root)
 }
 
 /// The same layout with an optional workspace `config.toml` written before the

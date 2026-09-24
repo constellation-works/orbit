@@ -17,7 +17,8 @@ use super::super::task_pilot::{
 };
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_config, runtime_with_workspace_layout,
+    runtime_with_non_git_workspace_layout, runtime_with_workspace_config,
+    runtime_with_workspace_layout,
 };
 use crate::application::task::TaskAddParams;
 use crate::{ShipMode, WorkspaceRuntimeBinding};
@@ -766,7 +767,7 @@ fn concurrent_prepare_and_delivery_fetch_share_the_common_dir_lock() {
 
 #[test]
 fn non_git_workspace_still_uses_filesystem_existence() {
-    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let (_root, runtime, repo_root) = runtime_with_non_git_workspace_layout();
     fs::create_dir_all(repo_root.join("src")).expect("src");
     fs::write(repo_root.join("src/alpha.rs"), "fn alpha() {}\n").expect("alpha");
     let task = seed_task(&runtime, "filesystem fallback");
