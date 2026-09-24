@@ -453,8 +453,16 @@ fn spawned_child_guard_retains_linux_mount_descriptors() {
         "mount descriptor must survive child exit until supervision completes"
     );
 
+    let authority_path = std::fs::canonicalize(root.join("orbit.db")).expect("authority path");
     drop(spawned);
-    assert_eq!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) }, -1);
+    // A parallel test can reuse the descriptor number as soon as it closes, so
+    // assert the number no longer names the authority, not that it is unused.
+    let still_names_authority = std::fs::read_link(format!("/proc/self/fd/{source_fd}"))
+        .is_ok_and(|path| path == authority_path);
+    assert!(
+        !still_names_authority,
+        "dropping supervision must release the mount descriptor"
+    );
 }
 
 /// Negative control for the proven fault: translating host runtime authority
