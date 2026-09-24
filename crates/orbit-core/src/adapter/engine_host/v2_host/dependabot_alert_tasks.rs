@@ -9,11 +9,13 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::duplicate_tasks::{
     DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
+};
+use crate::adapter::engine_host::v2_host::sweep_filing::{
+    bounded_u64, digest, display, truncate_chars,
 };
 use crate::application::task::TaskAddParams;
 
@@ -40,7 +42,6 @@ const SECRET_TITLE_PREFIX: &str = "[secret-scanning-sweep] ";
 const SYSTEM_CREW: &str = "system";
 const DEFAULT_MAX_TASKS: u64 = 10;
 const MAX_TASKS: u64 = 50;
-const KEY_LEN: usize = 16;
 
 struct PendingTask {
     params: TaskAddParams,
@@ -740,36 +741,6 @@ fn priority_for_rank(rank: u8) -> TaskPriority {
     }
 }
 
-fn digest(parts: &[&str]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part.as_bytes());
-        hasher.update([0]);
-    }
-    format!("{:x}", hasher.finalize())
-        .chars()
-        .take(KEY_LEN)
-        .collect()
-}
-
-fn bounded_u64(input: &Value, key: &str, default: u64, max: u64) -> Result<u64, OrbitError> {
-    let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
-        return Ok(default);
-    };
-    let raw = match value {
-        Value::Number(number) => number.as_u64(),
-        Value::String(text) => text.trim().parse::<u64>().ok(),
-        _ => None,
-    }
-    .ok_or_else(|| OrbitError::InvalidInput(format!("input.{key} must be a positive integer")))?;
-    if raw == 0 {
-        return Err(OrbitError::InvalidInput(format!(
-            "input.{key} must be greater than zero"
-        )));
-    }
-    Ok(raw.min(max))
-}
-
 fn alert_number(value: &Value) -> u64 {
     value.get("number").and_then(Value::as_u64).unwrap_or(0)
 }
@@ -780,17 +751,5 @@ fn field(value: &Value, key: &str) -> String {
         Some(Value::Number(number)) => number.to_string(),
         Some(Value::Bool(value)) => value.to_string(),
         _ => String::new(),
-    }
-}
-
-fn display(value: &str) -> &str {
-    if value.is_empty() { "unknown" } else { value }
-}
-
-fn truncate_chars(value: &str, max: usize) -> String {
-    if value.chars().count() <= max {
-        value.to_string()
-    } else {
-        value.chars().take(max).collect::<String>() + "…"
     }
 }

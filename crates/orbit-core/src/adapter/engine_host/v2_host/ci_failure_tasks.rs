@@ -34,12 +34,14 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
     DuplicateTaskMatch, SnapshotDuplicateLookup, find_covering_task,
+};
+use crate::adapter::engine_host::v2_host::sweep_filing::{
+    bounded_u64, digest, display, truncate_chars,
 };
 use crate::application::task::TaskAddParams;
 
@@ -80,10 +82,6 @@ const SYSTEM_CREW: &str = "system";
 
 const DEFAULT_MAX_TASKS: u64 = 5;
 const MAX_MAX_TASKS: u64 = 20;
-/// Hex characters of the signature digest kept in a tag. Full-width digests
-/// make a tag unreadable in a task list; this is a dedupe key, not a security
-/// boundary.
-const KEY_LEN: usize = 16;
 /// Log bytes carried into a task description. `collect_ci_evidence` has already
 /// bounded and redacted the excerpt; this is a second, tighter bound so a
 /// description stays a readable brief.
@@ -1971,36 +1969,6 @@ fn source_identity_fingerprint(runs: &[Value]) -> Option<CoverageFingerprint> {
     ))
 }
 
-fn digest(parts: &[&str]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part.as_bytes());
-        hasher.update([0u8]);
-    }
-    format!("{:x}", hasher.finalize())
-        .chars()
-        .take(KEY_LEN)
-        .collect()
-}
-
-fn bounded_u64(input: &Value, key: &str, default: u64, max: u64) -> Result<u64, OrbitError> {
-    let Some(value) = input.get(key).filter(|value| !value.is_null()) else {
-        return Ok(default);
-    };
-    let raw = match value {
-        Value::Number(number) => number.as_u64(),
-        Value::String(text) => text.trim().parse::<u64>().ok(),
-        _ => None,
-    }
-    .ok_or_else(|| OrbitError::InvalidInput(format!("input.{key} must be a positive integer")))?;
-    if raw == 0 {
-        return Err(OrbitError::InvalidInput(format!(
-            "input.{key} must be greater than zero"
-        )));
-    }
-    Ok(raw.min(max))
-}
-
 /// Read a snapshot field as a display string, accepting the numeric spellings
 /// `gh` uses for run and job identifiers.
 fn value_string(value: &Value, key: &str) -> String {
@@ -2016,17 +1984,6 @@ fn run_order(run: &Value) -> (String, u64) {
         value_string(run, "created_at"),
         run.get("run_id").and_then(Value::as_u64).unwrap_or(0),
     )
-}
-
-fn display(value: &str) -> &str {
-    if value.is_empty() { "unknown" } else { value }
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-    value.chars().take(max_chars).collect::<String>() + "…"
 }
 
 fn truncate_bytes(value: &str, max_bytes: usize) -> String {
