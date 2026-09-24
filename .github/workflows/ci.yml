@@ -261,6 +261,8 @@ jobs:
       # descriptor-contract tests, which need a host that enforces Landlock
       # for the same reason the plugin-sandbox tests do. It runs over the same
       # artifact set as the line above it so neither leg triggers a rebuild.
+      # A prior failure in this job (including `Run CI guardrails`) skips this
+      # gate; if this step is missing, the gate did not pass.
       - name: Linux sandbox/policy enforcement gate
         run: |
           cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
