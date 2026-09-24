@@ -35,42 +35,14 @@ pub(crate) fn parse_since(raw: &str) -> Result<DateTime<Utc>, orbit_core::OrbitE
     })
 }
 
+/// Dashboard durations: a bare number means seconds; anything else follows
+/// the shared `30m`/`2h`/`1d` grammar, which rejects overflow.
 pub(crate) fn parse_duration_seconds(raw: &str) -> Result<u64, orbit_core::OrbitError> {
     let value = raw.trim();
-    if value.is_empty() {
-        return Err(orbit_core::OrbitError::InvalidInput(
-            "duration string is empty".to_string(),
-        ));
-    }
-
-    let (num_str, unit) = if let Some(stripped) = value.strip_suffix('s') {
-        (stripped, "s")
-    } else if let Some(stripped) = value.strip_suffix('m') {
-        (stripped, "m")
-    } else if let Some(stripped) = value.strip_suffix('h') {
-        (stripped, "h")
-    } else if let Some(stripped) = value.strip_suffix('d') {
-        (stripped, "d")
-    } else if let Some(stripped) = value.strip_suffix('w') {
-        (stripped, "w")
-    } else {
-        // bare number = seconds
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
         return value.parse::<u64>().map_err(|_| {
             orbit_core::OrbitError::InvalidInput(format!("invalid duration '{raw}'"))
         });
-    };
-
-    let num: u64 = num_str.parse().map_err(|_| {
-        orbit_core::OrbitError::InvalidInput(format!("invalid number in duration '{raw}'"))
-    })?;
-
-    let secs = match unit {
-        "s" => num,
-        "m" => num * 60,
-        "h" => num * 3600,
-        "d" => num * 86400,
-        "w" => num * 86400 * 7,
-        _ => unreachable!(),
-    };
-    Ok(secs)
+    }
+    orbit_common::protocol::tool_input::parse_duration_seconds(value)
 }
