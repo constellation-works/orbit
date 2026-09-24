@@ -31,6 +31,9 @@ const DEFAULT_WINDOW: &str = "7d";
 /// Default number of buckets. Six weeks is long enough for a trend to separate
 /// itself from one noisy week.
 const DEFAULT_BUCKETS: usize = 6;
+/// Upper bound on `--buckets`: a ten-year weekly report, and far below where
+/// the per-bucket scan or the `i32` bucket index could overflow.
+const MAX_BUCKETS: usize = 520;
 
 #[derive(Args)]
 #[command(
@@ -287,6 +290,13 @@ pub(crate) fn compute_flow(
 impl Execute for TaskFlowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let width = bucket_width(&self.window)?;
+        let now = Utc::now();
+        report_start(now, width, self.buckets).ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "window '{}' x {} buckets reaches past the earliest representable time",
+                self.window, self.buckets
+            ))
+        })?;
         let points: Vec<FlowPoint> = runtime
             .list_tasks_by_tags(&self.tags)?
             .iter()
@@ -298,7 +308,7 @@ impl Execute for TaskFlowArgs {
             })
             .collect::<Result<_, _>>()?;
 
-        let report = compute_flow(&points, Utc::now(), width, self.buckets);
+        let report = compute_flow(&points, now, width, self.buckets);
 
         let mut table = Table::new(vec![
             Column::new("WINDOW").fixed(),
@@ -392,13 +402,27 @@ fn bucket_width(raw: &str) -> Result<Duration, OrbitError> {
         .ok_or_else(|| OrbitError::InvalidInput(format!("window '{raw}' is too large")))
 }
 
-/// Reject a zero bucket count, which would report nothing at all.
+/// Start of the oldest bucket, or `None` when the span overflows the
+/// timestamp range. `compute_flow` relies on this having been checked.
+pub(crate) fn report_start(
+    now: DateTime<Utc>,
+    width: Duration,
+    count: usize,
+) -> Option<DateTime<Utc>> {
+    let span = width.checked_mul(i32::try_from(count).ok()?)?;
+    now.checked_sub_signed(span)
+}
+
+/// Reject a zero or unbounded bucket count.
 fn parse_buckets(raw: &str) -> Result<usize, String> {
     let value: usize = raw.parse().map_err(|_| {
         format!("`{raw}` is not a valid bucket count (expected a positive integer)")
     })?;
     if value == 0 {
         return Err("buckets must be at least 1".to_string());
+    }
+    if value > MAX_BUCKETS {
+        return Err(format!("buckets must be at most {MAX_BUCKETS}"));
     }
     Ok(value)
 }
