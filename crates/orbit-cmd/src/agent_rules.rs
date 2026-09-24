@@ -42,11 +42,20 @@ pub struct InjectAgentRulesResult {
 
 /// Inject (or refresh) the Orbit rules block into `CLAUDE.md` and `AGENTS.md`
 /// at the workspace root. Always uses the embedded `AGENT_RULES_TEMPLATE`.
+///
+/// A target that is a symlink (commonly `CLAUDE.md -> AGENTS.md`) is written
+/// through to the file it names: the atomic rename would otherwise replace
+/// the link with a copy, and both names would then drift apart. A file
+/// reached through more than one name is written once.
 pub fn inject_agent_rules(workspace_root: &Path) -> Result<InjectAgentRulesResult, OrbitError> {
     let block = normalized_block(AGENT_RULES_TEMPLATE)?;
-    let mut outcomes = Vec::with_capacity(TARGET_FILES.len());
+    let mut outcomes: Vec<InjectionOutcome> = Vec::with_capacity(TARGET_FILES.len());
     for name in TARGET_FILES {
-        let path = workspace_root.join(name);
+        let name = workspace_root.join(name);
+        let path = std::fs::canonicalize(&name).unwrap_or(name);
+        if outcomes.iter().any(|outcome| outcome.path == path) {
+            continue;
+        }
         let action = apply_to_file(&path, &block)?;
         outcomes.push(InjectionOutcome { path, action });
     }
