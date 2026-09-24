@@ -199,22 +199,30 @@ fn scan_audit_page(
     offset: usize,
     limit: usize,
 ) -> Result<Vec<orbit_core::AuditEvent>, OrbitError> {
-    let wanted = offset.saturating_add(limit);
-    let mut matched = Vec::new();
+    let mut to_skip = offset;
+    let mut page = Vec::new();
     let mut scanned = 0usize;
     filter.limit = HISTORY_MAX_LIMIT;
     filter.offset = 0;
-    while matched.len() < wanted && scanned < AUDIT_POST_FILTER_SCAN_CAP {
+    while page.len() < limit && scanned < AUDIT_POST_FILTER_SCAN_CAP {
         let batch = OrbitRuntime::list_audit_events_filtered(runtime, filter)?;
         let fetched = batch.len();
         scanned += fetched;
-        matched.extend(batch.into_iter().filter(|e| post_filter.matches(e)));
+        // Keep only the requested page; matches before `offset` are counted,
+        // not buffered.
+        for event in batch.into_iter().filter(|e| post_filter.matches(e)) {
+            if to_skip > 0 {
+                to_skip -= 1;
+            } else if page.len() < limit {
+                page.push(event);
+            }
+        }
         if fetched < HISTORY_MAX_LIMIT {
             break;
         }
         filter.offset += fetched;
     }
-    Ok(matched.into_iter().skip(offset).take(limit).collect())
+    Ok(page)
 }
 
 /// Best-effort match of a stringified `arguments_json` payload against a
