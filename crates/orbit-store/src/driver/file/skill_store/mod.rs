@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use crate::json_schema::validate_schema_document;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
+use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 use crate::fs::path_safety::validate_path_stem;
 use crate::fs::yaml::parse_yaml_with;
@@ -530,17 +530,6 @@ fn is_semver(value: &str) -> bool {
         && parts
             .iter()
             .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        output.push_str(&format!("{byte:02x}"));
-    }
-    output
 }
 
 #[cfg(test)]

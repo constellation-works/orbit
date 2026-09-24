@@ -16,10 +16,10 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, write_text_with_parent};
+use orbit_common::security::release::sha256_hex;
 use orbit_tools::plugin::LoadedPlugin;
 use orbit_types::workflow::{AUTO_TASK_SCHEMA_VERSION, ROUTINE_SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::runtime::plugin_definitions::{
     PluginDefinitionSet, provenance_header, seeded_definition_name,
@@ -323,8 +323,4 @@ fn write_manifest(path: &Path, manifest: &PluginAssetManifest) -> Result<(), Orb
     }
     atomic_write_text(path, &encoded)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))
-}
-
-fn sha256_hex(content: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(content))
 }

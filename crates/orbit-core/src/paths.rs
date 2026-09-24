@@ -7,17 +7,7 @@ use orbit_common::OrbitError;
 pub(crate) const ORBIT_ROOT_TOKEN: &str = "{{ORBIT_ROOT}}";
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("HOME")
-        && !home.trim().is_empty()
-    {
-        return Some(PathBuf::from(home));
-    }
-    if let Ok(profile) = std::env::var("USERPROFILE")
-        && !profile.trim().is_empty()
-    {
-        return Some(PathBuf::from(profile));
-    }
-    None
+    orbit_common::fs::path::home_dir().ok()
 }
 
 pub(crate) fn cwd_orbit_root(cwd: &Path) -> PathBuf {
