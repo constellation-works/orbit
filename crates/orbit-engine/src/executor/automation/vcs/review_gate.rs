@@ -191,7 +191,13 @@ pub fn fetch_landed_commit(workspace_path: &Path, landed_commit: &str) -> Result
     }
     git_success(
         workspace_path,
-        &["fetch", "--quiet", "origin", landed_commit],
+        &[
+            "fetch",
+            "--quiet",
+            "--end-of-options",
+            "origin",
+            landed_commit,
+        ],
     )
 }
 

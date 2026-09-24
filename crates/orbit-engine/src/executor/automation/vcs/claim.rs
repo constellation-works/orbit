@@ -304,7 +304,13 @@ pub(in crate::executor::automation::vcs) fn observe_accepted_revision(
     if revision(workspace_path, &accepted.commit).is_err() {
         let _ = git_success(
             workspace_path,
-            &["fetch", "--quiet", "origin", &accepted.commit],
+            &[
+                "fetch",
+                "--quiet",
+                "--end-of-options",
+                "origin",
+                &accepted.commit,
+            ],
         );
     }
     let observed = revision(workspace_path, &accepted.commit).map_err(|error| {
