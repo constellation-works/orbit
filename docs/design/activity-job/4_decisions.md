@@ -78,11 +78,11 @@ Folded instances:
 |-----|----------------------------------|
 | [Cross-iteration `session:` binding is a loop-scoped HTTP-only feature](#cross-iteration-session-binding-is-a-loop-scoped-http-only-feature) | Retired by [ORB-10801]: the HTTP agent loop is gone, so any `session:` binding is refused at load. |
 | [Keep the retained CLI runtimes as the implementation of `backend: cli`](#keep-the-retained-cli-runtimes-as-the-implementation-of-backend-cli) | Retained CLI runtimes are the agent implementation. |
-| [Groundhog is a sibling activity kind, not an `agent_loop` mode bit](#groundhog-is-a-sibling-activity-kind-not-an-agentloop-mode-bit) | Groundhog is a sibling activity kind, not an `agent_loop` mode bit. |
+| [Groundhog is a sibling activity kind, not an `agent_loop` mode bit](#groundhog-is-a-sibling-activity-kind-not-an-agent_loop-mode-bit) | Groundhog is a sibling activity kind, not an `agent_loop` mode bit. |
 | [CLI backend resolves executor args, not just provider commands](#cli-backend-resolves-executor-args-not-just-provider-commands) | CLI backend resolves executor args, not just provider commands. |
 | [Codex CLI dynamic flags stay in provider runtime config](#codex-cli-dynamic-flags-stay-in-provider-runtime-config) | Codex CLI dynamic flags stay in provider runtime config. |
 | [`orbit init` is the writer for per-role agent settings](#orbit-init-is-the-writer-for-per-role-agent-settings) | `orbit init` writes per-role agent settings. |
-| [`[agent.<role>]` config overrides inline `agent_loop` settings at dispatch](#agentrole-config-overrides-inline-agentloop-settings-at-dispatch) | `[agent.<role>]` config overrides inline `agent_loop` settings at dispatch. |
+| `[agent.<role>]` config overrides inline `agent_loop` settings at dispatch | `[agent.<role>]` config overrides inline `agent_loop` settings at dispatch. |
 | [CLI agent envelopes carry durable task and run context](#cli-agent-envelopes-carry-durable-task-and-run-context) | CLI agent envelopes carry durable task and run context. |
 | [Provider static-arg fixups apply before sandbox dispatch](#provider-static-arg-fixups-apply-before-sandbox-dispatch) | Provider static-arg fixups apply before sandbox dispatch. |
 | [`orbit init` uses a recommendation-first setup wizard](#orbit-init-uses-a-recommendation-first-setup-wizard) | `orbit init` uses a recommendation-first setup wizard. |
@@ -107,17 +107,17 @@ Folded instances:
 
 ## Resolve `backend: auto` once, before dispatch
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260418-2143], [T20260419-0104]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## `target: activity:<name>` is authoring sugar, not an execution primitive
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260418-2019]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## Cross-iteration `session:` binding is a loop-scoped HTTP-only feature
 
@@ -177,10 +177,10 @@ Folded instances:
 
 ## Seed reference activities and jobs as load-bearing runtime contracts
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260419-2347], [T20260419-0622-3], [T20260419-0623], [T20260419-0623-2]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## Groundhog is a sibling activity kind, not an `agent_loop` mode bit
 
@@ -200,10 +200,10 @@ Folded into [Run state, audit, and operator inspection are durable layers](#run-
 
 ## Merge object-valued job defaults with caller input, and surface early pipeline failures as synthetic job steps
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260423-0445]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## Direct v2 job runs are durable job runs, not audit-only executions
 
@@ -214,10 +214,10 @@ Folded into [Run state, audit, and operator inspection are durable layers](#run-
 
 ## Job catalog discovery honors layer precedence
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260425-0204]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## Public run workflows are execution aliases only
 
@@ -235,10 +235,10 @@ Folded into [Host boundaries and agent dispatch stay explicit](#host-boundaries-
 
 ## Activity catalogs honor layer precedence and activity execution stays job-owned
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260426-0047]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## V2 job metrics persist invocation traces beside audit
 
@@ -342,10 +342,10 @@ Folded into [Host boundaries and agent dispatch stay explicit](#host-boundaries-
 
 ## Workflow admission is distinct from generic task updates
 
-**Superseded by:** [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries) (folded)
+**Superseded by:** "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision) (folded)
 **Recorded:** 2026-04 · [T20260428-8]
 
-Folded into [Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries](../orbit-docs/4_decisions.md#allocate-adr-ids-globally-via-orbitadradd-before-authoring-feature-decision-entries)'s rollup for canonical v2 asset normalization.
+Folded into "Allocate ADR IDs globally via orbit.adr.add before authoring feature decision entries" (a retired orbit-docs decision)'s rollup for canonical v2 asset normalization.
 
 ## `orbit init` is the writer for per-role agent settings
 
@@ -836,7 +836,7 @@ Superseded by removal. The proposal was: an optional `reviewer` field on the tas
 ## Remove the planning duel and retain compatibility-only residue
 
 **Recorded:** 2026-08-09 02:47:50.219705Z · [ORB-10627]
-**Supersedes:** [Auto-populate `task.context_files` from the winning duel plan](#auto-populate-taskcontextfiles-from-the-winning-duel-plan), [Scope duel-plan candidate and model overrides to \[duel\]](../agent-families/4_decisions.md#scope-duel-plan-candidate-and-model-overrides-to-duel)
+**Supersedes:** [Auto-populate `task.context_files` from the winning duel plan](#auto-populate-taskcontext_files-from-the-winning-duel-plan), [Scope duel-plan candidate and model overrides to \[duel\]](../agent-families/4_decisions.md#scope-duel-plan-candidate-and-model-overrides-to-duel)
 **Paths:** `crates/orbit-*/**`, `docs/**`, `website/**`
 
 ### Context

@@ -25,7 +25,7 @@ and validation evidence, not by drifting in.
 ## 1. Open Questions
 
 0. **First-class `activity:` targets.** v1 rejects `activity:<name>` at parse time because
-   run dispatch is job-shaped ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads)); the wrapper-job idiom covers current needs. A
+   run dispatch is job-shaped ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)); the wrapper-job idiom covers current needs. A
    standalone activity run entrypoint (or auto-wrapping) would let routines fire
    activities directly — worth doing only if the wrapper friction proves real.
 1. **Single-fire across hosts.** Under the multi-owner model described in
