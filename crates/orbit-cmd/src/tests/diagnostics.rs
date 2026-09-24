@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::super::diagnostics::{
     is_year_month, list_jsonl_months, parse_jsonl_values, read_jsonl_month,
-    validated_diagnostics_month_dir, validated_year_month,
+    read_jsonl_month_limited, validated_diagnostics_month_dir, validated_year_month,
 };
 
 #[test]
@@ -100,4 +100,34 @@ fn list_jsonl_months_missing_category_dir_is_empty() {
     let months = list_jsonl_months(root.path(), "metrics").unwrap();
 
     assert!(months.is_empty());
+}
+
+#[test]
+fn read_month_limited_returns_the_newest_entries_across_files() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let month_dir = root
+        .path()
+        .join("state")
+        .join("diagnostics")
+        .join("metrics")
+        .join("2026-03");
+    std::fs::create_dir_all(&month_dir).expect("month dir");
+    std::fs::write(month_dir.join("a.jsonl"), "{\"n\":1}\n{\"n\":2}\n").expect("older file");
+    std::fs::write(
+        month_dir.join("b.jsonl"),
+        "{\"n\":3}\nnot json\n\n{\"n\":4}{\"n\":5}\n",
+    )
+    .expect("newer file");
+
+    let newest = |limit| {
+        read_jsonl_month_limited::<Value>(root.path(), "metrics", "2026-03", limit)
+            .expect("read")
+            .into_iter()
+            .map(|entry| entry["n"].as_u64().expect("n"))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(newest(4), [5, 4, 3, 2]);
+    assert_eq!(newest(10), [5, 4, 3, 2, 1]);
+    assert!(newest(0).is_empty());
 }

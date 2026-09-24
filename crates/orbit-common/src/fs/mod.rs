@@ -5,6 +5,7 @@ pub mod git;
 pub mod io;
 pub mod overlap_index;
 pub mod path;
+pub mod reverse_lines;
 pub mod selector;
 pub mod task_io;
 
