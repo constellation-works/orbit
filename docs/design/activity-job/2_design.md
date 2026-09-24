@@ -606,7 +606,7 @@ and any future exception requires a deliberate edit with a stated reason.
 
 ### 7.6b Structured output is the Claude prevention layer
 
-§7.6a is a *detector*. Before [ORB-10746] nothing prevented a Claude run from finishing its work and then answering in prose with exit 0 and no envelope (`jrun-20260812-0312-9`); the guard refused to checkpoint it and the task blocked.
+§7.6a is a *detector*. Before [ORB-10746] nothing prevented a Claude run from finishing its work and then answering in prose with exit 0 and no envelope; the guard refused to checkpoint it and the task blocked.
 
 The installed Claude CLI exposes `--json-schema`, so the frame can be a
 constraint rather than a request. `crates/orbit-agent/src/types/response/protocol_schema.rs`
@@ -635,7 +635,7 @@ redundant.
 
 The earlier untyped property plus a description that said "null when status
 is success" made Claude's constrained decoder emit the JSON *string*
-`"null"` (`jrun-20260813-0451-3`). The parser accepts that token — and the
+`"null"`. The parser accepts that token — and the
 empty string — as absent `error`, the same as JSON `null` or a missing
 field. A `status=failed` envelope with missing, JSON-null, or
 string-`"null"` `error` is still a protocol violation (`failed status
