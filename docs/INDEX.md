@@ -83,7 +83,7 @@ a conservative title/status fallback.
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Draft | — |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
-| [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions | Superseded | claude |
+| [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
 | [Review Gate](./design/review-gate/1_overview.md) | Independent automatic code review — before-PR gating with a fresh reviewer and scoped repairs, after-landing scheduling, lineage budgets, and exact-tree delivery coverage. | Accepted | codex |
 | [Routines](./design/routines/1_overview.md) | Durable per-user scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state. | Accepted | claude |
