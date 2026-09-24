@@ -106,19 +106,17 @@ fn diagnostics_friction_from_v2_audit(
     let events = v2_audit_values(runtime, Some(since), Some(until), 50_000)?;
     let blob_store = audit_blob_store(runtime);
     let by_id = events_by_id(&events);
+    // `events` is oldest-first; walk newest-first and stop at `limit` so only
+    // the rows returned pay for their stderr blob read.
     let mut rows = Vec::new();
-    for event in events {
-        if let Some(row) = diagnostics_friction_row(&blob_store, &by_id, &event, month) {
+    for event in events.iter().rev() {
+        if let Some(row) = diagnostics_friction_row(&blob_store, &by_id, event, month) {
             rows.push(row);
+            if rows.len() == limit {
+                break;
+            }
         }
     }
-
-    rows.sort_by(|a, b| {
-        let left = a.get("ts").and_then(Value::as_str).unwrap_or("");
-        let right = b.get("ts").and_then(Value::as_str).unwrap_or("");
-        right.cmp(left)
-    });
-    rows.truncate(limit);
     Ok(rows)
 }
 
@@ -146,14 +144,14 @@ fn v2_audit_values(
         .collect())
 }
 
-fn events_by_id(events: &[Value]) -> HashMap<String, Value> {
+fn events_by_id(events: &[Value]) -> HashMap<&str, &Value> {
     events
         .iter()
         .filter_map(|event| {
             event
                 .get("event_id")
                 .and_then(Value::as_str)
-                .map(|event_id| (event_id.to_string(), event.clone()))
+                .map(|event_id| (event_id, event))
         })
         .collect()
 }
@@ -169,10 +167,10 @@ fn audit_blob_store(runtime: &OrbitRuntime) -> BlobStore {
 }
 
 // Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
-pub(super) fn diagnostics_friction_row(
+pub(super) fn diagnostics_friction_row<'a>(
     blob_store: &BlobStore,
-    events_by_id: &HashMap<String, Value>,
-    event: &Value,
+    events_by_id: &HashMap<&'a str, &'a Value>,
+    event: &'a Value,
     month: &str,
 ) -> Option<Value> {
     let ts = event.get("ts").and_then(Value::as_str)?;
@@ -258,34 +256,28 @@ pub(super) fn diagnostics_friction_row(
     }
 }
 
-fn enclosing_step_id_for_event(
-    event: &Value,
-    events_by_id: &HashMap<String, Value>,
+fn enclosing_step_id_for_event<'a>(
+    event: &'a Value,
+    events_by_id: &HashMap<&'a str, &'a Value>,
 ) -> Option<String> {
     if let Some(step_id) = event.get("step_id").and_then(Value::as_str) {
         return Some(step_id.to_string());
     }
 
-    let mut parent_id = event
-        .get("parent_event_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let mut parent_id = event.get("parent_event_id").and_then(Value::as_str);
     let mut seen = HashSet::new();
     while let Some(id) = parent_id {
-        if !seen.insert(id.clone()) {
+        if !seen.insert(id) {
             return None;
         }
-        let parent = events_by_id.get(&id)?;
+        let parent = events_by_id.get(id)?;
         if parent.get("body_kind").and_then(Value::as_str) == Some("step_started") {
             return parent
                 .get("step_id")
                 .and_then(Value::as_str)
                 .map(str::to_string);
         }
-        parent_id = parent
-            .get("parent_event_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        parent_id = parent.get("parent_event_id").and_then(Value::as_str);
     }
     None
 }

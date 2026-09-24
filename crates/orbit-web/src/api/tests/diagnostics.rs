@@ -193,9 +193,9 @@ fn diagnostics_friction_row_extracts_failed_cli_stderr_and_step() {
         "timed_out": false
     });
     let events_by_id = HashMap::from([
-        ("evt-step".to_string(), step),
-        ("evt-activity".to_string(), activity),
-        ("evt-cli".to_string(), event.clone()),
+        ("evt-step", &step),
+        ("evt-activity", &activity),
+        ("evt-cli", &event),
     ]);
 
     let row = diagnostics_friction_row(&blob_store, &events_by_id, &event, "2026-05").expect("row");
