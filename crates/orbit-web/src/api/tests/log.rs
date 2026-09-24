@@ -118,7 +118,7 @@ fn log_stream_framing_emits_one_data_frame_per_appended_line() {
     let path = dir.path().join("orbit.jsonl");
     write_lines(&path, &[]);
     let mut offset = std::fs::metadata(&path).expect("metadata").len();
-    let mut leftover = String::new();
+    let mut leftover = Vec::new();
 
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -152,6 +152,35 @@ fn log_stream_framing_emits_one_data_frame_per_appended_line() {
     assert!(frame.ends_with("\n\n"));
     assert!(frame.contains("\"source\":\"job\""));
     assert!(frame.contains("build"));
+}
+
+#[test]
+fn log_stream_skips_invalid_utf8_instead_of_stalling() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    let mut bytes = b"torn \xE2\x82 write\n".to_vec();
+    bytes.extend_from_slice(log_line("after-torn").as_bytes());
+    bytes.push(b'\n');
+    // A trailing partial line split inside a multi-byte character.
+    bytes.extend_from_slice("{\"partial\":\"\u{20ac}".as_bytes().split_at(13).0);
+    std::fs::write(&path, &bytes).expect("write log");
+
+    let mut offset = 0;
+    let mut leftover = Vec::new();
+    let events =
+        read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut leftover)
+            .expect("invalid UTF-8 must not fail the read");
+
+    assert_eq!(events.len(), 1, "the valid line after a torn one is served");
+    assert_eq!(
+        offset,
+        bytes.len() as u64,
+        "the stream advances past all bytes"
+    );
+    assert!(
+        !leftover.is_empty(),
+        "the partial line waits for its newline"
+    );
 }
 
 #[test]
@@ -292,7 +321,7 @@ fn reconnect_with_last_event_id_replays_only_lines_after_offset() {
     );
 
     let mut offset = 0;
-    let mut leftover = String::new();
+    let mut leftover = Vec::new();
     let events =
         read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut leftover)
             .expect("read all");

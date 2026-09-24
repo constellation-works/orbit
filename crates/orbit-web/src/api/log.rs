@@ -216,7 +216,7 @@ pub(super) fn spawn_log_sse_frames(
         let _permit = permit;
         let mut offset =
             resume_offset.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
-        let mut leftover = String::new();
+        let mut leftover = Vec::new();
         loop {
             if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
                 return;
@@ -242,12 +242,18 @@ pub(super) fn spawn_log_sse_frames(
     rx
 }
 
+/// Read complete lines appended since `offset`, keeping a trailing partial
+/// line in `leftover` until its newline arrives.
+///
+/// Lines are read as bytes and decoded lossily: a torn write or a resume
+/// offset inside a multi-byte character must cost one malformed line, not
+/// fail every later poll at the same offset and stall the stream.
 // Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).
 pub(super) fn read_appended_log_events(
     path: &std::path::Path,
     filters: &LogFilters,
     offset: &mut u64,
-    leftover: &mut String,
+    leftover: &mut Vec<u8>,
 ) -> io::Result<Vec<(RenderedLogEvent, u64)>> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
@@ -260,23 +266,17 @@ pub(super) fn read_appended_log_events(
     let mut events = Vec::new();
 
     loop {
-        let mut buf = String::new();
-        let n = reader.read_line(&mut buf)?;
+        let n = reader.read_until(b'\n', leftover)?;
         if n == 0 {
             break;
         }
         *offset += n as u64;
-        if !buf.ends_with('\n') {
-            leftover.push_str(&buf);
+        if leftover.last() != Some(&b'\n') {
             continue;
         }
-        let mut full_line = String::new();
-        if !leftover.is_empty() {
-            full_line.push_str(leftover);
-            leftover.clear();
-        }
-        full_line.push_str(buf.trim_end_matches('\n'));
-        if let Some(event) = parse_matching_event(&full_line, filters) {
+        let line = String::from_utf8_lossy(&leftover[..leftover.len() - 1]).into_owned();
+        leftover.clear();
+        if let Some(event) = parse_matching_event(&line, filters) {
             events.push((render_log_event_for_web(&event), *offset));
         }
     }
