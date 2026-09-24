@@ -183,10 +183,10 @@ echo "--- step 2: orbit init + workspace init ---"
 # OrbitRuntime::try_initialize_existing) — so without these two commands the
 # MCP server attaches but serves an empty tool surface. Initializing first
 # matches the documented binary-first installation flow.
-# Fresh-host non-interactive init requires host identity (ORB-10721): a
-# host name plus a 2-5 letter task prefix that is not ORB/ADR/L/F.
+# Fresh-host non-interactive init requires machine identity (ORB-10721): a
+# machine name plus a 2-5 letter task prefix that is not ORB/ADR/L/F.
 if ! npx -y "$NPM_SPEC" init --non-interactive \
-     --host-name smoke-npm-install --task-prefix SMK \
+     --machine-name smoke-npm-install --task-prefix SMK \
      >"$TMPDIR_ROOT/init.out" 2>"$TMPDIR_ROOT/init.err"; then
   echo "FAIL: orbit init exited non-zero" >&2
   echo "--- stdout ---" >&2
