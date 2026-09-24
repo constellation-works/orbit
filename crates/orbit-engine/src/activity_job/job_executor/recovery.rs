@@ -1,3 +1,5 @@
+use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+
 use super::*;
 use crate::context::StepRecoveryAdmission;
 
@@ -420,31 +422,6 @@ fn bound_string_leaves(run_id: &str, value: Value) -> Value {
         ),
         other => other,
     }
-}
-
-/// Largest index at or below `index` that splits `text` between characters.
-///
-/// Stands in for the unstable `str::floor_char_boundary`. Diagnostics are
-/// arbitrary text from a failing subprocess, so slicing one mid-codepoint
-/// would panic on the very inputs this bound exists to handle.
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    let mut end = index;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
-}
-
-/// Smallest index at or above `index` that splits `text` between characters.
-fn ceil_char_boundary(text: &str, index: usize) -> usize {
-    let mut start = index.min(text.len());
-    while start < text.len() && !text.is_char_boundary(start) {
-        start += 1;
-    }
-    start
 }
 
 fn validate_bound_recovery_context(input: &Value) -> Result<(), DispatchError> {

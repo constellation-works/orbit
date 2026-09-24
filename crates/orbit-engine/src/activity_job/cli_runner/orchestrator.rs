@@ -12,6 +12,7 @@ use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{
     PatternRedactor, argv_redactor, redact_sensitive_env_text,
 };
+use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
@@ -1072,10 +1073,10 @@ fn preview_source_window(raw: &str, prefer_tail: bool, limit: usize, margin: usi
     }
     if prefer_tail {
         let requested_start = raw.len() - cap;
-        let boundary = char_boundary_at_or_after(raw, requested_start);
+        let boundary = ceil_char_boundary(raw, requested_start);
         &raw[boundary..]
     } else {
-        let boundary = char_boundary_at_or_before(raw, cap);
+        let boundary = floor_char_boundary(raw, cap);
         &raw[..boundary]
     }
 }
@@ -1083,28 +1084,13 @@ fn preview_source_window(raw: &str, prefer_tail: bool, limit: usize, margin: usi
 fn truncate_preview_text(redacted: &str, prefer_tail: bool, limit: usize) -> String {
     if prefer_tail {
         let requested_start = redacted.len() - limit;
-        let boundary = char_boundary_at_or_after(redacted, requested_start);
+        let boundary = ceil_char_boundary(redacted, requested_start);
         let line_boundary = redacted[boundary..]
             .find('\n')
             .map_or(boundary, |idx| boundary + idx + 1);
         redacted[line_boundary..].to_string()
     } else {
-        let boundary = char_boundary_at_or_before(redacted, limit);
+        let boundary = floor_char_boundary(redacted, limit);
         redacted[..boundary].to_string()
     }
-}
-
-fn char_boundary_at_or_after(text: &str, requested: usize) -> usize {
-    text.char_indices()
-        .map(|(idx, _)| idx)
-        .find(|idx| *idx >= requested)
-        .unwrap_or(text.len())
-}
-
-fn char_boundary_at_or_before(text: &str, requested: usize) -> usize {
-    text.char_indices()
-        .map(|(idx, _)| idx)
-        .take_while(|idx| *idx <= requested)
-        .last()
-        .unwrap_or(0)
 }
