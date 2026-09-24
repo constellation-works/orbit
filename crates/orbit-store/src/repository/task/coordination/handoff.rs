@@ -26,10 +26,19 @@ impl TaskCommitBoundary {
     }
 
     pub fn accepted_handoff(&self, claim_id: &str) -> Result<AcceptedHandoff, OrbitError> {
+        self.find_accepted_handoff(claim_id)?
+            .ok_or_else(|| invalid("typed handoff unavailable"))
+    }
+
+    /// The claim's accepted handoff, or `None` when none was accepted, so
+    /// callers can tell an absent handoff from a failed read.
+    pub fn find_accepted_handoff(
+        &self,
+        claim_id: &str,
+    ) -> Result<Option<AcceptedHandoff>, OrbitError> {
         self.coordination_row(HANDOFF, claim_id)?
             .map(|r| decode(&r.payload_json))
-            .transpose()?
-            .ok_or_else(|| invalid("typed handoff unavailable"))
+            .transpose()
     }
 
     fn artifact_bytes(

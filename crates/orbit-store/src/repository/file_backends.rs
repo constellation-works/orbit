@@ -20,11 +20,11 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
-    fn accepted_handoff(
+    fn find_accepted_handoff(
         &self,
         claim_id: &str,
-    ) -> Result<orbit_types::workflow::handoff::AcceptedHandoff, OrbitError> {
-        self.claim_boundary()?.accepted_handoff(claim_id)
+    ) -> Result<Option<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
+        self.claim_boundary()?.find_accepted_handoff(claim_id)
     }
 
     fn landing_start_requests(
