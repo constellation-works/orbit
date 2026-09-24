@@ -140,7 +140,7 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-10440 — Daily friction-curation definition.
 - ORB-10514 — Original workspace-authored CI-failure auto-task.
 - ORB-10549 — Embedded the portable, disabled friction-curation default and
-  workspace materialization contract; [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates-one-generic-scheduler-routine) should be updated through the
+  workspace materialization contract; [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](./4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine) should be updated through the
   Orbit ADR surface after this task lands.
 - ORB-10550 — Added the disabled qa-sweep default and standardized agent-facing
   friction tool invocations on the registered `orbit tool run` surface.

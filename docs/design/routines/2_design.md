@@ -125,7 +125,7 @@ Field semantics:
   reserved and rejected at parse time with wrapping guidance: run dispatch is job-shaped
   (`submit_pipeline_run` resolves jobs by name; nothing dispatches a bare activity), and a
   one-step wrapper job in the same source workspace is the existing composition grammar
-  ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads)). There is deliberately no inline command form: the `shell` activity variant
+  ([Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)). There is deliberately no inline command form: the `shell` activity variant
   was removed fail-closed in [ORB-00374] / [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed), and reintroducing arbitrary-command
   payloads through the scheduler would reopen that surface on a timer.
 - **`policy`** — applied by the dispatcher around the run: timeout, bounded retries with

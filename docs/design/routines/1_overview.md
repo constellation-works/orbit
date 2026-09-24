@@ -29,7 +29,7 @@ is host-local and never synced, so each owner checkout is an independent schedul
 [3_vision.md](./3_vision.md) holds what is deliberately out of scope for v1.
 
 > **Status.** v1 shipped in [ORB-10021]; the At a Glance table lists the actual home of
-> each concern. Targets are `job:<name>` in v1 — see [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads) for why `activity:` is
+> each concern. Targets are `job:<name>` in v1 — see [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads) for why `activity:` is
 > reserved. `orbit-cmd::registry_routines` composes local host identity and the workspace
 > catalog from `orbit-registry` with registered runtimes; Core keeps the registry-neutral
 > scheduler, validation, and dispatch kernels.
@@ -78,7 +78,7 @@ fragmentation this feature exists to end.
   target, `enabled`, and policy. The durable unit of scheduling.
 - **Target** — what fires: a reference into the existing catalog. v1 dispatches
   `job:<name>`; `activity:<name>` is reserved (wrap the activity in a one-step job — see
-  [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads)). Routines carry no inline commands; the `shell` activity variant was
+  [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only--no-inline-command-payloads)). Routines carry no inline commands; the `shell` activity variant was
   removed fail-closed in [ORB-00374] (see [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)), and routines inherit that posture.
 - **Tick** — `orbit clock tick`, the stateless due-check pass the OS clock invokes on its
   configured cadence. It loads definitions, fires due routines, evaluates auto-task

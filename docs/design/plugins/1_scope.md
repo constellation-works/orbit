@@ -12,7 +12,7 @@ Namespace, dashboard-feature, install and mirror questions resolved 2026-09-20.
 Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md) (orbit-core ADR).
 Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph still ships three; its migration
 to `plugin.yaml` remains pending); the shelved
-[docs + search pluginization](../orbit-docs-plugin/1_scope.md); orbit-research's
+docs + search pluginization proposal; orbit-research's
 version/capability allowlist against the Orbit binary.
 
 ## Problem

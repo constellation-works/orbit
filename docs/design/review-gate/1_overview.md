@@ -66,7 +66,7 @@ a second time.
 | Concern | File | Task |
 | --- | --- | --- |
 | Shipped contract: gate, evidence rules, budgets, coverage, surfaces, rollback | [Design](./2_design.md) | [ORB-11333] |
-| What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish) | [ORB-11528], [ORB-11545] |
+| What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545) | [ORB-11528], [ORB-11545] |
 | After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/5_operations.md) | [ORB-11331] |
 | `[operation]` key reference | [CONFIG.md](../../CONFIG.md) | [ORB-11333] |
 
