@@ -93,7 +93,6 @@ a conservative title/status fallback.
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
-| [Worktree Artifacts](./design/worktree-artifacts/1_overview.md) | Historically, worktree artifacts let decision and learning body files travel with the branch that created them while preserving one shared ID authority for the repository. | Accepted | codex |
 
 Folder layout, frontmatter, ADR, and ownership rules live in
 [design conventions](./design/CONVENTIONS.md).

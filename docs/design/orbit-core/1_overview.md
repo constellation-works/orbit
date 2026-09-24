@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-08-16
+last_updated: 2026-09-24
 last_validated: 2026-09-10
 status: Accepted
 feature: orbit-core
@@ -54,6 +54,11 @@ owners without externalizing it as new crates.
   forward-only startup migrations.
 - **Composition** — root resolution and the sole join of `orbit-config`,
   bootstrap, runtime construction, and adapters.
+- **Runtime roots** — `OrbitRuntimeRoots` carries `global_root`,
+  `shared_root`, and `local_root`. On the primary checkout `shared_root` and
+  `local_root` are equal; in a linked worktree `shared_root` is the primary
+  checkout's `.orbit/` and `local_root` is the worktree's own. An explicit
+  `--root` or `ORBIT_ROOT` pins both.
 - **Registry-aware composition** — opening a selected registered checkout and
   composing routine discovery from local `host.toml` plus `workspaces.json`
   lives in `orbit-cmd::registry_runtime` and `orbit-cmd::registry_routines`,
