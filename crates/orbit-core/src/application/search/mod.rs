@@ -26,6 +26,10 @@ use self::convert::{fill_task_record_fields, lexical_task_hit};
 use self::filters::{SearchStatusFilters, resolve_task_statuses, task_has_all_tags};
 
 const DEFAULT_LIMIT: usize = 10;
+/// Upper bound on results per query. The limit comes straight from CLI and
+/// MCP callers and sizes result buffers, so an unbounded value could request
+/// an allocation large enough to abort the process.
+const MAX_LIMIT: usize = 1_000;
 /// The read-only inputs shared by each search-kind branch.
 #[derive(Clone, Copy)]
 struct BranchContext<'a> {
