@@ -395,6 +395,19 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| self.store.task_coordination_rows(&self.workspace_id, kind))
     }
 
+    /// One dependent coordination row by identity, settling an interrupted
+    /// commit first like [`Self::coordination_rows`].
+    pub fn coordination_row(
+        &self,
+        kind: &str,
+        row_id: &str,
+    ) -> Result<Option<crate::contracts::TaskCoordinationRow>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.store
+                .task_coordination_row(&self.workspace_id, kind, row_id)
+        })
+    }
+
     /// Replay the journal when a marker says a commit may be unfinished.
     ///
     /// Cheap on the common path: one existence check.

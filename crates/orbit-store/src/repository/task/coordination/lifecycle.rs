@@ -97,11 +97,9 @@ impl TaskCommitBoundary {
     }
 
     fn claim_state(&self, claim: ExecutionClaim) -> Result<ClaimInspection, OrbitError> {
-        let existing = self
-            .store
-            .task_coordination_rows(&self.workspace_id, STATE)?
-            .into_iter()
-            .find(|r| r.row_id == claim.claim_id);
+        let existing =
+            self.store
+                .task_coordination_row(&self.workspace_id, STATE, &claim.claim_id)?;
         let mut state = match existing {
             Some(row) => decode::<ClaimInspection>(&row.payload_json)?,
             None => {
@@ -173,11 +171,7 @@ impl TaskCommitBoundary {
             "{:x}",
             Sha256::digest(encode(&(&auth.claim_id, mutation_id))?)
         );
-        if let Some(receipt) = self
-            .coordination_rows(RECEIPT)?
-            .iter()
-            .find(|r| r.row_id == receipt_id)
-        {
+        if let Some(receipt) = self.coordination_row(RECEIPT, &receipt_id)? {
             let receipt: MutationReceipt = decode(&receipt.payload_json)?;
             if receipt.input != input {
                 return Err(invalid("mutation_mismatch"));
@@ -211,9 +205,7 @@ impl TaskCommitBoundary {
             return self.with_friction_result(receipt.result, &receipt_id);
         }
         let old = self
-            .coordination_rows(CLAIM)?
-            .into_iter()
-            .find(|r| r.row_id == auth.claim_id)
+            .coordination_row(CLAIM, &auth.claim_id)?
             .ok_or_else(|| invalid("stale_claim"))?;
         let claim: ExecutionClaim = decode(&old.payload_json)?;
         let recover_failed = auth.operator
@@ -231,10 +223,7 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("claim binding is inconsistent with phase"));
         }
-        let old_state = self
-            .coordination_rows(STATE)?
-            .into_iter()
-            .find(|r| r.row_id == claim.claim_id);
+        let old_state = self.coordination_row(STATE, &claim.claim_id)?;
         if !auth.operator
             && (auth.machine_id != claim.executed_on.machine_id || auth.run != state.bound_run)
         {
@@ -594,11 +583,7 @@ impl TaskCommitBoundary {
         mut result: ClaimMutationResult,
         receipt_id: &str,
     ) -> Result<ClaimMutationResult, OrbitError> {
-        if let Some(row) = self
-            .coordination_rows("distributed-claim-friction-v1")?
-            .iter()
-            .find(|row| row.row_id == receipt_id)
-        {
+        if let Some(row) = self.coordination_row("distributed-claim-friction-v1", receipt_id)? {
             result.friction = Some(decode(&row.payload_json)?);
         }
         Ok(result)

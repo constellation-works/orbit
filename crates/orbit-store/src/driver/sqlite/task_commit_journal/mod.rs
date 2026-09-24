@@ -426,6 +426,32 @@ impl Store {
                 .map_err(|error| OrbitError::Store(error.to_string()))
         })
     }
+
+    /// One published coordination row, looked up by identity.
+    pub(crate) fn task_coordination_row(
+        &self,
+        workspace_id: &str,
+        kind: &str,
+        row_id: &str,
+    ) -> Result<Option<TaskCoordinationRow>, OrbitError> {
+        self.with_read_connection(|conn| {
+            conn.query_row(
+                "SELECT kind, row_id, payload_json
+                 FROM task_coordination_rows
+                 WHERE workspace_id = ?1 AND kind = ?2 AND row_id = ?3",
+                params![workspace_id, kind, row_id],
+                |row| {
+                    Ok(TaskCoordinationRow {
+                        kind: row.get(0)?,
+                        row_id: row.get(1)?,
+                        payload_json: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+    }
 }
 
 /// The first requested row identity that is already published, if any.
