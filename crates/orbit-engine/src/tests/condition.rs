@@ -84,3 +84,23 @@ fn test_whitespace_handling() {
 fn test_invalid_atom() {
     assert!(evaluate_expr("no_operator_here").is_err());
 }
+
+#[test]
+fn a_rendered_value_is_compared_not_parsed() {
+    let mut ctx = TemplateContext::default();
+    std::sync::Arc::make_mut(&mut ctx.steps).insert(
+        "review".to_string(),
+        serde_json::json!({ "output": { "verdict": "a == a || x" } }),
+    );
+
+    let approved =
+        evaluate_bool_expr("{{ steps.review.output.verdict }} == approved", &ctx).unwrap();
+    assert!(
+        !approved,
+        "operators inside a rendered value must not add branches"
+    );
+
+    let unchanged =
+        evaluate_bool_expr("{{ steps.review.output.verdict }} != approved", &ctx).unwrap();
+    assert!(unchanged);
+}
