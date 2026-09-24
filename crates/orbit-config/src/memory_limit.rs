@@ -2,8 +2,9 @@
 //! [ORB-12913].
 //!
 //! Config admission parses the operator's string into a [`MemoryLimit`] built
-//! only from integers and fixed tokens; consumers render those typed values
-//! without re-parsing them, so there is no second grammar to drift and no
+//! only from integers and fixed tokens; consumers render it with
+//! [`MemoryLimit::systemd_value`] (or `Display`, which shares its one writer)
+//! and never re-parse it, so there is no second grammar to drift and no
 //! consumer-side parse failure that could quietly drop a limit.
 
 use std::fmt;
@@ -84,21 +85,39 @@ impl MemoryLimit {
         let amount = digits.parse::<u64>().ok()?;
         (amount > 0).then_some(Self::Bytes { amount, unit })
     }
+
+    /// The systemd form, for a `systemd-run --property=` argument.
+    ///
+    /// Same text as `Display`, but written from the destructured integers and
+    /// unit suffix rather than through the formatting machinery, so the
+    /// argument visibly depends on numbers and fixed tokens only; code
+    /// scanning otherwise treats the whole config snapshot as request data
+    /// (CodeQL rust/command-line-injection #459).
+    pub fn systemd_value(self) -> String {
+        let mut value = String::new();
+        // Writing into a `String` cannot fail.
+        let _ = self.write_systemd(&mut value);
+        value
+    }
+
+    fn write_systemd(self, out: &mut impl fmt::Write) -> fmt::Result {
+        match self {
+            Self::Bytes { amount, unit } => {
+                write!(out, "{}", amount)?;
+                match unit {
+                    Some(unit) => out.write_char(unit.suffix()),
+                    None => Ok(()),
+                }
+            }
+            Self::Percent(percent) => write!(out, "{}%", percent),
+            Self::Infinity => out.write_str("infinity"),
+        }
+    }
 }
 
 impl fmt::Display for MemoryLimit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Bytes { amount, unit } => {
-                write!(formatter, "{amount}")?;
-                match unit {
-                    Some(unit) => write!(formatter, "{}", unit.suffix()),
-                    None => Ok(()),
-                }
-            }
-            Self::Percent(percent) => write!(formatter, "{percent}%"),
-            Self::Infinity => formatter.write_str("infinity"),
-        }
+        self.write_systemd(formatter)
     }
 }
 
