@@ -18,3 +18,18 @@ fn search_modes_serialize_with_public_flag_names() {
         json!("lexical")
     );
 }
+
+#[test]
+fn normalized_limit_defaults_zero_and_caps_oversized_requests() {
+    let limit = |limit| {
+        GlobalSearchParams {
+            limit,
+            ..Default::default()
+        }
+        .normalized_limit()
+    };
+
+    assert_eq!(limit(0), DEFAULT_LIMIT);
+    assert_eq!(limit(7), 7);
+    assert_eq!(limit(u32::MAX as usize), MAX_LIMIT);
+}

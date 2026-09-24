@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::runtime::workspace_catalog::WorkspaceScope;
 
-use super::DEFAULT_LIMIT;
+use super::{DEFAULT_LIMIT, MAX_LIMIT};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -77,11 +77,12 @@ pub struct GlobalSearchParams {
 }
 
 impl GlobalSearchParams {
+    /// The requested limit, defaulted when zero and capped at [`MAX_LIMIT`].
     pub fn normalized_limit(&self) -> usize {
         if self.limit == 0 {
             DEFAULT_LIMIT
         } else {
-            self.limit
+            self.limit.min(MAX_LIMIT)
         }
     }
 }
