@@ -100,6 +100,19 @@ fn initialize_root(repo: &Path, home: &Path, mirror: &Path, root: &Path, suffix:
         .success();
 }
 
+/// Run a freshly copied test binary, absorbing the parallel-fork `ETXTBSY`
+/// race described in [`orbit_common::test_process`].
+fn output_of(command: &mut assert_cmd::Command) -> std::io::Result<std::process::Output> {
+    #[cfg(target_os = "linux")]
+    {
+        orbit_common::test_process::retry_executable_busy(|| command.output())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        command.output()
+    }
+}
+
 fn installed_orbit(
     executable: &Path,
     cwd: &Path,
@@ -156,11 +169,12 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
 
     let executable = install_test_binary(&temp.path().join("managed-bin"));
     let root_a_arg = root_a.to_string_lossy();
-    let output = installed_orbit(&executable, &checkout_b, &home, mirror.path())
-        .env("ORBIT_ROOT", &root_b)
-        .args(["update", "--root", root_a_arg.as_ref(), "--json"])
-        .output()
-        .expect("run update with explicit root A");
+    let output = output_of(
+        installed_orbit(&executable, &checkout_b, &home, mirror.path())
+            .env("ORBIT_ROOT", &root_b)
+            .args(["update", "--root", root_a_arg.as_ref(), "--json"]),
+    )
+    .expect("run update with explicit root A");
     assert!(
         output.status.success(),
         "explicit-root update failed\nstdout:\n{}\nstderr:\n{}",
@@ -184,17 +198,18 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
     assert!(managed_a.exists(), "sync did not restore root A asset");
     assert!(!managed_b.exists(), "sync unexpectedly touched root B");
 
-    let compatibility = installed_orbit(&executable, &checkout_b, &home, mirror.path())
-        .env("ORBIT_ROOT", &root_b)
-        .args([
-            "migrate",
-            "--dry-run",
-            "--root",
-            root_a_arg.as_ref(),
-            "--json",
-        ])
-        .output()
-        .expect("run downgrade compatibility inspection against root A");
+    let compatibility = output_of(
+        installed_orbit(&executable, &checkout_b, &home, mirror.path())
+            .env("ORBIT_ROOT", &root_b)
+            .args([
+                "migrate",
+                "--dry-run",
+                "--root",
+                root_a_arg.as_ref(),
+                "--json",
+            ]),
+    )
+    .expect("run downgrade compatibility inspection against root A");
     assert!(
         compatibility.status.success(),
         "root A compatibility inspection failed\nstdout:\n{}\nstderr:\n{}",
@@ -213,11 +228,12 @@ fn update_preserves_explicit_and_environment_roots_from_another_checkout() {
     );
 
     fs::remove_file(&managed_a).expect("remove root A asset for environment-only retry");
-    let retry = installed_orbit(&executable, &checkout_b, &home, mirror.path())
-        .env("ORBIT_ROOT", &root_a)
-        .args(["update", "--json"])
-        .output()
-        .expect("run update with environment root A");
+    let retry = output_of(
+        installed_orbit(&executable, &checkout_b, &home, mirror.path())
+            .env("ORBIT_ROOT", &root_a)
+            .args(["update", "--json"]),
+    )
+    .expect("run update with environment root A");
     assert!(
         retry.status.success(),
         "environment-root update failed\nstdout:\n{}\nstderr:\n{}",
@@ -257,10 +273,10 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
     let managed = workspace_root.join("auto_tasks/code-review.yaml");
     fs::remove_file(&managed).expect("remove default-root managed asset");
     let executable = install_test_binary(&temp.path().join("managed-bin"));
-    let output = installed_orbit(&executable, &repo, &home, mirror.path())
-        .args(["update", "--json"])
-        .output()
-        .expect("run default-root update");
+    let output = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path()).args(["update", "--json"]),
+    )
+    .expect("run default-root update");
     assert!(
         output.status.success(),
         "default-root update failed\nstdout:\n{}\nstderr:\n{}",
@@ -302,29 +318,29 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
     let before = fs::read(&executable).expect("installed bytes");
     let scratch_arg = scratch.to_string_lossy();
 
-    let preflight = installed_orbit(&executable, &repo, &home, mirror.path())
-        .args([
+    let preflight = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--preflight",
             "--json",
             "--root",
             scratch_arg.as_ref(),
-        ])
-        .output()
-        .expect("preflight against overridden root");
+        ]),
+    )
+    .expect("preflight against overridden root");
     assert_admission_refused(&preflight, "preflight --root");
 
-    let update = installed_orbit(&executable, &repo, &home, mirror.path())
-        .args([
+    let update = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
             "99.0.0",
             "--json",
             "--root",
             scratch_arg.as_ref(),
-        ])
-        .output()
-        .expect("update against overridden root");
+        ]),
+    )
+    .expect("update against overridden root");
     assert_admission_refused(&update, "update --root");
     assert_eq!(
         fs::read(&executable).expect("installed bytes"),
@@ -332,18 +348,20 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
         "overridden-root update replaced the binary under a live pin"
     );
 
-    let env_preflight = installed_orbit(&executable, &repo, &home, mirror.path())
-        .env("ORBIT_ROOT", &scratch)
-        .args(["update", "--preflight", "--json"])
-        .output()
-        .expect("preflight against ORBIT_ROOT");
+    let env_preflight = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path())
+            .env("ORBIT_ROOT", &scratch)
+            .args(["update", "--preflight", "--json"]),
+    )
+    .expect("preflight against ORBIT_ROOT");
     assert_admission_refused(&env_preflight, "preflight ORBIT_ROOT");
 
-    let env_update = installed_orbit(&executable, &repo, &home, mirror.path())
-        .env("ORBIT_ROOT", &scratch)
-        .args(["update", "--version", "99.0.0", "--json"])
-        .output()
-        .expect("update against ORBIT_ROOT");
+    let env_update = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path())
+            .env("ORBIT_ROOT", &scratch)
+            .args(["update", "--version", "99.0.0", "--json"]),
+    )
+    .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT");
     assert_eq!(
         fs::read(&executable).expect("installed bytes"),
@@ -351,10 +369,14 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
         "ORBIT_ROOT update replaced the binary under a live pin"
     );
 
-    let host_preflight = installed_orbit(&executable, &repo, &home, mirror.path())
-        .args(["update", "--preflight", "--json"])
-        .output()
-        .expect("host-global preflight");
+    let host_preflight = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path()).args([
+            "update",
+            "--preflight",
+            "--json",
+        ]),
+    )
+    .expect("host-global preflight");
     assert!(
         host_preflight.status.success(),
         "host-global preflight should ignore a pin on --root\nstdout:\n{}\nstderr:\n{}",
@@ -398,16 +420,16 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let host_global = home.join(".orbit");
 
     // Quiet: the override preflight still reports the host-global authority.
-    let preflight = installed_orbit(&executable, &repo, &home, mirror.path())
-        .args([
+    let preflight = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--preflight",
             "--json",
             "--root",
             scratch_arg.as_ref(),
-        ])
-        .output()
-        .expect("preflight against overridden root");
+        ]),
+    )
+    .expect("preflight against overridden root");
     assert!(
         preflight.status.success(),
         "quiet preflight failed\nstdout:\n{}\nstderr:\n{}",
@@ -426,17 +448,17 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
     let _client = GenerationGuard::acquire(&host_global, &digest).expect("live host-global pin");
     let before = fs::read(&executable).expect("installed bytes");
 
-    let root_update = installed_orbit(&executable, &repo, &home, mirror.path())
-        .args([
+    let root_update = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path()).args([
             "update",
             "--version",
             "99.0.0",
             "--json",
             "--root",
             scratch_arg.as_ref(),
-        ])
-        .output()
-        .expect("update against overridden root");
+        ]),
+    )
+    .expect("update against overridden root");
     assert_admission_refused(&root_update, "update --root under a host-global pin");
     assert_eq!(
         fs::read(&executable).expect("installed bytes"),
@@ -444,11 +466,12 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
         "--root update replaced the binary under a live host-global pin"
     );
 
-    let env_update = installed_orbit(&executable, &repo, &home, mirror.path())
-        .env("ORBIT_ROOT", &scratch)
-        .args(["update", "--version", "99.0.0", "--json"])
-        .output()
-        .expect("update against ORBIT_ROOT");
+    let env_update = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path())
+            .env("ORBIT_ROOT", &scratch)
+            .args(["update", "--version", "99.0.0", "--json"]),
+    )
+    .expect("update against ORBIT_ROOT");
     assert_admission_refused(&env_update, "update ORBIT_ROOT under a host-global pin");
     assert_eq!(
         fs::read(&executable).expect("installed bytes"),
@@ -456,11 +479,12 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling()
         "ORBIT_ROOT update replaced the binary under a live host-global pin"
     );
 
-    let refused_preflight = installed_orbit(&executable, &repo, &home, mirror.path())
-        .env("ORBIT_ROOT", &scratch)
-        .args(["update", "--preflight", "--json"])
-        .output()
-        .expect("preflight against ORBIT_ROOT");
+    let refused_preflight = output_of(
+        installed_orbit(&executable, &repo, &home, mirror.path())
+            .env("ORBIT_ROOT", &scratch)
+            .args(["update", "--preflight", "--json"]),
+    )
+    .expect("preflight against ORBIT_ROOT");
     assert_admission_refused(
         &refused_preflight,
         "preflight ORBIT_ROOT under a host-global pin",
