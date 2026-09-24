@@ -140,6 +140,8 @@ orbit mcp listen 0.0.0.0:7879 --allow-non-loopback
 ```
 
 Default is loopback port 7879. The socket authenticates no client; use a protected
-network path such as an SSH tunnel. Non-loopback exposure is an explicit choice,
+network path such as an SSH tunnel. Local processes can connect to loopback, and
+a browser page can send HTTP requests there; the listener rejects HTTP framing
+before its body reaches MCP dispatch. Non-loopback exposure is an explicit choice,
 not a remedy for a missing capability. SSH caller-policy configuration does not
 turn a raw TCP socket or dashboard into an authenticated per-user service.

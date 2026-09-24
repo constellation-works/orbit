@@ -49,7 +49,9 @@ pub enum McpSubcommand {
     /// Each accepted connection is an independent MCP session against the same
     /// server-local tool surface, resolved and audited exactly as a stdio session
     /// is. The socket authenticates no client, so it binds loopback unless a
-    /// wider bind is asked for explicitly.
+    /// wider bind is asked for explicitly. Local processes can still connect to
+    /// loopback. HTTP requests, including those sent by browser pages, are
+    /// closed before their bodies can be dispatched as MCP messages.
     Listen(ListenArgs),
 }
 

@@ -43,7 +43,10 @@ forward the call through another machine.
 `orbit mcp listen` is the socket form of the same server, for deployments that
 need one — typically reached through an SSH tunnel. It binds loopback unless a
 wider bind is asked for explicitly, because the socket authenticates no client.
-It is a transport adapter only: it adds no broker, checkout preflight, placement
+Local processes can still connect to loopback without authentication. A browser
+page can also send HTTP to loopback, so the listener closes connections whose
+first byte is not a JSON object start before rmcp sees any message. It is a
+transport adapter only: it adds no broker, checkout preflight, placement
 routing, or capability filter.
 
 ## Runtime rule

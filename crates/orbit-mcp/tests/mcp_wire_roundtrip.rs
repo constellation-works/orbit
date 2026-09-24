@@ -13,7 +13,7 @@ use orbit_types::tool::{
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, ClientInfo, Meta};
 use serde_json::{Map, Value, json};
-use tokio::io::duplex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::TcpStream;
 
 struct EchoHost {
@@ -282,6 +282,57 @@ async fn loopback_listener_round_trips_a_session_and_records_the_peer_ip() {
         TcpStream::connect(addr).await.is_err(),
         "the listening socket must be closed once the accept task is gone"
     );
+}
+
+/// A browser can send a simple HTTP POST to loopback. Its body must never
+/// reach rmcp, even when it contains a complete MCP handshake and tool call.
+#[tokio::test]
+async fn loopback_listener_closes_http_before_dispatching_post_body() {
+    let host = Arc::new(EchoHost {
+        contexts: Mutex::new(Vec::new()),
+        list_calls: Mutex::new(0),
+    });
+    let listener = McpListener::bind(
+        "127.0.0.1:0".parse().expect("loopback address"),
+        ListenerExposure::LoopbackOnly,
+        host.clone() as Arc<dyn McpHost>,
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind loopback listener");
+    let addr = listener.local_addr().expect("bound address");
+    let accepting = tokio::spawn(listener.serve());
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect over TCP");
+    let body = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"browser\",\"version\":\"0\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"demo_echo\",\"arguments\":{\"value\":\"unsafe\"}}}\n"
+    );
+    let request = format!(
+        "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("send browser-style POST");
+    let mut response = [0; 1];
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream.read(&mut response),
+    )
+    .await
+    .expect("listener must close HTTP promptly");
+    assert!(
+        matches!(closed, Ok(0) | Err(_)),
+        "HTTP must be closed without a JSON-RPC response: {closed:?}"
+    );
+    assert_eq!(*host.list_calls.lock().expect("list calls"), 0);
+    assert!(host.contexts.lock().expect("tool calls").is_empty());
+
+    accepting.abort();
 }
 
 fn call(name: &str, args: Value) -> CallToolRequestParams {
