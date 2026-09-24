@@ -44,6 +44,10 @@ pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cur
 /// explicitly mint one or enable it through the existing auto-task surface.
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
+        "backlog-hygiene",
+        include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
+    ),
+    (
         "delivery-code-review",
         include_str!("../../../assets/auto_tasks/delivery-code-review.yaml"),
     ),

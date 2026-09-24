@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932]
 ---
 
 # Auto-tasks — Overview
@@ -87,7 +87,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These eight YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These nine YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -114,6 +114,10 @@ definition of the same name.
   filed as one redacted friction or proposed task per pattern unless an
   existing task or friction already tracks it. The scan never mutates run
   state, and a window with no new pattern is a successful no-op.
+- `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
+  orphaned in-progress/review, aged proposed, and dependency-unblocked idle
+  tasks. Its execution summary recommends human follow-up without changing task
+  status or dispatching work.
 - `delivery-code-review` and `delivery-qa` — disabled-by-default checks of
   newly landed deliveries.
 
@@ -147,6 +151,7 @@ encode this repository's branches and gates. Re-init preserves them:
   shipped definition's canonical `code-review` name.
 - ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
   mines unfiled recurring run failures.
+- ORB-12932 — Added the disabled weekly, report-only `backlog-hygiene` default.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
