@@ -86,7 +86,16 @@ fn pipeline_reliability_json(
             unreadable.push(entry.id.clone());
             continue;
         };
-        let reliability = runtime.pipeline_reliability(&window)?;
+        // Same for one whose query fails: failing the whole fleet view would
+        // hide every healthy workspace behind the broken one.
+        let reliability = match runtime.pipeline_reliability(&window) {
+            Ok(reliability) => reliability,
+            Err(error) => {
+                tracing::warn!(workspace = %entry.id, %error, "fleet reliability skipped a workspace");
+                unreadable.push(entry.id.clone());
+                continue;
+            }
+        };
 
         accumulate(&mut totals, &reliability.job_runs.overall);
         recovery_numerator += reliability.recovery.per_step_invocation.numerator;

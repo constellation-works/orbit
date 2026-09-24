@@ -280,7 +280,14 @@ fn all_tasks_json(
         let Ok(runtime) = pinned.runtime_for(&entry.id) else {
             continue;
         };
-        let page = runtime.task_candidates(&query.filter(), query.limit())?;
+        // One broken workspace must not take down the fleet-wide list.
+        let page = match runtime.task_candidates(&query.filter(), query.limit()) {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                continue;
+            }
+        };
         total += page.total_without_cursor;
         remaining += page.total;
         for task in page.items {
