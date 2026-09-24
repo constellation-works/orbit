@@ -2,8 +2,8 @@
 //! [ORB-12913].
 //!
 //! Config admission parses the operator's string into a [`MemoryLimit`] built
-//! only from integers and fixed tokens; consumers format it with `Display`
-//! and never re-parse it, so there is no second grammar to drift and no
+//! only from integers and fixed tokens; consumers render those typed values
+//! without re-parsing them, so there is no second grammar to drift and no
 //! consumer-side parse failure that could quietly drop a limit.
 
 use std::fmt;
