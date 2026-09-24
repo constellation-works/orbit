@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::clock_unit::{
     ClockUnitVerdict, RunningBinary, clear_clock_reload_pending, inspect_clock_unit_at,
-    probe_program_version,
+    probe_program_version, split_systemd_exec_start,
 };
 
 const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../assets/clock/com.orbit.sweep.plist");
@@ -479,14 +479,14 @@ pub(super) fn write_launchd_unit(
     })?;
     fs::create_dir_all(log_parent).map_err(|error| OrbitError::Io(error.to_string()))?;
     let plist = LAUNCHD_PLIST_TEMPLATE
-        .replace("{{ORBIT_BIN}}", orbit_bin)
+        .replace("{{ORBIT_BIN}}", &plist_string(orbit_bin))
         .replace("{{CADENCE_SECONDS}}", &settings.cadence_seconds.to_string())
-        .replace("{{LOG_PATH}}", &log_path.to_string_lossy());
+        .replace("{{LOG_PATH}}", &plist_string(&log_path.to_string_lossy()));
 
     let agents_dir = home.join("Library/LaunchAgents");
     fs::create_dir_all(&agents_dir).map_err(|error| OrbitError::Io(error.to_string()))?;
     let plist_path = launchd_plist_path(home);
-    fs::write(&plist_path, plist).map_err(|error| {
+    atomic_write_text(&plist_path, &plist).map_err(|error| {
         OrbitError::Io(format!(
             "failed to write '{}': {error}",
             plist_path.display()
@@ -606,7 +606,30 @@ pub(super) fn systemd_manual_steps(activated: bool) -> Vec<String> {
 
 /// Render the systemd service independently of the user manager environment.
 pub(super) fn render_systemd_service(orbit_bin: &str) -> String {
-    SYSTEMD_SERVICE_TEMPLATE.replace("{{ORBIT_BIN}}", orbit_bin)
+    SYSTEMD_SERVICE_TEMPLATE.replace("{{ORBIT_BIN}}", &systemd_exec_program(orbit_bin))
+}
+
+/// Escape a value for a plist `<string>`; [`super::clock_unit`] reverses it.
+fn plist_string(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// `path` as the `ExecStart=` program. systemd expands `%` specifiers and
+/// splits on whitespace, so `%` is doubled and a path that needs it is quoted
+/// with C-style escapes. An ordinary path renders unchanged.
+fn systemd_exec_program(path: &str) -> String {
+    let escaped = path.replace('%', "%%");
+    if escaped
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+    {
+        format!("\"{}\"", escaped.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        escaped
+    }
 }
 
 pub(super) fn render_systemd_timer(settings: ClockSettings) -> String {
@@ -702,25 +725,13 @@ fn migrate_stale_systemd_service(home: &Path) -> Result<(), OrbitError> {
             service_path.display()
         ))
     })?;
-    let orbit_bin = installed
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("ExecStart="))
-        .and_then(|command| {
-            let command = command.trim();
-            command.strip_prefix('"').map_or_else(
-                || command.split_whitespace().next(),
-                |quoted| quoted.split('"').next(),
-            )
-        })
-        .filter(|program| !program.is_empty())
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "installed clock service '{}' has no ExecStart program",
-                service_path.display()
-            ))
-        })?;
-    let expected = render_systemd_service(orbit_bin);
+    let (orbit_bin, _) = split_systemd_exec_start(&installed).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "installed clock service '{}' has no ExecStart program",
+            service_path.display()
+        ))
+    })?;
+    let expected = render_systemd_service(&orbit_bin);
     if installed == expected {
         return Ok(());
     }

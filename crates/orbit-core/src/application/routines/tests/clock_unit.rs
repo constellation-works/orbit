@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tempfile::tempdir;
 
-use super::super::clock::ClockPlatform;
+use super::super::clock::{ClockPlatform, render_systemd_service};
 use super::super::clock_unit::{
     ClockUnitConvergence, ClockUnitDrift, ClockUnitVerdict, RunningBinary,
     clock_reload_pending_path, clock_unit_drift_warning_at, converge_clock_unit_with,
@@ -274,6 +274,38 @@ fn parses_quoted_systemd_exec_start() {
         inspection.program_path.as_deref(),
         Some(Path::new("/opt/orbit with spaces/orbit"))
     );
+}
+
+#[test]
+fn rendered_units_round_trip_paths_that_need_escaping() {
+    let program = r#"/opt/100% "orbit" & <co>\bin/orbit"#;
+    let home = tempdir().expect("home");
+    let unit_dir = home.path().join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("systemd user dir");
+    fs::write(
+        unit_dir.join("orbit-sweep.service"),
+        render_systemd_service(program),
+    )
+    .expect("write rendered service");
+    let systemd = inspect_clock_unit_at(
+        home.path(),
+        ClockPlatform::Systemd,
+        &running("/opt/orbit/bin/orbit", "0.21.0"),
+        |_| Ok("0.21.0".to_string()),
+    );
+    assert_eq!(systemd.program_path.as_deref(), Some(Path::new(program)));
+
+    write_launchd_unit(
+        home.path(),
+        "/opt/100% \"orbit\" &amp; &lt;co&gt;\\bin/orbit",
+    );
+    let launchd = inspect_clock_unit_at(
+        home.path(),
+        ClockPlatform::Launchd,
+        &running("/opt/orbit/bin/orbit", "0.21.0"),
+        |_| Ok("0.21.0".to_string()),
+    );
+    assert_eq!(launchd.program_path.as_deref(), Some(Path::new(program)));
 }
 
 #[test]

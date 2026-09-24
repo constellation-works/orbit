@@ -771,7 +771,7 @@ fn launchd_arguments(plist: &str) -> Option<Vec<String>> {
     while let Some(start) = remaining.find("<string>") {
         remaining = &remaining[start + "<string>".len()..];
         let end = remaining.find("</string>")?;
-        values.push(remaining[..end].trim().to_string());
+        values.push(plist_unescape(remaining[..end].trim()));
         remaining = &remaining[end + "</string>".len()..];
     }
     (!values.is_empty()).then_some(values)
@@ -781,42 +781,58 @@ fn first_plist_string(fragment: &str) -> Option<String> {
     let start = fragment.find("<string>")? + "<string>".len();
     let end = fragment[start..].find("</string>")?;
     let value = fragment[start..start + end].trim();
-    (!value.is_empty()).then(|| value.to_string())
+    (!value.is_empty()).then(|| plist_unescape(value))
+}
+
+/// Reverse the entity escaping `clock::plist_string` applies.
+fn plist_unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn parse_systemd_exec_start(unit: &str) -> Option<String> {
-    for line in unit.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("ExecStart=") else {
-            continue;
-        };
-        let rest = rest.trim();
-        if let Some(stripped) = rest.strip_prefix('"') {
-            return stripped.split('"').next().map(str::to_string);
-        }
-        let program = rest.split_whitespace().next()?.to_string();
-        if !program.is_empty() {
-            return Some(program);
-        }
-    }
-    None
+    split_systemd_exec_start(unit).map(|(program, _)| program)
 }
 
 fn systemd_arguments(unit: &str) -> Option<Vec<String>> {
+    let (_, rest) = split_systemd_exec_start(unit)?;
+    Some(rest.split_whitespace().map(ToString::to_string).collect())
+}
+
+/// Split the first `ExecStart=` line into its unescaped program and the raw
+/// arguments after it, reversing `clock::systemd_exec_program`.
+pub(super) fn split_systemd_exec_start(unit: &str) -> Option<(String, &str)> {
     let line = unit
         .lines()
         .map(str::trim)
         .find_map(|line| line.strip_prefix("ExecStart="))?
         .trim();
-    let rest = if let Some(stripped) = line.strip_prefix('"') {
-        let end = stripped.find('"')?;
-        &stripped[end + 1..]
-    } else {
-        line.split_once(char::is_whitespace)
-            .map(|(_, rest)| rest)
-            .unwrap_or("")
+    let (program, rest) = match line.strip_prefix('"') {
+        Some(quoted) => {
+            let mut program = String::new();
+            let mut chars = quoted.char_indices();
+            let mut end = None;
+            while let Some((index, ch)) = chars.next() {
+                match ch {
+                    '\\' => program.extend(chars.next().map(|(_, escaped)| escaped)),
+                    '"' => {
+                        end = Some(index + 1);
+                        break;
+                    }
+                    _ => program.push(ch),
+                }
+            }
+            (program, &quoted[end?..])
+        }
+        None => {
+            let (program, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+            (program.to_string(), rest)
+        }
     };
-    Some(rest.split_whitespace().map(ToString::to_string).collect())
+    let program = program.replace("%%", "%");
+    (!program.is_empty()).then_some((program, rest))
 }
 
 fn same_program(left: &Path, right: &Path) -> bool {
