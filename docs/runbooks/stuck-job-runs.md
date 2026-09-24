@@ -102,9 +102,9 @@ orphaned runs to `interrupted`, releasing their task reservations:
 
 Reconciliation runs best-effort at workspace open and lazily on
 `orbit run history` / `show` / `logs` / `events`. Pass `--no-reconcile` to any of those four
-to read stored run records without finalizing anything; the run-failure scan does, since it
-promises not to mutate run state. `orbit doctor` reports orphans read-only. A run whose PID
-is alive but unverifiable is deliberately left alone.
+to read stored run records without finalizing anything; the run-failure and backlog-hygiene
+scans do this because they promise not to mutate run state. `orbit doctor` reports orphans
+read-only. A run whose PID is alive but unverifiable is deliberately left alone.
 
 Nested sandboxed activity commands are not a liveness authority for their host worker. When an
 activity child carries truthy `ORBIT_MANAGED_RUN_CONTEXT` and a non-blank `ORBIT_RUN_ID`, its
