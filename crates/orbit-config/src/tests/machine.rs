@@ -311,7 +311,9 @@ fn admitted_memory_limits_render_as_systemd_values() {
         let snapshot = ResolvedConfig::load(&roots(global.path(), global.path()))
             .expect("layered load")
             .snapshot;
-        assert_eq!(snapshot.worker_containment().memory_max.to_string(), value);
+        let memory_max = snapshot.worker_containment().memory_max;
+        assert_eq!(memory_max.to_string(), value);
+        assert_eq!(memory_max.systemd_value(), value);
         assert_eq!(
             snapshot.value_for("machine.worker_memory_max"),
             Some(serde_json::json!(value))

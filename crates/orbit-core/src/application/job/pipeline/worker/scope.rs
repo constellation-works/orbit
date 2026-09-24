@@ -59,8 +59,8 @@ impl WorkerLimits {
     /// The unit properties, in `systemd-run --property=` form.
     fn properties(&self) -> [String; 4] {
         [
-            format!("MemoryHigh={}", self.memory_high),
-            format!("MemoryMax={}", self.memory_max),
+            format!("MemoryHigh={}", self.memory_high.systemd_value()),
+            format!("MemoryMax={}", self.memory_max.systemd_value()),
             format!("TasksMax={}", self.tasks_max),
             "OOMPolicy=continue".to_string(),
         ]
