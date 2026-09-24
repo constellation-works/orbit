@@ -31,6 +31,8 @@ mod validation_tools;
 pub(super) use apply::apply;
 #[cfg(test)]
 pub(super) use apply::inject_concurrent_edit_before_locked_apply;
+#[cfg(test)]
+pub(super) use apply::inject_concurrent_edit_before_status_retry;
 pub(crate) use source::requested_base_branch;
 use source::{GitPathKind, SourceSnapshot, resolve_source_snapshot};
 use validation_tools::ImplementationLane;
@@ -231,13 +233,14 @@ pub(super) fn prepare(
         let Some(source) = &source else {
             continue;
         };
-        let fingerprint = crate::application::automation::preparation::fingerprint(
-            runtime,
-            &task,
-            &source.source_revision,
-            &eligibility,
-        )
-        .map_err(|error| action_failed(action, error.to_string()))?;
+        let (fingerprint, status_neutral_fingerprint) =
+            crate::application::automation::preparation::fingerprints(
+                runtime,
+                &task,
+                &source.source_revision,
+                &eligibility,
+            )
+            .map_err(|error| action_failed(action, error.to_string()))?;
         // Each task is checked against the batch member that claimed it.
         if claim.as_ref().is_some_and(|claim| {
             claim
@@ -249,6 +252,7 @@ pub(super) fn prepare(
             return Err(action_failed(action, "state-trigger task meaning changed"));
         }
         snapshot["material_fingerprint"] = json!(fingerprint);
+        snapshot["status_neutral_fingerprint"] = json!(status_neutral_fingerprint);
     }
 
     // Size partitions only. Crew homogeneity is the state-consumer batching

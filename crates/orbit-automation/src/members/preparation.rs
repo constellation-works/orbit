@@ -1,7 +1,7 @@
 //! One material fingerprint used by scheduling, apply and readiness consumers.
 
 use crate::{AutomationError, delivery::definition_epoch};
-use orbit_types::task::Task;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationEligibility;
 use serde_json::{Value, json};
 
@@ -60,4 +60,33 @@ pub fn fingerprint(
     }
 
     definition_epoch(&material)
+}
+
+/// Companion to the material fingerprint for a task-pilot's bounded status
+/// retry. Every material field remains in the hash except the task status's
+/// contribution to eligibility and resolved dependency statuses.
+pub fn fingerprint_ignoring_status(
+    task: &Task,
+    source_revision: &str,
+    dependencies: &Value,
+    instructions: &str,
+    eligibility: &PreparationEligibility,
+) -> Result<String, AutomationError> {
+    let mut task = task.clone();
+    task.status = TaskStatus::Proposed;
+    let mut dependencies = dependencies.clone();
+    if let Some(entries) = dependencies.as_array_mut() {
+        for entry in entries {
+            if let Some(status) = entry.get_mut("status") {
+                *status = Value::Null;
+            }
+        }
+    }
+    fingerprint(
+        &task,
+        source_revision,
+        &dependencies,
+        instructions,
+        eligibility,
+    )
 }

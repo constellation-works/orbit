@@ -4,13 +4,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    Task, TaskComplexity, TaskPriority, TaskRelation, TaskRelationType, TaskStatus, TaskType,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use orbit_engine::fetch_remote_base;
 
-use super::super::task_pilot::{apply, prepare, requested_base_branch};
+use super::super::task_pilot::{
+    apply, inject_concurrent_edit_before_status_retry, prepare, requested_base_branch,
+};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout,
@@ -819,6 +823,430 @@ fn material_criteria_edit_invalidates_real_pilot_apply() {
 }
 
 #[test]
+fn dependency_status_only_drift_retries_and_applies_against_fresh_fingerprint() {
+    let fixture = remote_landing_fixture();
+    let dependency = seed_task(&fixture.runtime, "prerequisite");
+    fixture
+        .runtime
+        .update_task(
+            &fixture.task.id,
+            crate::application::task::TaskUpdateParams {
+                dependencies: Some(vec![dependency.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("attach dependency");
+    let prepared = prepare_landing(&fixture).expect("prepare with dependency");
+    let before = prepared["tasks"][0]["material_fingerprint"].clone();
+    fixture
+        .runtime
+        .update_task(
+            &dependency.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("complete dependency");
+    let fresh = prepare_landing(&fixture).expect("fresh dependency read");
+    assert_ne!(before, fresh["tasks"][0]["material_fingerprint"]);
+    assert_eq!(
+        prepared["tasks"][0]["status_neutral_fingerprint"],
+        fresh["tasks"][0]["status_neutral_fingerprint"],
+    );
+
+    let applied = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:src/merged.rs"],
+    );
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["task_outcomes"][0]["outcome"], "applied");
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task.id)
+            .unwrap()
+            .context_files,
+        vec!["file:src/merged.rs"],
+    );
+}
+
+#[test]
+fn own_backlog_to_in_progress_drift_retries_and_reports_status_changed() {
+    let fixture = remote_landing_fixture();
+    let prepared = prepare_landing(&fixture).expect("prepare backlog pilot");
+    fixture
+        .runtime
+        .update_task(
+            &fixture.task.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .expect("admit task during pilot");
+    let fresh = prepare_landing(&fixture).expect("fresh status read");
+    assert_ne!(
+        prepared["tasks"][0]["material_fingerprint"],
+        fresh["tasks"][0]["material_fingerprint"],
+    );
+    assert_eq!(
+        prepared["tasks"][0]["status_neutral_fingerprint"],
+        fresh["tasks"][0]["status_neutral_fingerprint"],
+    );
+    let applied = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:src/merged.rs"],
+    );
+    assert_eq!(applied["status"], "failed");
+    assert_eq!(applied["task_outcomes"][0]["reason"], "status_changed");
+    assert!(
+        fixture
+            .runtime
+            .get_task(&fixture.task.id)
+            .unwrap()
+            .context_files
+            .is_empty()
+    );
+}
+
+#[test]
+fn second_mismatch_on_status_retry_refuses_without_assessment_write() {
+    let fixture = remote_landing_fixture();
+    let dependency = seed_task(&fixture.runtime, "prerequisite");
+    fixture
+        .runtime
+        .update_task(
+            &fixture.task.id,
+            crate::application::task::TaskUpdateParams {
+                dependencies: Some(vec![dependency.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("attach dependency");
+    let prepared = prepare_landing(&fixture).expect("prepare with dependency");
+    fixture
+        .runtime
+        .update_task(
+            &dependency.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("complete dependency");
+    inject_concurrent_edit_before_status_retry();
+    let applied = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:src/merged.rs"],
+    );
+    assert_eq!(applied["status"], "failed");
+    assert_eq!(applied["task_outcomes"][0]["reason"], "material_changed");
+    assert!(applied["tasks"].as_array().unwrap().is_empty());
+    let task = fixture.runtime.get_task(&fixture.task.id).unwrap();
+    assert_eq!(task.title, "Changed between status reads");
+    assert!(task.context_files.is_empty());
+    assert!(
+        !fixture
+            .runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|entry| entry.event == "task_pilot_applied")
+    );
+}
+
+#[test]
+fn post_prepare_task_body_edits_still_refuse_apply() {
+    use crate::application::task::TaskUpdateParams;
+
+    for case in [
+        "description",
+        "acceptance_criteria",
+        "plan",
+        "title",
+        "tags",
+        "context_files",
+        "relations",
+        "complexity",
+    ] {
+        let fixture = remote_landing_fixture();
+        let prepared = prepare_landing(&fixture).expect("prepare task");
+        let related = seed_task(&fixture.runtime, "relation target");
+        let params = match case {
+            "description" => TaskUpdateParams {
+                description: Some("changed description".into()),
+                ..Default::default()
+            },
+            "acceptance_criteria" => TaskUpdateParams {
+                acceptance_criteria: Some(vec!["changed criterion".into()]),
+                ..Default::default()
+            },
+            "plan" => TaskUpdateParams {
+                plan: Some("changed plan".into()),
+                ..Default::default()
+            },
+            "title" => TaskUpdateParams {
+                title: Some("changed title".into()),
+                ..Default::default()
+            },
+            "tags" => TaskUpdateParams {
+                tags: Some(vec!["changed-tag".into()]),
+                ..Default::default()
+            },
+            "context_files" => TaskUpdateParams {
+                context_files: Some(vec!["file:src/existing.rs".into()]),
+                ..Default::default()
+            },
+            "relations" => TaskUpdateParams {
+                relations: Some(vec![TaskRelation {
+                    relation_type: TaskRelationType::RelatedTo,
+                    target: related.id,
+                }]),
+                ..Default::default()
+            },
+            "complexity" => TaskUpdateParams {
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+            _ => unreachable!(),
+        };
+        fixture
+            .runtime
+            .update_task(&fixture.task.id, params)
+            .expect(case);
+        let applied = apply_selectors(
+            &fixture.runtime,
+            &prepared,
+            &fixture.task,
+            vec!["file:src/merged.rs"],
+        );
+        assert_eq!(applied["status"], "failed", "{case}: {applied}");
+        assert_eq!(
+            applied["task_outcomes"][0]["reason"], "material_changed",
+            "{case}: {applied}"
+        );
+        assert!(applied["tasks"].as_array().unwrap().is_empty(), "{case}");
+        assert!(
+            fixture
+                .runtime
+                .get_task(&fixture.task.id)
+                .unwrap()
+                .context_files
+                .len()
+                <= 1,
+            "{case}"
+        );
+        assert!(
+            !fixture
+                .runtime
+                .get_task_history(&fixture.task.id)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.event == "task_pilot_applied"),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn post_prepare_dependency_body_edits_still_refuse_apply() {
+    use crate::application::task::TaskUpdateParams;
+
+    for case in ["description", "acceptance_criteria", "plan", "relations"] {
+        let fixture = remote_landing_fixture();
+        let dependency = seed_task(&fixture.runtime, "prerequisite");
+        let related = seed_task(&fixture.runtime, "relation target");
+        fixture
+            .runtime
+            .update_task(
+                &fixture.task.id,
+                TaskUpdateParams {
+                    dependencies: Some(vec![dependency.id.clone()]),
+                    ..Default::default()
+                },
+            )
+            .expect("attach dependency");
+        let prepared = prepare_landing(&fixture).expect("prepare task");
+        let params = match case {
+            "description" => TaskUpdateParams {
+                description: Some("changed dependency description".into()),
+                ..Default::default()
+            },
+            "acceptance_criteria" => TaskUpdateParams {
+                acceptance_criteria: Some(vec!["changed dependency criterion".into()]),
+                ..Default::default()
+            },
+            "plan" => TaskUpdateParams {
+                plan: Some("changed dependency plan".into()),
+                ..Default::default()
+            },
+            "relations" => TaskUpdateParams {
+                relations: Some(vec![TaskRelation {
+                    relation_type: TaskRelationType::RelatedTo,
+                    target: related.id,
+                }]),
+                ..Default::default()
+            },
+            _ => unreachable!(),
+        };
+        fixture
+            .runtime
+            .update_task(&dependency.id, params)
+            .expect(case);
+        let applied = apply_selectors(
+            &fixture.runtime,
+            &prepared,
+            &fixture.task,
+            vec!["file:src/merged.rs"],
+        );
+        assert_eq!(applied["status"], "failed", "{case}: {applied}");
+        assert_eq!(
+            applied["task_outcomes"][0]["reason"], "material_changed",
+            "{case}: {applied}"
+        );
+        assert!(
+            fixture
+                .runtime
+                .get_task(&fixture.task.id)
+                .unwrap()
+                .context_files
+                .is_empty(),
+            "{case}"
+        );
+        assert!(
+            !fixture
+                .runtime
+                .get_task_history(&fixture.task.id)
+                .unwrap()
+                .iter()
+                .any(|entry| entry.event == "task_pilot_applied"),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn status_retry_guard_hashes_required_tools_dependency_refs_instructions_and_revision() {
+    use orbit_automation::members::preparation::fingerprint_ignoring_status;
+    use orbit_types::workflow::automation::members::PreparationEligibility;
+
+    let fixture = remote_landing_fixture();
+    let task = &fixture.task;
+    let dependencies = json!([{
+        "id": "ORB-12000", "status": "backlog", "relations": [],
+        "criteria": ["original"], "description": "original", "plan": "original",
+        "refs": [], "pr_status": null,
+    }]);
+    let eligibility = PreparationEligibility::default();
+    let baseline = fingerprint_ignoring_status(
+        task,
+        "source-a",
+        &dependencies,
+        "instructions-a",
+        &eligibility,
+    )
+    .expect("baseline neutral fingerprint");
+
+    let mut changed_task = task.clone();
+    changed_task.required_tools.push("orbit.task.show".into());
+    assert_ne!(
+        baseline,
+        fingerprint_ignoring_status(
+            &changed_task,
+            "source-a",
+            &dependencies,
+            "instructions-a",
+            &eligibility
+        )
+        .unwrap(),
+        "required tools must refuse the status retry",
+    );
+    let mut changed_dependency = dependencies.clone();
+    changed_dependency[0]["refs"] = json!([{"system": "issue", "id": "one"}]);
+    assert_ne!(
+        baseline,
+        fingerprint_ignoring_status(
+            task,
+            "source-a",
+            &changed_dependency,
+            "instructions-a",
+            &eligibility
+        )
+        .unwrap(),
+        "dependency external refs must refuse the status retry",
+    );
+    assert_ne!(
+        baseline,
+        fingerprint_ignoring_status(
+            task,
+            "source-a",
+            &dependencies,
+            "instructions-b",
+            &eligibility
+        )
+        .unwrap(),
+        "instruction snapshot must refuse the status retry",
+    );
+    assert_ne!(
+        baseline,
+        fingerprint_ignoring_status(
+            task,
+            "source-b",
+            &dependencies,
+            "instructions-a",
+            &eligibility
+        )
+        .unwrap(),
+        "source revision must refuse the status retry",
+    );
+    let mut status_only = dependencies.clone();
+    status_only[0]["status"] = json!("done");
+    assert_eq!(
+        baseline,
+        fingerprint_ignoring_status(
+            task,
+            "source-a",
+            &status_only,
+            "instructions-a",
+            &eligibility
+        )
+        .unwrap(),
+        "dependency status alone must permit one retry",
+    );
+}
+
+#[test]
+fn post_prepare_source_revision_change_refuses_apply() {
+    let fixture = remote_landing_fixture();
+    let mut prepared = prepare_landing(&fixture).expect("prepare current revision");
+    assert_ne!(fixture.stale_sha, fixture.current_sha);
+    prepared["source"]["source_revision"] = json!(fixture.stale_sha);
+    let applied = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:src/existing.rs"],
+    );
+    assert_eq!(applied["status"], "failed");
+    assert_eq!(applied["task_outcomes"][0]["reason"], "material_changed");
+    assert!(
+        fixture
+            .runtime
+            .get_task(&fixture.task.id)
+            .unwrap()
+            .context_files
+            .is_empty()
+    );
+}
+
+#[test]
 fn comment_and_summary_leave_material_fingerprint_unchanged() {
     let fixture = remote_landing_fixture();
     let before = prepare_landing(&fixture).unwrap();
@@ -829,6 +1257,8 @@ fn comment_and_summary_leave_material_fingerprint_unchanged() {
             crate::application::task::TaskUpdateParams {
                 comment: Some("Progress only".into()),
                 execution_summary: Some("Instrumentation only".into()),
+                priority: Some(TaskPriority::High),
+                planned_by: Some(Some("operator".into())),
                 ..Default::default()
             },
         )
@@ -837,6 +1267,10 @@ fn comment_and_summary_leave_material_fingerprint_unchanged() {
     assert_eq!(
         before["tasks"][0]["material_fingerprint"],
         after["tasks"][0]["material_fingerprint"]
+    );
+    assert_eq!(
+        before["tasks"][0]["status_neutral_fingerprint"],
+        after["tasks"][0]["status_neutral_fingerprint"]
     );
 }
 
