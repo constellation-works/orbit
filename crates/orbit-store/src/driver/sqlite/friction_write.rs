@@ -74,8 +74,14 @@ pub(crate) fn upsert_record(
     Ok(())
 }
 
+/// Highest per-month counter the `FYYYY-MM-NNN` ID grammar can carry.
+const MAX_MONTH_SEQ: i64 = 999;
+
 /// Next per-month counter for a workspace. Callers must hold the write
 /// transaction so the read and the matching insert cannot interleave.
+///
+/// Refuses to allocate past [`MAX_MONTH_SEQ`]: a four-digit suffix would be
+/// stored but rejected by every ID-taking read and write path afterwards.
 pub(crate) fn next_month_seq(
     conn: &Connection,
     workspace_id: &str,
@@ -89,6 +95,12 @@ pub(crate) fn next_month_seq(
             |row| row.get(0),
         )
         .map_err(|error| OrbitError::Store(error.to_string()))?;
+    if next > MAX_MONTH_SEQ {
+        return Err(OrbitError::InvalidInput(format!(
+            "friction log for {month} is full ({MAX_MONTH_SEQ} records); \
+             resolve or consolidate existing records before adding more"
+        )));
+    }
     u32::try_from(next).map_err(|_| {
         OrbitError::Store(format!(
             "friction counter for workspace '{workspace_id}' month '{month}' overflowed"
