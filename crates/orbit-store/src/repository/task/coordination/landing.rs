@@ -41,10 +41,7 @@ impl TaskCommitBoundary {
     }
 
     fn attempt_row(&self, handoff_id: &str) -> Result<Option<TaskCoordinationRow>, OrbitError> {
-        Ok(self
-            .coordination_rows(ATTEMPT)?
-            .into_iter()
-            .find(|r| r.row_id == handoff_id))
+        self.coordination_row(ATTEMPT, handoff_id)
     }
 
     /// The live attempt for this claim's accepted handoff, with the row it was

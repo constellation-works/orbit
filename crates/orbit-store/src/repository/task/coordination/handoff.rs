@@ -26,9 +26,7 @@ impl TaskCommitBoundary {
     }
 
     pub fn accepted_handoff(&self, claim_id: &str) -> Result<AcceptedHandoff, OrbitError> {
-        self.coordination_rows(HANDOFF)?
-            .iter()
-            .find(|r| r.row_id == claim_id)
+        self.coordination_row(HANDOFF, claim_id)?
             .map(|r| decode(&r.payload_json))
             .transpose()?
             .ok_or_else(|| invalid("typed handoff unavailable"))
@@ -363,11 +361,7 @@ impl TaskCommitBoundary {
         }
         let accepted = self.accepted_handoff(&auth.claim_id)?;
         let id = &accepted.handoff_id;
-        let Some(old) = self
-            .coordination_rows(START)?
-            .into_iter()
-            .find(|r| &r.row_id == id)
-        else {
+        let Some(old) = self.coordination_row(START, id)? else {
             return Ok(());
         };
         let mut start: LandingStartRequest = decode(&old.payload_json)?;
@@ -398,9 +392,7 @@ impl TaskCommitBoundary {
         accepted: &AcceptedHandoff,
     ) -> Result<HandoffAuthorization, OrbitError> {
         let raw = self
-            .coordination_rows(AUTHORIZATION)?
-            .into_iter()
-            .find(|r| r.row_id == accepted.handoff_id)
+            .coordination_row(AUTHORIZATION, &accepted.handoff_id)?
             .ok_or_else(|| invalid("handoff awaits completion approval"))?;
         let authorization: HandoffAuthorization = decode(&raw.payload_json)?;
         if authorization.handoff_id != accepted.handoff_id
@@ -427,11 +419,7 @@ impl TaskCommitBoundary {
         state: LandingStartState,
         effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
-        let Some(old) = self
-            .coordination_rows(START)?
-            .into_iter()
-            .find(|r| r.row_id == handoff_id)
-        else {
+        let Some(old) = self.coordination_row(START, handoff_id)? else {
             return Err(invalid("no pending landing request for this handoff"));
         };
         let mut start: LandingStartRequest = decode(&old.payload_json)?;

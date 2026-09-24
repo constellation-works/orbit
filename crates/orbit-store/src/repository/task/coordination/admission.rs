@@ -139,10 +139,7 @@ impl TaskCommitBoundary {
         request: &str,
     ) -> Result<Option<TaskCoordinationRow>, OrbitError> {
         let key = receipt_key(machine, request)?;
-        Ok(self
-            .coordination_rows(RECEIPT_KIND)?
-            .into_iter()
-            .find(|row| row.row_id == key))
+        self.coordination_row(RECEIPT_KIND, &key)
     }
 
     pub fn execution_claims(&self) -> Result<Vec<ExecutionClaim>, OrbitError> {
