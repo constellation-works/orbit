@@ -77,6 +77,21 @@ template:
     the task identified above. The finding's description names the culprit task
     and the commit that introduced the defect.
 
+    ## Findings that narrow a shared invariant
+
+    When a finding is a repair that narrows a shared invariant — what the host
+    will create, what URLs are accepted, what counts as first-party, or any
+    other predicate with more than one caller — search for every caller and
+    fixture of that predicate and name them in the filed task's description;
+    its acceptance criteria must require the same change to update all of
+    them together, not just the call site that produced the observed symptom.
+
+    A pull request that is green only against its own base is not evidence
+    the merged tree is green. When the finding shares an invariant with other
+    in-flight work, the filed task's acceptance criteria must require
+    comparing the per-commit suite on the integration branch against its
+    parent commit, not just a green check on the PR's own base.
+
     ## Record the cursor
 
     Always record the reviewed range and the new last-reviewed commit in the
