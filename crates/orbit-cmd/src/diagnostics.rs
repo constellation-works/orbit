@@ -175,9 +175,13 @@ pub(crate) fn validated_year_month(year_month: &str) -> Result<String, OrbitErro
     let year = year_month[..4].parse::<u16>().map_err(|_| {
         OrbitError::InvalidInput("diagnostics month contains an invalid year".to_string())
     })?;
-    let month = year_month[5..].parse::<u8>().map_err(|_| {
-        OrbitError::InvalidInput("diagnostics month contains an invalid month".to_string())
-    })?;
+    let month = year_month[5..]
+        .parse::<u8>()
+        .ok()
+        .filter(|month| (1..=12).contains(month))
+        .ok_or_else(|| {
+            OrbitError::InvalidInput("diagnostics month contains an invalid month".to_string())
+        })?;
     Ok(format!("{year:04}-{month:02}"))
 }
 

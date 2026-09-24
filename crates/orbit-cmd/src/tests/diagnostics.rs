@@ -33,6 +33,8 @@ fn validated_year_month_rebuilds_only_the_allowed_components() {
     assert_eq!(validated_year_month("2026-03").unwrap(), "2026-03");
     assert!(validated_year_month("2026/03").is_err());
     assert!(validated_year_month("../secrets").is_err());
+    assert!(validated_year_month("2026-00").is_err());
+    assert!(validated_year_month("2026-13").is_err());
 }
 
 #[test]
