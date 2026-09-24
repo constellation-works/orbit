@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931]
 ---
 
 # Auto-tasks — Overview
@@ -87,7 +87,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These seven YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These eight YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -107,6 +107,13 @@ definition of the same name.
   documentation. Existing `last_validated` dates take precedence; documents
   without the key use git last-touched dates and completed task summaries for
   rotation, without gaining frontmatter solely for this task.
+- `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
+  own run evidence (failed and interrupted runs, step failures, worker logs)
+  since the previous scan's `run-failure-cursor.json` artifact. Failures
+  sharing a normalized signature at least 3 times across at least 2 runs are
+  filed as one redacted friction or proposed task per pattern unless an
+  existing task or friction already tracks it. The scan never mutates run
+  state, and a window with no new pattern is a successful no-op.
 - `delivery-code-review` and `delivery-qa` — disabled-by-default checks of
   newly landed deliveries.
 
@@ -138,6 +145,8 @@ encode this repository's branches and gates. Re-init preserves them:
   are no longer listed as if they were embedded defaults.
 - ORB-11095 — Added centralized finding-title provenance and established the
   shipped definition's canonical `code-review` name.
+- ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
+  mines unfiled recurring run failures.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

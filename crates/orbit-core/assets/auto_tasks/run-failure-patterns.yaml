@@ -1,0 +1,149 @@
+schemaVersion: 1
+name: run-failure-patterns
+description: Weekly mining of this workspace's run evidence for recurring failures that nobody has filed
+enabled: false
+schedule:
+  cron: 20 7 * * 1
+template:
+  title: Mine recurring run failures
+  description: |-
+    Mine this workspace's own run evidence for recurring failure patterns that
+    are not yet tracked. The durable output is one friction record or proposed
+    task per untracked pattern plus the recorded scan cursor; the execution
+    summary is the audit trail. Narrative-only output does not count as delivery.
+
+    ## Rules and command surfaces
+
+    - Read-only against run state. Never retry, resume, cancel, or edit a run,
+      and never change the status of a task a run touched. Read runs only with
+      `orbit run history --limit <n> --json`, `orbit run show <run-id> --json`,
+      `orbit run logs <run-id>`, and `orbit run events <run-id>`; do not read or
+      edit the Orbit database or state files directly.
+    - Use the registered Orbit tool surface for records. Find the newest completed
+      prior instance with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["run-failure-patterns","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      (tag filters use AND semantics) and read its cursor artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"run-failure-cursor.json","model":"<agent-family>"}'`.
+      Search existing coverage with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"all","all":true,"model":"<agent-family>"}'`
+      and inspect a candidate with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Lexical search matches one case-insensitive substring: pass a single
+      distinctive token (an error code, step name, or tool name), never a
+      multi-word phrase, and do not treat a 0-hit multi-word query as proof that
+      nothing covers the pattern.
+    - File a pattern with
+      `orbit tool run orbit.friction.add --input '{"title":"<surface and failure>","body":"<markdown>","tags":["automation"],"during_task":"<this task ID>","model":"<agent-family>"}'`,
+      or, only when the fix is clear, propose a task (tool-created tasks start
+      `proposed`) with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["run-failure-patterns"],"type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Do not use direct lifecycle CLI subcommands; they skip agent provenance.
+    - Fail open. A window with no new untracked pattern is a successful no-op. Do
+      not invent work to justify the run.
+
+    ## Determine the scan window
+
+    Run the prior-instance query above. When it returns a task, read its
+    `run-failure-cursor.json` artifact; its `cursor` is the RFC 3339 upper bound
+    that instance scanned through, and this scan starts strictly after it. A
+    selected instance without a readable cursor artifact is an error to report,
+    not a first run: fall back to the cursor recorded in its execution summary,
+    and fail the task if neither exists. Only when no prior instance exists, start
+    the window seven days before now. The window ends at the moment this scan
+    starts; record that timestamp before reading any run.
+
+    The window contains every run whose `finished_at` falls inside it. Page
+    `orbit run history --limit <n> --json` (newest first by creation) by raising
+    `<n>` until the oldest returned run was created at least seven days before
+    the window start, so long-running runs that finished inside the window are
+    included. Runs still `pending` or `running` at scan start belong to the
+    window in which they finish.
+
+    ## Collect failure evidence
+
+    From the window, collect:
+
+    1. Runs whose state is `failed` or `interrupted`, and `cancelled` runs that
+       recorded an error message.
+    2. Step failure records: every non-success, non-skipped entry in a run's
+       `steps` list, including failed steps inside runs that later succeeded
+       after a retry or a recovery activity such as `step_failure_recovery`.
+       Use `orbit run show <run-id> --json` for the step detail.
+    3. Worker log evidence for those runs from `orbit run logs <run-id>` (and
+       `--step <step-id>` for one step), read only as far as needed to name the
+       error.
+
+    ## Cluster by normalized signature
+
+    Normalize each failure to a signature of error class, failing step, and
+    tool: the error class is the stable code or leading error kind (for example
+    an `error.code=` value, an HTTP status, or the failing guard name); the
+    failing step is the step or deterministic action named in the error; the
+    tool is the provider CLI, Orbit tool, or command that raised it. Strip run
+    ids, task ids, timestamps, paths, SHAs, and counts before comparing, and
+    group by the signature with the job ID as context.
+
+    A cluster is a pattern only when it has **at least 3 occurrences across at
+    least 2 distinct runs** in the window. One-offs and single-run retry loops
+    below that threshold are not filed; count them in the summary only.
+
+    ## Check coverage before filing
+
+    For each pattern, search open and closed tasks and frictions with one
+    distinctive token at a time from its signature (the error code, the step
+    name, the tool name), and inspect every plausible hit. A pattern is already
+    tracked when an open task or open friction describes the same underlying
+    failure, or a done task does and no occurrence postdates its completion;
+    record the `<signature> -> <id>` mapping and do not file. Occurrences after
+    a done fix are a regression: file them as a new pattern that names the done
+    task. Never file duplicates, including two records for one pattern in the
+    same scan.
+
+    ## File untracked patterns
+
+    File exactly one record per untracked pattern: a friction by default, or a
+    proposed task when the evidence makes the fix clear. The body states the
+    normalized signature, occurrence count, distinct run count, first and last
+    seen timestamps, up to three representative run ids, the affected job IDs,
+    and one short excerpt of the error.
+
+    Excerpts must be redacted. Quote at most a few lines, and replace tokens,
+    credentials, authorization headers, cookies, email addresses, and home or
+    user paths with placeholders before writing. Put excerpts only in text sent
+    through `orbit.friction.add` or `orbit.task.add`, which also apply Orbit's
+    write-time redaction; when the response reports `redactions_applied: true`,
+    read the record back and confirm no secret-bearing context survived. Never
+    attach raw logs as artifacts or copy them into other files.
+
+    ## Record the cursor
+
+    Always record the window bounds and the new cursor (the scan start
+    timestamp) in the persisted execution summary, with runs scanned, failures
+    collected, patterns found, filed ids, and already-tracked mappings. Write
+    `{"schema_version":1,"cursor":"<RFC 3339 scan start>","runs_scanned":<count>}`
+    to `.orbit/tmp/run-failure-cursor.json` (`$ORBIT_SCRATCH_DIR`) and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/run-failure-cursor.json","path":"run-failure-cursor.json","model":"<agent-family>"}'`.
+    Write it on every completed scan, including an empty window.
+  acceptance_criteria:
+  - The scan window started at the previous completed instance's recorded cursor, or seven days before the scan on the first run, and ended at the recorded scan start.
+  - Failures were clustered by normalized signature, and only clusters with at least 3 occurrences across at least 2 distinct runs were treated as patterns.
+  - Open and closed tasks and frictions were searched for every pattern before filing, and no duplicate record was filed.
+  - Every filed record carries the signature, occurrence count, first and last seen, representative run ids, and a redacted excerpt.
+  - No run was retried, resumed, cancelled, or edited, and no run state was mutated.
+  - The execution summary reports runs scanned, patterns found, filed versus already-tracked ids, and the window bounds, and the new cursor is attached as `run-failure-cursor.json`.
+  - A window with no new untracked pattern succeeds as a no-op.
+  task_type: chore
+  tags:
+  - run-failure-patterns
+  - no-diff-expected
+  priority: medium
+  complexity: medium
+  # The portable system lane is seeded per machine and compatibility-aliased
+  # for configs written before that crew existed.
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-24T00:00:00Z
+updated_by: system
+updated_at: 2026-09-24T00:00:00Z
