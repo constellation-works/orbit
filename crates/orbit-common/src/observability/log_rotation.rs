@@ -97,9 +97,15 @@ impl LogRotationConfig {
             )));
         }
 
+        // `max_file_mb <= max_total_mb`, so only the total can overflow.
+        let max_total_bytes = max_total_mb.checked_mul(BYTES_PER_MB).ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "[runtime] log_max_total_mb ({max_total_mb}) is too large"
+            ))
+        })?;
         Ok(Self {
             retention_days,
-            max_total_bytes: max_total_mb * BYTES_PER_MB,
+            max_total_bytes,
             max_file_bytes: max_file_mb * BYTES_PER_MB,
         })
     }
