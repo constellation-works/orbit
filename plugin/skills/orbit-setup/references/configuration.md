@@ -34,7 +34,7 @@ orbit config show                  # effective merged view, with source provenan
 orbit config show --scope global   # one physical file
 orbit config get <key>
 orbit config set <key> <value>
-orbit config keys                  # every settable key
+orbit config keys                  # every registered key; machine.id and machine.task_prefix are listed and read-only
 orbit config path
 ```
 
@@ -61,8 +61,9 @@ assuming a value.
 | `scoring.enabled` | Record scoreboard metrics for task runs. |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
 
-Use `orbit config keys` to distinguish fixed keys supported by `config set`
-from settings authored as TOML. Named crew fields are also settable as
+Use `orbit config keys` to distinguish fixed registry keys from settings
+authored as TOML. Read-only identity keys are listed and refused by
+`config set`. Named crew fields are also settable as
 `crews.<name>.<field>` (for example `orbit config set crews.sol.effort high`)
 even though those keys are not listed by `orbit config keys`. Creating a crew
 still requires a `[crews.<name>]` table with `model` and `provider`. Set
