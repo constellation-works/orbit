@@ -2440,6 +2440,10 @@ fn declared_non_git_checkout_fails_typed_before_provider_spawn() {
     let fixture = linked_worktree_fixture();
     let non_git = fixture.root().join("not-a-repository");
     fs::create_dir(&non_git).expect("create non-Git directory");
+    // TMPDIR can sit inside a managed worktree. Stop Git from discovering
+    // that ancestor so the declared path has no usable repository.
+    fs::write(non_git.join(".git"), "gitdir: missing-fixture-gitdir\n")
+        .expect("isolate non-Git fixture from ancestor worktree");
     let marker = fixture.root().join("provider-started");
     let script = fixture.root().join("codex");
     write_executable(
