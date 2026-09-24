@@ -31,6 +31,36 @@ fn add_allocates_workspace_local_monthly_ids() {
     assert_eq!(next_month.record.id, "F2026-06-001");
 }
 
+/// The ID grammar carries a three-digit month counter; the 1000th record in a
+/// month must be refused up front rather than stored under an ID that every
+/// later show/update/resolve rejects.
+#[test]
+fn add_refuses_a_month_whose_counter_is_exhausted() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frictions = friction_store(temp.path(), "ws_one");
+    let may = Utc.with_ymd_and_hms(2026, 5, 10, 0, 0, 0).unwrap();
+    frictions
+        .add(add_params(TEST_CODEX_MODEL, may, &["tooling"]))
+        .expect("first add");
+    store(temp.path())
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute("UPDATE friction_records SET seq = 999", [])
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .expect("advance the month counter");
+
+    let error = frictions
+        .add(add_params(TEST_CODEX_MODEL, may, &["tooling"]))
+        .expect_err("a 1000th record in one month must be refused");
+
+    assert!(
+        matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+        "{error:?}"
+    );
+}
+
 /// Identity is `(workspace_id, friction_id)`: two workspaces allocate the same
 /// ID independently and neither can see or overwrite the other's record.
 #[test]
