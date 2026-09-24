@@ -22,7 +22,10 @@ impl OrbitRuntime {
         claim_id: &str,
     ) -> Result<orbit_types::workflow::handoff::AcceptedHandoff, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.stores().tasks().accepted_handoff(claim_id)
+        self.stores()
+            .tasks()
+            .find_accepted_handoff(claim_id)?
+            .ok_or_else(|| OrbitError::InvalidInput("typed handoff unavailable".into()))
     }
 
     /// Accepting a completion-authorized handoff records its landing-start
@@ -196,8 +199,7 @@ impl OrbitRuntime {
             let accepted = self
                 .stores()
                 .tasks()
-                .accepted_handoff(&claim.claim.claim_id)
-                .ok();
+                .find_accepted_handoff(&claim.claim.claim_id)?;
             let handoff = accepted.as_ref().map(|accepted| {
                 let request = requests
                     .iter()
@@ -371,10 +373,10 @@ impl OrbitRuntime {
     ) -> Result<(ClaimInspection, AcceptedHandoff), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         for claim in self.stores().tasks().resolve_execution_claims()? {
-            let Ok(accepted) = self
+            let Some(accepted) = self
                 .stores()
                 .tasks()
-                .accepted_handoff(&claim.claim.claim_id)
+                .find_accepted_handoff(&claim.claim.claim_id)?
             else {
                 continue;
             };

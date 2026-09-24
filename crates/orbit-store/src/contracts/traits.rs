@@ -40,10 +40,11 @@ use crate::contracts::{
 };
 
 pub trait TaskStoreBackend: Send + Sync {
-    fn accepted_handoff(
+    /// The claim's accepted handoff, or `None` when none was accepted.
+    fn find_accepted_handoff(
         &self,
         _claim_id: &str,
-    ) -> Result<orbit_types::workflow::handoff::AcceptedHandoff, OrbitError> {
+    ) -> Result<Option<orbit_types::workflow::handoff::AcceptedHandoff>, OrbitError> {
         Err(OrbitError::Store("typed handoff unavailable".into()))
     }
 

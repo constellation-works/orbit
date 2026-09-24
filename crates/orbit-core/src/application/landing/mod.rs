@@ -356,10 +356,10 @@ impl OrbitRuntime {
         handoff_id: &str,
     ) -> Result<(ClaimInspection, AcceptedHandoff), OrbitError> {
         for claim in self.stores().tasks().resolve_execution_claims()? {
-            let Ok(accepted) = self
+            let Some(accepted) = self
                 .stores()
                 .tasks()
-                .accepted_handoff(&claim.claim.claim_id)
+                .find_accepted_handoff(&claim.claim.claim_id)?
             else {
                 continue;
             };
