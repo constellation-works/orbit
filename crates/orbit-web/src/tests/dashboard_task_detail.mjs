@@ -73,7 +73,7 @@ globalThis.fetch = async (path, options = {}) => {
 };
 const detailReads = () => requests.filter((r) => r.method === "GET").length;
 
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 let tasks = [summaryRow()];
 const replaced = [];

@@ -52,8 +52,8 @@ globalThis.fetch = async path => {
 };
 await import('./app.js');
 await settle();
-const { setWorkspace } = await import('./common.js');
-const { setActiveTab } = await import('./router.js');
+const { setWorkspace } = await import('./js/common.js');
+const { setActiveTab } = await import('./js/router.js');
 const refresh = () => {
   const button = node('refresh-btn');
   if (button.listeners) button.listeners.click(); else button.click();

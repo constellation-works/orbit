@@ -1,0 +1,153 @@
+/* Settings tab. */
+
+/* ORB-12724: the Config tab. One column of section panels, each a list of
+   key rows: key, value, the layer the value came from, and what that layer
+   shadows. Provenance is carried by the source chip's colour, so the five
+   states (workspace / global / default / unset / registry) stay
+   distinguishable at a glance without reading the label. */
+.config-layout { grid-template-columns: minmax(0, 1fr); }
+.tab-pane[data-tab="config"] .panel { min-width: 0; }
+#config-panel > .body { padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 12px; }
+.config-explainer {
+  margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--hair);
+  color: var(--fg-dim); font-size: 12px; background: var(--bg);
+}
+.config-filter {
+  flex: 1 1 200px; min-width: 160px; background: var(--bg-elev); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 2px; padding: 5px 8px;
+  font: 12px/1.4 var(--font-mono);
+}
+.config-chips { display: inline-flex; gap: 4px; }
+.config-chip, .config-action {
+  background: var(--bg-elev); color: var(--fg-dim); border: 1px solid var(--border);
+  border-radius: 2px; padding: 4px 10px; font: 11px/1.4 var(--font-mono); cursor: pointer;
+}
+.config-chip.on { color: var(--accent); border-color: var(--accent); }
+.config-action:hover, .config-chip:hover { color: var(--fg); }
+.config-action.primary { color: var(--accent); border-color: var(--accent); }
+.config-action.ghost { border-color: var(--hair); }
+.config-action[disabled] { opacity: 0.5; cursor: default; }
+.config-action.revealed { color: var(--fg); font-size: 10px; }
+
+.config-strip {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg-elev);
+}
+.config-registry { flex-direction: row; justify-content: space-between; flex-wrap: wrap; align-items: center; }
+.config-registry-facts, .config-layer-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.config-arrow { color: var(--fg-mute); }
+.config-layer { display: inline-flex; align-items: center; gap: 6px; }
+.config-layer-name {
+  color: var(--fg-dim); font: 11px/1.4 var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.config-layer-path { color: var(--fg-dim); font-size: 11px; overflow-wrap: anywhere; }
+.config-layer-path.absent { color: var(--fg-mute); }
+.config-fact { display: inline-flex; gap: 6px; align-items: baseline; }
+.config-fact-label { color: var(--fg-dim); font-size: 11px; }
+.config-fact-value { color: var(--fg); font-size: 11px; }
+.config-warning { color: var(--status-open); font-size: 11px; }
+.config-note { color: var(--fg-dim); font-size: 11px; }
+.config-note.inline { color: var(--fg-mute); }
+.config-match { font: 11px/1.4 var(--font-mono); }
+.config-match.ok { color: var(--state-success); }
+.config-match.ok::before { content: "✓ "; }
+.config-match.warn { color: var(--status-open); }
+.config-match.warn::before { content: "⚠ "; }
+
+.config-section.not-inherited { border-color: var(--status-open); }
+.config-section-title { color: var(--fg); }
+.config-section-prefix { color: var(--fg-mute); margin-left: 8px; text-transform: none; letter-spacing: 0; }
+.config-section-blurb { color: var(--fg-dim); margin-left: 8px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.config-header-right { display: inline-flex; gap: 8px; align-items: center; }
+.config-badge { padding: 2px 8px; border-radius: 2px; font: 11px/1.4 var(--font-mono); }
+.config-badge.warn { color: var(--status-open); border: 1px solid var(--status-open); }
+.config-section-body { background: var(--bg); }
+.config-collapsed { display: flex; gap: 10px; align-items: center; padding: 10px 14px; }
+.config-empty { padding: 10px 14px; color: var(--fg-dim); font-size: 12px; }
+
+.config-row { border-bottom: 1px solid var(--hair); }
+.config-row:last-child { border-bottom: none; }
+.config-row-main {
+  display: grid; grid-template-columns: minmax(140px, 1.1fr) minmax(90px, 0.8fr) 92px minmax(200px, 2fr) 28px;
+  gap: 10px; align-items: baseline; padding: 8px 14px;
+}
+
+/* The Keys reference rows carry no editor, so they lay out on their own grid
+   with the same gutters as the layered rows above. */
+.config-key-row {
+  display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(90px, 0.6fr) 110px minmax(240px, 2fr);
+  gap: 12px; align-items: baseline; padding: 10px 16px;
+}
+.config-key-row:hover { background: var(--bg-hover); }
+@media (max-width: 760px) {
+  .config-key-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .config-key-row .config-description { grid-column: 1 / -1; }
+}
+.config-row-main.clickable { cursor: pointer; }
+.config-row-main.clickable:hover { background: var(--bg-elev); }
+.config-key { font-size: 12px; overflow-wrap: anywhere; }
+.config-key-prefix { color: var(--fg-mute); }
+.config-key-name { color: var(--fg); }
+.config-value { color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
+.config-description { color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
+.config-shadow, .config-referenced { color: var(--status-open); }
+.config-options { color: var(--fg-mute); }
+.config-row.state-unset .config-value { color: var(--fg-mute); }
+
+.config-source {
+  justify-self: start; padding: 1px 7px; border-radius: 2px; border: 1px solid transparent;
+  font: 10px/1.6 var(--font-mono); text-transform: lowercase; white-space: nowrap;
+}
+.config-source.workspace { color: var(--accent); border-color: var(--accent); }
+.config-source.global { color: var(--status-in-progress); border-color: var(--status-in-progress); }
+.config-source.default, .config-source.built-in { color: var(--fg-dim); border-color: var(--border); }
+.config-source.unset { color: var(--fg-mute); border: 1px dashed var(--border); }
+.config-source.registry { color: var(--status-review); border-color: var(--status-review); }
+.config-source.environment { color: var(--state-success); border-color: var(--state-success); }
+
+.config-pencil {
+  background: none; border: none; color: var(--fg-mute); cursor: pointer; font-size: 12px; padding: 0;
+}
+.config-pencil:hover { color: var(--accent); }
+
+.config-row.editing { background: var(--bg-elev); }
+.config-editor { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; }
+.config-editor-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.config-editor-foot { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.config-editor-actions { display: inline-flex; gap: 6px; }
+.config-input {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px;
+  padding: 4px 8px; font-size: 12px; min-width: 160px;
+}
+.config-toggle { display: inline-flex; gap: 8px; align-items: center; color: var(--fg-dim); font-size: 12px; }
+.config-chiplist { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.config-entry {
+  display: inline-flex; gap: 6px; align-items: center; padding: 2px 6px;
+  border: 1px solid var(--border); border-radius: 2px; color: var(--fg); font-size: 11px;
+}
+.config-entry-remove { background: none; border: none; color: var(--fg-mute); cursor: pointer; padding: 0; }
+.config-entry-remove:hover { color: var(--state-failed); }
+.config-field { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.config-field-label { color: var(--fg-dim); font-size: 11px; min-width: 84px; }
+.config-row-error { color: var(--state-failed); font: 11px/1.5 var(--font-mono); padding: 0 14px 8px; overflow-wrap: anywhere; }
+
+.config-crew-cells {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(90px, 0.8fr) minmax(90px, 1fr) 70px minmax(80px, 0.9fr) 92px minmax(140px, 1.4fr) 28px;
+  gap: 10px; align-items: baseline; padding: 8px 14px;
+}
+.config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
+.config-provider { display: inline-flex; gap: 6px; align-items: center; color: var(--fg); font-size: 12px; }
+.config-provider-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+.config-paths {
+  display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  gap: 4px 16px; padding: 10px 14px; background: var(--bg);
+}
+.config-path-label { color: var(--fg-dim); font-size: 11px; }
+.config-path-value { color: var(--fg); font-size: 11px; overflow-wrap: anywhere; }
+
+@media (max-width: 900px) {
+  .config-row-main, .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .config-paths { grid-template-columns: minmax(0, 1fr); }
+}

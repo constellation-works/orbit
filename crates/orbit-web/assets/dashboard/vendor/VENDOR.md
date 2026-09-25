@@ -1,13 +1,14 @@
 # Vendored dashboard JavaScript
 
 The dashboard self-hosts two third-party libraries as checked-in files
-(`purify.min.js`, `marked.umd.js`). They are compiled into `orbit-web` and
-served from `/static/` under the dashboard CSP (`script-src 'self'`).
+(`purify.min.js`, `marked.umd.js`) in this directory. They are compiled into
+`orbit-web` and served from `/static/vendor/` under the dashboard CSP
+(`script-src 'self'`).
 
 | Record | Role |
 | --- | --- |
 | [`vendor-manifest.json`](vendor-manifest.json) | Library name, exact version, upstream URL, npm tarball, SHA-256 of the checked-in bytes, refresh command |
-| [`package.json`](package.json) / [`package-lock.json`](package-lock.json) | npm identity so GitHub's dependency graph, Dependabot, and security alerts can see the pins |
+| [`package.json`](../package.json) / [`package-lock.json`](../package-lock.json) (dashboard root) | npm identity so GitHub's dependency graph, Dependabot, and security alerts can see the pins |
 
 Do not edit the minified blobs by hand.
 
@@ -26,7 +27,8 @@ version bump that does not refresh the copies fails CI.
 
 ## Advisories and new releases
 
-`.github/dependabot.yml` includes an `npm` ecosystem on this directory,
+`.github/dependabot.yml` includes an `npm` ecosystem on the dashboard
+directory (where `package.json` lives),
 targeting `agent-main`, on a weekly schedule. That is the release-watch:
 Dependabot opens version PRs when npm publishes a new `dompurify` or
 `marked`.

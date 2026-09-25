@@ -1,0 +1,203 @@
+/* Health tab: reliability and incidents. */
+
+/* ORB-10588 — pipeline reliability.
+   The colour rules here encode the display contract: a real reading is
+   plain, a low-`n` reading is dimmed and struck through with a dashed
+   border, and "no data" is neutral grey. A withheld rate must never be
+   able to pass for a confident one at a glance. */
+.rel-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.rel-tile {
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.rel-tile-label {
+  font-family: var(--font-sans); font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-dim);
+}
+.rel-tile-value {
+  font-family: var(--font-mono); font-size: 18px; color: var(--fg);
+}
+.rel-tile-hint {
+  font-family: var(--font-mono); font-size: 10px; color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+.rel-rate {
+  font-family: var(--font-mono); font-size: 18px; color: var(--fg);
+}
+.rel-rate-low {
+  font-size: 12px; color: var(--fg-dim);
+  border: 1px dashed var(--border); border-radius: 3px;
+  padding: 1px 6px; align-self: flex-start;
+}
+.rel-rate-empty { font-size: 14px; color: var(--fg-dim); }
+td .rel-rate { font-size: 12px; }
+.rel-note {
+  margin: 0; padding: 10px 16px;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  color: var(--fg-dim); border-bottom: 1px solid var(--border);
+}
+.rel-note-warn { color: var(--priority-medium); }
+.rel-chart-wrap { padding: 14px 16px; background: var(--bg); }
+.rel-chart-title {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: capitalize;
+  letter-spacing: 0;
+  color: var(--fg);
+  margin-bottom: 10px;
+}
+.rel-chart {
+  display: flex; align-items: flex-end; gap: 2px;
+  height: 110px; padding: 6px 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border); border-radius: 4px;
+  overflow-x: auto;
+}
+.rel-bar-slot {
+  flex: 1 1 auto; min-width: 4px; height: 100%;
+  display: flex; align-items: flex-end;
+}
+.rel-bar {
+  width: 100%; background: var(--state-failed); border-radius: 1px 1px 0 0;
+}
+
+/* A bucket whose settled count is below the confidence threshold is drawn
+   muted and hatched, so a 1-of-2 bucket cannot read as a real spike. */
+.rel-bar-low {
+  background: repeating-linear-gradient(
+    45deg, var(--fg-dim), var(--fg-dim) 2px, transparent 2px, transparent 4px
+  );
+}
+.rel-bar-empty { background: var(--border); }
+.rel-chart-axis {
+  margin-top: 6px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--fg-dim);
+  display: flex; justify-content: space-between;
+}
+.rel-table { width: 100%; }
+.rel-card .card-body { padding: 0; }
+.rel-role {
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
+}
+.rel-role-recovery { color: var(--state-failed); border-color: var(--state-failed); }
+.rel-role-step { color: var(--state-success); border-color: var(--state-success); }
+.rel-role-ambiguous { color: var(--priority-medium); border-color: var(--priority-medium); }
+.rel-role-unknown { color: var(--fg-dim); }
+
+/* ORB-10871: grouped failure incidents (Diagnostics → Incidents).
+   Every count renders next to what it is out of, and the class chips
+   keep denials, expected negative paths, and unexpected failures
+   visually separate. */
+.incident-summary {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--bg-alt, var(--bg));
+}
+.incident-summary-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+.incident-summary-headline { color: var(--fg); font: 13px var(--font-mono); }
+.incident-summary-denominator { color: var(--fg-dim); font: 11px/1.5 var(--font-sans); }
+.incident-summary-window {
+  padding: 2px 7px; border: 1px solid var(--border); border-radius: 999px;
+  color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap;
+}
+.incident-class-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.incident-class-chip {
+  padding: 2px 8px; border: 1px solid var(--border); border-left-width: 2px; border-radius: 3px;
+  color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap;
+}
+.incident-class-chip.unexpected { border-left-color: var(--state-failed); }
+.incident-class-chip.expected { border-left-color: var(--fg-dim); }
+.incident-class-chip.denied { border-left-color: var(--state-warn, var(--accent)); }
+.incident-class-chip.diagnostic { border-left-color: var(--accent); }
+.incident-truncation-note { margin: 0; color: var(--state-warn, var(--fg-dim)); font: 11px/1.5 var(--font-sans); }
+.incident-lifecycle-note {
+  color: var(--fg-dim); font: 11px/1.5 var(--font-sans); overflow-wrap: anywhere;
+}
+
+.incident-list { display: flex; flex-direction: column; }
+.incident-row { border-bottom: 1px solid var(--border); padding: 10px 14px; }
+.incident-row.unexpected { border-left: 2px solid var(--state-failed); }
+.incident-row.expected { border-left: 2px solid var(--fg-dim); }
+.incident-row.denied { border-left: 2px solid var(--state-warn, var(--accent)); }
+.incident-row.diagnostic { border-left: 2px solid var(--accent); }
+.incident-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; width: 100%;
+  padding: 0; border: 0; background: none; color: var(--fg); text-align: left; cursor: pointer;
+}
+.incident-caret { color: var(--fg-dim); font: 10px var(--font-mono); }
+.incident-class { font: 10px var(--font-mono); text-transform: lowercase; }
+.incident-class.unexpected { color: var(--state-failed); }
+.incident-class.expected { color: var(--fg-dim); }
+.incident-class.denied { color: var(--state-warn, var(--accent)); }
+.incident-class.diagnostic { color: var(--accent); }
+.incident-surface { font: 12px var(--font-mono); overflow-wrap: anywhere; }
+.incident-actor { color: var(--fg-dim); font: 11px var(--font-sans); }
+.incident-count { margin-left: auto; color: var(--fg); font: 11px var(--font-mono); white-space: nowrap; }
+.incident-when { color: var(--fg-dim); font: 10px var(--font-mono); white-space: nowrap; }
+.incident-message {
+  margin-top: 4px; color: var(--fg-dim); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere;
+}
+.incident-detail {
+  display: flex; flex-direction: column; gap: 12px; margin-top: 10px;
+  padding: 10px; border: 1px solid var(--border); border-radius: 3px; overflow-x: auto;
+}
+.incident-facts {
+  display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); gap: 4px 12px; margin: 0;
+}
+.incident-facts dt { color: var(--fg-dim); font: 10px var(--font-sans); }
+.incident-facts dd { margin: 0; color: var(--fg); font: 11px var(--font-mono); overflow-wrap: anywhere; }
+.incident-section-title { color: var(--fg-dim); font: 10px var(--font-sans); }
+.incident-propagation { display: flex; flex-direction: column; gap: 4px; }
+.incident-propagation-link {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  padding-left: 10px; border-left: 1px dashed var(--border);
+}
+.incident-propagation-link .chain-mark { color: var(--fg-dim); }
+.incident-propagation-link .chain-surface { font: 11px var(--font-mono); }
+.incident-propagation-link .chain-count { color: var(--fg-dim); font: 10px var(--font-mono); }
+.incident-propagation-link .chain-message {
+  flex: 1 1 12rem; color: var(--fg-dim); font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere;
+}
+.incident-evidence { width: 100%; border-collapse: collapse; }
+.incident-evidence th, .incident-evidence td {
+  padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top;
+}
+.incident-evidence th { color: var(--fg-dim); font: 10px var(--font-sans); }
+.incident-evidence td { font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.incident-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Narrow viewports: the incident summary and its expansion have to stay
+   scannable without clipping between 480 and 720px. */
+@media (max-width: 720px) {
+  .incident-summary { padding: 10px; }
+  .incident-summary-denominator, .incident-class-chip, .incident-lifecycle-note, .lifecycle-failure-counts {
+    font-size: 11px; overflow-wrap: anywhere;
+  }
+  .incident-class-chip { white-space: normal; }
+  .tool-health-grid { grid-template-columns: minmax(0, 1fr); }
+  .health-card .card-header { flex-wrap: wrap; align-items: flex-start; }
+  .health-card .tool-name { white-space: normal; overflow-wrap: anywhere; }
+  .incident-count { margin-left: 0; }
+  .incident-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .incident-facts dt { margin-top: 6px; }
+  .incident-evidence { display: block; overflow-x: auto; white-space: nowrap; }
+  .incident-evidence td.stderr { white-space: normal; min-width: 14rem; }
+}
+@media (max-width: 520px) {
+  .incident-row { padding: 10px; }
+  .incident-head { align-items: flex-start; }
+  .incident-surface { flex: 1 1 100%; }
+  .incident-actions > * { flex: 1 1 100%; }
+}

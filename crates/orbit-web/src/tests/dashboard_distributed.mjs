@@ -160,10 +160,10 @@ globalThis.fetch = async (path, options = {}) => {
   return respond({ ok: true, result: { handoff_id: "handoff1", claim_id: "claim-1", phase: "handed_off", task_status: "review" } });
 };
 
-const distributed = await import("./distributed.js");
+const distributed = await import("./js/distributed.js");
 const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation } = distributed;
-const { setWorkspace } = await import("./common.js");
-await import("./tasks.js");
+const { setWorkspace } = await import("./js/common.js");
+await import("./js/tasks.js");
 
 const mount = async (taskId = "ORB-2") => {
   invalidateDistributedConsole();

@@ -3,11 +3,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dashboardFile } from './dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
-const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 
 async function assertVisibleTaskRow(page, viewport, pageName) {
@@ -48,11 +48,11 @@ async function assertVisibleTaskRow(page, viewport, pageName) {
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const file = name === '/test.mjs' ? scenarios : path.join(assets, name === '/' ? 'index.html' : path.basename(name));
-  if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  let data = fs.readFileSync(file);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
+  if (!served) { res.writeHead(404); res.end(); return; }
+  let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
-  res.setHeader('content-type', file.endsWith('.html') ? 'text/html' : file.endsWith('.css') ? 'text/css' : 'text/javascript');
+  res.setHeader('content-type', served.type);
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -106,7 +106,9 @@ try {
   await page.waitForFunction(() => document.getElementById('task-filter-summary').textContent.includes('done'));
   await page.locator('#task-filter .chip[data-role="all"]').click();
   const firstTask = page.locator('#tasks-body .row[data-key^="task-"]:not(.header)').first();
-  await firstTask.click();
+  // Open it the way a person does, by its title: on a narrow row the centre
+  // of the box is the crew select, which takes the click for itself.
+  await firstTask.locator('.title').click();
   const detail = page.locator('#tasks-body .row-detail').first();
   await detail.waitFor({ state: 'visible' });
   const pageOverflowsHorizontally = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);

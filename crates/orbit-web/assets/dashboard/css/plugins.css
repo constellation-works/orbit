@@ -1,0 +1,65 @@
+/* Plugins tab. */
+
+/* The Plugins tab. One card per installed plugin, holding the panels its
+   manifest declares. Every panel is drawn by the generic renderer, so the
+   styles here describe the four render modes, not any plugin. */
+.plugins-layout { grid-template-columns: minmax(0, 1fr); }
+.tab-pane[data-tab="plugins"] .panel { min-width: 0; }
+#plugins-panel > .body { padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 12px; }
+.plugins-explainer {
+  margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--hair);
+  color: var(--fg-dim); font-size: 12px; background: var(--bg);
+}
+.plugin-card {
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg-elev);
+  padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0;
+}
+
+/* A plugin that is not serving its tools reads as muted, with its
+   diagnostic — the reason — in the warning colour. */
+.plugin-card.plugin-disabled, .plugin-card.plugin-missing { opacity: 0.82; }
+.plugin-card.plugin-inactive { border-color: var(--status-open); }
+.plugin-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.plugin-name { color: var(--fg); font-size: 13px; font-weight: 600; }
+.plugin-version { color: var(--fg-mute); font: 11px/1.4 var(--font-mono); }
+.plugin-status { text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; color: var(--fg-dim); }
+.plugin-status.status-active { color: var(--state-succeeded, var(--accent)); }
+.plugin-status.status-inactive, .plugin-status.status-missing { color: var(--status-open); }
+.plugin-chip {
+  display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 2px;
+  border: 1px solid var(--border); color: var(--fg-dim); font: 10px/1.6 var(--font-mono);
+}
+.plugin-chip-warn { color: var(--status-open); border-color: var(--status-open); }
+.plugin-chip-idle { opacity: 0.6; }
+.plugin-description { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.plugin-diagnostic { margin: 0; color: var(--status-open); font-size: 12px; overflow-wrap: anywhere; }
+.plugin-tools, .plugin-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.plugin-link-tile {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg);
+  color: var(--accent); font-size: 12px; text-decoration: none;
+}
+.plugin-link-tile:hover { border-color: var(--accent); color: var(--accent-hover); }
+.plugin-panel { border: 1px solid var(--hair); border-radius: 2px; background: var(--bg); min-width: 0; }
+.plugin-panel-head {
+  display: flex; gap: 8px; align-items: baseline; justify-content: space-between;
+  padding: 6px 10px; border-bottom: 1px solid var(--hair);
+}
+.plugin-panel-title { color: var(--fg); font-size: 12px; font-weight: 600; }
+.plugin-panel-source { color: var(--fg-mute); font: 10px/1.4 var(--font-mono); }
+.plugin-panel-body { padding: 8px 10px; min-width: 0; overflow-x: auto; }
+.plugin-kv { display: grid; grid-template-columns: minmax(100px, max-content) minmax(0, 1fr); gap: 4px 14px; }
+.plugin-kv-row { display: contents; }
+.plugin-kv-key { color: var(--fg-dim); font-size: 11px; }
+.plugin-kv-value { color: var(--fg); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.plugin-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.plugin-table th, .plugin-table td {
+  text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--hair);
+  color: var(--fg); overflow-wrap: anywhere;
+}
+.plugin-table th { color: var(--fg-dim); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+.plugin-json { margin: 0; max-height: 18rem; overflow: auto; color: var(--fg); font: 11px/1.5 var(--font-mono); }
+
+@media (max-width: 900px) {
+  .plugin-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}

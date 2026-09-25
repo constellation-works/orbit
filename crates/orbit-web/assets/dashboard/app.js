@@ -1,19 +1,19 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
-import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
-import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
-import { renderScoreboard } from './scoreboard.js';
-import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './reliability.js';
-import { initLogTail, fitLogPanelToViewport, setDockMode } from './log-tail.js';
-import { renderDiagnosticsSideCard, renderDiagnostics } from './diagnostics.js';
-import { renderMarkdown } from './markdown.js';
-import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
-import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './operations.js';
-import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './config.js';
-import { fetchAndRenderPlugins } from './plugins.js';
+import { requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
+import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
+import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { renderScoreboard } from './js/scoreboard.js';
+import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
+import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
+import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
+import { renderMarkdown } from './js/markdown.js';
+import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
+import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
+import { fetchAndRenderPlugins } from './js/plugins.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -38,7 +38,7 @@ import {
   clearExpandedStepIndices,
   toggleExpandedStepIndex,
   initRunDetail,
-} from './run-detail.js';
+} from './js/run-detail.js';
 
 const STATUS_ORDER = [
   "in-progress",

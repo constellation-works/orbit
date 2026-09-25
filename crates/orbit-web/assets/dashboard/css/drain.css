@@ -1,0 +1,102 @@
+/* The auto-drain card in the Tasks dock. Loaded after automation.css
+   because it refines .operation-button. */
+
+/* ORB-12898: the auto-drain card, first in the Tasks dock's Drain pane.
+   It keeps its natural height and Locked files below takes the rest;
+   a dock too short for both scrolls as one pane. Every row is sized to
+   fit the dock's 336px minimum width without horizontal scroll. */
+.dock-pane[data-pane="drain"] { overflow-y: auto; }
+.dock-pane > .panel.drain-card { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
+.dock-pane[data-pane="drain"] > #locks-panel { min-height: 160px; }
+.drain-card > header { flex-wrap: nowrap; gap: 10px; padding: 14px 16px 0; border-bottom: 0; }
+.drain-title { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.drain-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-mute); }
+.drain-dot.live { background: var(--state-running); box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12); }
+.drain-dot.stopped { background: var(--priority-medium); }
+.drain-live {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg-dim); font: 400 12.5px var(--font-sans); letter-spacing: 0; text-transform: none;
+}
+.drain-idle { color: var(--fg-mute); }
+#auto-drain-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
+
+/* The panel's "Updated." / "Refreshing…" note stays out of the card;
+   only the first load and a failed refresh show. */
+#auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
+#auto-drain-body .operations-readonly-note { margin: 0; }
+.drain-durations {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; padding: 3px;
+  border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
+}
+.drain-duration {
+  min-width: 0; min-height: 28px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-dim); font: 12.5px var(--font-sans); cursor: pointer;
+}
+.drain-duration:hover { color: var(--fg); }
+.drain-duration.selected { background: #1f1f26; color: var(--fg); font-weight: 600; }
+.drain-duration:focus-visible, .drain-step:focus-visible, .drain-stepper-value:focus-visible,
+.drain-completion-option:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.drain-form { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--hair); }
+.drain-settings { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: end; }
+.drain-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.drain-field-label { color: var(--fg-dim); font: 500 12px var(--font-sans); }
+.drain-stepper {
+  display: inline-flex; align-items: stretch; height: 30px; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
+}
+.drain-step { width: 30px; padding: 0; border: 0; background: transparent; color: var(--fg-dim); font: 15px var(--font-sans); cursor: pointer; }
+.drain-step:hover { color: var(--fg); background: var(--bg-elev); }
+.drain-stepper-value {
+  width: 34px; min-width: 0; padding: 0; border: 0;
+  background: transparent; color: var(--fg); font-size: 13px; text-align: center; appearance: textfield; -moz-appearance: textfield;
+}
+.drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.drain-stepper-value::placeholder { color: var(--fg-mute); }
+.drain-completion {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 3px;
+  border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
+}
+.drain-completion-option {
+  position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; height: 24px;
+  border-radius: 5px; color: var(--fg-dim); font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.drain-completion-option input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.drain-completion-option span { overflow: hidden; text-overflow: ellipsis; }
+.drain-completion-option:hover { color: var(--fg); }
+.drain-completion-option.selected { background: #1f1f26; color: var(--fg); font-weight: 600; }
+.drain-completion-option.done.selected { background: #2a1f0e; color: #f7cf94; }
+.drain-completion-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
+.drain-actions { display: flex; gap: 8px; min-width: 0; }
+.drain-capacity { display: flex; flex-direction: column; gap: 8px; }
+.drain-capacity-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; color: #c4c4cc; }
+.drain-capacity-free { font-size: 12.5px; color: var(--fg-dim); white-space: nowrap; }
+.drain-capacity-free.full { color: #f2c38b; }
+.drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; }
+.drain-capacity-used { background: var(--state-running); border-radius: 3px; }
+.drain-capacity-over { border-radius: 3px; background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); }
+.drain-slots { margin: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.5; }
+.drain-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.drain-stat {
+  display: flex; flex-direction: column-reverse; gap: 2px; min-width: 0; padding: 9px 10px;
+  border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
+}
+.drain-stat-label {
+  display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap;
+  color: var(--fg-dim); font: 12px var(--font-sans);
+}
+.drain-stat-label span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.drain-stat-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.drain-stat.eligible .drain-stat-dot { background: var(--state-success); }
+.drain-stat.blocked .drain-stat-dot { background: var(--priority-medium); }
+.drain-stat-value { color: var(--fg); font: 600 20px var(--font-sans); line-height: 1.2; }
+.drain-stat.blocked.nonzero .drain-stat-value { color: var(--priority-medium); }
+.drain-blocked { display: flex; flex-direction: column; gap: 7px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.drain-blocked-row { min-width: 0; padding-left: 8px; border-left: 2px solid var(--priority-medium); }
+.drain-blocked-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; font-size: 11px; }
+.drain-blocked-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drain-blocked-state { flex: 0 0 auto; color: var(--fg-dim); font-size: 10px; }
+.drain-blocked-state.running { color: var(--state-running); }
+.drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: 10px; }
+.drain-blocked-more { color: var(--fg-dim); font-size: 10px; }
+.drain-muted { color: var(--fg-dim); }
+.drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }

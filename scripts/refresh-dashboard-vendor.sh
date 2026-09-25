@@ -6,9 +6,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-vendor_dir="$repo_root/crates/orbit-web/assets/dashboard"
+package_dir="$repo_root/crates/orbit-web/assets/dashboard"
+vendor_dir="$package_dir/vendor"
 manifest="$vendor_dir/vendor-manifest.json"
-package_json="$vendor_dir/package.json"
+package_json="$package_dir/package.json"
 
 if [[ ! -f "$manifest" || ! -f "$package_json" ]]; then
   echo "refresh-dashboard-vendor: missing $manifest or $package_json" >&2
@@ -38,9 +39,10 @@ from pathlib import Path
 
 repo_root = Path(sys.argv[1])
 work = Path(sys.argv[2])
-vendor = repo_root / "crates" / "orbit-web" / "assets" / "dashboard"
+package_dir = repo_root / "crates" / "orbit-web" / "assets" / "dashboard"
+vendor = package_dir / "vendor"
 manifest_path = vendor / "vendor-manifest.json"
-package_path = vendor / "package.json"
+package_path = package_dir / "package.json"
 
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 package = json.loads(package_path.read_text(encoding="utf-8"))
@@ -98,7 +100,7 @@ manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
 PY
 
 (
-  cd "$vendor_dir"
+  cd "$package_dir"
   npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 )
 
