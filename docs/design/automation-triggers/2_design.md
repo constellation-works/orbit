@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-09-05
-last_validated: 2026-09-05
+last_updated: 2026-09-25
+last_validated: 2026-09-25
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -43,9 +43,11 @@ Historical ADRs are not inputs to this design.
   and provenance before accepting an immutable receipt. Job-only consumers use
   persisted step results. QA and review remain independent.
 - State-member pilot freshness and bounded causal triage use the same Store
-  checkpoint path [ORB-11331]. Broader multi-member coordination, review exclusion certificates,
+  checkpoint path [ORB-11331]. Broader multi-member coordination,
   policy-driven waiver/migration workflows and usage accounting below remain
-  separately owned proposals. No such certificate currently excludes a delivery;
+  separately owned proposals. The implemented before-PR review gate excludes
+  only deliveries whose certificate, task meaning, repository, reviewed trees,
+  and landing evidence pass validation [ORB-11333];
   missing usage is unknown.
 
 ## 2. Shared contract and ownership
