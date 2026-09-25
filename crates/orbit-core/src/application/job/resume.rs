@@ -25,7 +25,6 @@
 //! ownership check in `load_handoff_context` keeps its full strength.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
@@ -52,7 +51,6 @@ const OWNERSHIP_ID_FIELDS: [&str; 2] = ["job_run_id", "batch_id"];
 /// Everything `resume` resolves from the source run before a new run exists.
 pub(crate) struct ResumePlan {
     pub(crate) source: JobRun,
-    pub(crate) job_path: PathBuf,
     pub(crate) input: Value,
     pub(crate) attempt: u32,
     /// Source checkpoints to seed the resumed run with, when the source has at
@@ -68,10 +66,8 @@ pub(crate) struct ResumePlan {
 impl OrbitRuntime {
     /// Resolve the source run, its checkpoints, and its retry lineage.
     ///
-    /// Shared by both resume surfaces: the blocking CLI path
-    /// (`resume_job_run`) and the asynchronous submission path
-    /// (`submit_resume_run`), so they cannot drift on which runs are resumable
-    /// or which checkpoints are reused.
+    /// Shared by production detached submission and the in-process test
+    /// fixtures, so admission and checkpoint rules stay aligned.
     pub(crate) fn plan_job_run_resume(
         &self,
         source_run_id: &str,
@@ -159,9 +155,8 @@ impl OrbitRuntime {
         // which stays alive by design). Treating those as concurrent execution
         // would refuse the most common resume there is.
         //
-        // Both resume surfaces funnel through this planner (`orbit job resume`
-        // and the CLI/dashboard/`workflow_tools` paths reaching
-        // `submit_resume_run`), so re-verifying here covers all of them.
+        // CLI, dashboard, and workflow tools all reach this planner through
+        // `submit_resume_run`, so re-verifying here covers all of them.
         // Fail-safe direction is the opposite of the sweep's: refuse only on a
         // *confirmed*-alive owner, so an unprobeable one (foreign PID
         // namespace, non-Unix) does not make a legitimately dead run
@@ -191,14 +186,13 @@ impl OrbitRuntime {
                 .values()
                 .any(|step_state| *step_state == JobRunState::Success)
         });
-        let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
+        self.load_v2_job_asset_by_name(&source.job_id)?;
         let lineage = self.resume_lineage_run_ids(&source)?;
         let checkpoint_batch_id = resume_state.as_ref().and_then(checkpoint_ownership_id);
         let attempt = source.attempt.saturating_add(1);
 
         Ok(ResumePlan {
             source,
-            job_path,
             input,
             attempt,
             resume_state,
@@ -379,9 +373,7 @@ pub(super) fn task_ids_from_input(input: &Value) -> Option<BTreeSet<String>> {
 impl OrbitRuntime {
     /// [ORB-10470] Submit a resume of a terminal run as a detached run.
     ///
-    /// The non-blocking counterpart to
-    /// [`OrbitRuntime::resume_job_run`](crate::OrbitRuntime::resume_job_run):
-    /// it persists the resumed run (seeded with the source's checkpoints),
+    /// It persists the resumed run (seeded with the source's checkpoints),
     /// reconciles the retry lineage's task ownership, spawns the detached
     /// pipeline worker, and returns the new run id as soon as the run is
     /// durable. Nothing about the resumed execution happens on the caller's
