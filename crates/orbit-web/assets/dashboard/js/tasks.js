@@ -2554,13 +2554,36 @@ function buildQuickAction(task, context) {
     runQuickAction(task, spec.kind, context);
   });
   cell.appendChild(btn);
-  if (state && state.kind === "error") {
-    const err = el("span", { class: "task-quick-error", text: state.text, title: state.text });
-    err.setAttribute("role", "status");
-    err.setAttribute("aria-live", "assertive");
-    cell.appendChild(err);
-  }
   return cell;
+}
+
+function buildQuickActionError(task) {
+  const state = quickActionState.get(task.id);
+  if (!state || state.kind !== "error") return null;
+
+  const text = state.text;
+  const runMatch = text.match(/\b(jrun-[a-zA-Z0-9_\-\.]+)\b/);
+  let wrap;
+  if (runMatch) {
+    const runId = runMatch[1];
+    const idx = text.indexOf(runId);
+    const before = text.slice(0, idx);
+    const after = text.slice(idx + runId.length);
+    const link = el("a", { class: "task-quick-error-link", text: runId, title: `Open run ${runId}` });
+    link.href = `#runs?run_id=${encodeURIComponent(runId)}`;
+    link.addEventListener("click", (e) => e.stopPropagation());
+    wrap = el("div", { class: "task-quick-error", title: "" }, [
+      before,
+      link,
+      after,
+    ]);
+  } else {
+    wrap = el("div", { class: "task-quick-error", text, title: "" });
+  }
+  wrap.setAttribute("role", "status");
+  wrap.setAttribute("aria-live", "assertive");
+  stopRowInteraction(wrap);
+  return wrap;
 }
 
 async function runQuickAction(task, kind, context) {
@@ -2708,12 +2731,14 @@ export function renderTasks(tasks, context) {
               t.title,
             ])
           : el("span", { class: "title", text: t.title });
-        row = el("div", { class: "row", title: t.title }, [
+        const quickError = buildQuickActionError(t);
+        row = el("div", { class: `row${quickError ? " has-quick-error" : ""}`, title: t.title }, [
           idSpan,
           titleCell,
           buildStatusUpdateControl(t, context),
           buildCrewUpdateControl(t, context),
           buildQuickAction(t, context),
+          ...(quickError ? [quickError] : []),
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;

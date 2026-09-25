@@ -39,6 +39,10 @@
 @media (max-width: 1000px) {
   .row-detail.split-layout { grid-template-columns: 1fr; }
 }
+.row-detail > .action-error,
+.row-detail.split-layout > .action-error {
+  grid-column: 1 / -1;
+}
 .detail-main {
   display: flex;
   flex-direction: column;
