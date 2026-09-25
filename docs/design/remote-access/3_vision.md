@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: "Evolution gates for remote Orbit Web access without weakening the loopback and registry boundaries."
 tags: [remote-access, orbit-web, ssh]
-paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs"]
+paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [remote-access, user-interface, host-registry, federated-mcp]
 related_artifacts: [ORB-11008, ORB-11009]
 ---

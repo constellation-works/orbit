@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "Current Orbit Web state, registered runtime composition, and SSH local-forward lifecycle."
 tags: [remote-access, orbit-web, ssh]
-paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/web.rs", "crates/orbit-cli/src/command/operation.rs"]
+paths: ["crates/orbit-web/**", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/web.rs", "crates/orbit-cli/src/command/operation.rs"]
 related_features: [remote-access, user-interface, host-registry]
 related_artifacts: []
 ---

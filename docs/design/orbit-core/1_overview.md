@@ -79,7 +79,7 @@ owners without externalizing it as new crates.
 | Context assembly | `crates/orbit-core/src/context.rs` | — |
 | Resolved-config consumption | `crates/orbit-core/src/runtime/builder.rs` | [ORB-10885], [ORB-10886] |
 | Config layering (owning crate) | `crates/orbit-config/src/` | [ORB-10885] |
-| Registered runtime + routine composition | `crates/orbit-cmd/src/registry_runtime.rs`, `crates/orbit-cmd/src/registry_routines.rs` | — |
+| Registered runtime + routine composition | `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-cmd/src/registry/routines.rs` | — |
 | Host identity + local workspace catalog | `crates/orbit-registry/src/` | — |
 | Tool dispatch and command-audit boundary | `crates/orbit-core/src/adapter/command/dispatch.rs` | [ORB-10886] |
 | Root re-export policy | `crates/orbit-core/src/lib.rs` | [ORB-10016] |

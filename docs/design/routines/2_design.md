@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Contract for routine definitions, clock-tick dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237, ORB-12745]
 ---
@@ -344,7 +344,7 @@ creation and legacy migration; `orbit routine init --install-clock` only install
 clock unit (§5). A malformed `host.toml` is an error, not a fallback. Host identity names
 run ownership and display; it takes no part in deciding what is evaluated.
 
-The implementation boundary is vertical: `crates/orbit-cmd/src/registry_routines.rs` reads
+The implementation boundary is vertical: `crates/orbit-cmd/src/registry/routines.rs` reads
 `host.toml` and `workspaces.json` through `orbit-registry`, validates local checkout paths,
 and constructs registered runtimes through `registry_runtime`. It projects those inputs
 through `RoutineWorkspaceProvider` into

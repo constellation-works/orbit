@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, none-only review, and non-pruning context footprints."
 tags: [distributed-drain, multi-host, pull, federated-mcp]
-paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
+paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
 related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616]
 ---
@@ -33,7 +33,7 @@ Roles are the host-registry catalog roles, unchanged. The owner checkout has no 
 `owner_machine_id` (its logical owner is the local `machine_id`); a follower is a replica checkout
 whose `owner_machine_id` names the owner machine. `RegisteredRuntimeFactory` carries the replica
 owner into Core's coordination-write guard
-(`crates/orbit-cmd/src/registry_runtime.rs::replica_owner_for_checkout`), and
+(`crates/orbit-cmd/src/registry/runtime/selection.rs::replica_owner_for_checkout`), and
 `automation/ownership.rs` refuses delivery automation on a replica. No role, fleet table or host
 list is added.
 

@@ -5,10 +5,5 @@
 mod activity_v2;
 mod agent_rules;
 mod diagnostics;
-mod doctor;
 mod migrate;
-mod registry_routines;
-mod registry_runtime;
-mod task_owner;
-mod task_store;
 mod workspace_catalog;

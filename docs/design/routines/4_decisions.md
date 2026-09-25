@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Decision log for the routines scheduler — OS clock, one host tick for routines and auto-tasks, no host pins, registration as the automation opt-in, default seeding, workspace-local shipment.
 tags: [routines, scheduler]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
+paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12236, ORB-12237, ORB-12718]
 ---
