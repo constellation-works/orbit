@@ -20,26 +20,16 @@ pub const GENERATION_CONTRACT: &str = "executable-generation-v1";
 
 /// A shared generation pin. Retain until all operations and replies finish.
 pub struct GenerationGuard {
-    _file: File,
+    _record: Record,
     /// True when this process joined a recorded generation other than its own
     /// digest, without rewriting the record (read-only same-schema join).
     joined_foreign: bool,
 }
 
-impl Drop for GenerationGuard {
-    fn drop(&mut self) {
-        // flock belongs to the open description. Explicit release prevents a
-        // concurrently forked, pre-exec child from extending this pin after
-        // the owning process has finished its operations. Independent pins
-        // use independent opens and remain held.
-        let _ = FileExt::unlock(&self._file);
-    }
-}
-
 /// Exclusive admission, before installing a candidate or mutating resources.
 pub struct GenerationUpdate {
-    admission: File,
     generation: Record,
+    admission: Record,
 }
 
 const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
@@ -225,6 +215,16 @@ struct Record {
     writable: bool,
 }
 
+impl Drop for Record {
+    fn drop(&mut self) {
+        // A child forked before exec can inherit this open description. Unlock
+        // explicitly so it cannot extend admission or an abandoned update's
+        // generation lock after the owner drops its record. Independent
+        // participants use independent descriptions and retain their locks.
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     let root = validated_generation_root(root)?;
     let path = validated_generation_record_path(&root, name)?;
@@ -259,12 +259,12 @@ fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     }
 }
 
-fn admission(root: &Path) -> Result<File, OrbitError> {
+fn admission(root: &Path) -> Result<Record, OrbitError> {
     // Admission is held by lock alone, so a read-only descriptor serves.
-    let file = open(root, ADMISSION_LOCK)?.file;
+    let file = open(root, ADMISSION_LOCK)?;
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        match FileExt::try_lock_exclusive(&file) {
+        match FileExt::try_lock_exclusive(&file.file) {
             Ok(()) => return Ok(file),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(10));
@@ -329,9 +329,9 @@ fn read_generation(file: &mut File) -> Result<String, OrbitError> {
 }
 
 impl GenerationGuard {
-    fn holding(file: File, joined_foreign: bool) -> Self {
+    fn holding(record: Record, joined_foreign: bool) -> Self {
         Self {
-            _file: file,
+            _record: record,
             joined_foreign,
         }
     }
@@ -367,7 +367,7 @@ impl GenerationGuard {
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         if read_generation(&mut generation.file)? == digest {
-            return Ok(Self::holding(generation.file, false));
+            return Ok(Self::holding(generation, false));
         }
         FileExt::unlock(&generation.file).map_err(refusal)?;
         FileExt::try_lock_exclusive(&generation.file).map_err(|_| refusal(WRITES_WHILE_FOREIGN))?;
@@ -397,7 +397,7 @@ impl GenerationGuard {
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         if read_generation(&mut generation.file)? == digest {
-            return Ok(Self::holding(generation.file, false));
+            return Ok(Self::holding(generation, false));
         }
         let store_schema = match store_schema() {
             Ok(store_schema) => store_schema,
@@ -418,7 +418,7 @@ impl GenerationGuard {
                  (store schema {store_schema} differs from compiled schema {compiled_schema})"
             )));
         }
-        Ok(Self::holding(generation.file, true))
+        Ok(Self::holding(generation, true))
     }
 }
 
@@ -478,7 +478,7 @@ impl GenerationUpdate {
         self.generation.file.sync_all().map_err(refusal)?;
         FileExt::lock_shared(&self.generation.file).map_err(refusal)?;
         drop(self.admission);
-        Ok(GenerationGuard::holding(self.generation.file, false))
+        Ok(GenerationGuard::holding(self.generation, false))
     }
 }
 
