@@ -1,5 +1,5 @@
 ---
-title: Agents
+title: Agents and Crews
 description: "How Orbit invokes coding agents through provider CLIs, which executors ship today, and how to write a crew for one."
 sidebar:
   order: 6
@@ -619,9 +619,10 @@ effort = "high"
 
 `effort` is an optional reasoning-budget request, forwarded through each
 provider's own argument and validated against the provider **and** model at
-config load. An unsupported combination is rejected outright — Orbit never
-downgrades a value to the nearest supported one, and never accepts a key it
-would then ignore. The per-provider sets are in
+config load. An invalid or unsupported combination is ignored for that crew
+with a warning, and `orbit doctor` lists it — Orbit never downgrades a value to
+the nearest supported one. `orbit config set` refuses to persist a value that
+load would drop. The per-provider sets are in
 [Configuration](../../reference/config/#reasoning-effort).
 
 `[workflow] system_crew` is a separate assignment used for system activities
@@ -643,9 +644,10 @@ backend into the shipped executor assets:
   available, so read rules and network egress stay delegated. Dispatch **fails
   closed** if `bwrap` is missing or its namespace-and-mount probe fails, unless
   the executor explicitly sets `allow_fallback: true`.
-- **Windows and other platforms** — no OS-level wrapper. Process supervision,
-  tool allowlists, and in-process guards for Orbit's own built-in tools still
-  apply.
+- **Other platforms** — Orbit ships release binaries for macOS and Linux only
+  (x64 and arm64). A source build on any other OS seeds its executors with no
+  OS-level wrapper; process supervision, tool allowlists, and in-process guards
+  for Orbit's own built-in tools still apply.
 
 The bundled `local-shell` executor declares no sandbox on any platform, by
 design. See [Install Orbit](../../getting-started/install/#prepare-the-sandbox)

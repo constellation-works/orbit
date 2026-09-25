@@ -18,7 +18,7 @@ authentication, any of which may still deny an included tool at execution time.
 
 An activity can select a named profile with `fsProfile`. If it omits the field, Orbit resolves an implicit unrestricted profile before global denies are applied.
 
-> **Platform support.** Spawned agent CLIs run under an OS boundary scoped by the resolved `fsProfile` — `sandbox-exec` on macOS, Bubblewrap on Linux, none on Windows; see [Platform Support](../agents/#platform-support).
+> **Platform support.** Spawned agent CLIs run under an OS boundary scoped by the resolved `fsProfile` — `sandbox-exec` on macOS, Bubblewrap on Linux; see [Platform Support](../agents/#platform-support).
 
 ## Shape
 

@@ -1,13 +1,7 @@
 ---
 import { Icon } from '@astrojs/starlight/components';
 import ThemeSelect from './ThemeSelect.astro';
-
-const links = [
-  { href: '/getting-started/', label: 'Getting started' },
-  { href: '/concepts/', label: 'Concepts' },
-  { href: '/how-to/', label: 'How-to guides' },
-  { href: '/reference/', label: 'Reference' },
-];
+import { navLinks as links } from './navLinks';
 
 const pathname = Astro.url.pathname;
 const menuLabel = Astro.locals.t('menuButton.accessibleLabel');

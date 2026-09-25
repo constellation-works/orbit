@@ -185,4 +185,4 @@ orbit run ship "$TASK_ID" "$SECOND_TASK_ID" --base main
 
 - [Delivery Workflows](../workflows/) — the whole `orbit run` surface.
 - [Run a Task Lifecycle](../../how-to/task-lifecycle/) — the same path in more detail, including attaching artifacts.
-- [Run a Continuous Delivery Window](../../how-to/continuous-delivery/) — drain a whole backlog instead of one task.
+- [Run a Delivery Window](../../how-to/continuous-delivery/) — drain a whole backlog instead of one task.

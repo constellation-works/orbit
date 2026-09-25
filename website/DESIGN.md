@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Owner:** Orbit contributors
-**Last updated:** 2026-09-17
+**Last updated:** 2026-09-25
 
 ---
 
@@ -28,9 +28,9 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
 2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
 3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Zero JS by default. The homepage's copy controls and its
-   narrow-viewport Menu (Escape and breakpoint close) are the scripted exceptions;
-   every other interaction is CSS. Hundreds of pages should feel identical in
+4. **Static and fast.** Zero JS by default. The homepage's copy control, its
+   command-terminal tabs, and its narrow-viewport Menu (Escape and breakpoint
+   close) are the scripted exceptions; every other interaction is CSS. Hundreds of pages should feel identical in
    performance to ten.
 5. **Dark-default, light-available.** Theme toggle persists per user; neither mode is an afterthought.
 
@@ -56,12 +56,14 @@ Light mode is the same roles inverted; accent stays the same hue, darkened for A
 
 | Role              | Family                         | Size / Line-height      |
 |-------------------|--------------------------------|--------------------------|
-| Body              | Inter or Geist Sans            | 16px / 1.65              |
+| Body              | Geist (self-hosted)            | 16px / 1.65              |
 | Headings          | Same sans, tighter tracking    | h1 2rem · h2 1.5rem · h3 1.25rem |
-| Code (inline/block) | Geist Mono or JetBrains Mono | 14px / 1.6               |
+| Code (inline/block) | Geist Mono (self-hosted)     | 14px / 1.6               |
 | UI (nav, search)  | Same sans as body              | 14px                     |
 
-No display font. No serif anywhere.
+No display font. No serif anywhere. Both families ship as npm packages
+(`@fontsource-variable/geist`, `@fontsource-variable/geist-mono`) listed in
+`customCss`, so the site loads no fonts from other domains.
 
 ### 3.3 Orbit motif (sparing use)
 
@@ -87,73 +89,66 @@ Three-column, fixed:
 - Left nav: collapsible sections. Active page marked with a 2px accent bar on the left edge.
 - Content column: max-width ~720px, measure 65–75ch for prose.
 - Right rail: sticky "On this page" TOC. Muted until the corresponding section is in view.
-- Top bar: logo, section links (from 50rem), search, theme toggle. Below 50rem the
+- Top bar: logo, latest-release badge (read from `CHANGELOG.md` at build time),
+  section links including Changelog (from 50rem), search, theme toggle. Below 50rem the
   splash header keeps search and exposes section links plus theme through a Menu
   disclosure; documentation pages keep Starlight's sidebar Menu.
 
 ### 3.5 Landing page
 
-The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only):
+The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only).
 
-- **Eyebrow** — mono uppercase tag (`early access`).
-- **Headline** — 3.6rem display heading (2.75rem on narrower desktops, 2.2rem
-  on phones). The only heading on the site that exceeds the body type scale.
-- **Lede + install bar + primary/secondary CTAs.** Install bar carries a `$` prompt and a Copy action.
-- **Provider strip** — the shipped CLI executors as a plain list under a
-  hairline, with the legacy Gemini executor named in a footnote rather than
-  implied current.
+**Hero, left column** — release chip (`Early access`, linking to the
+changelog), a 3.6rem headline whose last sentence is muted, a lede that says
+what Orbit is, primary and secondary CTAs, a one-line requirements note, and
+the provider strip: the shipped CLI executors as a plain list under a
+hairline, with the legacy Gemini executor named in a footnote rather than
+implied current.
+
+**Hero, right column** — two stacked panels:
+
+- **Command terminal.** One tab per way of running Orbit: Install, From your
+  agent, From the CLI, Drain a backlog, On a schedule. Every workflow tab
+  starts from `orbit init` and `orbit workspace init --mcp`. The tab row and
+  the Copy control are served `hidden` and revealed by the page script, which
+  implements the WAI-ARIA tabs pattern (roving tabindex, arrow keys, Home and
+  End) and points Copy at the active panel's commands. Without JavaScript every
+  panel shows under its own label.
 - **Session preview** — a `figure` of one exchange between the reader, their
-  agent, and Orbit, laid out as a conversation with receipts. Turns are
-  body type with a mono speaker label (`you` in the accent, `agent` in
-  grey). Under each agent turn a receipt block, indented to the text column,
-  lists that turn's tool calls one per mono row — tool name, arrow, what
-  Orbit returned — with task statuses drawn as pills: `orbit.task.add`
-  (task in `proposed`); the agent asks for the go-ahead and the reader gives
-  it; `orbit.task.update` (`proposed → backlog`, the approval) and
-  `orbit.workflow.ship` (run ID, scope reserved, worktree isolated);
-  `orbit.workflow.run.show` (steps settled, PR opened, task in `review`); the
-  agent reports the PR is open and the diff and merge are the reader's. The
-  agent drives Orbit over MCP, so the conversation is the hero visual and the
-  CLI is plumbing. Arguments are omitted so the calls read as one line each;
-  tool names are real and identifiers are placeholders, and the `figcaption`
-  says so. `role="img"` marks it illustrative, not captured output.
+  agent, and Orbit, laid out as a conversation with receipts: `orbit.task.add`
+  (task in `proposed`), the go-ahead, `orbit.task.update` and
+  `orbit.workflow.ship`, then `orbit.workflow.run.show` with the task in
+  `review`. Tool names are real and identifiers are placeholders; the
+  `figcaption` says so and `role="img"` marks it illustrative.
 
-Below the hero, each section opens on a two-column head — mono eyebrow and a
-one-sentence heading on the left, a short lede on the right — and in order:
+Below the hero, in order:
 
-1. **One conversation, one pull request** — the task lifecycle as a rail
-   (`proposed → backlog → in-progress → review → done`, with the default
-   ship's stop at `review` marked and `done` dashed), then a 4-card grid for
-   say what you want → the agent files it → you say go, it ships → you
-   review the pull request. Each card carries a mono numbered tag `01`–`04`
-   and the command or MCP call behind it; the review card is outlined in the
-   accent because that is where the default path stops. New tasks start in
-   `proposed` until approved into the backlog; the same `--approve` later
-   takes `review` to `done`, and neither step merges the pull request. A
-   sentence under the grid points at Install and Set Up MCP, with First Task
-   as the by-hand CLI route.
-2. **When you are not in the loop** — one table over `orbit run ship`,
-   `--mode local`, `orbit run auto`, and
-   `orbit run ship-sweep`: the command, where the run stops, and that
-   completing delivery is a separate explicit authorization, side by side so
-   modes compare without clicking. Row headers link to each mode's guide.
-   This section stays after the walkthrough so the attended path is read
-   first.
-3. **Why Orbit** — a 2×2 value-prop grid. Each card carries a thin SVG glyph
-   beside its copy and the command that shows the property; these and the
-   walkthrough tags are the only glyphs in content.
-4. **Go further** — a 3-card grid routing to continuous delivery, recurring
-   work, and publication and recovery, with the CLI reference linked from the
-   section head.
-5. **Explore the docs** — a flat five-column index of the sidebar groups,
-   closing the page in one bordered panel.
+1. **Guarantees** — three short promises (nothing runs until you approve,
+   nothing merges without you, every step is on the record), each with a
+   glyph.
+2. **How it works** — the lifecycle rail (`proposed → backlog → in-progress →
+   review → done`, the default ship's stop at `review` marked and `done`
+   dashed) and a 4-card walkthrough (ask → file → ship → review), each card
+   with the command or MCP call behind it and the review card outlined in the
+   accent.
+3. **Why Orbit** — a 2×2 value-prop grid with glyphs and a command per card.
+4. **When you step away** — one card per unattended shape (`orbit run ship`,
+   `--mode local`, `orbit run auto`, `orbit run ship-sweep`): the command,
+   where it stops, and what `--complete` does. Each links to its guide.
+5. **Go further** — a list of five guides beside the section head, with the
+   CLI reference linked from the head.
+6. **Quickstart** — a closing panel with the three setup commands and CTAs.
+
+Sections open on a two-column head — mono eyebrow and a one-sentence heading
+on the left, a short lede on the right. The footer, not the page, carries the
+full docs index.
 
 Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
 and publishes no live metric.
 
-Scripts are limited to the copy controls and the homepage Menu's Escape /
-breakpoint close. Copy buttons are served `hidden` and unhidden by that script,
+Scripts are limited to the copy control, the terminal tabs, and the homepage
+Menu's Escape / breakpoint close. Copy buttons are served `hidden` and unhidden by that script,
 so a page without JavaScript shows the command text and no dead control; a
 clipboard that is
 unavailable or refuses the write reports failure rather than a false success.
@@ -164,14 +159,20 @@ Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged
 
 ## 4. Information Architecture
 
-Initial top-level sections (left nav, in order):
+Top-level sections (left nav, in order), following the reader from setup to
+lookup:
 
-1. **Introduction** — what Orbit is, who it's for, 2-minute read
-2. **Getting Started** — install, first task, activity catalog
-3. **Concepts** — tasks, activities/jobs, policies, agents
-4. **How-to Guides** — task-oriented recipes
-5. **Reference** — CLI, YAML schemas, config, scoping rules
-6. **Contributing** — local dev, crate layout, PR workflow
+1. **Start Here** — what Orbit is, quickstart, install, connect your agent
+   (MCP), first task, delivery workflows
+2. **Concepts** — tasks, agents and crews, activities and jobs, routines and
+   auto-tasks, policies
+3. **Guides** — task-oriented recipes for everyday use
+4. **Operate** — backup and restore, multi-machine drains
+5. **Reference** — CLI, configuration, YAML schemas, policy format, scoping
+6. **Project** — changelog, contributing (collapsed), privacy
+
+Sidebar labels match page titles (section indexes read "Overview"). Moving a page between groups never moves
+its URL.
 
 Each section has an index page that lists its children with one-line descriptions. No "coming soon" placeholders — sections appear only when populated.
 

@@ -1,5 +1,5 @@
 ---
-title: Set Up MCP
+title: Connect Your Agent
 description: "Expose Orbit's safe MCP tool surface to Claude Code, Codex, Gemini, Antigravity, Grok Build, Cursor, VS Code, or Windsurf."
 sidebar:
   order: 5
