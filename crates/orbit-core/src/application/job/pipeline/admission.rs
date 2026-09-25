@@ -131,13 +131,26 @@ impl OrbitRuntime {
                     .jobs()
                     .insert_automation_job_run(job_name, input.clone(), key)?
             } else {
-                let run = self.stores().jobs().insert_job_run(
-                    job_name,
-                    resume.map_or(1, |plan| plan.attempt),
-                    submitted_at,
-                    Some(input.clone()),
-                    resume.map(|plan| plan.source.run_id.clone()),
-                )?;
+                // A resume admits through the lineage-guarded insert: while any
+                // run in the source's retry lineage is live, it is refused with
+                // `ResumeRunInFlight` in the same transaction that would have
+                // inserted, so concurrent resumes from any surface yield one run.
+                let run = match resume {
+                    Some(plan) => self.stores().jobs().insert_resume_job_run(
+                        job_name,
+                        plan.attempt,
+                        submitted_at,
+                        Some(input.clone()),
+                        &plan.source.run_id,
+                    )?,
+                    None => self.stores().jobs().insert_job_run(
+                        job_name,
+                        1,
+                        submitted_at,
+                        Some(input.clone()),
+                        None,
+                    )?,
+                };
                 self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
                 run
             };

@@ -40,6 +40,12 @@ fn error_payload(err: &OrbitError) -> Value {
         object.insert("task_id".to_string(), json!(task_id));
         object.insert("run_id".to_string(), json!(run_id));
     }
+    if let Some((source_run_id, run_id)) = err.resume_run_in_flight()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("source_run_id".to_string(), json!(source_run_id));
+        object.insert("run_id".to_string(), json!(run_id));
+    }
     if let Some((task_id, path, reason)) = err.task_bundle_corruption()
         && let Some(object) = payload.as_object_mut()
     {
@@ -98,6 +104,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
         OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
+        OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",

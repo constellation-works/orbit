@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use chrono::Utc;
+use orbit_common::OrbitError;
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::TaskReservationReleaseReason;
 use orbit_types::task::TaskStatus;
@@ -17,6 +18,7 @@ use serde_json::json;
 
 use crate::OrbitRuntime;
 use crate::application::job::JobRunListParams;
+use crate::application::job::pipeline::worker_command_override;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::exec::{test_runtime, v2_events};
@@ -674,4 +676,145 @@ fn resume_recovers_a_pending_commit_marker_instead_of_refusing_claim_inspection(
         !marker.exists(),
         "submit_resume_run recovered the pending commit"
     );
+}
+
+/// A pipeline worker that stays alive without claiming, so a submitted resume
+/// remains `pending` for the whole test instead of being terminalized by its
+/// startup observer. Thread-local: each racing thread installs its own.
+struct IdleWorker;
+
+impl IdleWorker {
+    fn install() -> Self {
+        worker_command_override::set(["sh", "-c", "sleep 10"]);
+        Self
+    }
+}
+
+impl Drop for IdleWorker {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
+}
+
+fn resumes_of(runtime: &OrbitRuntime, source_run_id: &str) -> Vec<String> {
+    runtime
+        .stores()
+        .jobs()
+        .job_run_retries(source_run_id, 100)
+        .expect("list resumes")
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect()
+}
+
+fn live_resume_of(error: OrbitError) -> (String, String) {
+    match error {
+        OrbitError::ResumeRunInFlight {
+            source_run_id,
+            run_id,
+        } => (source_run_id, run_id),
+        other => panic!("expected ResumeRunInFlight, got {other:?}"),
+    }
+}
+
+/// The 2026-09-25 reboot recovery: eight dashboard resumes of one source were
+/// all accepted and eight agents shared its worktree. `submit_resume_run` is
+/// the seam the CLI, MCP, and HTTP surfaces share, so refusing here refuses
+/// everywhere; a terminal first resume re-opens the source.
+#[test]
+fn a_second_resume_is_refused_while_the_first_is_live_and_allowed_once_it_is_cancelled() {
+    let (_root, runtime, _repo_root, global_root) = test_runtime();
+    let jobs_dir = global_root.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    write_delivery_tail_job(&jobs_dir.join("qa_resume_once.yaml"), "qa_resume_once");
+    let task_id = seed_task(&runtime, "resume once fixture");
+    let source = seed_failed_delivery_run(&runtime, "qa_resume_once", &task_id, None);
+    let _worker = IdleWorker::install();
+
+    let first = runtime
+        .submit_resume_run(&source, Some("test"), None)
+        .expect("first resume is admitted");
+    let refused = runtime
+        .submit_resume_run(&source, Some("dashboard"), None)
+        .expect_err("a second resume while the first is live is refused");
+    assert!(
+        refused.to_string().contains(&first.run_id),
+        "the refusal names the live run: {refused}"
+    );
+    assert_eq!(
+        live_resume_of(refused),
+        (source.clone(), first.run_id.clone())
+    );
+    assert_eq!(resumes_of(&runtime, &source), vec![first.run_id.clone()]);
+
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&first.run_id, JobRunState::Cancelled, Utc::now(), Some(1))
+        .expect("cancel first resume");
+    let second = runtime
+        .submit_resume_run(&source, Some("test"), None)
+        .expect("resume is allowed again once the first is terminal");
+    let second_run = runtime
+        .get_job_run_backend(&second.run_id)
+        .expect("read second resume")
+        .expect("second resume exists");
+    assert_eq!(
+        second_run.retry_source_run_id.as_deref(),
+        Some(source.as_str()),
+        "a re-resume chains from the run the caller named"
+    );
+    assert_eq!(second_run.attempt, 2);
+}
+
+/// Two processes resuming the same source at once — modelled as two runtimes
+/// over one workspace — admit exactly one run; the loser names the winner.
+#[test]
+fn concurrent_resumes_of_one_source_create_exactly_one_run() {
+    let (_root, runtime, repo_root, global_root) = test_runtime();
+    let jobs_dir = global_root.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    write_delivery_tail_job(&jobs_dir.join("qa_resume_race.yaml"), "qa_resume_race");
+    let task_id = seed_task(&runtime, "resume race fixture");
+    let source = seed_failed_delivery_run(&runtime, "qa_resume_race", &task_id, None);
+    let workspace_root = repo_root.join(".orbit");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let outcomes = std::thread::scope(|scope| {
+        let racers = (0..2)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                let (global_root, workspace_root, source) =
+                    (&global_root, &workspace_root, &source);
+                scope.spawn(move || {
+                    let racer = OrbitRuntime::from_roots(global_root, workspace_root)
+                        .expect("racer runtime");
+                    let _worker = IdleWorker::install();
+                    barrier.wait();
+                    racer.submit_resume_run(source, Some("racer"), None)
+                })
+            })
+            .collect::<Vec<_>>();
+        racers
+            .into_iter()
+            .map(|racer| racer.join().expect("racer thread"))
+            .collect::<Vec<_>>()
+    });
+
+    let admitted = outcomes
+        .iter()
+        .filter_map(|outcome| outcome.as_ref().ok())
+        .map(|invoke| invoke.run_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        admitted.len(),
+        1,
+        "exactly one resume is admitted: {outcomes:?}"
+    );
+    let loser = outcomes
+        .into_iter()
+        .find_map(Result::err)
+        .expect("one racer is refused");
+    assert_eq!(live_resume_of(loser), (source.clone(), admitted[0].clone()));
+    assert_eq!(resumes_of(&runtime, &source), admitted);
 }

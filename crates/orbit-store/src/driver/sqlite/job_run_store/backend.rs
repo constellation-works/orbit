@@ -67,6 +67,43 @@ impl SqliteJobRunStore {
     }
 }
 
+/// Upper bound on `retry_source_run_id` hops walked from a resume source to its
+/// lineage root, so a corrupted cycle cannot make the probe unbounded.
+const RESUME_LINEAGE_MAX_HOPS: i64 = 64;
+
+/// The oldest non-terminal run in `source_run_id`'s retry lineage: its
+/// ancestors plus every run descended from any of them.
+fn live_lineage_run_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    source_run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    conn.query_row(
+        "WITH RECURSIVE \
+           ancestors(run_id, parent, depth) AS ( \
+             SELECT run_id, retry_source_run_id, 0 FROM job_runs \
+              WHERE workspace_id = ?1 AND run_id = ?2 \
+             UNION \
+             SELECT j.run_id, j.retry_source_run_id, a.depth + 1 \
+               FROM job_runs j JOIN ancestors a ON j.run_id = a.parent \
+              WHERE j.workspace_id = ?1 AND a.depth < ?3 \
+           ), \
+           lineage(run_id) AS ( \
+             SELECT run_id FROM ancestors \
+             UNION \
+             SELECT j.run_id FROM job_runs j JOIN lineage l ON j.retry_source_run_id = l.run_id \
+              WHERE j.workspace_id = ?1 \
+           ) \
+         SELECT j.run_id FROM job_runs j JOIN lineage l ON j.run_id = l.run_id \
+          WHERE j.workspace_id = ?1 AND j.state IN ('pending', 'running', 'retrying') \
+          ORDER BY j.created_at, j.run_id LIMIT 1",
+        rusqlite::params![workspace_id, source_run_id, RESUME_LINEAGE_MAX_HOPS],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
 impl JobRunStoreBackend for SqliteJobRunStore {
     fn local_pull_for_run(
         &self,
@@ -242,6 +279,57 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                     pid_start_time: None,
                     input,
                     retry_source_run_id,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
+                Ok(run)
+            })
+    }
+
+    /// The live-lineage probe and the insert share one SQLite `IMMEDIATE`
+    /// transaction. The database writer lock is process-wide, so the dashboard,
+    /// MCP server, and CLI serialize here: whichever resume commits first is
+    /// visible to every later probe, and the rest are refused.
+    fn insert_resume_job_run(
+        &self,
+        job_id: &str,
+        attempt: u32,
+        scheduled_at: DateTime<Utc>,
+        input: Option<serde_json::Value>,
+        retry_source_run_id: &str,
+    ) -> Result<JobRun, OrbitError> {
+        validate_path_stem(job_id, "job")?;
+        let created_at = Utc::now();
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                if let Some(run_id) =
+                    live_lineage_run_conn(&tx.tx, &self.workspace_id, retry_source_run_id)?
+                {
+                    return Err(OrbitError::ResumeRunInFlight {
+                        source_run_id: retry_source_run_id.to_string(),
+                        run_id,
+                    });
+                }
+                let run_id =
+                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run = JobRun {
+                    executed_on: self.executed_on.clone(),
+                    run_id,
+                    job_id: job_id.to_string(),
+                    attempt,
+                    state: JobRunState::Pending,
+                    scheduled_at,
+                    started_at: None,
+                    finished_at: None,
+                    duration_ms: None,
+                    created_at,
+                    pid: None,
+                    pid_start_time: None,
+                    input,
+                    retry_source_run_id: Some(retry_source_run_id.to_string()),
                     knowledge_metrics: None,
                     resolved_crew: None,
                     crew_model: None,

@@ -287,6 +287,18 @@ pub enum OrbitError {
         "task {task_id} already has an in-flight run ({run_id}); wait for it to finish or cancel it"
     )]
     ShipRunInFlight { task_id: String, run_id: String },
+    /// A resume was refused because the source run's retry lineage already
+    /// has a non-terminal run. Raised atomically by the store insert on the
+    /// shared resume path, so the CLI, MCP, and HTTP surfaces refuse the
+    /// duplicate identically; the payload names the live run so a caller can
+    /// open, wait on, or cancel it rather than resume again.
+    #[error(
+        "job run '{source_run_id}' already has a live resume in its retry lineage ({run_id}); wait for it to finish or cancel it before resuming again"
+    )]
+    ResumeRunInFlight {
+        source_run_id: String,
+        run_id: String,
+    },
     /// A governed workflow operation was refused because another operator holds
     /// the exclusive workspace claim [ADR-0352, ORB-10709]. Raised by the shared
     /// run-submission path, so the refusal is identical on every surface, and
@@ -422,6 +434,18 @@ impl OrbitError {
     pub fn ship_run_in_flight(&self) -> Option<(&str, &str)> {
         match self {
             Self::ShipRunInFlight { task_id, run_id } => Some((task_id, run_id)),
+            _ => None,
+        }
+    }
+
+    /// The `(source_run_id, run_id)` of a duplicate-resume refusal: the run the
+    /// caller asked to resume and the live run already carrying its lineage.
+    pub fn resume_run_in_flight(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::ResumeRunInFlight {
+                source_run_id,
+                run_id,
+            } => Some((source_run_id, run_id)),
             _ => None,
         }
     }
