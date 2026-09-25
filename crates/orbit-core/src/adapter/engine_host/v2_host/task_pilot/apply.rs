@@ -104,7 +104,7 @@ pub(in super::super) fn apply(
         })
         .transpose()?
         .unwrap_or_default();
-    let claim = crate::application::automation::members::claim(runtime, prepared_value)
+    let claim = crate::application::automation::members::claim(runtime, prepared_value, &[])
         .map_err(|error| action_failed(action, error.to_string()))?;
     // The same consumer predicate prepare fingerprinted under; a run without
     // a claim evaluates the default [ORB-12745].

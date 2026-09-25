@@ -1,7 +1,8 @@
 //! Host observe/admission fixtures for incident inventory reuse [ORB-11633].
 
 use super::super::{
-    members::{Host, head_invocations, reset_head_invocations},
+    consumer_key,
+    members::{Host, claim, head_invocations, reset_head_invocations},
     preparation,
     source::{ls_tree_invocations, reset_ls_tree_invocations},
 };
@@ -14,7 +15,13 @@ use orbit_types::{
     task::{TaskPriority, TaskStatus, TaskType},
     workflow::{
         ChildDispatch, ChildDispatchPhase, JobRunState, JobTargetType, PipelineState,
-        automation::members::{PreparationEligibility, StateTrigger, StateTriggerKind},
+        automation::{
+            AutomationState, SourceRevision,
+            members::{
+                MemberAttempt, MemberState, PreparationEligibility, StateMember, StateTrigger,
+                StateTriggerKind,
+            },
+        },
     },
 };
 use serde_json::json;
@@ -118,6 +125,14 @@ fn create_backlog_task(runtime: &OrbitRuntime, _repo_root: &Path, id_hint: &str)
 }
 
 fn create_proposed_task(runtime: &OrbitRuntime, _repo_root: &Path, id_hint: &str) -> String {
+    create_scoped_proposed_task(runtime, id_hint, Vec::new())
+}
+
+fn create_scoped_proposed_task(
+    runtime: &OrbitRuntime,
+    id_hint: &str,
+    context_files: Vec<String>,
+) -> String {
     runtime
         .stores()
         .task_records()
@@ -133,7 +148,7 @@ fn create_proposed_task(runtime: &OrbitRuntime, _repo_root: &Path, id_hint: &str
             required_tools: Vec::new(),
             plan: "test plan".into(),
             execution_summary: String::new(),
-            context_files: Vec::new(),
+            context_files,
             repo_root: None,
             created_by: Some("test".into()),
             planned_by: None,
@@ -702,4 +717,254 @@ fn live_owner_keeps_incomplete_cohort_from_certifying_coverage() {
         "incomplete recovery stays withheld: {:?}",
         page.withheld
     );
+}
+
+fn commit_file(repo: &Path, path: &str, contents: &str) {
+    let file = repo.join(path);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, contents).unwrap();
+    git(repo, &["add", path]);
+    git(repo, &["commit", "-m", &format!("touch {path}")]);
+}
+
+/// How the consumer's stored attempt stands when a run rechecks its claim.
+#[derive(Clone, Copy, Debug)]
+enum Stored {
+    Live,
+    Expired,
+    Exhausted,
+}
+
+/// A preparation claim frozen at the current `agent-main` head over one task
+/// scoped to `context_files`, claimed and admitted as the consumer's active
+/// attempt through the store's own checkpoint transitions.
+fn preparation_claim(
+    runtime: &OrbitRuntime,
+    repo: &Path,
+    context_files: &[&str],
+    stored: Stored,
+) -> MemberAttempt {
+    let id = create_scoped_proposed_task(
+        runtime,
+        "prepared",
+        context_files
+            .iter()
+            .map(|selector| selector.to_string())
+            .collect(),
+    );
+    let source = SourceRevision {
+        commit: git(repo, &["rev-parse", "HEAD"]),
+        tree: git(repo, &["rev-parse", "HEAD^{tree}"]),
+    };
+    let now = Utc::now();
+    let (retry_after, deadline) = match stored {
+        Stored::Expired => (
+            now - chrono::Duration::minutes(2),
+            now - chrono::Duration::minutes(1),
+        ),
+        Stored::Live | Stored::Exhausted => (now, now + chrono::Duration::minutes(30)),
+    };
+    let member = StateMember {
+        key: id.clone(),
+        task_ids: vec![id],
+        fingerprint: "fixture-fingerprint".into(),
+        source: source.clone(),
+        evidence: json!({}),
+        first_seen: now,
+        changed_at: now,
+        crew: None,
+    };
+    let consumer = consumer_key(runtime, "routine", "pilot").unwrap();
+    let attempt = MemberAttempt {
+        consumer: consumer.clone(),
+        kind: StateTriggerKind::PreparationEligible,
+        id: "fixture-attempt".into(),
+        member: member.clone(),
+        members: vec![member.clone()],
+        attempt: 1,
+        max_attempts: 2,
+        deadline,
+        retry_after,
+        action_key: "fixture-key".into(),
+        action_id: None,
+        exhausted: false,
+    };
+    let state = AutomationState {
+        members: Some(MemberState::default()),
+        consumer,
+        epoch: "fixture-epoch".into(),
+        trigger: None,
+        repository: "fixture".into(),
+        branch: "agent-main".into(),
+        generation: 0,
+        baseline: source.clone(),
+        observed: source.clone(),
+        covered: source,
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        active: None,
+        stall: None,
+    };
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_initialize(&state).unwrap());
+    let mut claimed = state.clone();
+    claimed.generation += 1;
+    let members = claimed.members.as_mut().unwrap();
+    members.pending.insert(member.key.clone(), member);
+    members.active = Some(attempt);
+    assert!(store.automation_commit(&state, &claimed, None).unwrap());
+
+    let mut admitted = claimed.clone();
+    admitted.generation += 1;
+    let active = admitted.members.as_mut().unwrap().active.as_mut().unwrap();
+    active.action_id = Some("fixture-run".into());
+    active.exhausted = matches!(stored, Stored::Exhausted);
+    let submitted = active.clone();
+    assert!(store.automation_commit(&claimed, &admitted, None).unwrap());
+    submitted
+}
+
+fn stale_reason(result: Result<Option<MemberAttempt>, orbit_common::OrbitError>) -> String {
+    match result {
+        Ok(_) => panic!("claim was accepted instead of refused"),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// [ORB-12981] A drain merges into the integration branch every few
+/// minutes. A merge that touches none of the prepared material must not
+/// discard a pilot's finished preparation at apply.
+#[test]
+fn preparation_claim_survives_a_head_move_disjoint_from_its_material() {
+    let (_root, runtime, repo) = test_runtime();
+    commit_file(&repo, "src/prepared.rs", "fn prepared() {}");
+    let submitted = preparation_claim(
+        &runtime,
+        &repo,
+        &["file:src/prepared.rs", "dir:docs/guide"],
+        Stored::Live,
+    );
+    commit_file(&repo, "src/unrelated.rs", "fn unrelated() {}");
+    commit_file(&repo, "docs/guidebook.md", "sibling of a scoped directory");
+
+    let prepared = json!({
+        "state_automation": submitted,
+        "tasks": [{"context_files_before": ["file:src/prepared.rs"]}],
+    });
+    let active = claim(&runtime, &prepared, &["file:src/recommended.rs".into()])
+        .expect("disjoint head move keeps the claim")
+        .expect("preparation claim");
+    assert_eq!(active.id, submitted.id);
+    assert_ne!(
+        git(&repo, &["rev-parse", "agent-main"]),
+        submitted.member.source.commit,
+        "the fixture must actually move the head"
+    );
+}
+
+/// [ORB-12981] Revalidation is not a bypass: a move that touches any
+/// prepared input — a member selector, the prepared snapshot, the pilot's
+/// recommendation, or repository instructions — is still stale.
+#[test]
+fn preparation_claim_refuses_a_head_move_touching_its_material() {
+    let cases: [(&str, &[&str], &str); 5] = [
+        ("src/prepared.rs", &[], "src/prepared.rs"),
+        (
+            "docs/guide/nested/page.md",
+            &[],
+            "docs/guide/nested/page.md",
+        ),
+        ("src/before.rs", &[], "src/before.rs"),
+        (
+            "src/recommended.rs",
+            &["file:src/recommended.rs"],
+            "src/recommended.rs",
+        ),
+        ("crates/nested/AGENTS.md", &[], "repository instructions"),
+    ];
+    for (touched, material, expected) in cases {
+        let (_root, runtime, repo) = test_runtime();
+        let submitted = preparation_claim(
+            &runtime,
+            &repo,
+            &["symbol:src/prepared.rs#prepared:function", "dir:docs/guide"],
+            Stored::Live,
+        );
+        commit_file(&repo, touched, "changed after preparation");
+        let prepared = json!({
+            "state_automation": submitted,
+            "tasks": [{"context_files_before": ["file:src/before.rs"]}],
+        });
+        let material = material.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let reason = stale_reason(claim(&runtime, &prepared, &material));
+        assert!(
+            reason.contains("stale preparation") && reason.contains(expected),
+            "touching {touched} must refuse as stale naming {expected}: {reason}"
+        );
+    }
+}
+
+#[test]
+fn preparation_claim_refuses_a_rewritten_branch_or_unanchored_material() {
+    let (_root, runtime, repo) = test_runtime();
+    let submitted = preparation_claim(&runtime, &repo, &["file:sample.txt"], Stored::Live);
+    git(&repo, &["commit", "--amend", "-m", "rewritten baseline"]);
+    let reason = stale_reason(claim(
+        &runtime,
+        &json!({"state_automation": submitted}),
+        &[],
+    ));
+    assert!(reason.contains("no longer descends"), "{reason}");
+
+    let (_root, runtime, repo) = test_runtime();
+    let submitted = preparation_claim(
+        &runtime,
+        &repo,
+        &["module:orbit_core::automation"],
+        Stored::Live,
+    );
+    commit_file(&repo, "src/unrelated.rs", "fn unrelated() {}");
+    let reason = stale_reason(claim(
+        &runtime,
+        &json!({"state_automation": submitted}),
+        &[],
+    ));
+    assert!(reason.contains("no repository path to compare"), "{reason}");
+}
+
+/// Identity, budget and deadline still govern the claim whether or not the
+/// head moved: revalidating material never revives a dead attempt.
+#[test]
+fn expired_exhausted_or_mismatched_preparation_claims_are_still_refused() {
+    let cases = [
+        ("expired", Stored::Expired, false),
+        ("exhausted", Stored::Exhausted, false),
+        ("mismatched member", Stored::Live, true),
+    ];
+    for (label, stored, mismatched) in cases {
+        for head_moved in [false, true] {
+            let (_root, runtime, repo) = test_runtime();
+            let mut submitted = preparation_claim(&runtime, &repo, &["file:sample.txt"], stored);
+            if mismatched {
+                submitted.member.fingerprint = "other-fingerprint".into();
+                submitted.members = vec![submitted.member.clone()];
+            }
+            if head_moved {
+                commit_file(&repo, "src/unrelated.rs", "fn unrelated() {}");
+            }
+            let reason = stale_reason(claim(
+                &runtime,
+                &json!({"state_automation": submitted}),
+                &[],
+            ));
+            assert!(
+                reason.contains("state claim stale or expired"),
+                "{label} claim (head moved: {head_moved}) must be refused: {reason}"
+            );
+        }
+    }
 }

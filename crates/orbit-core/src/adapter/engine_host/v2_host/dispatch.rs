@@ -60,12 +60,12 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::PrepareTaskPilot | CoreDeterministicAction::ApplyTaskPilotResults
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
-        if let Some(claim) = crate::application::automation::members::claim(runtime, claim_input)
+        let claim = crate::application::automation::members::claim(runtime, claim_input, &[])
             .map_err(|error| DispatchError::DeterministicActionFailed {
                 action: action.into(),
                 message: error.to_string(),
-            })?
-        {
+            })?;
+        if let Some(claim) = claim {
             let owner = tool_context
                 .reservation_owner
                 .as_ref()

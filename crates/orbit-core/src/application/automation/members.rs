@@ -546,18 +546,23 @@ fn member_evidence(output: &Value) -> Result<Vec<MemberEvidence>, AutomationErro
 }
 
 /// Recheck the server-issued claim at the deterministic prepare/apply boundary.
+///
+/// `material` names selectors the caller is about to write for a claim member
+/// (a pilot's recommended `context_files`) beyond those the members and the
+/// prepared snapshot already carry; they join the head-freshness comparison.
 pub(crate) fn claim(
     runtime: &OrbitRuntime,
     value: &Value,
+    material: &[String],
 ) -> Result<Option<MemberAttempt>, OrbitError> {
-    let Some(value) = value
+    let Some(claim) = value
         .get("state_automation")
         .filter(|claim| !claim.is_null())
     else {
         return Ok(None);
     };
 
-    let submitted: MemberAttempt = serde_json::from_value(value.clone())
+    let submitted: MemberAttempt = serde_json::from_value(claim.clone())
         .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
 
     let state = runtime
@@ -565,18 +570,10 @@ pub(crate) fn claim(
         .automation_state(&submitted.consumer)?
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;
 
-    // Preparation material is derived from the branch head, so a moved head
-    // invalidates the claim; incident material is not tied to the head.
-    if submitted.kind == StateTriggerKind::PreparationEligible
-        && Source::new(&runtime.paths().repo_root)
-            .head(&state.branch)
-            .map_err(automation_error_to_orbit)?
-            .1
-            != submitted.member.source
-    {
-        return Err(OrbitError::InvalidInput(
-            "state-trigger source changed".into(),
-        ));
+    // Preparation material is derived from the branch head the claim froze;
+    // incident material is not tied to the head.
+    if submitted.kind == StateTriggerKind::PreparationEligible {
+        ensure_preparation_fresh(runtime, &state.branch, &submitted, value, material)?;
     }
 
     let active = state
@@ -599,4 +596,152 @@ pub(crate) fn claim(
     }
 
     Ok(Some(active))
+}
+
+/// A drain lands on the integration branch every few minutes, so its head
+/// routinely moves while a pilot runs. The preparation stays valid when the
+/// head only advanced through commits disjoint from the prepared material:
+/// repository instructions and every path a member's context selectors
+/// anchor, before or after the pilot [ORB-12981]. A rewritten branch, a touched
+/// path, or a selector with no repository path to compare is stale.
+fn ensure_preparation_fresh(
+    runtime: &OrbitRuntime,
+    branch: &str,
+    submitted: &MemberAttempt,
+    value: &Value,
+    material: &[String],
+) -> Result<(), OrbitError> {
+    let root = &runtime.paths().repo_root;
+    let source = Source::new(root);
+    let (_, head) = source.head(branch).map_err(automation_error_to_orbit)?;
+    let prepared = &submitted.member.source;
+    if head == *prepared {
+        return Ok(());
+    }
+
+    let stale = |detail: String| {
+        OrbitError::InvalidInput(format!(
+            "stale preparation: state-trigger source changed from {} to {}: {detail}",
+            prepared.commit, head.commit
+        ))
+    };
+
+    source
+        .git(&[
+            "merge-base",
+            "--is-ancestor",
+            &prepared.commit,
+            &head.commit,
+        ])
+        .map_err(|_| stale("the branch no longer descends from the prepared source".into()))?;
+
+    // `--no-renames` reports both sides of a rename; `--relative` keeps paths
+    // in the workspace frame the selectors and instruction scan use.
+    let changed = source
+        .git(&[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--relative",
+            "-z",
+            &prepared.commit,
+            &head.commit,
+        ])
+        .map_err(|error| stale(format!("changed paths unavailable: {error}")))?;
+    let changed = changed
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+
+    if let Some(path) = changed
+        .iter()
+        .find(|path| matches!(path.rsplit('/').next(), Some("AGENTS.md" | "CLAUDE.md")))
+    {
+        return Err(stale(format!("repository instructions `{path}` changed")));
+    }
+
+    let mut selectors = material.to_vec();
+    for id in submitted.task_ids() {
+        match runtime.get_task(&id) {
+            Ok(task) => selectors.extend(task.context_files),
+            // The write boundary reports a deleted task stale on its own.
+            Err(OrbitError::NotFound { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    selectors.extend(
+        value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|task| task.get("context_files_before")?.as_array())
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned),
+    );
+    selectors.sort();
+    selectors.dedup();
+
+    for selector in &selectors {
+        let anchor = repository_anchor(root, selector).ok_or_else(|| {
+            stale(format!(
+                "context selector `{selector}` has no repository path to compare"
+            ))
+        })?;
+        let Some(anchor) = anchor else {
+            continue;
+        };
+        if let Some(path) = changed.iter().find(|path| {
+            anchor.is_empty()
+                || **path == anchor
+                || path
+                    .strip_prefix(anchor.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        }) {
+            return Err(stale(format!(
+                "`{path}` changed under prepared context selector `{selector}`"
+            )));
+        }
+    }
+
+    tracing::info!(
+        consumer = %submitted.consumer,
+        attempt = %submitted.id,
+        from = %prepared.commit,
+        to = %head.commit,
+        changed = changed.len(),
+        "preparation revalidated across a head move disjoint from its material"
+    );
+    Ok(())
+}
+
+/// The workspace-relative path a context selector anchors (`""` for the
+/// root), `Some(None)` for an anchor outside the repository, which no commit
+/// can change, and `None` when the selector has no filesystem anchor at all
+/// (`module:`, `command:`, unparseable input).
+fn repository_anchor(root: &std::path::Path, selector: &str) -> Option<Option<String>> {
+    let anchor = orbit_common::fs::selector::anchor_path(selector).ok()?;
+    let relative = if anchor.is_absolute() {
+        let canonical = root.canonicalize().ok();
+        match anchor
+            .strip_prefix(root)
+            .ok()
+            .or_else(|| anchor.strip_prefix(canonical.as_deref()?).ok())
+        {
+            Some(relative) => relative.to_path_buf(),
+            None => return Some(None),
+        }
+    } else {
+        anchor
+    };
+    if relative.starts_with("..") {
+        return Some(None);
+    }
+    let relative = relative.to_string_lossy();
+    Some(Some(if relative == "." {
+        String::new()
+    } else {
+        relative.into_owned()
+    }))
 }
