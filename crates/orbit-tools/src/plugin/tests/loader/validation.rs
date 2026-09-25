@@ -1,0 +1,249 @@
+use super::*;
+
+#[test]
+fn fs_write_root_refuses_protected_global_paths_but_allows_plugin_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let plugin_root = global_root.join("plugins/demo/1.0.0");
+    let plugin_state = global_root.join("state/plugins/demo");
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    std::fs::create_dir_all(&plugin_state).expect("plugin state");
+
+    assert_eq!(
+        fs_write_root_covers(
+            &plugin_root,
+            &plugin_root,
+            &global_root,
+            &plugin_state,
+            None,
+        ),
+        Some("plugin install root")
+    );
+    assert_eq!(
+        fs_write_root_covers(
+            Path::new("/"),
+            &plugin_root,
+            &global_root,
+            &plugin_state,
+            None,
+        ),
+        Some("plugin install root")
+    );
+    assert_eq!(
+        fs_write_root_covers(
+            &global_root,
+            &plugin_root,
+            &global_root,
+            &plugin_state,
+            None,
+        ),
+        Some("plugin install root")
+    );
+    for protected in [
+        global_root.join("bin"),
+        global_root.join("plugins/.grants"),
+        global_root.join("plugins/other/1.0.0"),
+        plugin_state.join("../../../plugins/.grants"),
+        plugin_root.join("cache"),
+    ] {
+        assert_eq!(
+            fs_write_root_covers(&protected, &plugin_root, &global_root, &plugin_state, None,),
+            Some("protected path beneath Orbit global root"),
+            "{} must stay read-only",
+            protected.display()
+        );
+    }
+    for allowed in [&plugin_state, &plugin_state.join("cache")] {
+        assert_eq!(
+            fs_write_root_covers(allowed, &plugin_root, &global_root, &plugin_state, None,),
+            None,
+            "{} is inside this plugin's writable state tree",
+            allowed.display()
+        );
+    }
+}
+
+/// A backend with a writable `{{plugin_state}}` can plant a symbolic link in
+/// its own state tree, so the guard cannot read a declared root by name: a
+/// root whose tail does not exist yet is judged where its existing ancestors
+/// physically live. Otherwise `state/plugins/demo/alias/9.0.0` reads as
+/// plugin state while it materialises a new version tree inside the
+/// plugin's protected install namespace [ORB-12799].
+#[cfg(unix)]
+#[test]
+fn fs_write_root_refuses_an_absent_tail_below_a_symlink_into_the_global_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let install_root = global_root.join("plugins/demo");
+    let plugin_root = install_root.join("1.0.0");
+    let plugin_state = global_root.join("state/plugins/demo");
+    for directory in [
+        &plugin_root,
+        &plugin_state,
+        &global_root.join("bin"),
+        &global_root.join("plugins/.grants"),
+        &global_root.join("plugins/other/1.0.0"),
+    ] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+
+    for (alias, target) in [
+        ("install", install_root.clone()),
+        ("bin", global_root.join("bin")),
+        ("grants", global_root.join("plugins/.grants")),
+        ("other", global_root.join("plugins/other")),
+    ] {
+        let link = plugin_state.join(alias);
+        symlink(&target, &link).expect("state alias");
+        let absent = link.join("9.0.0");
+        assert_eq!(
+            fs_write_root_covers(&absent, &plugin_root, &global_root, &plugin_state, None),
+            Some("protected path beneath Orbit global root"),
+            "{} reaches {} through an alias in writable plugin state",
+            absent.display(),
+            target.display()
+        );
+        assert!(
+            !absent.exists(),
+            "the guard decides a path without creating it"
+        );
+    }
+
+    // The alias to this plugin's own install root is the only one that could
+    // be mistaken for its own tree; it is refused as the install namespace it
+    // physically is, not as plugin state.
+    assert!(!install_root.join("9.0.0").exists());
+
+    for allowed in [
+        plugin_state.join("cache"),
+        plugin_state.join("cache/deeper/still-absent"),
+    ] {
+        assert_eq!(
+            fs_write_root_covers(&allowed, &plugin_root, &global_root, &plugin_state, None),
+            None,
+            "{} is an absent directory inside the real plugin state tree",
+            allowed.display()
+        );
+    }
+}
+
+#[test]
+fn load_refuses_a_manifest_whose_fs_write_covers_the_plugin_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin(temp.path());
+    let manifest = temp.path().join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            "  permissions:\n    fs:\n      write: [\"{{plugin_root}}\"]\n  backend:\n",
+        ),
+    )
+    .expect("covering write");
+    let plugin = load_plugin_dir(temp.path()).expect("load");
+    let global_root = temp.path().join("global");
+    let spec = backend_spec(
+        &plugin,
+        &global_root,
+        global_root.join("state/plugins/demo"),
+    );
+    let error = refuse_covering_fs_write_roots(&spec, None)
+        .expect_err("plugin-root write is refused")
+        .to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
+        "{error}"
+    );
+}
+
+#[test]
+fn validate_and_registration_refuse_workspace_metadata_but_allow_a_sibling() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let global_root = global.path().join("global");
+    let plugin_state = global_root.join("state/plugins/demo");
+
+    for declared in [
+        "{{workspace}}",
+        "{{workspace}}/.orbit/routines",
+        "{{workspace}}/.git/hooks",
+    ] {
+        let temp = tempfile::tempdir().expect("plugin tempdir");
+        write_plugin(temp.path());
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        let body = std::fs::read_to_string(&manifest).expect("read manifest");
+        std::fs::write(
+            &manifest,
+            body.replace(
+                "  backend:\n",
+                &format!("  permissions:\n    fs:\n      write: [\"{declared}\"]\n  backend:\n"),
+            ),
+        )
+        .expect("write permission");
+        let plugin = load_plugin_dir(temp.path()).expect("load");
+        let spec = backend_spec(&plugin, &global_root, plugin_state.clone());
+        let error = refuse_covering_fs_write_roots(&spec, None)
+            .expect_err("workspace metadata write must be refused before call time")
+            .to_string();
+        assert!(
+            error.contains("spec.permissions.fs.write[0]")
+                && error.contains(".orbit")
+                && error.contains(".git"),
+            "{declared}: {error}"
+        );
+    }
+
+    let allowed = tempfile::tempdir().expect("allowed plugin tempdir");
+    write_plugin(allowed.path());
+    let manifest = allowed.path().join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            "  permissions:\n    fs:\n      write: [\"{{workspace}}/.orbit-graph\"]\n  backend:\n",
+        ),
+    )
+    .expect("write permission");
+    let plugin = load_plugin_dir(allowed.path()).expect("load");
+    let spec = backend_spec(&plugin, &global_root, plugin_state);
+    refuse_covering_fs_write_roots(&spec, None)
+        .expect("a similarly named workspace directory is not Orbit metadata");
+}
+
+/// A marker planted in the *path* of an unrelated host must not verify: only
+/// a parsed host and organisation should, not a substring anywhere in the URL.
+#[test]
+fn first_party_source_parses_host_and_org_rather_than_matching_a_substring() {
+    assert!(
+        !first_party_source("git+https://evil.test/github.com/constellation-works/x.git"),
+        "the marker sits in an unrelated host's path, not its authority, and must not verify"
+    );
+    assert!(
+        first_party_source("git+git@github.com:constellation-works/x.git"),
+        "the SCP-like git@host:org/repo form must still verify"
+    );
+    assert!(
+        first_party_source("git+https://github.com/constellation-works/x.git"),
+        "a genuine constellation-works GitHub URL must still verify"
+    );
+}
+
+/// Directory sources cannot establish first-party provenance because their
+/// Git metadata is controlled by the directory author.
+#[test]
+fn first_party_source_refuses_directory_sources() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(temp.path().join(".git")).expect("git metadata directory");
+    std::fs::write(
+        temp.path().join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://github.com/constellation-works/orbit-graph.git\n",
+    )
+    .expect("candidate-owned origin remote");
+    assert!(
+        !first_party_source(temp.path().to_str().expect("utf8 directory source")),
+        "a directory source is never first-party, even when its own Git config names a trusted remote"
+    );
+}
