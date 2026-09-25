@@ -81,7 +81,7 @@ The default tracing subscriber appends redacted structured events to `~/.orbit/s
 |---------|----------------|-----------------|
 | Audit design ownership | `docs/design/auditability/` | [T20260426-0605] |
 | Command audit records and queries | `crates/orbit-types/src/telemetry/audit_event.rs`, `crates/orbit-cli/src/command/audit/`, `crates/orbit-store/src/driver/sqlite/audit_event_store/` | [T20260426-0605] |
-| MCP session context, server composition, and direct Core tool audit | `crates/orbit-mcp/src/remote/identity.rs`, `crates/orbit-mcp/src/adapter/dispatch.rs`, `crates/orbit-cli/src/command/mcp/server.rs`, `crates/orbit-core/src/adapter/command/dispatch.rs` | [ORB-10228], [ORB-10319] |
+| MCP session context, server composition, and direct Core tool audit | `crates/orbit-mcp/src/remote/identity.rs`, `crates/orbit-mcp/src/adapter/dispatch.rs`, `crates/orbit-cli/src/command/mcp/server.rs`, `crates/orbit-core/src/adapter/command/dispatch/` | [ORB-10228], [ORB-10319] |
 | V2 activity/job envelopes and SQLite sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002], [T20260426-0519] |
 | Run trace inspection CLI | `crates/orbit-cli/src/command/run/mod.rs`, `crates/orbit-core/src/runtime/audit/run.rs` | [T20260426-0705], [T20260426-0709] |
 | Loop audit events and blobs | `crates/orbit-agent/src/loop_engine/audit/mod.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs`, `crates/orbit-common/src/storage/blob_store.rs` | [T20260426-0605] |

@@ -5,7 +5,6 @@
 //! ledger budgets, and coverage exclusions exercise the production paths.
 
 mod admission;
-mod gate;
 mod handoff_console;
 
 use std::fs;

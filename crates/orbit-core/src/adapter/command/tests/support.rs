@@ -9,7 +9,7 @@ use crate::adapter::command::dispatch::take_tool_audit_recorded;
 /// Holds the process-wide guard every env-mutating test in this binary
 /// shares (not a lock of its own), clears the variables these tests set or
 /// assert on, and restores whatever was there when dropped.
-pub(super) fn env_guard() -> ScopedEnv {
+pub(in crate::adapter::command) fn env_guard() -> ScopedEnv {
     orbit_common::test_env::unset([
         "ORBIT_AGENT_NAME",
         "ORBIT_AGENT_MODEL",
@@ -25,7 +25,7 @@ pub(super) fn env_guard() -> ScopedEnv {
     ])
 }
 
-pub(super) fn clear_identity_env() {
+pub(in crate::adapter::command) fn clear_identity_env() {
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::remove_var("ORBIT_AGENT_NAME");
@@ -33,7 +33,7 @@ pub(super) fn clear_identity_env() {
     }
 }
 
-pub(super) fn set_identity_env(agent: &str, model: &str) {
+pub(in crate::adapter::command) fn set_identity_env(agent: &str, model: &str) {
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::set_var("ORBIT_AGENT_NAME", agent);
@@ -41,7 +41,7 @@ pub(super) fn set_identity_env(agent: &str, model: &str) {
     }
 }
 
-pub(super) fn fresh_runtime() -> OrbitRuntime {
+pub(in crate::adapter::command) fn fresh_runtime() -> OrbitRuntime {
     // Reset the dedup signal so cross-test thread-local leakage cannot mask
     // bugs in the per-call set/clear cycle.
     let _ = take_tool_audit_recorded();

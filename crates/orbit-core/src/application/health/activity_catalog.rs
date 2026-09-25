@@ -35,7 +35,7 @@ pub struct RetiredActivityBackendSkip {
     pub reason: String,
 }
 
-/// One catalog-invalid activity file, ready to become an [`super::artifact_health::ArtifactFinding`].
+/// One catalog-invalid activity file, ready to become an [`super::artifact::ArtifactFinding`].
 #[derive(Debug, Clone)]
 pub(crate) struct ActivityCatalogFault {
     pub name: String,

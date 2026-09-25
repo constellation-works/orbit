@@ -43,7 +43,7 @@ fn activities_dir(global_root: &Path) -> PathBuf {
 }
 
 fn managed_manifest_path(dir: &Path) -> PathBuf {
-    dir.join(crate::application::MANAGED_ASSET_MANIFEST_FILE)
+    dir.join(crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE)
 }
 
 #[test]

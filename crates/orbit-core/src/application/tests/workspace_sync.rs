@@ -4,8 +4,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
-use crate::application::MANAGED_ASSET_MANIFEST_FILE;
-use crate::application::routine::RoutineSeedIdentity;
+use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
+use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::workspace_sync::{
     ManagedArtifactOutcome, reconcile_workspace_managed_artifacts,
 };

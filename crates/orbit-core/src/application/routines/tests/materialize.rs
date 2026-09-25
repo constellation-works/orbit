@@ -6,29 +6,29 @@
 //! `orbit workspace sync` — the retired default retired, a stale default
 //! refreshed — while a genuine hand edit is still preserved and reported.
 
-use orbit_common::fs::io::write_text_with_parent;
 use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::automation::members::StateTriggerKind;
 use orbit_types::workflow::{OverlapPolicy, RoutineTarget};
 use tempfile::tempdir;
 
-use super::super::routine::{
+use super::super::materialize::{reconcile_default_routines, seed_default_routines};
+use super::super::parse_cron;
+use super::super::seed::{
     BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
     RETIRED_ROUTINE_FILES, ROUTINE_NAME_PLACEHOLDER, RoutineSeedIdentity,
-    SUPERSEDED_ROUTINE_TEMPLATES, ShippedShape, default_routine_name_collisions,
-    reconcile_default_routines, seed_default_routines, shipped_shape_of,
+    SUPERSEDED_ROUTINE_TEMPLATES,
 };
-use super::super::routines::parse_cron;
-use super::super::{
+use super::super::template::{ShippedShape, shipped_shape_of};
+use crate::application::managed_assets::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, ManagedAssetOutcome,
     ManagedAssetReconciliation, encode_managed_asset_manifest, load_managed_asset_manifest,
-    sha256_hex,
 };
 
 /// Render a shipped template the way a release of that vintage would have
 /// written it for `workspace` on the test host (`hm_test`, observing `main`,
 /// the identity `seed_default_routines` uses).
-fn render(template: &str, stem: &str, workspace: &str) -> String {
+pub(super) fn render(template: &str, stem: &str, workspace: &str) -> String {
     template
         .replace(
             "__ORBIT_ROUTINE_NAME__",
@@ -65,7 +65,7 @@ fn superseded_template(stem: &str) -> &'static str {
         .expect("superseded template is shipped as a provenance shape")
 }
 
-fn current_template(stem: &str) -> &'static str {
+pub(super) fn current_template(stem: &str) -> &'static str {
     DEFAULT_ROUTINE_FILES
         .iter()
         .find(|(name, _)| *name == stem)
@@ -105,10 +105,10 @@ fn record_provenance(routines_dir: &std::path::Path, stem: &str, template: &str,
         .insert(stem.to_string(), sha256_hex(rendered.as_bytes()));
     manifest.routine_provenance.insert(
         stem.to_string(),
-        super::super::RoutineAssetProvenance {
+        crate::application::managed_assets::RoutineAssetProvenance {
             template_digest: sha256_hex(template.as_bytes()),
             rendered_digest: sha256_hex(rendered.as_bytes()),
-            binding: super::super::RoutineMaterializationBinding {
+            binding: crate::application::managed_assets::RoutineMaterializationBinding {
                 name,
                 owner_machine: None,
                 branch: None,
@@ -408,7 +408,7 @@ fn check_mode_reports_retirement_without_touching_the_workspace() {
         &routines_dir,
         &identity,
         false,
-        crate::application::ManagedAssetReconcileMode::Check,
+        crate::application::managed_assets::ManagedAssetReconcileMode::Check,
     )
     .expect("check");
     assert_eq!(
@@ -525,51 +525,6 @@ fn hand_edited_shipped_default_is_still_preserved() {
     );
 }
 
-/// Shape classification itself: every shipped, superseded, and retired
-/// template is recognised, and an operator's own routine is not.
-#[test]
-fn shipped_shapes_are_classified_by_template_owned_fields() {
-    for (stem, template) in DEFAULT_ROUTINE_FILES {
-        let body = render(template, stem, "workspace");
-        assert_eq!(
-            shipped_shape_of(stem, &body),
-            Some(ShippedShape::Current),
-            "{stem} must be recognised as its current shipped shape"
-        );
-        assert_eq!(
-            shipped_shape_of(stem, &body.replace("enabled: false", "enabled: true")),
-            Some(ShippedShape::Current),
-            "{stem} opted in is still the current shape"
-        );
-    }
-    for (stem, template) in SUPERSEDED_ROUTINE_TEMPLATES {
-        assert_eq!(
-            shipped_shape_of(stem, &render(template, stem, "workspace")),
-            Some(ShippedShape::Superseded)
-        );
-    }
-    for (stem, template) in RETIRED_ROUTINE_FILES {
-        assert_eq!(
-            shipped_shape_of(stem, &render(template, stem, "workspace")),
-            Some(ShippedShape::Retired)
-        );
-    }
-
-    // A template's own fields changed: not a shipped shape.
-    let edited = render(
-        current_template("dependabot_alert_sweep"),
-        "dependabot_alert_sweep",
-        "workspace",
-    )
-    .replace(r#"cron: "25 3 * * *""#, r#"cron: "*/5 * * * *""#);
-    assert_eq!(shipped_shape_of("dependabot_alert_sweep", &edited), None);
-    // Nor is a file that does not parse as a routine.
-    assert_eq!(
-        shipped_shape_of("dependabot_alert_sweep", "not: a routine\n"),
-        None
-    );
-}
-
 /// The deliberate exception: an overwriting seed (`--force`) restores the
 /// shipped template verbatim, opt-in included. Ordinary convergence keeps the
 /// operator's `enabled` setting; a destructive re-init does not.
@@ -636,7 +591,7 @@ fn untracked_retired_default_is_retired_with_a_preserved_copy() {
         &routines_dir,
         &identity,
         false,
-        crate::application::ManagedAssetReconcileMode::Check,
+        crate::application::managed_assets::ManagedAssetReconcileMode::Check,
     )
     .expect("check");
     assert_eq!(
@@ -966,7 +921,7 @@ fn state_routine_seeds_this_hosts_owner_and_the_registered_base_branch() {
         &routines_dir,
         &identity,
         false,
-        super::super::ManagedAssetReconcileMode::Apply,
+        crate::application::managed_assets::ManagedAssetReconcileMode::Apply,
     )
     .expect("seed default routines");
 
@@ -1368,92 +1323,5 @@ fn manifestless_unparseable_collision_is_still_reported() {
     assert_eq!(
         std::fs::read_to_string(&path).expect("reread file"),
         "not: a routine\n"
-    );
-}
-
-/// Without a usable workspace suffix every workspace on the host would
-/// seed the same bare `task-pilot` name, so seeding refuses the name
-/// instead of writing definitions that drop each other at load time.
-#[test]
-fn seeding_requires_a_workspace_name_with_usable_characters() {
-    let root = tempdir().expect("create tempdir");
-    let err = seed_default_routines(&root.path().join("routines"), " ***", true)
-        .expect_err("unusable workspace name must not seed unsuffixed routines");
-    assert!(err.to_string().contains("routine name"), "{err}");
-}
-
-/// The seeded suffix is the registered workspace name, so two checkouts
-/// whose directories share a basename still seed distinct names, and a
-/// name mismatch never leaks the directory into the routine [ORB-12107].
-#[test]
-fn seeded_names_follow_the_workspace_name_not_the_checkout_directory() {
-    let alpha = RoutineSeedIdentity::new("Alpha QA", "hm_test", "main")
-        .expect("workspace name renders a routine suffix");
-    let beta =
-        RoutineSeedIdentity::new("beta", "hm_test", "main").expect("second workspace identity");
-
-    assert_eq!(alpha.routine_name("task_pilot"), "task-pilot-alpha-qa");
-    assert_eq!(beta.routine_name("task_pilot"), "task-pilot-beta");
-    assert!(
-        alpha
-            .seeded_routine_names()
-            .iter()
-            .all(|name| !beta.seeded_routine_names().contains(name)),
-        "distinct workspace names must not share a seeded routine name"
-    );
-}
-
-/// A name another workspace on the host already declares is reported
-/// before seeding: routine discovery drops every colliding definition, so
-/// writing the duplicate would disable both workspaces' routines.
-#[test]
-fn collisions_report_names_another_workspace_already_declares() {
-    let root = tempdir().expect("create tempdir");
-    let other_orbit = root.path().join("other/.orbit");
-    seed_default_routines(&other_orbit.join("routines"), "server", false)
-        .expect("seed the other workspace");
-
-    let identity = RoutineSeedIdentity::new("server", "hm_test", "main").expect("seed identity");
-    let collisions = default_routine_name_collisions(&identity, std::slice::from_ref(&other_orbit));
-    assert_eq!(
-        collisions.len(),
-        DEFAULT_ROUTINE_FILES.len(),
-        "every seeded name collides: {collisions:?}"
-    );
-    assert!(collisions.iter().any(|collision| {
-        collision.name == "task-pilot-server"
-            && collision.declared_in == other_orbit.join("routines/task_pilot.yaml")
-    }));
-
-    let distinct =
-        RoutineSeedIdentity::new("other-server", "hm_test", "main").expect("seed identity");
-    assert!(
-        default_routine_name_collisions(&distinct, &[other_orbit]).is_empty(),
-        "a distinct workspace name must not collide"
-    );
-}
-
-/// Local definitions share the host-wide name space, so a `local/`
-/// routine is detected too.
-#[test]
-fn collisions_cover_local_routine_definitions() {
-    let root = tempdir().expect("create tempdir");
-    let other_orbit = root.path().join("other/.orbit");
-    let local_dir = other_orbit.join("routines/local");
-    seed_default_routines(&other_orbit.join("routines"), "alpha", false)
-        .expect("seed the other workspace");
-    let local = std::fs::read_to_string(other_orbit.join("routines/task_pilot.yaml"))
-        .expect("read a seeded routine to adapt")
-        .replace("task-pilot-alpha", "task-pilot-beta");
-    write_text_with_parent(&local_dir.join("pilot.yaml"), &local).expect("write local routine");
-
-    let identity = RoutineSeedIdentity::new("beta", "hm_test", "main").expect("seed identity");
-    let collisions = default_routine_name_collisions(&identity, &[other_orbit]);
-    assert_eq!(
-        collisions
-            .iter()
-            .map(|collision| collision.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["task-pilot-beta"]
     );
 }

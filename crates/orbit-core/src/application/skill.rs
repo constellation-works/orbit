@@ -6,7 +6,9 @@ use orbit_common::OrbitError;
 use crate::OrbitRuntime;
 use crate::skill_catalog::{LoadedSkill, SkillCatalogDoctorStatus};
 
-use super::{ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets};
+use super::managed_assets::{
+    ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
+};
 
 /// Every shipped skill file, keyed by its path relative to the skills root.
 ///

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use crate::application::{
+use crate::application::managed_assets::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;

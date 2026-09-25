@@ -8,10 +8,10 @@ use orbit_store::friction_store;
 use orbit_types::workspace::{DEFAULT_BASE_BRANCH, WorkspacePaths};
 
 use crate::OrbitRuntime;
-use crate::application::MANAGED_ASSET_MANIFEST_FILE;
 use crate::application::executor::seed_default_executors;
 use crate::application::job::seed_default_jobs;
-use crate::application::routine::RoutineSeedIdentity;
+use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
+use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::skill::{
     default_skill_ids, is_default_skill_file_for_root, seed_default_skills,
 };

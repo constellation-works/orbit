@@ -1,7 +1,7 @@
 //! Core assembly for routine sources and target catalog resolution.
 
 use crate::OrbitRuntime;
-use crate::application::routine::sync_retires_routine;
+use crate::application::routines::template::sync_retires_routine;
 pub use orbit_automation::routines::loader::{
     LoadedRoutine, RetiredRoutine, RoutineCatalogLookup, RoutineCollection, RoutineLoadError,
     RoutineOrigin, RoutineSource,

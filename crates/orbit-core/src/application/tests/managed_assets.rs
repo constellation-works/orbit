@@ -7,12 +7,12 @@ use tempfile::tempdir;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use super::super::MANAGED_ASSET_MANIFEST_FILE;
 #[cfg(unix)]
 use super::super::job::seed_default_jobs;
+use super::super::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
 use crate::OrbitRuntime;
 use crate::application::job::JobCatalogFilter;
-use crate::application::routine::RoutineSeedIdentity;
+use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::bootstrap::activity::seed_default_activities;
 use crate::bootstrap::global_defaults::stamp_path;
 use crate::bootstrap::init::{InitOptions, InitResult, init_workspace_at_root};
@@ -454,10 +454,10 @@ mod artifacts {
     use super::*;
     use std::path::PathBuf;
 
-    use crate::application::artifact_health::{
+    use crate::application::health::artifact::{
         ArtifactCondition, ArtifactHealth, ArtifactKind, ArtifactProvenance,
     };
-    use crate::application::routine::RETIRED_ROUTINE_FILES;
+    use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
     use crate::application::workspace_sync::reconcile_workspace_managed_artifacts;
 
     fn init_workspace(root: &Path) -> (PathBuf, PathBuf) {

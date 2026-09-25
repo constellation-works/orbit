@@ -21,10 +21,10 @@ use crate::OrbitRuntime;
 use crate::application::job::catalog::{
     DEFAULT_JOB_FILES, reset_v2_job_catalog_loads, v2_job_catalog_loads,
 };
-use crate::application::routine::RETIRED_ROUTINE_FILES;
 use crate::application::routines::loader::{
     LoadedRoutine, RoutineCollection, RoutineOrigin, collect_routines,
 };
+use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 
 const NOOP_JOB: &str = "schemaVersion: 2\n\
 kind: Job\n\
