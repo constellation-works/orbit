@@ -13,8 +13,11 @@ use super::super::capability::{
 /// The behavior rule from the federated spec, locked tool by tool over the
 /// whole advertised surface [ORB-11012].
 const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
+    ("orbit.auto_task.add", McpToolClass::ControlPlane),
     ("orbit.auto_task.list", McpToolClass::ControlPlane),
     ("orbit.auto_task.mint", McpToolClass::ControlPlane),
+    ("orbit.auto_task.toggle", McpToolClass::ControlPlane),
+    ("orbit.auto_task.update", McpToolClass::ControlPlane),
     ("orbit.command.exec", McpToolClass::Execute),
     ("orbit.crew.list", McpToolClass::Unclassified),
     ("orbit.agent.invoke", McpToolClass::Execute),

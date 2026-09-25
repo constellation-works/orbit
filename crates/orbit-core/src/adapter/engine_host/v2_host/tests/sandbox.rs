@@ -517,6 +517,16 @@ fn resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor() {
         .expect("resolve")
         .expect("descriptor");
     let modify = &resolved.fs_profile.modify;
+    let registered_auto_tasks = runtime
+        .paths()
+        .orbit_dir
+        .join("auto_tasks/child-write.yaml");
+    assert!(
+        linux_bwrap_write_grant_diagnostic(&resolved.fs_profile, &registered_auto_tasks)
+            .expect("diagnose direct child write")
+            .is_some(),
+        "a child must not write the registered checkout's scheduler definitions"
+    );
     let canonical_worktree = worktree.canonicalize().expect("canonical worktree");
     let orbit = canonical_worktree.join(".orbit");
     let deny = format!("!{}/**", orbit.display());
@@ -717,6 +727,12 @@ fn resolve_executor_sandbox_appends_gemini_orbit_runtime_roots_without_home_real
     assert!(
         !modify.iter().any(|entry| entry == &workspace_orbit),
         "gemini sandbox must not re-allow the whole workspace .orbit root: {modify:?}"
+    );
+    assert!(
+        !modify
+            .iter()
+            .any(|entry| entry.starts_with(&format!("{workspace_orbit}/auto_tasks"))),
+        "a macOS child must not receive a direct scheduler-definition write root: {modify:?}"
     );
     // Registered-but-not-activity-exposed stores remain outside this child-runtime inventory.
     for excluded in [

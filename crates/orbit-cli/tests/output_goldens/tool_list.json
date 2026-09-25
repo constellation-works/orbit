@@ -205,6 +205,46 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
+    "enabled": true,
+    "name": "orbit.auto_task.add",
+    "parameters": [
+      {
+        "description": "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required.",
+        "name": "name",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Human description of the recurring chore.",
+        "name": "description",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: integrated_qa_v1 or landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.",
+        "name": "schedule",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "description": "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.",
+        "name": "template",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "description": "Dedupe policy: `skip_if_open` (default) or `always`.",
+        "name": "dedupe",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "List every auto-task definition in this workspace.",
     "enabled": true,
     "name": "orbit.auto_task.list",
@@ -223,6 +263,74 @@
         "name": "name",
         "param_type": "string",
         "required": true
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Enable or disable an auto-task definition without deleting it.",
+    "enabled": true,
+    "name": "orbit.auto_task.toggle",
+    "parameters": [
+      {
+        "description": "Definition name. Required.",
+        "name": "name",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Whether to enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete. Required.",
+        "name": "enabled",
+        "param_type": "boolean",
+        "required": true
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Update an existing auto-task definition (present fields only).",
+    "enabled": true,
+    "name": "orbit.auto_task.update",
+    "parameters": [
+      {
+        "description": "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.",
+        "name": "waive_batch",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "description": "Definition name. Required.",
+        "name": "name",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "New description.",
+        "name": "description",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: integrated_qa_v1 or landed_code_review_v1).",
+        "name": "schedule",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "description": "Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
+        "name": "template",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "description": "New dedupe policy: `skip_if_open` or `always`.",
+        "name": "dedupe",
+        "param_type": "string",
+        "required": false
       }
     ],
     "status": "active"

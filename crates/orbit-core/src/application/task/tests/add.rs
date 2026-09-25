@@ -543,12 +543,12 @@ fn task_add_accepts_valid_context_selectors() {
 fn task_add_rejects_a_requirement_agents_can_never_be_granted() {
     let (_root, runtime) = test_runtime();
 
-    // `orbit.auto_task.add` is registered but admin/human-only, so activity
+    // Candidate inspection remains admin/human-only, so activity
     // admission refuses it and `required_tools` cannot be edited afterwards.
     let error = runtime
         .add_task(TaskAddParams {
             title: "Require a human-only tool".to_string(),
-            required_tools: vec!["orbit.auto_task.add".to_string()],
+            required_tools: vec!["orbit.auto_task.show".to_string()],
             ..Default::default()
         })
         .expect_err("a never-grantable requirement must be rejected at creation");
@@ -560,10 +560,10 @@ fn task_add_rejects_a_requirement_agents_can_never_be_granted() {
     else {
         panic!("expected an invalid-input diagnostic with suggestions");
     };
-    assert!(message.contains("orbit.auto_task.add"), "{message}");
+    assert!(message.contains("orbit.auto_task.show"), "{message}");
     assert!(message.contains("admin/human-only"), "{message}");
     assert!(
-        !did_you_mean.contains(&"orbit.auto_task.add".to_string()),
+        !did_you_mean.contains(&"orbit.auto_task.show".to_string()),
         "suggestions must only offer agent-facing tools: {did_you_mean:?}"
     );
     assert!(did_you_mean.contains(&"orbit.task.show".to_string()));

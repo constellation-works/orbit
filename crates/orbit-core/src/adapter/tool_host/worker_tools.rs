@@ -30,6 +30,9 @@ pub(crate) fn execute(
             | OrbitBuiltinAction::TaskReject
             | OrbitBuiltinAction::TaskLocksRelease
             | OrbitBuiltinAction::TaskLocksReserve
+            | OrbitBuiltinAction::AutoTaskAdd
+            | OrbitBuiltinAction::AutoTaskUpdate
+            | OrbitBuiltinAction::AutoTaskToggle
             | OrbitBuiltinAction::Friction(_)
     ) {
         return Ok(None);
@@ -198,6 +201,16 @@ pub(crate) fn execute(
         | OrbitBuiltinAction::Friction(
             FrictionVerb::List | FrictionVerb::Show | FrictionVerb::Stats | FrictionVerb::Tags,
         ) => return Ok(None),
+        // These writes use the owner's checkout-backed definition root. They
+        // must pass the worker destination check above before ordinary CRUD.
+        OrbitBuiltinAction::AutoTaskAdd
+        | OrbitBuiltinAction::AutoTaskUpdate
+        | OrbitBuiltinAction::AutoTaskToggle => {
+            binding
+                .validate_arguments(input)
+                .map_err(OrbitError::InvalidInput)?;
+            return Ok(None);
+        }
         OrbitBuiltinAction::TaskAdd
         | OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskReject

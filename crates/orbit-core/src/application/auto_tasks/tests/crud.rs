@@ -62,6 +62,68 @@ fn add_rejects_duplicate_name() {
 }
 
 #[test]
+fn writes_reject_loader_invalid_definitions_without_repairing_them() {
+    let runtime = runtime();
+    let root = runtime.paths().local_dir.clone();
+    runtime
+        .auto_task_add(interval_params("valid", 60))
+        .expect("seed valid definition");
+    let valid_path = root.join("auto_tasks/valid.yaml");
+    let original = fs::read(&valid_path).expect("read valid definition");
+    let wrong_stem = root.join("auto_tasks/wrong-stem.yaml");
+    fs::write(&wrong_stem, &original).expect("seed mismatched name");
+
+    for result in [
+        runtime.auto_task_update(
+            "valid",
+            AutoTaskUpdateParams {
+                description: Some("would overwrite".into()),
+                ..Default::default()
+            },
+        ),
+        runtime.auto_task_toggle("valid", false),
+        runtime.auto_task_add(interval_params("another", 60)),
+    ] {
+        let error = result.expect_err("invalid host definition must reject every write");
+        assert!(error.to_string().contains("stem"), "{error}");
+    }
+    assert_eq!(fs::read(&valid_path).expect("valid YAML"), original);
+    assert_eq!(fs::read(&wrong_stem).expect("invalid YAML"), original);
+    assert!(!root.join("auto_tasks/another.yaml").exists());
+
+    fs::write(&wrong_stem, "name: malformed\nunknown: field\n").expect("seed parser rejection");
+    assert!(runtime.auto_task_toggle("valid", false).is_err());
+    assert_eq!(fs::read(&valid_path).expect("valid YAML"), original);
+}
+
+#[test]
+fn update_does_not_create_a_second_definition_file_from_a_yml_source() {
+    let runtime = runtime();
+    let root = runtime.paths().local_dir.clone();
+    runtime
+        .auto_task_add(interval_params("single", 60))
+        .expect("seed definition");
+    let yaml = root.join("auto_tasks/single.yaml");
+    let yml = root.join("auto_tasks/single.yml");
+    fs::rename(&yaml, &yml).expect("use loader-supported extension");
+    assert!(
+        runtime
+            .auto_task_update(
+                "single",
+                AutoTaskUpdateParams {
+                    description: Some("changed".into()),
+                    ..Default::default()
+                },
+            )
+            .expect_err("editing .yml must not create a duplicate .yaml")
+            .to_string()
+            .contains("canonical .yaml")
+    );
+    assert!(!yaml.exists());
+    assert!(yml.exists());
+}
+
+#[test]
 fn add_rejects_invalid_name_and_schedule() {
     let runtime = runtime();
     let mut bad_name = interval_params("placeholder", 60);

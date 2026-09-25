@@ -11,11 +11,8 @@ use serde_json::json;
 use tempfile::tempdir;
 
 const INACTIVE_TOOL_NAMES: &[&str] = &[
-    // ORB-10798: auto-task authoring is human/admin work on the CLI surface.
-    "orbit.auto_task.add",
+    // Candidate inspection remains on the CLI surface.
     "orbit.auto_task.show",
-    "orbit.auto_task.toggle",
-    "orbit.auto_task.update",
     "orbit.friction.show",
     "orbit.friction.tags",
     "orbit.task.locks",
