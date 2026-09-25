@@ -56,8 +56,11 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             .collect::<Vec<_>>(),
         [
             "orbit.agent.invoke",
+            "orbit.auto_task.add",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
+            "orbit.auto_task.toggle",
+            "orbit.auto_task.update",
             "orbit.command.exec",
             // [ORB-12495] The distributed drain's read-only half: a follower
             // reaches these over federated MCP before pull exists at all.
