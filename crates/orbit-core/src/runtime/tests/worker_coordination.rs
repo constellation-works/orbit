@@ -14,6 +14,7 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 
+use crate::application::auto_tasks::loader::collect_auto_tasks;
 use crate::{
     OrbitRuntime,
     adapter::tool_host::test_support::{create_context_task, test_runtime},
@@ -180,6 +181,108 @@ fn owner_routing_fences_generic_writes_across_separate_stores() {
         .clone()
         .with_worker_invocation(binding.clone(), owner.clone())
         .expect("worker");
+    // A job's tool call crosses to the registered owner checkout. A local
+    // definition with the same name cannot stand in for the host clock's YAML.
+    let definition_input = json!({
+        "name": "host-chore", "description": "Host definition",
+        "schedule": {"every_minutes": 60},
+        "template": {"title": "Host chore"}, "model": "codex"
+    });
+    let added = worker
+        .run_tool("orbit.auto_task.add", definition_input)
+        .expect("host-brokered add");
+    assert_eq!(added["name"], "host-chore");
+    let owner_definition_root = owner.runtime.paths().local_dir.clone();
+    let follower_definition_root = follower.paths().local_dir.clone();
+    assert_eq!(
+        collect_auto_tasks(&owner_definition_root).definitions.len(),
+        1,
+        "the host clock must observe the new definition"
+    );
+    assert!(
+        collect_auto_tasks(&follower_definition_root)
+            .definitions
+            .is_empty(),
+        "the worker's local definition store must remain untouched"
+    );
+    follower
+        .auto_task_add(crate::application::auto_tasks::crud::AutoTaskAddParams {
+            name: "host-chore".into(),
+            description: "Worktree shadow".into(),
+            schedule: orbit_types::workflow::AutoTaskSchedule::Interval { every_minutes: 60 },
+            template: orbit_types::workflow::AutoTaskTemplate {
+                title: "Shadow".into(),
+                description: String::new(),
+                acceptance_criteria: Vec::new(),
+                task_type: orbit_types::task::TaskType::Chore,
+                tags: Vec::new(),
+                required_tools: Vec::new(),
+                priority: orbit_types::task::TaskPriority::Medium,
+                complexity: None,
+                crew: None,
+                status: TaskStatus::Backlog,
+            },
+            dedupe: orbit_types::workflow::DedupePolicy::SkipIfOpen,
+        })
+        .expect("seed local shadow");
+    let updated = worker
+        .run_tool(
+            "orbit.auto_task.update",
+            json!({"name":"host-chore","description":"Edited on host","model":"codex"}),
+        )
+        .expect("host-brokered update");
+    assert_eq!(updated["description"], "Edited on host");
+    let toggled = worker
+        .run_tool(
+            "orbit.auto_task.toggle",
+            json!({"name":"host-chore","enabled":false,"model":"codex"}),
+        )
+        .expect("host-brokered toggle");
+    assert_eq!(toggled["enabled"], false);
+    let host_loaded = collect_auto_tasks(&owner_definition_root);
+    assert_eq!(
+        host_loaded.definitions[0].definition.description,
+        "Edited on host"
+    );
+    assert!(!host_loaded.definitions[0].definition.enabled);
+    assert_eq!(
+        collect_auto_tasks(&follower_definition_root).definitions[0]
+            .definition
+            .description,
+        "Worktree shadow"
+    );
+    assert!(worker
+        .run_tool(
+            "orbit.auto_task.update",
+            json!({"name":"host-chore","description":"Wrong workspace","workspace":"another-workspace","model":"codex"}),
+        )
+        .is_err());
+    assert_eq!(
+        collect_auto_tasks(&owner_definition_root).definitions[0]
+            .definition
+            .description,
+        "Edited on host"
+    );
+    let host_path = owner_definition_root.join("auto_tasks/host-chore.yaml");
+    let host_yaml = std::fs::read_to_string(&host_path).expect("host definition YAML");
+    let malformed = host_yaml.replace("name: host-chore", "name: other-chore");
+    assert_ne!(malformed, host_yaml, "fixture must change the YAML name");
+    std::fs::write(&host_path, &malformed).expect("seed host loader rejection");
+    assert!(
+        worker
+            .run_tool(
+                "orbit.auto_task.update",
+                json!({"name":"host-chore","description":"would repair","model":"codex"}),
+            )
+            .expect_err("the host loader must reject a name/stem mismatch")
+            .to_string()
+            .contains("stem")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&host_path).expect("host YAML after refusal"),
+        malformed
+    );
+    std::fs::write(&host_path, host_yaml).expect("restore host definition fixture");
     assert_eq!(
         worker.get_task(&task.id).expect("owner read").status,
         TaskStatus::InProgress

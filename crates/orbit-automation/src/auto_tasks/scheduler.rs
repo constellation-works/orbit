@@ -127,8 +127,8 @@ pub fn run_auto_task_scheduler_at(
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
-    // Definitions are tracked checkout content; cursor state is host-local
-    // coordination state shared by linked worktrees.
+    // Definitions belong to this host's registered checkout; cursor state is
+    // host-local coordination state shared by linked worktrees.
     let definition_root = host.definition_root();
     let state_path = cursor_state_path(&host.state_dir());
 

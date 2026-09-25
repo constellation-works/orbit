@@ -22,12 +22,8 @@ const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
 ];
 
 const INACTIVE_TOOL_NAMES: &[&str] = &[
-    // ORB-10798: auto-task definitions are authored by humans; the agent
-    // surface keeps only `list` and `mint`.
-    "orbit.auto_task.add",
+    // Candidate inspection stays on the CLI surface.
     "orbit.auto_task.show",
-    "orbit.auto_task.toggle",
-    "orbit.auto_task.update",
     "orbit.task.locks",
     "orbit.task.locks.release",
     "orbit.task.locks.reserve",
@@ -343,7 +339,7 @@ fn friction_surface_supports_artifact_triage() {
 }
 
 #[test]
-fn auto_task_surface_exposes_only_list_and_mint() {
+fn auto_task_surface_exposes_host_brokered_definition_writes() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     let active: BTreeSet<String> = registry
@@ -359,7 +355,13 @@ fn auto_task_surface_exposes_only_list_and_mint() {
         .collect();
     assert_eq!(
         auto_task,
-        BTreeSet::from(["orbit.auto_task.list", "orbit.auto_task.mint"])
+        BTreeSet::from([
+            "orbit.auto_task.add",
+            "orbit.auto_task.list",
+            "orbit.auto_task.mint",
+            "orbit.auto_task.toggle",
+            "orbit.auto_task.update",
+        ])
     );
 
     let mint = registry

@@ -3,6 +3,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::thread;
@@ -82,6 +84,78 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
         !linked_orbit.exists(),
         "resolution should not materialize a linked-worktree .orbit directory"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_list_skips_unchanged_registry_lock_and_refuses_unpersisted_validation() {
+    let temp = tempdir().expect("fixture");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&repo).expect("repo");
+    init_git_repo(&repo);
+    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+    let global = home.join(".orbit");
+    let lock = global.join(".workspaces.json.lock");
+    if lock.exists() {
+        fs::remove_file(&lock).expect("remove fixture lock before read-only check");
+    }
+    let listed = run_orbit_json(
+        &repo,
+        &home,
+        &["workspace", "list", "--format", "json"],
+        None,
+    );
+    assert!(listed.as_array().is_some_and(|rows| !rows.is_empty()));
+    assert!(
+        !lock.exists(),
+        "unchanged validation must not create a lock"
+    );
+
+    // The first invocation prepared Orbit's enumerated global SQLite state.
+    // A second list must work with the surrounding global directory read-only.
+    let original_permissions = fs::metadata(&global).expect("global root").permissions();
+    fs::set_permissions(&global, fs::Permissions::from_mode(0o555))
+        .expect("make global root read-only");
+    let listed_read_only = run_orbit_json(
+        &repo,
+        &home,
+        &["workspace", "list", "--format", "json"],
+        None,
+    );
+    assert_eq!(listed_read_only, listed);
+    assert!(!lock.exists(), "read-only list must not create a lock");
+
+    let moved_repo = temp.path().join("moved-repo");
+    fs::rename(&repo, &moved_repo).expect("make registered checkout missing");
+    let unrelated = temp.path().join("unrelated");
+    fs::create_dir(&unrelated).expect("unrelated cwd");
+    let before = fs::read(global.join("workspaces.json")).expect("registry before failure");
+    let mut command = cargo_bin_cmd!("orbit");
+    command
+        .current_dir(&unrelated)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .args(["workspace", "list", "--format", "json"]);
+    clear_inherited_authority_env(&mut command);
+    set_orbit_root_env(&mut command, None);
+    let failed = command.assert().failure();
+    let stderr = String::from_utf8_lossy(&failed.get_output().stderr);
+    assert!(
+        stderr.contains("Read-only file system") || stderr.contains("Permission denied"),
+        "validation write must fail closed: {stderr}"
+    );
+    assert_eq!(
+        fs::read(global.join("workspaces.json")).expect("registry after failure"),
+        before,
+        "failed validation must not silently drop or partially persist the edit"
+    );
+    assert!(
+        !lock.exists(),
+        "failed validation must not leave a lock file"
+    );
+    fs::set_permissions(&global, original_permissions).expect("restore global permissions");
 }
 
 #[test]

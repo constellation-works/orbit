@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-20
-last_validated: 2026-09-20
+last_updated: 2026-09-25
+last_validated: 2026-09-25
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -41,26 +41,28 @@ definitions that omit `complexity` remain valid and mint
 without pretending it is an assessment. Per [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) there are **no turn-based knobs**; `deny_unknown_fields`
 makes a stray `max_turns`/`turns` a hard parse error.
 
-Definitions live as `.orbit/auto_tasks/<name>.yaml` in the active checkout.
+Definitions are gitignored per-user files at
+`<registered-checkout>/.orbit/auto_tasks/<name>.yaml` for the host clock.
 Discovery (`loader.rs`) scans the directory, parses each file fail-closed, and
 rejects any file whose stem ≠ its `name`, so the on-disk identity and the
-`auto-task:<name>` provenance tag stay in lockstep. In a linked-worktree
-runtime, definition discovery and CRUD use `WorkspacePaths::local_dir`;
-host-local cursor state continues to use the shared root. This split makes
-definition edits ordinary branch content instead of transient tracked dirt in
-the registered primary checkout ([Route tracked auto-task definitions through the active worktree](./4_decisions.md#route-tracked-auto-task-definitions-through-the-active-worktree)).
+`auto-task:<name>` provenance tag stay in lockstep. The host clock calls
+`collect_auto_tasks` with the registered checkout's local Orbit directory.
+Gitignored copies in linked worktrees are separate files and do not reach that
+clock. Cursor state remains under the shared runtime root.
 
 `auto-task show` reports `definition_source.root` and
 `definition_source.path` in JSON, plus the same root and path in plain text, so
 the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
 ID issued from a cwd that is **not** a Git-linked worktree of that workspace
-still opens the registered primary checkout. When the same logical selector
-(or the managed `ORBIT_WORKSPACE` envelope) is issued from a Git-linked
-worktree of that workspace, definition CRUD uses that worktree's `.orbit` as
-`local_root` while `shared_root` stays the registered primary store. That is
-what lets `orbit auto-task add` (and update/toggle) write
-`.orbit/auto_tasks/<name>.yaml` in a managed `jrun-*` worktree instead of the
-read-only primary bind mount.
+still opens the registered primary checkout. Direct CLI calls from a Git-linked
+worktree still use that worktree's `local_root` for candidate inspection and
+local definition edits. A managed job run's `orbit.auto_task.add`,
+`orbit.auto_task.update`, and `orbit.auto_task.toggle` tool calls are instead
+brokered to the owning host process. The host checks the worker's workspace
+binding and runs CRUD with its registered checkout as `local_root`. Before
+writing, CRUD rejects loader errors, including a file stem/name mismatch. The
+child receives no raw write grant to the registered checkout's `auto_tasks`
+directory. A worktree-local write or shadow is never reported as a host update.
 
 To inspect a candidate definition in isolation from a cwd that is not that
 worktree, pass the linked checkout's absolute path:

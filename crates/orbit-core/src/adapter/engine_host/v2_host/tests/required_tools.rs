@@ -82,6 +82,19 @@ fn activity_tools_are_the_deterministic_union_of_baseline_and_task_requirements(
             "github.run.view",
         ]
     );
+    let definition_id = add_task(
+        &runtime,
+        "Edit host definitions",
+        &[
+            "orbit.auto_task.add",
+            "orbit.auto_task.update",
+            "orbit.auto_task.toggle",
+        ],
+    );
+    let definition_tools =
+        RuntimeHost::resolve_activity_tools(&runtime, &[definition_id], &baseline)
+            .expect("managed definition tools are admitted by exact name");
+    assert_eq!(definition_tools.requested_tools.len(), 3);
 }
 
 #[test]
@@ -95,7 +108,7 @@ fn invalid_task_requirements_fail_structured_admission_before_dispatch() {
         ),
         ("Wildcard", "github.*", "wildcard and prefix"),
         ("Malformed", " github.run.list", "malformed canonical"),
-        ("Human only", "orbit.auto_task.add", "not agent-facing"),
+        ("Human only", "orbit.auto_task.show", "not agent-facing"),
     ] {
         let task_id = add_task(&runtime, title, &[tool]);
         let error =

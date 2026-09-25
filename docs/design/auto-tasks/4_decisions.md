@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-09-20
-last_validated: 2026-09-20
+last_updated: 2026-09-25
+last_validated: 2026-09-25
 status: Accepted
 feature: auto-tasks
 doc_role: decisions
@@ -19,6 +19,25 @@ related_artifacts: [ORB-12237, ORB-12698, ORB-12718]
 This document preserves the feature's non-obvious decisions and their reasoning.
 
 ---
+
+## Broker managed auto-task writes to the host definition root
+
+**Recorded:** 2026-09-25 · [ORB-12950]
+
+The host clock loads gitignored auto-task YAML from the registered checkout.
+A managed job's linked worktree has a separate copy, and its child sandbox
+cannot write the registered checkout's `.orbit/auto_tasks/` directly. Managed
+`orbit.auto_task.add`, `update`, and `toggle` tool calls therefore route to the
+owning host process. The host verifies the worker's workspace destination,
+loads and validates definitions, and writes its registered checkout's local
+root. The scheduler sees the result on its next collection pass.
+
+We rejected a child sandbox grant on `.orbit/auto_tasks/` or a wider `.orbit`
+root: raw child writes bypass ownership and loader checks, while adjacent
+`config.toml` and `routines/` control unattended host execution. We also
+rejected re-tracking definitions in Git: schedules are per-user state, and
+merge plus pull would still be needed before the registered host clock sees a
+change. Direct CLI worktree edits remain local candidate edits.
 
 ## Auto-task definitions are per-user checkout state, not git-versioned records
 
@@ -92,6 +111,7 @@ Some normal workflow tasks produce durable side effects through Orbit rather tha
 ## Route tracked auto-task definitions through the active worktree
 
 **Recorded:** 2026-08-08 19:11:08.591438Z · [ORB-10472]
+**Superseded for managed `orbit.auto_task.*` writes by:** [Broker managed auto-task writes to the host definition root](#broker-managed-auto-task-writes-to-the-host-definition-root). Definitions later became gitignored per-user state; direct CLI worktree edits remain local.
 **Paths:** `crates/orbit-core/src/application/auto_tasks/**`, `crates/orbit-engine/src/activity_job/workspace.rs`
 
 ### Context

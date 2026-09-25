@@ -138,7 +138,12 @@ impl OrbitRuntime {
 }
 
 pub(crate) fn is_coordination_tool(name: &str) -> bool {
-    name.starts_with("orbit.task.") || name.starts_with("orbit.friction.")
+    name.starts_with("orbit.task.")
+        || name.starts_with("orbit.friction.")
+        || matches!(
+            name,
+            "orbit.auto_task.add" | "orbit.auto_task.update" | "orbit.auto_task.toggle"
+        )
 }
 
 /// A required child can start before the parent has recorded its PID. Wait

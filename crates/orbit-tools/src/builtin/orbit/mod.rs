@@ -28,10 +28,12 @@ pub(super) struct OrbitIdentity {
 }
 
 pub fn register(registry: &mut ToolRegistry) {
-    // Auto-task definitions are authored by humans through the CLI; the MCP
-    // surface carries only what an executing agent needs — reading the
-    // definitions and minting one on demand.
-    registry.register_inactive(auto_task::add::OrbitAutoTaskAddTool);
+    // Managed workers can ask the owning host to edit its live definitions.
+    // The child receives no raw write grant for the registered checkout.
+    registry.register_mcp(
+        auto_task::add::OrbitAutoTaskAddTool,
+        McpToolScope::WorkspaceRequired,
+    );
     registry.register_mcp(
         auto_task::list::OrbitAutoTaskListTool,
         McpToolScope::WorkspaceRequired,
@@ -41,8 +43,14 @@ pub fn register(registry: &mut ToolRegistry) {
         McpToolScope::WorkspaceRequired,
     );
     registry.register_inactive(auto_task::show::OrbitAutoTaskShowTool);
-    registry.register_inactive(auto_task::update::OrbitAutoTaskUpdateTool);
-    registry.register_inactive(auto_task::toggle::OrbitAutoTaskToggleTool);
+    registry.register_mcp(
+        auto_task::update::OrbitAutoTaskUpdateTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_mcp(
+        auto_task::toggle::OrbitAutoTaskToggleTool,
+        McpToolScope::WorkspaceRequired,
+    );
     // The distributed drain's read-only half. The probe and receipt lookup are
     // advertised because a follower must reach them over federated MCP before
     // it can enable pull at all. Claim inspection is registered active but

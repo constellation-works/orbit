@@ -2,8 +2,10 @@
 //! (`orbit auto-task …`) and the MCP tools (`orbit.auto_task.*`). Definitions
 //! are YAML under `<local_orbit_dir>/auto_tasks/<name>.yaml`;
 //! these methods are the single choke point that reads/writes them, so both
-//! entry points stay consistent. In a linked worktree, `local_orbit_dir`
-//! belongs to that checkout rather than the registered primary checkout.
+//! entry points stay consistent. A managed worker's `orbit.auto_task.*` writes
+//! are routed to the owner host before reaching this surface, so its
+//! `local_orbit_dir` is the registered checkout the host clock reads.
+//! Direct CLI calls from a linked worktree still use that worktree's root.
 //! Disabling is a `toggle`, never a delete.
 //!
 //! `mint` (CLI-only by design — see `docs/design/mcp-bridge/2_design.md`)
@@ -19,7 +21,7 @@ use orbit_types::workflow::{
 
 use crate::OrbitRuntime;
 
-use super::loader::{collect_auto_tasks, definition_path};
+use super::loader::{AutoTaskCollection, collect_auto_tasks, definition_path};
 use super::schedule::validate_schedule;
 use super::scheduler::mint_task;
 
@@ -72,8 +74,14 @@ impl OrbitRuntime {
         };
         self.validate_auto_task(&definition)?;
 
+        let collection = self.validated_auto_tasks(&definition.name)?;
         let path = definition_path(&self.paths().local_dir, &definition.name);
-        if path.exists() {
+        if path.exists()
+            || collection
+                .definitions
+                .iter()
+                .any(|loaded| loaded.definition.name == definition.name)
+        {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task '{}' already exists; update or toggle it instead",
                 definition.name
@@ -145,7 +153,7 @@ impl OrbitRuntime {
         name: &str,
         params: AutoTaskUpdateParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        let mut definition = self.require_auto_task(name)?;
+        let mut definition = self.require_validated_auto_task(name)?;
         if let Some(request) = &params.waive_batch {
             if params.description.is_some()
                 || params.schedule.is_some()
@@ -192,7 +200,7 @@ impl OrbitRuntime {
         name: &str,
         enabled: bool,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        let mut definition = self.require_auto_task(name)?;
+        let mut definition = self.require_validated_auto_task(name)?;
         definition.enabled = enabled;
         self.stamp_and_write(definition)
     }
@@ -223,6 +231,49 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))
     }
 
+    fn require_validated_auto_task(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
+        let loaded = self
+            .validated_auto_tasks(name)?
+            .definitions
+            .into_iter()
+            .find(|loaded| loaded.definition.name == name)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
+        if loaded.path != definition_path(&self.paths().local_dir, name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "auto-task '{name}' must be stored at its canonical .yaml path before editing"
+            )));
+        }
+        Ok(loaded.definition)
+    }
+
+    fn validated_auto_tasks(&self, name: &str) -> Result<AutoTaskCollection, OrbitError> {
+        let collection = collect_auto_tasks(&self.paths().local_dir);
+        if !collection.errors.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "auto-task '{name}' definition load failed: {}",
+                collection
+                    .errors
+                    .iter()
+                    .map(|error| error.path.as_ref().map_or_else(
+                        || error.message.clone(),
+                        |path| format!("{}: {}", path.display(), error.message),
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )));
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for loaded in &collection.definitions {
+            if !names.insert(&loaded.definition.name) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "auto-task '{}' has more than one definition file",
+                    loaded.definition.name
+                )));
+            }
+        }
+        Ok(collection)
+    }
+
     fn stamp_and_write(
         &self,
         mut definition: AutoTaskDefinition,
@@ -248,8 +299,8 @@ impl OrbitRuntime {
     }
 
     fn write_auto_task(&self, definition: &AutoTaskDefinition) -> Result<(), OrbitError> {
-        // ADR-0286: tracked definition mutation belongs to the active
-        // worktree; shared state remains under `orbit_dir`.
+        // The runtime has already selected the definition root. A managed
+        // tool call reaches this method only in the registered owner host.
         let path = definition_path(&self.paths().local_dir, &definition.name);
         let yaml = serde_yaml::to_string(definition).map_err(|error| {
             OrbitError::Io(format!("encode auto-task '{}': {error}", definition.name))
