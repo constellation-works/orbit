@@ -1423,6 +1423,24 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
                 .tool_context_for_activity(Some(&run.run_id), None, None, None),
         )
         .unwrap();
+    // [ORB-12981] The drain lands on the integration branch while the pilot
+    // runs. A landing under a recommended selector makes that recommendation
+    // stale at the write boundary; one disjoint from every prepared path
+    // leaves the preparation applicable.
+    commit_file(&fixture.repo, ".gitignore", ".orbit/\ntarget/\n");
+    let stale = apply_selectors(
+        &fixture.runtime,
+        &prepared,
+        &fixture.task,
+        vec!["file:.gitignore"],
+    );
+    assert_eq!(stale["task_outcomes"][0]["outcome"], "apply_failed");
+    let refusal = stale["task_outcomes"][0]["error"].as_str().unwrap();
+    assert!(
+        refusal.contains("stale preparation") && refusal.contains(".gitignore"),
+        "{refusal}"
+    );
+    commit_file(&fixture.repo, "src/landed_meanwhile.rs", "unrelated\n");
     let result = apply_selectors(
         &fixture.runtime,
         &prepared,

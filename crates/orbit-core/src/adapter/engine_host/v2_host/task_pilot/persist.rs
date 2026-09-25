@@ -44,7 +44,7 @@ pub(super) fn apply_task(
         let mut outcome = None;
         let mut retry_fingerprint = None;
         let mut operation = || {
-            crate::application::automation::members::claim(runtime, prepared)?;
+            crate::application::automation::members::claim(runtime, prepared, &task.after)?;
             let receipt = format!("operation_id={}", task.operation_id);
             if runtime
                 .get_task_history(&task.task_id)?
