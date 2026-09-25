@@ -5550,3 +5550,372 @@ fn dashboard_operations_links_use_accent_color() {
         "operations links must use the theme accent color"
     );
 }
+
+/// ORB-12978: Refused quick actions (Ship on backlog, Approve on proposed)
+/// must show the complete server error message in the task list without hovering.
+/// The text is visible, selectable, links any embedded run id, and clicking the error
+/// stops propagation so the task row toggle is not activated.
+#[test]
+fn dashboard_quick_action_refusals_show_full_message_and_link_runs() {
+    run_dashboard_javascript_test(
+        r##"
+import assert from "node:assert/strict";
+
+class Node {
+  constructor() {
+    this.children = [];
+    this.dataset = {};
+    this.style = {};
+    this.listeners = {};
+    this.className = "";
+    this._text = "";
+    this.parentNode = null;
+    this.disabled = false;
+  }
+  appendChild(child) {
+    this.children.push(child);
+    child.parentNode = this;
+    return child;
+  }
+  insertBefore(child, before) {
+    const old = child.parentNode;
+    if (old) old.children = old.children.filter((c) => c !== child);
+    const index = this.children.indexOf(before);
+    this.children.splice(index < 0 ? this.children.length : index, 0, child);
+    child.parentNode = this;
+    return child;
+  }
+  removeChild(child) {
+    this.children = this.children.filter((c) => c !== child);
+    child.parentNode = null;
+    return child;
+  }
+  remove() {
+    if (this.parentNode) {
+      this.parentNode.removeChild(this);
+    }
+  }
+  prepend(...newNodes) {
+    for (let i = newNodes.length - 1; i >= 0; i--) {
+      const child = newNodes[i];
+      if (child.parentNode) child.parentNode.removeChild(child);
+      this.children.unshift(child);
+      child.parentNode = this;
+    }
+  }
+  querySelector(selector) {
+    const sel = selector.startsWith(".") ? selector.slice(1) : selector;
+    return find(this, (n) => n !== this && n.className && n.className.split(" ").includes(sel));
+  }
+  querySelectorAll(selector) {
+    const sel = selector.startsWith(".") ? selector.slice(1) : selector;
+    const results = [];
+    const collect = (n) => {
+      for (const child of n.children || []) {
+        if (child.className && child.className.split(" ").includes(sel)) {
+          results.push(child);
+        }
+        collect(child);
+      }
+    };
+    collect(this);
+    return results;
+  }
+  replaceChildren(...newChildren) {
+    this.children = [];
+    for (const c of newChildren) {
+      this.appendChild(c);
+    }
+  }
+  addEventListener(name, callback) {
+    this.listeners[name] = callback;
+  }
+  setAttribute(name, value) {
+    this[name] = String(value);
+  }
+  getAttribute(name) {
+    return this[name] || null;
+  }
+  get textContent() {
+    return this._text + this.children.map((c) => c.textContent || "").join("");
+  }
+  set textContent(value) {
+    this._text = String(value);
+    this.children = [];
+  }
+  get lastElementChild() {
+    return this.children[this.children.length - 1];
+  }
+  get classList() {
+    return {
+      add: (...names) => {
+        const set = new Set(this.className.split(" ").filter(Boolean));
+        for (const n of names) set.add(n);
+        this.className = Array.from(set).join(" ");
+      },
+      remove: (...names) => {
+        const set = new Set(this.className.split(" ").filter(Boolean));
+        for (const n of names) set.delete(n);
+        this.className = Array.from(set).join(" ");
+      },
+      contains: (name) => this.className.split(" ").includes(name),
+    };
+  }
+}
+
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/#tasks");
+globalThis.window = { location, addEventListener: () => {}, confirm: () => false };
+Object.defineProperty(globalThis, "navigator", {
+  value: { clipboard: { writeText: () => Promise.resolve() } },
+  configurable: true,
+});
+
+let mockRejections = new Map();
+globalThis.fetch = async (url) => {
+  const path = String(url);
+  for (const [prefix, refusal] of mockRejections.entries()) {
+    if (path.includes(prefix)) {
+      return {
+        ok: false,
+        status: refusal.status || 409,
+        text: async () => JSON.stringify({ error: refusal.error }),
+      };
+    }
+  }
+  return { ok: true, status: 200, text: async () => "{}" };
+};
+
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const { renderTasks } = await import("./js/tasks.js");
+
+function find(node, predicate) {
+  if (!node) return null;
+  if (predicate(node)) return node;
+  for (const child of node.children || []) {
+    const match = find(child, predicate);
+    if (match) return match;
+  }
+  return null;
+}
+
+// 1. Row-level Ship refusal with long message and run ID
+const shipTask = {
+  id: "ORB-12971",
+  title: "Ship task with in-flight run conflict",
+  status: "backlog",
+  history: [],
+  artifacts: [],
+  status_transitions: [],
+};
+
+let currentTasks = [shipTask];
+const shipContext = {
+  getTasks: () => currentTasks,
+  getTasksMeta: () => null,
+  getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["backlog"]),
+  statusOrder: statuses,
+  fmtAbsTime: (v) => v,
+  refreshDashboard: () => Promise.resolve(),
+};
+
+const longShipError = "task ORB-12971 already has an in-flight run (jrun-20260925-0551-c2); wait for it to finish or cancel it";
+mockRejections.set("/api/workflows/ship", { status: 409, error: longShipError });
+
+renderTasks(currentTasks, shipContext);
+
+const shipBtn = find(get("tasks-body"), (n) => n.className && n.className.includes("task-quick ship"));
+assert.ok(shipBtn, "Ship quick action button must be rendered on backlog task");
+
+shipBtn.listeners.click({ stopPropagation: () => {} });
+await new Promise(setImmediate);
+
+const shipErr = find(get("tasks-body"), (n) => n.className && n.className.includes("task-quick-error"));
+assert.ok(shipErr, "task-quick-error must be rendered in task list after ship refusal");
+
+const expectedShipText = `ship failed: ${longShipError}`;
+assert.equal(
+  shipErr.textContent,
+  expectedShipText,
+  "Full error message must be rendered in DOM without truncation",
+);
+
+// Assert the message is not clamped to an ellipsized line
+assert.notEqual(shipErr.getAttribute("title"), longShipError, "Error must not be hidden only in a hover title attribute");
+
+const rowWithShipErr = find(get("tasks-body"), (n) => n.dataset && n.dataset.key === "task-ORB-12971");
+assert.ok(rowWithShipErr, "task row node must exist");
+assert.ok(
+  rowWithShipErr.className.includes("has-quick-error"),
+  "Task row must receive has-quick-error class when quick error is present",
+);
+
+// Assert run id link is rendered
+const runLink = find(shipErr, (n) => n.className && n.className.includes("task-quick-error-link"));
+assert.ok(runLink, "Run ID link must be rendered inside quick error");
+assert.equal(runLink.textContent, "jrun-20260925-0551-c2");
+assert.equal(runLink.href, "#runs?run_id=jrun-20260925-0551-c2");
+
+// Assert clicking quick error stops propagation to allow text selection without toggling row
+let propagationStopped = false;
+shipErr.listeners.click({ stopPropagation: () => { propagationStopped = true; } });
+assert.ok(propagationStopped, "Quick error element must stop event propagation for text selection");
+
+// 2. Refused Approve quick action shows its full message the same way
+const approveTask = {
+  id: "ORB-12972",
+  title: "Proposed task refused approval",
+  status: "proposed",
+  history: [],
+  artifacts: [],
+  status_transitions: [],
+};
+
+currentTasks = [approveTask];
+const approveContext = {
+  getTasks: () => currentTasks,
+  getTasksMeta: () => null,
+  getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["proposed"]),
+  statusOrder: statuses,
+  fmtAbsTime: (v) => v,
+  refreshDashboard: () => Promise.resolve(),
+};
+
+const longApproveError = "status transition refused: governance policy requires an explicit approval note for critical tasks";
+mockRejections.set("/approve", { status: 403, error: longApproveError });
+
+renderTasks(currentTasks, approveContext);
+
+const approveBtn = find(get("tasks-body"), (n) => n.className && n.className.includes("task-quick approve"));
+assert.ok(approveBtn, "Approve quick action button must be rendered on proposed task");
+
+approveBtn.listeners.click({ stopPropagation: () => {} });
+await new Promise(setImmediate);
+
+const approveErr = find(get("tasks-body"), (n) => n.className && n.className.includes("task-quick-error"));
+assert.ok(approveErr, "task-quick-error must be rendered in task list after approve refusal");
+
+const expectedApproveText = `approve failed: ${longApproveError}`;
+assert.equal(
+  approveErr.textContent,
+  expectedApproveText,
+  "Full approve error message must be rendered without truncation",
+);
+
+const rowWithApproveErr = find(get("tasks-body"), (n) => n.dataset && n.dataset.key === "task-ORB-12972");
+assert.ok(
+  rowWithApproveErr.className.includes("has-quick-error"),
+  "Task row must receive has-quick-error class when approve error is present",
+);
+
+// 3. Detail panel's Ship error renders above detail columns without displacing them
+const detailTask = {
+  id: "ORB-12973",
+  title: "Detail task to test panel ship error",
+  status: "backlog",
+  history: [],
+  artifacts: [],
+  status_transitions: [],
+};
+
+currentTasks = [detailTask];
+const detailContext = {
+  getTasks: () => currentTasks,
+  getTasksMeta: () => null,
+  getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["backlog"]),
+  statusOrder: statuses,
+  fmtAbsTime: (v) => v,
+  refreshDashboard: () => Promise.resolve(),
+};
+
+renderTasks(currentTasks, detailContext);
+
+// Expand the row to mount detail panel
+const rowToExpand = find(get("tasks-body"), (n) => n.dataset && n.dataset.key === "task-ORB-12973");
+rowToExpand.listeners.click();
+renderTasks(currentTasks, detailContext);
+
+const detailPanel = find(get("tasks-body"), (n) => n.className && n.className.includes("row-detail split-layout"));
+assert.ok(detailPanel, "Detail panel must be rendered when row is expanded");
+
+const detailShipBtn = find(detailPanel, (n) => n.className && n.className.includes("action ship"));
+assert.ok(detailShipBtn, "Detail panel must contain Ship button");
+
+const detailShipError = "task ORB-12973 already in flight";
+mockRejections.set("/api/workflows/ship", { status: 409, error: detailShipError });
+
+detailShipBtn.listeners.click({ stopPropagation: () => {} });
+await new Promise(setImmediate);
+
+const detailActionError = find(detailPanel, (n) => n.className && n.className.includes("action-error"));
+assert.ok(detailActionError, "Detail panel must prepend action-error when ship fails");
+assert.equal(detailActionError.textContent, `ship failed: ${detailShipError}`);
+
+// Assert child ordering: action-error is child 0 (prepended), detail-main is child 1, detail-side is child 2
+assert.equal(detailPanel.children[0], detailActionError, "action-error must be prepended before detail columns");
+assert.ok(detailPanel.children[1].className.includes("detail-main"), "detail-main must remain the first content column");
+assert.ok(detailPanel.children[2].className.includes("detail-side"), "detail-side must remain the second content column");
+"##,
+    );
+}
+
+/// ORB-12978: Layout contracts for quick-action errors and task-detail Ship errors:
+/// 1. `.task-quick-error` spans the full width of the row (`grid-column: 1 / -1`) and wraps without clamping (`white-space: normal`, `overflow-wrap: anywhere`).
+/// 2. Under container query max-width: 620px (covering mobile ~390px), `.row.has-quick-error` assigns `grid-area: error` across all columns (`error error error`) to prevent horizontal scroll.
+/// 3. In the detail panel, `.row-detail.split-layout > .action-error` has `grid-column: 1 / -1`, rendering full width above detail columns without displacing the main/side grid tracks.
+#[test]
+fn dashboard_quick_and_detail_error_layout_contracts_prevent_horizontal_scroll_and_displacement() {
+    let css = DASHBOARD_CSS;
+
+    // 1. Quick error spans the full row width and does not clamp
+    assert!(
+        css.contains(".task-quick-error {")
+            && css.contains("grid-column: 1 / -1;")
+            && css.contains("white-space: normal;")
+            && css.contains("overflow-wrap: anywhere;")
+            && css.contains("word-break: break-word;"),
+        "task-quick-error must wrap across the full row width with overflow-wrap: anywhere to prevent truncation and overflow"
+    );
+
+    // Ensure the old clamping is gone
+    let quick_error_block = css
+        .split(".task-quick-error {")
+        .nth(1)
+        .expect("task-quick-error rule must exist")
+        .split('}')
+        .next()
+        .expect("task-quick-error block must terminate");
+    assert!(
+        !quick_error_block.contains("text-overflow: ellipsis"),
+        "task-quick-error must not be clamped with text-overflow: ellipsis"
+    );
+    assert!(
+        !quick_error_block.contains("white-space: nowrap"),
+        "task-quick-error must not be forced onto one line with white-space: nowrap"
+    );
+
+    // 2. Mobile / narrow viewport support (~390px phone width) via container query
+    assert!(
+        css.contains("@container tasks-panel (max-width: 620px)")
+            && css.contains("\"error error error\"")
+            && css.contains(".row .task-quick-error { grid-area: error; }"),
+        "narrow tasks-panel container query must place task-quick-error in a dedicated spanning row"
+    );
+
+    // 3. Detail panel Ship error renders full width without displacing split-layout columns
+    assert!(
+        css.contains(".row-detail.split-layout > .action-error")
+            && css.contains("grid-column: 1 / -1;"),
+        "detail panel action-error must span grid-column: 1 / -1 so it stays full-width above detail columns without displacing main/side tracks"
+    );
+}
