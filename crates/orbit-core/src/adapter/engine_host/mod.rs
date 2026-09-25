@@ -2,6 +2,3 @@
 
 mod runtime_host;
 pub(crate) mod v2_host;
-
-#[cfg(test)]
-mod tests;

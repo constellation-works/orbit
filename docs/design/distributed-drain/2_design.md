@@ -158,7 +158,7 @@ the submission. Acceptance and landing resolve revisions through one shared rule
 
 **Not yet executable.** Only an owner-local destination is served. The routed follower
 `PullPeer` over federated SSH does not exist (only `OwnerPullPeer` in
-`adapter/engine_host/v2_host/pull_adapters.rs`), no mutating distributed entry point is a
+`adapter/engine_host/v2_host/pull/adapters.rs`), no mutating distributed entry point is a
 registered tool, and `orbit run auto --pull` is not implemented. `run auto` / `run ship` still
 render a legacy pipeline name for `pr` and `local` modes after taking the shared admission
 decision ([§7.3](#73-ship-sweep)).

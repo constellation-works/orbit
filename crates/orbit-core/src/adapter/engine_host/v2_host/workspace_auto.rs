@@ -12,12 +12,12 @@ use crate::OrbitRuntime;
 
 use crate::runtime::engine::crew::CrewAllowlist;
 
-use super::auto_admission::{AdmissionHolders, select_admissions};
-use super::backlog_exclusion::{
+use super::admission::auto_admission::{AdmissionHolders, select_admissions};
+use super::admission::backlog_exclusion::{
     BacklogTaskExclusionReason, allowlist_from_input, backlog_snapshot,
     sort_tasks_for_automatic_dispatch,
 };
-use super::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
+use super::admission::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
 
 /// The job that ships loose leaves. Its live runs are read for two things at
 /// once: how many slots are occupied, and which backlog tasks are already
