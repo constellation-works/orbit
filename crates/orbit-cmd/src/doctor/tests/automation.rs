@@ -338,3 +338,46 @@ fn tracked_orbit_files_warn_until_untracked() {
     assert_eq!(row.message, "no tracked files under .orbit/");
     assert_eq!(row.remediation, None);
 }
+
+/// [ORB-12968] A scheduled reboot is a warning naming its mode and time; with
+/// none pending the row is ok. The probe is injected, never the real `/run`.
+#[test]
+fn host_shutdown_check_names_a_scheduled_reboot() {
+    use orbit_core::runtime::host_signal::{FixedHostSignals, ScheduledShutdown};
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let quiet = workspace_runtime(&temp)
+        .with_host_signal_probe(std::sync::Arc::new(FixedHostSignals::none()));
+    let results = quiet.doctor_workspace().expect("doctor");
+    assert_eq!(
+        status_of(&results, "host-shutdown").status,
+        WorkspaceDoctorStatus::Ok
+    );
+
+    let scheduled_at = chrono::DateTime::parse_from_rfc3339("2026-09-25T04:00:00Z")
+        .expect("time")
+        .with_timezone(&Utc);
+    let held = quiet.with_host_signal_probe(std::sync::Arc::new(FixedHostSignals::scheduled(
+        ScheduledShutdown {
+            mode: "reboot".to_string(),
+            scheduled_at,
+            source: "fixture".to_string(),
+        },
+    )));
+    let results = held.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "host-shutdown");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(
+        row.message
+            .contains("host reboot scheduled for 2026-09-25T04:00:00Z"),
+        "{}",
+        row.message
+    );
+    assert!(
+        row.remediation
+            .as_deref()
+            .is_some_and(|remediation| remediation.contains("shutdown -c")),
+        "{:?}",
+        row.remediation
+    );
+}

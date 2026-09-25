@@ -16,6 +16,7 @@ use crate::OrbitRuntime;
 use crate::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
+use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
 use chrono::Utc;
 use orbit_automation::routines::sweep::run_sweep_core;
 pub use orbit_automation::routines::sweep::{
@@ -165,16 +166,19 @@ pub fn run_sweep_at_with_providers(
         options,
         local_machine,
         workspace_provider,
+        default_host_signal_probe().as_ref(),
         Utc::now(),
     )
 }
 
-/// Test seam for one scheduler tick at an explicit instant.
+/// Test seam for one scheduler tick at an explicit instant, with an injected
+/// host-signal probe.
 pub(crate) fn run_sweep_at_with_providers_at(
     global_root: &Path,
     options: SweepOptions,
     local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
+    host_signals: &dyn HostSignalProbe,
     now_utc: chrono::DateTime<Utc>,
 ) -> Result<SweepOutcome, OrbitError> {
     // One pass per host at a time: overlapping invocations from a slow prior
@@ -206,6 +210,45 @@ pub(crate) fn run_sweep_at_with_providers_at(
 
     let mut collection = collect_routines(&discovered.entries);
     load_errors.append(&mut collection.errors);
+
+    // [ORB-12968] A pending host shutdown or reboot would kill anything this
+    // tick starts, so the whole fire phase — routines and auto-tasks — stands
+    // down for it. Cursors are not advanced, so once the schedule is cancelled
+    // or the host is back, each routine's own `missed_run` policy decides what
+    // the held slots become, exactly as after any other downtime.
+    if let Some(shutdown) = host_signals.scheduled_shutdown() {
+        let reason = shutdown.hold_reason();
+        tracing::warn!(
+            target: "orbit.core.sweep",
+            mode = shutdown.mode.as_str(),
+            scheduled_at = %shutdown.scheduled_at,
+            routines = collection.routines.len(),
+            "sweep.host_shutdown_hold: {}; no routine or auto-task fires this tick",
+            shutdown.describe(),
+        );
+        return Ok(SweepOutcome {
+            machine_name: local_machine.machine_name,
+            machine_id: local_machine.machine_id,
+            lock_busy: false,
+            reports: collection
+                .routines
+                .iter()
+                .map(|routine| RoutineSweepReport {
+                    routine: routine.definition.name.clone(),
+                    source: routine.source_workspace.clone(),
+                    origin: routine.origin.as_str(),
+                    action: "skipped",
+                    reason: Some(reason.clone()),
+                    slot: None,
+                    run_id: None,
+                    batch: Vec::new(),
+                })
+                .collect(),
+            auto_task_reports: Vec::new(),
+            load_errors,
+            no_workspace_loaded,
+        });
+    }
 
     let dispatch = RuntimeDispatch {
         runtimes: discovered

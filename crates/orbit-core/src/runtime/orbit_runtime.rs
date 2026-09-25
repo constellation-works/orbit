@@ -16,6 +16,9 @@ use orbit_types::workspace::WorkspacePaths;
 use serde_json::Value;
 
 use super::config_path::validated_runtime_config_path;
+use super::host_signal::{
+    FixedHostSignals, HostSignalProbe, ScheduledShutdown, default_host_signal_probe,
+};
 use super::workspace::binding::WorkspaceRuntimeBinding;
 use super::workspace::catalog;
 use super::{builder, event_bus, worker_coordination};
@@ -39,6 +42,9 @@ pub struct OrbitRuntime {
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
     workspace_catalog: Option<Arc<dyn catalog::WorkspaceCatalog>>,
+    /// Host lifecycle signals unattended admission consults before starting
+    /// new work [ORB-12968]. The platform probe by default; tests inject one.
+    host_signals: Arc<dyn HostSignalProbe>,
     pub event_log: event_bus::EventLog,
     /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
     /// this runtime opened (empty `applied` when the layout was already
@@ -165,6 +171,7 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_machine_identity: None,
             workspace_catalog: None,
+            host_signals: default_host_signal_probe(),
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(layout_report),
             _temp_dir: None,
@@ -209,6 +216,8 @@ impl OrbitRuntime {
             coordination_write_owner: None,
             automation_machine_identity: None,
             workspace_catalog: None,
+            // An in-memory runtime is not bound to a host lifecycle.
+            host_signals: Arc::new(FixedHostSignals::none()),
             event_log: event_bus::EventLog::default(),
             layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
             _temp_dir: Some(Arc::new(temp_dir)),
@@ -316,6 +325,20 @@ impl OrbitRuntime {
 
     pub(crate) fn workspace_catalog(&self) -> Option<&Arc<dyn catalog::WorkspaceCatalog>> {
         self.workspace_catalog.as_ref()
+    }
+
+    /// Replace the host-signal probe, so a fixture can present a scheduled
+    /// shutdown without touching the real `/run` filesystem [ORB-12968].
+    pub fn with_host_signal_probe(mut self, probe: Arc<dyn HostSignalProbe>) -> Self {
+        self.host_signals = probe;
+        self
+    }
+
+    /// The host shutdown or reboot currently pending, if any. While one is,
+    /// unattended admission points start no new runs; in-flight runs are
+    /// left alone.
+    pub fn scheduled_host_shutdown(&self) -> Option<ScheduledShutdown> {
+        self.host_signals.scheduled_shutdown()
     }
 
     /// Refuse control-plane work in a replica checkout.

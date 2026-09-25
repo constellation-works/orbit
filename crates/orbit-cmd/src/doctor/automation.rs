@@ -60,6 +60,33 @@ pub(super) fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
     )
 }
 
+/// A pending host shutdown or reboot holds every unattended admission —
+/// routine and auto-task fires, drain waves, the ship sweep — so doctor names
+/// it with its mode and time [ORB-12968]. Nothing is wrong with the workspace;
+/// the warning explains why no new work is starting.
+pub(super) fn doctor_check_host_shutdown(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    match runtime.scheduled_host_shutdown() {
+        None => check(
+            "host-shutdown",
+            WorkspaceDoctorStatus::Ok,
+            "no host shutdown or reboot is scheduled".to_string(),
+        ),
+        Some(shutdown) => actionable_check(
+            "host-shutdown",
+            WorkspaceDoctorStatus::Warning,
+            format!(
+                "{} (read from {}); scheduled routines, auto-tasks, drain waves and the ship \
+                 sweep start no new runs until it clears, and in-flight runs are not touched",
+                shutdown.describe(),
+                shutdown.source
+            ),
+            "Nothing to repair: admissions resume on their own after the restart. To resume \
+             them now, cancel the schedule as root with `shutdown -c`."
+                .to_string(),
+        ),
+    }
+}
+
 /// Delivery automation consumers that cannot make progress: evaluation
 /// suspended by a stall, an enabled definition whose branch does not exist, or
 /// an enabled definition this host may never admit work for.

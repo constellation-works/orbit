@@ -4,7 +4,7 @@ summary: Check Orbit workspace, database, dashboard, log-sink, job-run, and rout
 tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
-related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244]
+related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
 last_validated: 2026-09-20
 ---
 
@@ -28,6 +28,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `job-runs` | orphaned `pending` or `running` runs with no live worker process |
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
+| `host-shutdown` | warns while the host has a shutdown or reboot scheduled (logind's `/run/systemd/shutdown/scheduled`), naming its mode and time; unattended admissions are held until it clears ([distributed drain](./distributed-drain.md#scheduled-host-shutdown-or-reboot)) |
 | `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
 | `tracked-orbit-files` | git still tracks files under `.orbit/`; `.orbit/` is per-user state. Remedy: `git rm -r --cached .orbit` |
 | `empty-task-stubs` | empty `ORB-*` directories under those partitions, or ones that hold only `.task.yaml.lock` (aborted creates). Data-bearing dirs missing `task.yaml` are not stubs; `orbit task reindex` still clears this row |

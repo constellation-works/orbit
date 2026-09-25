@@ -882,6 +882,52 @@ fn claimed_occupancy_stands_the_unattended_sweep_down_but_not_an_explicit_ship()
     assert_eq!(explicit.occupancy.occupied, 1);
 }
 
+/// [ORB-12968] With a host reboot scheduled, the unattended sweep stands down
+/// and names the schedule; an operator's explicit ship and drain are admitted
+/// with the schedule reported beside the decision.
+#[test]
+fn a_scheduled_host_shutdown_stands_unattended_entry_down_but_not_an_explicit_one() {
+    use crate::application::distributed::DrainEntryPoint;
+    use crate::runtime::host_signal::{FixedHostSignals, ScheduledShutdown};
+
+    let (_root, runtime, _repo_root) = test_runtime();
+    let shutdown = ScheduledShutdown {
+        mode: "poweroff".to_string(),
+        scheduled_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        source: "fixture".to_string(),
+    };
+    let held = runtime.with_host_signal_probe(std::sync::Arc::new(FixedHostSignals::scheduled(
+        shutdown.clone(),
+    )));
+
+    let sweep = held
+        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .expect("sweep decision");
+    assert_eq!(
+        sweep.refusal.as_ref().map(DrainEntryRefusal::code),
+        Some("host_shutdown_scheduled")
+    );
+    let reason = sweep.refusal.as_ref().map(DrainEntryRefusal::reason);
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(&shutdown.describe())),
+        "{reason:?}"
+    );
+    assert!(matches!(
+        sweep.into_result(),
+        Err(orbit_common::OrbitError::PolicyDenied(_))
+    ));
+
+    for entry in [DrainEntryPoint::ExplicitShip, DrainEntryPoint::OwnerDrain] {
+        let explicit = held
+            .drain_entry_admission(entry, &[], false)
+            .expect("explicit decision");
+        assert!(explicit.refusal.is_none(), "{}", entry.label());
+        assert_eq!(explicit.host_shutdown.as_ref(), Some(&shutdown));
+    }
+}
+
 /// [ORB-12500] A replica serves no owner coordination from any retained entry
 /// point. It executes through pull instead, which is the whole point of the
 /// role split.

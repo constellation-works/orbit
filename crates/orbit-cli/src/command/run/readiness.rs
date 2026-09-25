@@ -12,7 +12,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots."
+    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots.\n\nWhile the host has a shutdown or reboot scheduled, every task reports\n`host_shutdown_scheduled` and the output names the scheduled time and mode."
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -76,6 +76,9 @@ pub(super) fn readiness_lines(payload: &Value) -> Vec<String> {
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    if let Some(hold) = host_shutdown_hold(&capacity["host_shutdown"]) {
+        lines.push(hold);
+    }
     if let Some(phases) = occupancy_phases(&capacity["occupancy"]["phases"]) {
         lines.push(format!("Occupied slots: {phases}."));
     }
@@ -98,6 +101,19 @@ pub(super) fn readiness_lines(payload: &Value) -> Vec<String> {
         }
     }
     lines
+}
+
+/// [ORB-12968] A pending host shutdown holds every new admission, so it is
+/// named up front with its mode and time rather than left to per-task reasons.
+fn host_shutdown_hold(shutdown: &Value) -> Option<String> {
+    let mode = shutdown["mode"].as_str()?;
+    let at = shutdown["scheduled_at"]
+        .as_str()
+        .unwrap_or("an unknown time");
+    Some(format!(
+        "Admissions held: host {mode} scheduled for {at}. New runs start again once the \
+         schedule is cancelled or the host has restarted; in-flight runs are not touched."
+    ))
 }
 
 /// [ORB-11973] A saturated drain reads the same whether its slots are working
