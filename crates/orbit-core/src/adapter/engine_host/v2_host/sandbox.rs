@@ -79,6 +79,7 @@ pub(crate) fn resolve_executor_sandbox(
                 append_codex_side_write_roots(runtime, provider, &mut resolved)?;
                 append_orbit_child_runtime_write_roots(runtime, &mut resolved);
                 append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
+                deny_registered_auto_task_definition_writes(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 Ok(Some(ResolvedSandbox {
                     kind,
@@ -160,7 +161,8 @@ pub(crate) fn resolve_executor_sandbox(
 /// the workspace root. The kernel's `subpath` predicate is meaningless for
 /// relative paths, so this is the layer that turns Orbit's policy into a
 /// payload `sandbox-exec` can enforce.
-fn resolve_fs_profile_absolute(
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn resolve_fs_profile_absolute(
     runtime: &OrbitRuntime,
     fs_profile: Option<&str>,
     workspace_override: Option<&Path>,
@@ -257,8 +259,8 @@ fn append_codex_side_write_roots(
 /// stay denied until the corresponding tools are added to those activity
 /// allowlists. Keep the grants path-shaped instead of re-allowing the whole
 /// home directory or workspace `.orbit` tree.
-#[cfg(target_os = "macos")]
-fn append_orbit_child_runtime_write_roots(
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+pub(super) fn append_orbit_child_runtime_write_roots(
     runtime: &OrbitRuntime,
     resolved: &mut ResolvedFsProfile,
 ) {
@@ -293,6 +295,31 @@ fn append_orbit_child_runtime_write_roots(
     ] {
         append_unique_modify_root(resolved, root);
     }
+}
+
+/// Keep registered scheduler definitions behind the host-brokered auto-task
+/// tools. The default policy exception is for host-side writes; nested provider
+/// children must not inherit it as direct filesystem authority.
+#[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
+pub(super) fn deny_registered_auto_task_definition_writes(
+    runtime: &OrbitRuntime,
+    resolved: &mut ResolvedFsProfile,
+) {
+    let workspace_orbit = runtime
+        .paths()
+        .orbit_dir
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.paths().orbit_dir.clone());
+    let auto_tasks = workspace_orbit.join("auto_tasks").display().to_string();
+    let auto_tasks_descendants = format!("{auto_tasks}/");
+
+    resolved.modify.retain(|rule| {
+        if rule.starts_with('!') {
+            return true;
+        }
+        rule != &auto_tasks && !rule.starts_with(&auto_tasks_descendants)
+    });
+    resolved.modify.push(format!("!{auto_tasks}/**"));
 }
 
 /// Deny the host-only recovery authority store, after every convenience grant.

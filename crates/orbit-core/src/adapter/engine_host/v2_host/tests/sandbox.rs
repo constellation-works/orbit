@@ -4,6 +4,10 @@ use orbit_exec::{
     compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, prepare_linux_bwrap_write_grants,
 };
 
+use crate::adapter::engine_host::v2_host::sandbox::{
+    append_orbit_child_runtime_write_roots, deny_registered_auto_task_definition_writes,
+    resolve_fs_profile_absolute,
+};
 use crate::adapter::engine_host::v2_host::test_support::seeded_runtime_with_executor;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use crate::adapter::engine_host::v2_host::test_support::{
@@ -742,6 +746,51 @@ fn resolve_executor_sandbox_appends_gemini_orbit_runtime_roots_without_home_real
         assert!(
             !modify.iter().any(|entry| entry == &excluded),
             "gemini sandbox must not allow non-activity-exposed Orbit store {excluded}: {modify:?}"
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn macos_child_profile_denies_registered_auto_task_definitions() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut resolved = resolve_fs_profile_absolute(&runtime, None, None).expect("resolve profile");
+    append_orbit_child_runtime_write_roots(&runtime, &mut resolved);
+    deny_registered_auto_task_definition_writes(&runtime, &mut resolved);
+
+    let workspace_orbit = runtime
+        .paths()
+        .orbit_dir
+        .canonicalize()
+        .unwrap_or_else(|_| runtime.paths().orbit_dir.clone())
+        .display()
+        .to_string();
+    assert!(
+        !resolved
+            .modify
+            .iter()
+            .any(|entry| entry.starts_with(&format!("{workspace_orbit}/auto_tasks"))),
+        "a macOS child must not receive a direct scheduler-definition write root: {:?}",
+        resolved.modify
+    );
+    #[cfg(target_os = "linux")]
+    {
+        let auto_task = runtime
+            .paths()
+            .orbit_dir
+            .join("auto_tasks/scheduled-job.yaml");
+        assert!(
+            linux_bwrap_write_grant_diagnostic(&resolved, &auto_task)
+                .expect("diagnose scheduler-definition write")
+                .is_some(),
+            "registered scheduler definitions must remain unwritable"
+        );
+        let task_store = runtime.paths().orbit_dir.join("tasks/ORB-00001.yaml");
+        assert!(
+            linux_bwrap_write_grant_diagnostic(&resolved, &task_store)
+                .expect("diagnose admitted task-store write")
+                .is_none(),
+            "admitted task-store writes must remain available"
         );
     }
 }
