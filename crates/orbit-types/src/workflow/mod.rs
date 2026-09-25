@@ -39,7 +39,8 @@ pub use activity_job::{
     validate_tool_allowlist_against_registered_tools,
 };
 pub use auto_task::{
-    AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskSchedule,
+    AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskCursor, AutoTaskCursorState,
+    AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSchedule, AutoTaskSkipRecord,
     AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, SWEEP_CURSOR_ARTIFACT,
     SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord, SweepCursorSelector,
     auto_task_tag, is_valid_auto_task_name,
@@ -75,10 +76,5 @@ pub use run_state::{
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
-
-mod auto_task_cursor;
-pub use auto_task_cursor::{
-    AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim, AutoTaskSkipRecord,
-};
 
 pub mod automation;

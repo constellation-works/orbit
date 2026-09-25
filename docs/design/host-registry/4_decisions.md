@@ -9,7 +9,7 @@ status: Accepted
 feature: host-registry
 doc_role: decisions
 tags: [host-registry, machine-identity, workspace-catalog, runtime-composition]
-paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-config/src/registry.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**"]
+paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-config/src/registry/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/**"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
 related_artifacts: [ORB-11008, ORB-11009, ORB-12725]
 ---

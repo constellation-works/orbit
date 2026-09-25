@@ -1,22 +1,8 @@
-#[path = "response/envelope.rs"]
-// Visible to sibling-layout tests for this file-rooted module without
-// reintroducing a nested `response/tests` tree.
 pub(in crate::types) mod envelope;
-#[path = "response/protocol_schema.rs"]
-// Visible to sibling-layout tests for this file-rooted module without
-// reintroducing a nested `response/tests` tree.
 pub(in crate::types) mod protocol_schema;
-#[path = "response/tool_calls.rs"]
 mod tool_calls;
-#[path = "response/trace.rs"]
 mod trace;
-#[path = "response/usage.rs"]
-// Visible to sibling-layout tests for this file-rooted module without
-// reintroducing a nested `response/tests` tree.
 pub(in crate::types) mod usage;
-#[path = "response/wrapper.rs"]
-// Visible to sibling-layout tests for this file-rooted module without
-// reintroducing a nested `response/tests` tree.
 pub(in crate::types) mod wrapper;
 
 use orbit_common::OrbitError;

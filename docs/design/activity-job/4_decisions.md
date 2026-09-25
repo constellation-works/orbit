@@ -1238,7 +1238,7 @@ Rejected alternative: enforce uniqueness at the store layer as a constraint on n
 ## Dispatch admission separates unmet dependencies from unsatisfiable ones
 
 **Recorded:** 2026-08-02 22:25:12.480309Z · [ORB-10593]
-**Paths:** `crates/orbit-types/src/task/model.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs`
+**Paths:** `crates/orbit-types/src/task/model/task.rs`, `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs`
 
 ### Context
 

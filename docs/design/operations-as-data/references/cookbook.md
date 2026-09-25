@@ -55,7 +55,7 @@ For a noun with verbs `v₁…vₙ`, find:
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
 | Handlers | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
 | CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>.rs` |
-| CLI audit metadata | `crates/orbit-cli/src/command/operation.rs` |
+| CLI audit metadata | `crates/orbit-cli/src/command/operation_registry.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
 
 Note where the *same* field is described differently in two places. Do **not**
@@ -134,7 +134,7 @@ Delete the per-verb `Args` structs and `Execute` impls. Keep the parent
 impls that are three lines each, delegating to `operation_args`. Keep the
 response renderers — those are presentation and stay per-noun.
 
-Update `command/operation.rs`'s arm for the noun to read
+Update `command/operation_registry.rs`'s arm for the noun to read
 `invocation.spec.name`, `invocation.target_id()`, and `invocation.json` instead
 of matching verb by verb.
 

@@ -343,7 +343,7 @@ chooses `mode: cloud`. Phase 3 lets task-pilot mark candidates as `cloud-eligibl
    `gh pr diff --name-status` instead of the local `git status`, and record
    `execution_summary_derived`. `reject_failed_delivery` then applies unchanged, so a PR
    summarized as failed or blocked sends the task to `blocked`, not `review`.
-4. **PR ref.** Stamp `{system: "github-pr", id: <number>}` (`task/model.rs:736`) and set
+4. **PR ref.** Stamp `{system: "github-pr", id: <number>}` (`task/model/support.rs`) and set
    `pr_status`.
 
 **Why reading the PR body is allowed.** The AGENTS rule forbids reading the agent's *final

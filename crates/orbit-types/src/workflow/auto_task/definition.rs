@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::error::WorkflowError;
+use super::super::error::WorkflowError;
 use crate::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
 /// Auto-task YAML schema version this binary reads and writes.
@@ -170,7 +170,7 @@ pub struct AutoTaskDefinition {
 pub enum AutoTaskSchedule {
     /// Verified landings, independent of task completion.
     Deliveries {
-        deliveries_landed: super::automation::DeliveryTrigger,
+        deliveries_landed: super::super::automation::DeliveryTrigger,
     },
     /// Standard 5-field cron expression, evaluated in host-local time.
     Cron { cron: String },
@@ -185,7 +185,7 @@ pub enum AutoTaskSchedule {
 struct RawSchedule {
     cron: Option<String>,
     every_minutes: Option<u64>,
-    deliveries_landed: Option<super::automation::DeliveryTrigger>,
+    deliveries_landed: Option<super::super::automation::DeliveryTrigger>,
 }
 
 impl<'de> Deserialize<'de> for AutoTaskSchedule {

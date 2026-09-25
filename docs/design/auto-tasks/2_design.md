@@ -27,7 +27,7 @@ and unimplemented; existing scheduling and action semantics remain current.
 
 ## 1. The definition record
 
-`AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task.rs`) is a
+`AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task/definition.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
 `schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b), and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum

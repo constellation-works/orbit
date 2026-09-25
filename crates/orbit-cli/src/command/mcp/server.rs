@@ -35,7 +35,7 @@ use serde_json::Value;
 /// `workspace` as an optional filter, and behavior must agree.
 ///
 /// `pub(crate)` and re-exported through `command::mcp` so the CLI path in
-/// `command/tool/run.rs` (and `command/operation.rs`'s task-artifact routing)
+/// `command/tool/run.rs` (and `command/operation_registry.rs`'s task-artifact routing)
 /// share this single list instead of keeping a second one that can drift
 /// [ORB-12263].
 pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =

@@ -91,7 +91,7 @@ Add the opt-in `skip_if_unchanged` precondition, evaluated after dedupe on `Fire
 ## No-diff-expected tasks bypass repository change gates
 
 **Recorded:** 2026-07-12 03:33:35.554901Z · [ORB-10148]
-**Paths:** `crates/orbit-engine/src/executor/automation/vcs/**`, `crates/orbit-types/src/task/model.rs`, `.orbit/auto_tasks/**`
+**Paths:** `crates/orbit-engine/src/executor/automation/vcs/**`, `crates/orbit-types/src/task/model/task.rs`, `.orbit/auto_tasks/**`
 
 ### Context
 
@@ -128,7 +128,7 @@ Read and replace tracked auto-task definitions through the runtime local root. K
 ## Run budgets are provider-neutral: wall-clock timeouts, never turn caps
 
 **Recorded:** 2026-07-12 03:33:34.766432Z · [ORB-10146], [ORB-10148]
-**Paths:** `crates/orbit-core/assets/**`, `crates/orbit-types/src/workflow/auto_task.rs`, `.orbit/auto_tasks/**`
+**Paths:** `crates/orbit-core/assets/**`, `crates/orbit-types/src/workflow/auto_task/definition.rs`, `.orbit/auto_tasks/**`
 
 ### Context
 
