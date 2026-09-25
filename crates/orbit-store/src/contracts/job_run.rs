@@ -104,6 +104,26 @@ pub trait JobRunStoreBackend: Send + Sync {
         input: Option<serde_json::Value>,
         retry_source_run_id: Option<String>,
     ) -> Result<JobRun, OrbitError>;
+    /// Atomically admit a resume of `retry_source_run_id` unless its retry
+    /// lineage already has a live run.
+    ///
+    /// The lineage is the source's `retry_source_run_id` ancestors and every
+    /// run descended from any of them: all of them reuse the same checkpointed
+    /// worktree and task claims. When one is `pending`, `running`, or
+    /// `retrying`, this inserts nothing and fails with
+    /// [`OrbitError::ResumeRunInFlight`] naming the oldest such run. The
+    /// lineage read and the insert share one immediate transaction, so
+    /// concurrent resumes of one lineage from any process admit exactly one.
+    fn insert_resume_job_run(
+        &self,
+        _job_id: &str,
+        _attempt: u32,
+        _scheduled_at: DateTime<Utc>,
+        _input: Option<serde_json::Value>,
+        _retry_source_run_id: &str,
+    ) -> Result<JobRun, OrbitError> {
+        Err(OrbitError::Store("resume admission unavailable".into()))
+    }
     /// Atomically admit and link a child run unless its parent has stopped
     /// admissions.
     ///

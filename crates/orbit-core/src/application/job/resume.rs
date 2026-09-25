@@ -385,6 +385,15 @@ impl OrbitRuntime {
     /// workflow operation and takes the same workspace-claim gate as
     /// [`Self::submit_ship_run`] — checked here, on the shared path, rather than
     /// in the adapters.
+    ///
+    /// At most one run per retry lineage is live. Every run in a lineage reuses
+    /// the same checkpointed worktree and task claims, so while one is pending
+    /// or running, a further resume of any member is refused with
+    /// [`OrbitError::ResumeRunInFlight`] naming it. The check is part of the
+    /// store insert, so concurrent requests from the dashboard, MCP, and CLI
+    /// admit exactly one. Once that run is terminal, resuming is allowed again
+    /// and chains from the run the caller names — its checkpoints and attempt
+    /// number — not from the lineage's latest attempt.
     pub fn submit_resume_run(
         &self,
         source_run_id: &str,
@@ -394,6 +403,10 @@ impl OrbitRuntime {
         self.require_workspace_claim("orbit.workflow.run.resume", claim_token)?;
         let plan = self.plan_job_run_resume(source_run_id)?;
         let job_id = plan.source.job_id.clone();
+        // Settle orphans first: a lineage run whose worker died (a host reboot)
+        // still reads as running and would otherwise refuse the resume that
+        // exists to recover it.
+        self.reconcile_stale_job_runs(Some(&job_id))?;
         self.submit_persisted_pipeline_run(PipelineSubmission {
             resume: Some(&plan),
             ..PipelineSubmission::catalog(&job_id, plan.input.clone(), actor)

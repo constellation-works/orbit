@@ -1064,3 +1064,129 @@ fn local_pull_pipeline_limit_and_live_parent_reduction_are_authoritative() {
             .is_none()
     );
 }
+
+fn failed_run(backend: &SqliteJobRunStore, retry_source: Option<&str>) -> String {
+    let now = Utc::now();
+    let run = match retry_source {
+        Some(source) => backend.insert_resume_job_run("job-resume", 2, now, None, source),
+        None => backend.insert_job_run("job-resume", 1, now, None, None),
+    }
+    .expect("insert lineage run");
+    backend
+        .mark_job_run_running(&run.run_id, now, 42)
+        .expect("start lineage run");
+    backend
+        .finalize_job_run(&run.run_id, JobRunState::Failed, now, Some(1))
+        .expect("fail lineage run");
+    run.run_id
+}
+
+fn live_resume_of(error: orbit_common::OrbitError) -> (String, String) {
+    match error {
+        orbit_common::OrbitError::ResumeRunInFlight {
+            source_run_id,
+            run_id,
+        } => (source_run_id, run_id),
+        other => panic!("expected ResumeRunInFlight, got {other:?}"),
+    }
+}
+
+/// A resume is refused while any run in the source's retry lineage is live —
+/// including a grandchild reached through a sibling branch — and admitted
+/// again once that run is terminal. An unrelated lineage of the same job is
+/// never blocked by it.
+#[test]
+fn resume_insert_refuses_a_live_lineage_run_and_reopens_once_it_is_terminal() {
+    let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+    let source = failed_run(&backend, None);
+    let unrelated = failed_run(&backend, None);
+    let now = Utc::now();
+
+    let first = backend
+        .insert_resume_job_run("job-resume", 2, now, None, &source)
+        .expect("first resume is admitted");
+    assert_eq!(first.retry_source_run_id.as_deref(), Some(source.as_str()));
+    assert_eq!(first.state, JobRunState::Pending);
+
+    let refused = backend
+        .insert_resume_job_run("job-resume", 2, now, None, &source)
+        .expect_err("a second resume while the first is pending is refused");
+    assert_eq!(
+        live_resume_of(refused),
+        (source.clone(), first.run_id.clone())
+    );
+    backend
+        .insert_resume_job_run("job-resume", 2, now, None, &unrelated)
+        .expect("another lineage of the same job is unaffected");
+
+    backend
+        .finalize_job_run(&first.run_id, JobRunState::Cancelled, now, Some(1))
+        .expect("cancel first resume");
+    let second = failed_run(&backend, Some(&source));
+    let grandchild = backend
+        .insert_resume_job_run("job-resume", 3, now, None, &second)
+        .expect("resuming the terminal second attempt is admitted");
+
+    for requested in [&source, &first.run_id, &second] {
+        let refused = backend
+            .insert_resume_job_run("job-resume", 2, now, None, requested)
+            .expect_err("every lineage member is refused while the grandchild is live");
+        assert_eq!(
+            live_resume_of(refused),
+            (requested.clone(), grandchild.run_id.clone())
+        );
+    }
+
+    backend
+        .finalize_job_run(&grandchild.run_id, JobRunState::Interrupted, now, Some(1))
+        .expect("interrupt grandchild");
+    backend
+        .insert_resume_job_run("job-resume", 2, now, None, &source)
+        .expect("the source resumes again once its lineage is idle");
+}
+
+/// Concurrent resumes of one source from independent connections — the
+/// dashboard, MCP server, and CLI are separate processes — admit exactly one
+/// run; every loser is told which run won.
+#[test]
+fn concurrent_resume_inserts_of_one_source_admit_exactly_one_run() {
+    const RACERS: usize = 8;
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("orbit.db");
+    let seed = SqliteJobRunStore::new(Store::open(&db_path).expect("seed store"), "ws_a");
+    let source = failed_run(&seed, None);
+    let backends = (0..RACERS)
+        .map(|_| SqliteJobRunStore::new(Store::open(&db_path).expect("racer store"), "ws_a"))
+        .collect::<Vec<_>>();
+    let barrier = Arc::new(Barrier::new(RACERS));
+
+    let racers = backends
+        .into_iter()
+        .map(|backend| {
+            let barrier = Arc::clone(&barrier);
+            let source = source.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                backend.insert_resume_job_run("job-resume", 2, Utc::now(), None, &source)
+            })
+        })
+        .collect::<Vec<_>>();
+    let outcomes = racers
+        .into_iter()
+        .map(|racer| racer.join().expect("racer thread"))
+        .collect::<Vec<_>>();
+
+    let admitted = outcomes
+        .iter()
+        .filter_map(|outcome| outcome.as_ref().ok())
+        .collect::<Vec<_>>();
+    assert_eq!(admitted.len(), 1, "exactly one racer is admitted");
+    let winner = admitted[0].run_id.clone();
+    for outcome in outcomes.into_iter().filter(Result::is_err) {
+        let (source_run_id, run_id) = live_resume_of(outcome.expect_err("loser"));
+        assert_eq!(source_run_id, source);
+        assert_eq!(run_id, winner, "a loser names the admitted run");
+    }
+    let resumes = seed.job_run_retries(&source, 100).expect("retries");
+    assert_eq!(resumes.len(), 1, "one resume persisted: {resumes:?}");
+}

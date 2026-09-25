@@ -608,6 +608,56 @@ async fn resume_job_run_endpoint_rejects_non_terminal_run_with_guard_reason() {
     );
 }
 
+/// A second resume while the source's first resume is still live is a 409
+/// whose body names that run, so the dashboard can link to it instead of
+/// starting another agent in the same worktree.
+#[tokio::test]
+async fn resume_job_run_endpoint_refuses_a_second_live_resume_and_names_it() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "web_resume_dedup");
+    let source = seed_run(
+        &runtime,
+        "jrun-web-resume-source",
+        "web_resume_dedup",
+        JobRunState::Failed,
+    );
+    let mut live = seed_run(
+        &runtime,
+        "jrun-web-resume-live",
+        "web_resume_dedup",
+        JobRunState::Pending,
+    );
+    live.attempt = 2;
+    live.retry_source_run_id = Some(source.run_id.clone());
+    write_seeded_run(&runtime, &live);
+
+    let response = request_resume(
+        runtime.clone(),
+        &source.run_id,
+        Some("http://localhost:3000"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let payload = body_json(response).await;
+    assert_eq!(payload["code"], "resume_run_in_flight");
+    assert_eq!(payload["run_id"], live.run_id);
+    assert_eq!(payload["source_run_id"], source.run_id);
+    assert!(
+        payload["error"]
+            .as_str()
+            .is_some_and(|message| message.contains(&live.run_id)),
+        "{payload}"
+    );
+    let runs = runtime
+        .list_job_runs(JobRunListParams {
+            job_id: Some("web_resume_dedup".to_string()),
+            ..Default::default()
+        })
+        .expect("list runs");
+    assert_eq!(runs.len(), 2, "the refused resume persists no run");
+}
+
 #[tokio::test]
 async fn resume_job_run_endpoint_returns_not_found_for_unknown_run() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");

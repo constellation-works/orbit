@@ -217,6 +217,20 @@ the checkpoint owner. Direct ownership still authorizes the original run.
 An unrelated run, a broken lineage, or a task re-claimed by a superseding run
 fails before Orbit commits, pushes, or updates the task.
 
+A lineage has at most one live resume. While any run in the source's retry lineage
+(its `retry_source_run_id` ancestors and everything descended from them) is `pending`,
+`running`, or `retrying`, another resume of any member is refused on every surface — CLI,
+MCP, and dashboard — with `already has a live resume in its retry lineage (<run_id>)`
+(HTTP 409 / code `resume_run_in_flight`, with that `run_id` in the payload). All lineage
+runs share one worktree, so a second one would edit it concurrently. The refusal is
+atomic: concurrent requests, even from different processes, create exactly one run.
+Watch or cancel the named run (`orbit run show <run_id>`, `orbit run cancel <run_id> --confirm`);
+once it is terminal, resuming is allowed again. A later resume chains from the run you
+name, using that run's checkpoints and `attempt + 1`. To continue from further along,
+resume the latest attempt instead of the original source. A lineage run stuck as
+`running` after its worker died (for example after a host reboot) is reconciled to
+`interrupted` before the check, so it does not block recovery.
+
 Resume needs the job present in the catalog (`orbit job list --all`). A run started from
 a raw YAML path can be resumed only after that YAML is registered under `resources/jobs/`.
 A run with no successful checkpoints degrades to a full replay.

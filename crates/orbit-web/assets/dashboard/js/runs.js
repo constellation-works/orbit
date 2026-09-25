@@ -32,6 +32,10 @@ const RUN_SORT_DEFAULT_DIR = {
 
 let runSort = { key: "when", dir: "desc" };
 const resumedRunIdsBySource = new Map();
+// Resume requests awaiting a response, by run identity. The server refuses a
+// second live resume of a lineage; this keeps the button disabled even when
+// the row re-renders mid-request.
+const resumeRequestsInFlight = new Set();
 let runFilter = (() => {
   const value = new URL(window.location.href).searchParams.get("run_state") || "all";
   return RUN_FILTERS.has(value) ? value : "all";
@@ -128,6 +132,7 @@ function buildResumeRunButton(run, host) {
     text: "Resume",
     title: `Resume ${run.run_id} from its first non-successful step`,
   });
+  btn.disabled = resumeRequestsInFlight.has(runIdentity(run));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     resumeRun(run, btn, host);
@@ -199,31 +204,57 @@ async function replayRun(run, btn, host) {
   }
 }
 
+// A 409 `resume_run_in_flight` names the run already carrying this lineage;
+// link to it rather than showing the refusal as a bare failure.
+function resumeErrorNode(error, run) {
+  const liveRunId = error && error.code === "resume_run_in_flight" && error.body && error.body.run_id;
+  if (!liveRunId) {
+    return el("div", { class: "action-error", text: (error && error.message) || "resume failed" });
+  }
+  const open = el("button", {
+    class: "action approve resume-live-run",
+    text: `Open ${liveRunId}`,
+    title: `Open live run ${liveRunId}`,
+  });
+  open.addEventListener("click", (e) => {
+    e.stopPropagation();
+    doNavigateToRun(liveRunId, run.workspace_id);
+  });
+  return el("div", { class: "action-error resume-conflict" }, [
+    `Not resumed: ${liveRunId} is already resuming this run and is still live. `,
+    open,
+  ]);
+}
+
 async function resumeRun(run, btn, host) {
   const runId = run && run.run_id;
   if (!runId) return;
+  const key = runIdentity(run);
+  if (resumeRequestsInFlight.has(key)) return;
   const message = `Resume ${runId}? This creates a new run that re-runs the failed step and all subsequent steps. It succeeds only if the underlying cause is resolved.`;
   if (!window.confirm(message)) return;
+  resumeRequestsInFlight.add(key);
   const old = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>Resume`;
   if (host) {
     for (const node of host.querySelectorAll(".action-error")) node.remove();
   }
+  let resumed = false;
   try {
     const payload = await postJson(runScopedPath(`/api/job-runs/${encodeURIComponent(runId)}/resume`, run));
     if (!payload.run_id) throw new Error("resume response did not include run_id");
-    resumedRunIdsBySource.set(runIdentity(run), payload.run_id);
-    await doFetchAndRenderRuns();
+    resumedRunIdsBySource.set(key, payload.run_id);
+    resumed = true;
   } catch (e) {
-    if (host) {
-      host.appendChild(el("div", { class: "action-error", text: e.message || "resume failed" }));
-    }
+    if (host) host.appendChild(resumeErrorNode(e, run));
     console.error(e);
   } finally {
+    resumeRequestsInFlight.delete(key);
     btn.disabled = false;
     btn.textContent = old;
   }
+  if (resumed) await doFetchAndRenderRuns();
 }
 
 function coerceNumber(value) {
@@ -674,7 +705,7 @@ export function renderRuns(runs) {
     ];
     const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
     row.dataset.key = `run-${runIdentity(r)}`;
-    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
+    row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${friction.durationMs}-${friction.longRun}`;
     row.style.cursor = "pointer";
     // A run row opens the run detail view rather than disclosing inline, so it
     // gets button semantics with no expansion state.

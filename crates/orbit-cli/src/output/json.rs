@@ -32,6 +32,12 @@ pub fn error_payload(error: &OrbitError) -> Value {
     {
         object.insert("artifact_origin".to_string(), json!(artifact_origin));
     }
+    if let Some((source_run_id, run_id)) = error.resume_run_in_flight()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("source_run_id".to_string(), json!(source_run_id));
+        object.insert("run_id".to_string(), json!(run_id));
+    }
     if let Some((task_id, path, reason)) = error.task_bundle_corruption()
         && let Some(object) = payload.as_object_mut()
     {
@@ -97,6 +103,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
+        OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         // New OrbitError variants must remain JSON-serializable before this
         // boundary assigns them a dedicated stable code.
         _ => "internal_error",

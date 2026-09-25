@@ -159,6 +159,26 @@ fn ship_run_in_flight_has_a_stable_code_and_names_both_ids() {
     );
 }
 
+/// The MCP projection of a duplicate resume names the live run under the same
+/// `resume_run_in_flight` code and `run_id` field the dashboard's 409 carries.
+#[test]
+fn resume_run_in_flight_has_a_stable_code_and_names_the_live_run() {
+    let error = OrbitError::ResumeRunInFlight {
+        source_run_id: "jrun-source".to_string(),
+        run_id: "jrun-live".to_string(),
+    };
+    let payload = error_payload(&error);
+
+    assert_eq!(payload["code"], "resume_run_in_flight");
+    assert_eq!(payload["source_run_id"], "jrun-source");
+    assert_eq!(payload["run_id"], "jrun-live");
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("jrun-live"))
+    );
+}
+
 #[test]
 fn friction_not_local_has_a_stable_code_and_names_owners() {
     let error = OrbitError::friction_not_local(

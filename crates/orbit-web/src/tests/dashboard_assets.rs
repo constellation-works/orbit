@@ -293,7 +293,7 @@ fn dashboard_task_actions_route_to_selected_workspace() {
 }
 
 #[test]
-fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() {
+fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage() {
     let runs = include_str!("../../assets/dashboard/js/runs.js");
 
     assert!(
@@ -316,9 +316,90 @@ fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() 
             && runs.contains("text: `from ${sourceId}`"),
         "the runs table must expose both directions of resumed-run lineage"
     );
-    assert!(
-        runs.contains(r#"class: "action-error", text: e.message || "resume failed""#),
-        "Resume failures must display the server-provided error text"
+}
+
+/// The 2026-09-25 reboot recovery sent eight resumes of one source from the
+/// dashboard. The button must stay disabled while a resume is in flight — even
+/// across a re-render that rebuilds the row — and a 409 `resume_run_in_flight`
+/// must link to the live run rather than read as a generic failure.
+#[test]
+fn dashboard_resume_disables_while_in_flight_and_links_the_live_run_on_conflict() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { if (child == null) return child; if (child.parentNode) child.parentNode.removeChild(child); this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { return { add: (c) => { if (!this.className.split(/\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }, toggle: () => {} }; }
+  querySelectorAll(selector) { const found = []; const visit = (node) => { for (const child of node.children) { if (selector === ".action-error" && child.className.split(/\s+/).includes("action-error")) found.push(child); visit(child); } }; visit(this); return found; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+const find = (node, predicate) => { for (const child of node.children) { if (predicate(child)) return child; const hit = find(child, predicate); if (hit) return hit; } return null; };
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+globalThis.window = { location: new URL("http://dashboard.test/"), innerWidth: 1200, confirm: () => true };
+globalThis.history = { replaceState: () => {} };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+
+const requests = [];
+let respond = null;
+globalThis.fetch = (path) => {
+  requests.push(String(path));
+  return new Promise((resolve) => { respond = resolve; });
+};
+
+const runs = [{ run_id: "jrun-source", job_id: "task_pr_pipeline", state: "interrupted", created_at: "2026-09-25T03:24:00Z" }];
+let navigated = null;
+const { initRuns, renderRuns } = await import("./js/runs.js");
+initRuns({
+  getLastRuns: () => runs,
+  getRunsMeta: () => ({ truncated: false }),
+  navigateToRun: (runId) => { navigated = runId; },
+  fetchAndRenderRuns: () => Promise.resolve(),
+  getActiveRunId: () => null,
+});
+renderRuns(runs);
+const body = get("runs-body");
+const resumeButton = () => find(body, (node) => node.className.includes("run-resume"));
+
+resumeButton().listeners.click({ stopPropagation() {} });
+if (requests.length !== 1) throw new Error(`expected one resume request, got ${requests}`);
+if (!resumeButton().disabled) throw new Error("resume must be disabled while its request is in flight");
+
+renderRuns(runs);
+const rebuilt = resumeButton();
+if (!rebuilt.disabled) throw new Error("a re-render during the request must not re-enable resume");
+rebuilt.listeners.click({ stopPropagation() {} });
+if (requests.length !== 1) throw new Error(`a second click while in flight sent another request: ${requests}`);
+
+const conflict = { error: "job run 'jrun-source' already has a live resume in its retry lineage (jrun-live)", code: "resume_run_in_flight", run_id: "jrun-live", source_run_id: "jrun-source" };
+respond({ ok: false, status: 409, text: async () => JSON.stringify(conflict) });
+await new Promise((resolve) => setTimeout(resolve, 0));
+
+const error = find(body, (node) => node.className.includes("action-error"));
+if (!error || !error.textContent.includes("jrun-live")) throw new Error(`conflict must name the live run: ${body.textContent}`);
+const open = find(error, (node) => node.className.includes("resume-live-run"));
+if (!open) throw new Error(`conflict must link to the live run: ${error.textContent}`);
+open.listeners.click({ stopPropagation() {} });
+if (navigated !== "jrun-live") throw new Error(`live-run link navigated to ${navigated}`);
+
+renderRuns(runs);
+if (resumeButton().disabled) throw new Error("resume must re-enable once the request settles");
+"#,
     );
 }
 

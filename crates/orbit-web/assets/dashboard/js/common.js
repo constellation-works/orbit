@@ -460,6 +460,9 @@ export function requestJson(path, method, body) {
       error.status = res.status;
       if (body.code) error.code = body.code;
       if (body.remedy) error.remedy = body.remedy;
+      // A typed refusal can name the resource it conflicts with (a 409's
+      // `run_id`); callers read those fields instead of parsing the prose.
+      error.body = body;
       throw error;
     }
     return body;
