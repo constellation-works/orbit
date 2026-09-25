@@ -84,6 +84,19 @@ fn candidate_pin_excludes_old_generation_through_convergence() {
 }
 
 #[test]
+fn pinned_newer_generation_refuses_old_digest_until_pin_is_dropped() {
+    let root = tempfile::tempdir().expect("root");
+    drop(GenerationGuard::acquire(root.path(), OLD).expect("old"));
+    let newer = GenerationUpdate::acquire(root.path())
+        .expect("quiescent update")
+        .pin(NEW)
+        .expect("new pin");
+    assert!(GenerationGuard::acquire(root.path(), OLD).is_err());
+    drop(newer);
+    GenerationGuard::acquire(root.path(), OLD).expect("old digest after new pin exits");
+}
+
+#[test]
 fn invalid_record_is_refused_without_repair_or_truncation() {
     let root = tempfile::tempdir().expect("root");
     let path = root.path().join(".generation.lock");
@@ -103,11 +116,11 @@ fn failed_installation_releases_admission_without_changing_generation() {
         std::fs::read(root.path().join(".generation.lock")).expect("record"),
         before
     );
-    assert!(GenerationGuard::acquire(root.path(), OLD).is_ok());
+    GenerationGuard::acquire(root.path(), OLD).expect("old digest after abandoned update");
 }
 
 #[test]
-fn interrupted_exclusive_holder_releases_os_locks_without_repair() {
+fn live_exclusive_holder_in_another_process_blocks_until_reaped() {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let root = tempfile::tempdir().expect("root");
@@ -132,6 +145,15 @@ fn interrupted_exclusive_holder_releases_os_locks_without_repair() {
     child.kill().expect("interrupt isolated holder");
     child.wait().expect("reap holder");
     assert!(GenerationGuard::acquire(root.path(), OLD).is_ok());
+}
+
+#[test]
+fn second_update_on_same_root_is_refused_while_first_update_is_alive() {
+    let root = tempfile::tempdir().expect("root");
+    let first = GenerationUpdate::acquire(root.path()).expect("first update");
+    assert!(GenerationUpdate::acquire(root.path()).is_err());
+    drop(first);
+    GenerationUpdate::acquire(root.path()).expect("update after first exits");
 }
 
 #[cfg(unix)]
