@@ -11,7 +11,8 @@
 //! [`OrbitRuntime`], which `orbit_runtime` defines. The `engine`, `audit`,
 //! `mutation`, and `tool_exec` sub-modules provide the high-level operations
 //! exposed to command handlers; `plugin` and `workspace` own host plugins and
-//! the workspace binding, catalog, and claim.
+//! the workspace binding, catalog, and claim; `host_signal` probes host
+//! lifecycle signals, such as a scheduled reboot, that hold new admissions.
 
 mod activity_catalog;
 pub(crate) mod assets;
@@ -26,6 +27,7 @@ pub mod event_bus;
 pub(crate) mod friction;
 #[cfg(target_os = "linux")]
 pub(crate) mod git_sandbox;
+pub mod host_signal;
 pub mod mutation;
 mod orbit_runtime;
 pub mod plugin;

@@ -141,6 +141,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_task_reservations(self),
             doctor_check_task_relations(self),
             doctor_check_stalled_automation(self),
+            doctor_check_host_shutdown(self),
             doctor_check_orphan_task_stores(self),
             doctor_check_tracked_orbit_files(self),
         ]);

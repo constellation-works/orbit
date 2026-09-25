@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{SecondsFormat, TimeZone, Utc};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
@@ -15,6 +15,7 @@ use crate::adapter::engine_host::v2_host::test_support::{
 };
 use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::runtime::host_signal::{FixedHostSignals, ScheduledShutdown};
 
 fn classify(runtime: &OrbitRuntime) -> Value {
     classify_with(runtime, json!({}))
@@ -1498,6 +1499,59 @@ fn a_stopped_drain_admits_nothing_and_leaves_live_children() {
     let readiness = readiness(&runtime, &[], None);
     assert_eq!(readiness["capacity"]["admissions_stopped"], true);
     assert_eq!(readiness["capacity"]["free_slots"], 0);
+}
+
+/// [ORB-12968] A drain wave taken while the host has a reboot scheduled admits
+/// nothing and names the schedule; readiness gives every waiting task the same
+/// reason. A live child is left running, and once the schedule clears the next
+/// wave admits again on its own.
+#[test]
+fn a_scheduled_host_shutdown_holds_drain_waves_and_leaves_live_children() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
+    let leaves = seed_backlog_leaves(&runtime, 1);
+    let live = seed_live_leaf_run(&runtime, &["CARRIED"]);
+    let held =
+        runtime
+            .clone()
+            .with_host_signal_probe(std::sync::Arc::new(FixedHostSignals::scheduled(
+                ScheduledShutdown {
+                    mode: "reboot".to_string(),
+                    scheduled_at: Utc
+                        .with_ymd_and_hms(2026, 9, 25, 4, 0, 0)
+                        .single()
+                        .expect("time"),
+                    source: "fixture".to_string(),
+                },
+            )));
+
+    let output = classify_with(&held, json!({ "max_active_leaf_runs": 5 }));
+    assert_eq!(output["free_slots"], 0, "{output}");
+    assert_eq!(output["has_leaves"], false, "{output}");
+    assert_eq!(output["host_shutdown"]["mode"], "reboot", "{output}");
+    assert_eq!(
+        output["host_shutdown"]["scheduled_at"], "2026-09-25T04:00:00Z",
+        "{output}"
+    );
+    assert!(
+        !runtime
+            .show_job_run(&live)
+            .expect("show child")
+            .state
+            .is_terminal(),
+        "the hold must not cancel an already admitted child"
+    );
+
+    let explained = readiness(&held, &[], None);
+    assert_eq!(explained["capacity"]["free_slots"], 0);
+    assert_eq!(explained["capacity"]["host_shutdown"]["mode"], "reboot");
+    let entry = readiness_task(&explained, &leaves[0]);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "host_shutdown_scheduled", "{entry}");
+
+    let resumed = classify_with(&runtime, json!({ "max_active_leaf_runs": 5 }));
+    assert!(resumed["host_shutdown"].is_null(), "{resumed}");
+    assert_eq!(resumed["loose_task_ids"], json!([leaves[0]]), "{resumed}");
 }
 
 #[test]

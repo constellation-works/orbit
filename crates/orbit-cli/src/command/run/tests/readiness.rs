@@ -59,3 +59,36 @@ fn readiness_payload_separates_lock_waiting_slots_from_working_ones() {
         "{text}"
     );
 }
+
+#[test]
+fn readiness_payload_names_a_scheduled_host_shutdown() {
+    let text = readiness_lines(&json!({
+        "capacity": {
+            "active_leaf_runs": 1,
+            "max_active_leaf_runs": 5,
+            "free_slots": 0,
+            "host_shutdown": {
+                "mode": "reboot",
+                "scheduled_at": "2026-09-25T04:00:00Z",
+                "source": "/run/systemd/shutdown/scheduled",
+            }
+        },
+        "tasks": [{ "task_id": "ORB-1", "eligible": false, "reason": "host_shutdown_scheduled" }]
+    }))
+    .join("\n");
+    assert!(
+        text.contains("Admissions held: host reboot scheduled for 2026-09-25T04:00:00Z"),
+        "{text}"
+    );
+    assert!(
+        text.contains("ORB-1: waiting (host_shutdown_scheduled)"),
+        "{text}"
+    );
+
+    let quiet = readiness_lines(&json!({
+        "capacity": { "active_leaf_runs": 0, "max_active_leaf_runs": 5, "free_slots": 5, "host_shutdown": null },
+        "tasks": []
+    }))
+    .join("\n");
+    assert!(!quiet.contains("Admissions held"), "{quiet}");
+}

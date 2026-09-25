@@ -9,6 +9,7 @@ use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
 use crate::runtime::engine::crew::CrewAllowlist;
 
@@ -122,6 +123,19 @@ pub(super) fn classify_workspace_auto_tasks(
         .collect();
     let admissions_stop = live_admissions_stop(runtime, input);
     let admissions_stopped = admissions_stop.is_some();
+    // [ORB-12968] A pending host shutdown would kill anything started now, so
+    // the wave admits nothing while one is scheduled. Live children are not
+    // touched, and the next iteration after the schedule clears admits again.
+    let host_shutdown = runtime.scheduled_host_shutdown();
+    if let Some(shutdown) = host_shutdown.as_ref() {
+        tracing::warn!(
+            target: "orbit.core.host_signal",
+            mode = shutdown.mode.as_str(),
+            scheduled_at = %shutdown.scheduled_at,
+            "drain admits no new leaves: {}",
+            shutdown.describe(),
+        );
+    }
 
     // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy
     // that decides this wave is the store's one reading of both paths — live
@@ -130,7 +144,7 @@ pub(super) fn classify_workspace_auto_tasks(
     // count.
     let occupancy = shared_leaf_occupancy(runtime)
         .map_err(|error| action_failed(action, format!("read shared leaf occupancy: {error}")))?;
-    let free_slots = if admissions_stopped {
+    let free_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -223,6 +237,7 @@ pub(super) fn classify_workspace_auto_tasks(
         "worker_limit": worker_limit,
         "admissions_stopped": admissions_stopped,
         "admissions_stop": admissions_stop,
+        "host_shutdown": host_shutdown,
     }))
 }
 
@@ -295,8 +310,9 @@ pub fn explain_workspace_auto_readiness(
     let admissions_stopped = active_drain
         .as_ref()
         .is_some_and(|drain| drain.admissions_stopped());
+    let host_shutdown = runtime.scheduled_host_shutdown();
     let shared_occupancy = shared_leaf_occupancy(runtime)?;
-    let free_slots = if admissions_stopped {
+    let free_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
@@ -461,6 +477,12 @@ pub fn explain_workspace_auto_readiness(
             if let Some(run_ids) = claimed_by_task.get(&task.id) {
                 object.insert("reason".to_string(), Value::String("claimed_by_live_child".to_string()));
                 object.insert("run_ids".to_string(), json!(run_ids));
+            } else if let Some(shutdown) = host_shutdown.as_ref() {
+                object.insert(
+                    "reason".to_string(),
+                    Value::String(HOST_SHUTDOWN_SCHEDULED.to_string()),
+                );
+                object.insert("detail".to_string(), json!(shutdown.describe()));
             } else if admissions_stopped {
                 object.insert(
                     "reason".to_string(),
@@ -517,6 +539,9 @@ pub fn explain_workspace_auto_readiness(
             "admissions_stop": active_drain
                 .as_ref()
                 .and_then(|drain| drain.stop.clone()),
+            // [ORB-12968] A pending host shutdown or reboot; while present no
+            // drain, sweep, or routine starts new work.
+            "host_shutdown": host_shutdown,
         },
         "tasks": tasks,
     }))

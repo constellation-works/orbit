@@ -48,6 +48,7 @@ use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use serde::Serialize;
 
 use crate::runtime::authorization::resolved_caller_capabilities;
+use crate::runtime::host_signal::{HOST_SHUTDOWN_SCHEDULED, ScheduledShutdown};
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -522,6 +523,11 @@ pub enum DrainEntryRefusal {
         claim_id: String,
         machine_id: String,
     },
+    /// The host has a shutdown or reboot pending that would kill anything
+    /// started now [ORB-12968]. Only unattended entry points stand down for
+    /// it; the hold lifts on its own when the schedule is cancelled or the
+    /// host has restarted.
+    HostShutdownScheduled { shutdown: ScheduledShutdown },
 }
 
 impl DrainEntryRefusal {
@@ -533,6 +539,7 @@ impl DrainEntryRefusal {
             DrainEntryRefusal::Replica { .. } => "replica_checkout",
             DrainEntryRefusal::Saturated { .. } => "ship_in_flight",
             DrainEntryRefusal::Claimed { .. } => "claimed_by_execution_claim",
+            DrainEntryRefusal::HostShutdownScheduled { .. } => HOST_SHUTDOWN_SCHEDULED,
         }
     }
 
@@ -555,6 +562,7 @@ impl DrainEntryRefusal {
                 "task '{task_id}' is held by execution claim '{claim_id}' on machine \
                  '{machine_id}'; it settles or is deliberately recovered, never admitted twice"
             ),
+            DrainEntryRefusal::HostShutdownScheduled { shutdown } => shutdown.hold_reason(),
         }
     }
 }
@@ -574,6 +582,10 @@ pub struct DrainEntryAdmission {
     /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
     /// retained entry cannot disagree about it.
     pub claim_admission_refusal: Option<String>,
+    /// The host shutdown pending when the decision was taken. An unattended
+    /// entry point is refused for it; an explicit one is admitted with a
+    /// warning, and the drain it starts still holds its own waves.
+    pub host_shutdown: Option<ScheduledShutdown>,
     pub refusal: Option<DrainEntryRefusal>,
 }
 
@@ -601,16 +613,17 @@ impl DrainEntryAdmission {
 impl crate::OrbitRuntime {
     /// The shared admission decision every retained entry point makes.
     ///
-    /// `saturation_stands_down` is what separates an unattended sweep from an
-    /// operator's explicit invocation: a sweep that finds the host busy skips
-    /// that workspace, while `orbit run ship` is a deliberate act whose own
-    /// leaf definition already bounds it. Neither may bypass the claim ledger
-    /// or serve owner coordination from a replica.
+    /// `unattended` is what separates a sweep from an operator's explicit
+    /// invocation: a sweep that finds the host busy, or finds a host shutdown
+    /// scheduled, skips that workspace, while `orbit run ship` is a deliberate
+    /// act whose own leaf definition already bounds it and which proceeds
+    /// past a scheduled shutdown with a warning. Neither may bypass the claim
+    /// ledger or serve owner coordination from a replica.
     pub fn drain_entry_admission(
         &self,
         entry_point: DrainEntryPoint,
         task_ids: &[String],
-        saturation_stands_down: bool,
+        unattended: bool,
     ) -> Result<DrainEntryAdmission, OrbitError> {
         let ship = self.owner_ship_contract();
         let occupancy = self.stores().jobs().drain_leaf_occupancy()?;
@@ -619,6 +632,7 @@ impl crate::OrbitRuntime {
             occupancy,
             review_policy: ship.review_policy.clone(),
             claim_admission_refusal: self.claim_contract_refusal(&ship),
+            host_shutdown: self.scheduled_host_shutdown(),
             refusal: None,
         };
         if let Some(owner_machine_id) = self.coordination_write_owner() {
@@ -648,7 +662,23 @@ impl crate::OrbitRuntime {
                 return Ok(decision);
             }
         }
-        if saturation_stands_down && decision.occupancy.occupied > 0 {
+        if let Some(shutdown) = decision.host_shutdown.as_ref() {
+            if unattended {
+                decision.refusal = Some(DrainEntryRefusal::HostShutdownScheduled {
+                    shutdown: shutdown.clone(),
+                });
+                return Ok(decision);
+            }
+            tracing::warn!(
+                target: "orbit.core.host_signal",
+                entry_point = entry_point.label(),
+                mode = shutdown.mode.as_str(),
+                scheduled_at = %shutdown.scheduled_at,
+                "explicit admission proceeds although {}; the run may be killed by it",
+                shutdown.describe(),
+            );
+        }
+        if unattended && decision.occupancy.occupied > 0 {
             decision.refusal = Some(DrainEntryRefusal::Saturated {
                 occupied: decision.occupancy.occupied,
             });

@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-09-20
 ---
 
@@ -423,6 +423,31 @@ orbit run ship-sweep --dry-run
 A replica sweep reports destination-authority refusal before it reads a
 backlog. Scheduled invocation still confers no completion authority. Do not
 enable a dark routine to "turn on" distributed drain.
+
+## Scheduled host shutdown or reboot
+
+When the host has a shutdown or reboot pending (for example
+`unattended-upgrades` running `shutdown -r 04:00`), Orbit starts no new
+unattended work until the schedule clears. Routines and auto-tasks do not
+fire, drain waves admit no leaves, and `orbit run ship-sweep` skips with
+`host_shutdown_scheduled`. Runs already in flight are not cancelled or
+signalled.
+
+```bash
+orbit doctor                 # host-shutdown: warning naming mode and time
+orbit run readiness          # "Admissions held: host reboot scheduled for …"
+cat /run/systemd/shutdown/scheduled   # USEC= / MODE= written by logind
+```
+
+- To resume admissions before the restart, cancel the schedule as root with
+  `shutdown -c`. The next tick or drain iteration admits again.
+- Otherwise, do nothing. `/run` is cleared on reboot, and admissions resume
+  on their own when the host comes back.
+- `orbit run ship` and `orbit run auto` still run while a hold is active and
+  log a warning. A single explicit ship may be killed by the restart. A drain
+  started during the hold admits nothing until the hold clears.
+- Reboot policy (apt `Automatic-Reboot*` settings) is root territory, and
+  Orbit does not change it.
 
 ## Verification
 

@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-24
+last_updated: 2026-09-25
 last_validated: 2026-09-20
 status: Draft
 feature: distributed-drain
@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968]
 ---
 
 # Distributed Drain — Design
@@ -508,6 +508,35 @@ It also reports the owner's review policy and the verdict of `orbit_store::admis
 without raising it: v1 admits only `none` through the claim contract, while a workspace configured
 for `before-pr` or `after-landing` keeps shipping through its legacy leaf and review gate.
 
+### 7.4 Host shutdown hold
+
+[ORB-12968] A host with a shutdown or reboot scheduled kills every run started before it, so
+unattended admission holds new work while one is pending. The signal comes from a host-signal
+probe on `OrbitRuntime` (`runtime::host_signal`). On Linux it reads logind's
+`/run/systemd/shutdown/scheduled` (`USEC=`, `MODE=`), which is unprivileged and is the state behind
+the `org.freedesktop.login1.Manager.ScheduledShutdown` D-Bus property. `shutdown -c` removes the
+file, and `/run` is a tmpfs, so the hold lifts on its own either way. A `dry-*` mode
+(`shutdown -k`), a missing file, an unreadable file, and a malformed file all mean "nothing
+scheduled". Other platforms have no probe and never hold. Tests inject a fixed probe
+(`with_host_signal_probe`; the sweep takes one explicitly), and orbit-core's unit-test build never
+reads the real host. There is no lead window: the hold starts as soon as a schedule exists.
+
+- **Scheduler tick.** `run_sweep_at_with_providers` fires no routine (cron, delivery, or state) and
+  mints no auto-task. Each routine row reads `skipped` with a `host_shutdown_scheduled: …` reason
+  naming the mode and time, and every tick logs `sweep.host_shutdown_hold`. Cursors do not advance,
+  so each routine's `missed_run` policy decides what happens to the held slots once the hold lifts,
+  as after any other downtime.
+- **Drain waves.** `classify_workspace_auto_tasks` sets `free_slots` to 0, reports
+  `host_shutdown`, and admits no leaf until the schedule is gone. It does not signal or cancel live
+  children.
+- **Entry admission.** `drain_entry_admission` refuses an unattended caller (`orbit run
+  ship-sweep`) with `host_shutdown_scheduled`. Explicit operator commands (`orbit run ship`,
+  `orbit run auto`) are admitted with a warning and `host_shutdown` on the decision. That is the
+  documented override: an operator who ships one task during the window chooses to risk it. An
+  explicit drain started during a hold still holds its own waves.
+- **Surfaces.** `orbit run readiness` names the schedule and gives every waiting backlog task the
+  reason `host_shutdown_scheduled`. `orbit doctor` reports a `host-shutdown` warning.
+
 ## 8. Required validation scenarios
 
 Acceptance criteria, not reported as passing.
@@ -543,6 +572,7 @@ Acceptance criteria, not reported as passing.
 | Approve twice, or revoke before merge | Operator required; one immutable authorization/start request under concurrent retries; revoked or stale candidate cannot publish merge intent |
 | Missing, failed, replaced or wrong-candidate validation artifact | Acceptance, approval and merge-intent publication rejected with no partial effects |
 | Idle polling and receipt compaction | One idle request per pass; tombstones cannot re-admit; unsettled receipts kept; growth metrics visible |
+| Host shutdown or reboot scheduled | Sweep fires and mints nothing, drain waves and the ship sweep admit nothing, readiness and doctor name mode and time; in-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
 | Mixed legacy and claimed admission under one ceiling | One occupancy reading; wrapper → gate → queued claimed leaf is one slot; terminal leaf holds its slot until settlement; `max_active_runs` per definition |
 
 ## 9. Concerns & Honest Limitations

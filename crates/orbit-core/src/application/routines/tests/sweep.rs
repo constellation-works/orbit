@@ -9,6 +9,7 @@ use crate::application::routines::sweep::{
     SweepOptions, SweepOutcome, configured_sweep_options, refresh_discovered_token_scoreboards,
     run_sweep_at_with_providers, run_sweep_at_with_providers_at,
 };
+use crate::runtime::host_signal::{FixedHostSignals, ScheduledShutdown};
 use chrono::{Duration, TimeZone, Utc};
 use orbit_automation::routines::loader::RoutineLoadError;
 use orbit_common::OrbitError;
@@ -466,6 +467,7 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         },
         host(),
         &provider,
+        &FixedHostSignals::none(),
         first,
     )
     .expect("dry tick");
@@ -475,9 +477,15 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         !crate::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir).exists()
     );
 
-    let baseline =
-        run_sweep_at_with_providers_at(&global, SweepOptions::default(), host(), &provider, first)
-            .expect("baseline tick");
+    let baseline = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &FixedHostSignals::none(),
+        first,
+    )
+    .expect("baseline tick");
     assert_swept(&baseline, &global, "baseline tick");
     let cursor_before = std::fs::read(crate::application::auto_tasks::cursor_state_path(
         &runtime.paths().state_dir,
@@ -491,6 +499,7 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         },
         host(),
         &provider,
+        &FixedHostSignals::none(),
         first + Duration::minutes(2),
     )
     .expect("dry due tick");
@@ -510,6 +519,7 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         SweepOptions::default(),
         host(),
         &provider,
+        &FixedHostSignals::none(),
         first + Duration::minutes(2),
     )
     .expect("due tick");
@@ -569,9 +579,15 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
         .with_ymd_and_hms(2026, 9, 12, 7, 0, 0)
         .single()
         .expect("time");
-    let baseline =
-        run_sweep_at_with_providers_at(&global, SweepOptions::default(), host(), &provider, first)
-            .expect("baseline tick");
+    let baseline = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &FixedHostSignals::none(),
+        first,
+    )
+    .expect("baseline tick");
     assert_swept(&baseline, &global, "baseline tick");
     std::fs::write(
         broken_dir.join("auto_tasks/broken-chore.yaml"),
@@ -585,6 +601,7 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
         SweepOptions::default(),
         host(),
         &provider,
+        &FixedHostSignals::none(),
         first + Duration::minutes(2),
     )
     .expect("combined tick");
@@ -667,6 +684,7 @@ fn tick_reports_every_retired_default_as_skipped_rather_than_a_load_error() {
         SweepOptions::default(),
         host(),
         &provider,
+        &FixedHostSignals::none(),
         Utc.with_ymd_and_hms(2026, 9, 15, 7, 0, 0)
             .single()
             .expect("time"),
@@ -707,5 +725,116 @@ fn tick_reports_every_retired_default_as_skipped_rather_than_a_load_error() {
             .list_job_runs(JobRunListParams::default())
             .expect("job runs")
             .is_empty()
+    );
+}
+
+/// [ORB-12968] While the host has a reboot scheduled, a tick fires no routine
+/// and mints no auto-task, and says why on every routine row. Once the
+/// schedule is gone the next tick fires again on its own.
+#[test]
+fn a_scheduled_host_shutdown_holds_every_fire_until_it_clears() {
+    let _tz = orbit_common::test_env::unset(["TZ"]);
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    let orbit_dir = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(orbit_dir.join("routines")).expect("routines dir");
+    std::fs::create_dir_all(global.join("resources/jobs")).expect("global jobs dir");
+    std::fs::write(global.join("resources/jobs/noop.yaml"), NOOP_JOB).expect("job");
+    std::fs::write(
+        orbit_dir.join("routines/minutely.yaml"),
+        "schemaVersion: 1\nname: minutely\nenabled: true\ntrigger:\n  cron: '* * * * *'\ntarget: job:noop\n",
+    )
+    .expect("routine");
+    let runtime = crate::OrbitRuntime::from_roots(&global, &orbit_dir).expect("runtime");
+    runtime
+        .auto_task_add(auto_task("chore"))
+        .expect("auto-task");
+    let provider = FixedWorkspaces {
+        entries: vec![(workspace("ws-one", "one"), runtime.clone())],
+    };
+    let first = Utc
+        .with_ymd_and_hms(2026, 9, 25, 2, 30, 0)
+        .single()
+        .expect("time");
+    let quiet = FixedHostSignals::none();
+    let reboot = FixedHostSignals::scheduled(ScheduledShutdown {
+        mode: "reboot".to_string(),
+        scheduled_at: Utc
+            .with_ymd_and_hms(2026, 9, 25, 4, 0, 0)
+            .single()
+            .expect("time"),
+        source: "fixture".to_string(),
+    });
+    let baseline = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &quiet,
+        first,
+    )
+    .expect("baseline tick");
+    assert_swept(&baseline, &global, "baseline tick");
+
+    worker_command_override::set(["sh", "-c", "true"]);
+    let held = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &reboot,
+        first + Duration::minutes(2),
+    )
+    .expect("held tick");
+    assert_swept(&held, &global, "held tick");
+    let row = held
+        .reports
+        .iter()
+        .find(|row| row.routine == "minutely")
+        .expect("the held routine is reported");
+    assert_eq!(row.action, "skipped");
+    assert!(row.run_id.is_none(), "a held routine never dispatches");
+    let reason = row.reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.starts_with("host_shutdown_scheduled")
+            && reason.contains("reboot")
+            && reason.contains("2026-09-25T04:00:00Z"),
+        "the row names the hold, its mode, and its time: {reason}"
+    );
+    assert!(
+        held.auto_task_reports.is_empty(),
+        "{:?}",
+        held.auto_task_reports
+    );
+    assert!(runtime.list_tasks().expect("tasks").is_empty());
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("job runs")
+            .is_empty(),
+        "a held tick starts no run"
+    );
+
+    let resumed = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &quiet,
+        first + Duration::minutes(3),
+    )
+    .expect("resumed tick");
+    worker_command_override::clear();
+    assert_swept(&resumed, &global, "resumed tick");
+    assert!(
+        resumed.reports.iter().any(|row| row.action == "fired"),
+        "{:?}",
+        resumed.reports
+    );
+    assert!(
+        resumed
+            .auto_task_reports
+            .iter()
+            .any(|row| row.action == "minted")
     );
 }
