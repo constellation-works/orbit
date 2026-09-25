@@ -26,38 +26,42 @@
         </svg>
         </div>
 
+        <!-- The workspace picker sits under the brand: it scopes every view, so
+             it belongs above the destinations it scopes, not below the fold. -->
+        <div class="rail-workspace" id="rail-workspace"></div>
+
         <div class="tabs" id="tabs">
           <div class="rail-group">
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
+          <button class="tab" data-tab="runs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Runs</span><span class="rail-count" id="rail-count-diag-runs"></span></button>
           </div>
 
           <div class="rail-group">
             <div class="rail-group-label">Observe</div>
           <button class="tab" data-tab="audit" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3h9l3 3v11H4z"/><path d="M7 9h6M7 12h4"/></svg><span class="rail-label">Audit</span><span class="rail-count" id="rail-count-audit"></span></button>
-          <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Diagnostics</span><span class="rail-count" id="rail-count-diagnostics"></span></button>
-            <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Diagnostics views">
-              <button class="subtab" data-subtab="runs" type="button">Recent runs<span class="rail-count" id="rail-count-diag-runs"></span></button>
-              <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
-              <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
+          <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span></button>
+            <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
               <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
+              <button class="subtab" data-subtab="errors" type="button">Errors<span class="rail-count" id="rail-count-diag-errors"></span></button>
               <button class="subtab" data-subtab="reliability" type="button">Reliability<span class="rail-count" id="rail-count-diag-reliability"></span></button>
+              <button class="subtab" data-subtab="metrics" type="button">Metrics<span class="rail-count" id="rail-count-diag-metrics"></span></button>
               <button class="subtab" data-subtab="scoreboard" type="button">Scoreboard<span class="rail-count" id="rail-count-diag-scoreboard"></span></button>
             </nav>
           </div>
 
           <div class="rail-group">
             <div class="rail-group-label">Manage</div>
-          <button class="tab" data-tab="operations" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg><span class="rail-label">Operations</span><span class="rail-count" id="rail-count-operations"></span></button>
-            <nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Operations views">
+          <button class="tab" data-tab="operations" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg><span class="rail-label">Automation</span><span class="rail-count" id="rail-count-operations"></span></button>
+            <nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Automation views">
               <button class="subtab active" data-subtab="routines" type="button">Routines<span class="rail-count" id="rail-count-ops-routines"></span></button>
               <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks<span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
               <button class="subtab" data-subtab="jobs" type="button">Jobs<span class="rail-count" id="rail-count-ops-jobs"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
-          <button class="tab" data-tab="config" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="8" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="7" cy="14" r="1.6"/></svg><span class="rail-label">Config</span><span class="rail-count" id="rail-count-config"></span></button>
-            <nav class="subtabs rail-subtabs" id="config-subtabs" aria-label="Config views">
+          <button class="tab" data-tab="config" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="8" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="7" cy="14" r="1.6"/></svg><span class="rail-label">Settings</span><span class="rail-count" id="rail-count-config"></span></button>
+            <nav class="subtabs rail-subtabs" id="config-subtabs" aria-label="Settings views">
               <button class="subtab active" data-subtab="effective" type="button">Effective</button>
               <button class="subtab" data-subtab="workspace-file" type="button">Workspace file</button>
               <button class="subtab" data-subtab="global-file" type="button">Global file</button>
@@ -68,7 +72,6 @@
         </div>
 
         <div class="rail-foot">
-          <div class="rail-workspace" id="rail-workspace"></div>
           <div class="rail-conn">
             <span id="conn-status" class="status-dot orange"></span>
             <span id="meta-text">connecting&hellip;</span>
@@ -78,19 +81,19 @@
 
       <div class="main-col">
         <header class="topbar">
-          <span class="crumb" id="topbar-crumb">Tasks</span>
-          <!-- ORB-10972: the four health metrics that used to occupy an 88px
-               strip ride inline here. Same data, same ids for the values. -->
-          <div class="kpis" id="health-strip" aria-label="Audit health summary">
-            <span class="kpi" id="tile-events"><span class="k">Events 24h</span><span class="v" id="tile-events-value">-</span></span>
-            <span class="kpi" id="tile-denials"><span class="k">Denials</span><span class="v" id="tile-denials-value">-</span></span>
-            <span class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Distinct from Recent Runs' failed filter (durable Failed state, no window) and Errors (step/event failures this month)."><span class="k">Failed runs</span><span class="v" id="tile-failed-value">-</span></span>
-            <span class="kpi" id="tile-active"><span class="k">Long</span><span class="v" id="tile-active-value">-</span></span>
-            <svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <h1 class="crumb" id="topbar-crumb">Tasks</h1>
+          <!-- The four health metrics read as counts with plain labels, and each
+               one opens the view that explains it. Same ids for the values. -->
+          <div class="kpis" id="health-strip" role="group" aria-label="Health in the selected window">
+            <button type="button" class="kpi" id="tile-failed" title="Failed, timeout, and interrupted job runs in the selected window. Opens Runs filtered to failures."><span class="v" id="tile-failed-value">-</span><span class="k">failed runs</span></button>
+            <button type="button" class="kpi" id="tile-denials" title="Policy denials in the selected window. Opens Audit &gt; Policy."><span class="v" id="tile-denials-value">-</span><span class="k">policy denials</span></button>
+            <button type="button" class="kpi" id="tile-active" title="Runs still going after longer than 95% of this window's finished runs took. Opens live runs."><span class="v" id="tile-active-value">-</span><span class="k">running long</span></button>
+            <button type="button" class="kpi" id="tile-events" title="Audited events in the selected window. Opens Audit."><span class="v" id="tile-events-value">-</span><span class="k">events</span><svg class="kpi-spark" id="tile-events-sparkline" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true"></svg></button>
+            <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
           </div>
           <span class="topbar-spacer"></span>
           <div class="global-id-wrap">
-            <input type="search" id="global-task-id" placeholder="Jump to task id" autocomplete="off" spellcheck="false" />
+            <input type="search" id="global-task-id" placeholder="Go to task ID" aria-label="Go to task ID" autocomplete="off" spellcheck="false" />
             <span id="global-task-id-error" class="global-id-error"></span>
           </div>
           <button id="refresh-btn" class="refresh-btn" type="button">Refresh</button>
@@ -100,9 +103,12 @@
       <main class="tasks-layout">
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
-            <header><span>Tasks</span><span class="count" id="tasks-count">-</span></header>
+            <header class="tasks-head">
+              <h2 class="panel-title">Tasks</h2>
+              <input type="search" id="task-search" placeholder="Filter by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" />
+              <span class="count" id="tasks-count">-</span>
+            </header>
             <div class="controls">
-              <input type="search" id="task-search" placeholder="Search ID or title..." autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" />
               <div id="task-filter" role="group" aria-label="Filter tasks by status"></div>
             </div>
             <div class="filter-summary" id="task-filter-summary" role="status" aria-live="polite"></div>
@@ -405,7 +411,7 @@
       </main>
     </section>
     <section class="tab-pane" data-tab="knowledge">
-      <main style="grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);">
+      <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
         <section class="panel" id="knowledge-panel">
           <header><span>Knowledge</span><span class="count" id="knowledge-count" role="status" aria-live="polite" aria-atomic="true">-</span></header>
           <nav class="subtabs" id="knowledge-subtabs">
@@ -413,25 +419,22 @@
           </nav>
           <div class="friction-stats" id="friction-stats">
             <div class="tile">
-              <span class="label">Open</span>
               <span class="value" id="friction-open-value">-</span>
-              <span class="glyph">OPN</span>
+              <span class="label">open</span>
             </div>
             <div class="tile">
-              <span class="label">Triaged</span>
               <span class="value" id="friction-triaged-value">-</span>
-              <span class="glyph">TRI</span>
+              <span class="label">triaged</span>
             </div>
             <div class="tile">
-              <span class="label">Resolved This Month</span>
               <span class="value" id="friction-resolved-month-value">-</span>
-              <span class="glyph">RSL</span>
+              <span class="label">resolved this month</span>
             </div>
           </div>
           <div class="controls">
             <input type="search" id="friction-search" placeholder="Search frictions..." autocomplete="off" spellcheck="false" />
             <label class="friction-filter-control" for="friction-status-filter">
-              <span>Status</span>
+              <span>Show</span>
               <select id="friction-status-filter" aria-controls="frictions-body">
                 <option value="active" selected>Active</option>
                 <option value="open">Open</option>

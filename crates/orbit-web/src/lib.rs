@@ -62,14 +62,14 @@ const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/dashboard.css"),
     ),
     (
-        "/static/fonts/inter-latin.woff2",
+        "/static/fonts/geist-latin.woff2",
         WOFF2,
-        include_bytes!("../assets/dashboard/fonts/inter-latin.woff2"),
+        include_bytes!("../assets/dashboard/fonts/geist-latin.woff2"),
     ),
     (
-        "/static/fonts/jetbrains-mono-latin.woff2",
+        "/static/fonts/geist-mono-latin.woff2",
         WOFF2,
-        include_bytes!("../assets/dashboard/fonts/jetbrains-mono-latin.woff2"),
+        include_bytes!("../assets/dashboard/fonts/geist-mono-latin.woff2"),
     ),
     (
         "/static/marked.umd.js",

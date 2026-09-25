@@ -70,6 +70,32 @@ onWorkspaceChange(() => {
 // server rejects a duplicate with 409 regardless), and is released only when the
 // dispatch failed and retrying is the right move.
 let shipInFlightTaskIds = new Set();
+// Row shortcuts (Approve on a proposed task, Ship on a backlog one): the
+// pending or failed state of each, keyed by task id, so a refresh repaints it.
+let quickActionState = new Map();
+
+// Groups read in the order a person has to act on them: tasks waiting on a
+// human decision first, then running work, then the queue. The chips keep the
+// lifecycle order; only the grouped list is reordered.
+const GROUP_ORDER = ["proposed", "review", "blocked", "in-progress", "backlog", "someday", "done", "rejected", "archived"];
+const GROUP_LABELS = {
+  proposed: "Awaiting approval",
+  review: "Ready for review",
+  blocked: "Blocked",
+  "in-progress": "In progress",
+  backlog: "Backlog",
+  someday: "Someday",
+  done: "Done",
+  rejected: "Rejected",
+  archived: "Archived",
+};
+const GROUP_HINTS = {
+  proposed: "Proposed tasks never run until they are approved",
+  review: "Review the pull request, then approve to close",
+  blocked: "Waiting on something the run cannot resolve",
+  "in-progress": "Running now",
+  backlog: "Approved and eligible for Ship or a drain window",
+};
 
 function taskList(context) {
   return context && typeof context.getTasks === "function" ? context.getTasks() : [];
@@ -545,6 +571,10 @@ export function renderTaskPagination(context) {
     : {};
   previous.disabled = Boolean(state.loading) || !state.canPrevious;
   next.disabled = Boolean(state.loading) || !state.canNext;
+  // One page needs no pager; it comes back as soon as there is somewhere to go
+  // or something to report.
+  const pager = previous.closest ? previous.closest(".task-pagination") : null;
+  if (pager) pager.hidden = !state.canPrevious && !state.canNext && !state.loading && !state.error;
   status.textContent = state.error
     ? `Page failed: ${state.error}`
     : state.loading ? "Loading task page…" : "";
@@ -571,7 +601,6 @@ export function buildChips(context) {
     const chip = el("button", { class: "chip", text: status });
     chip.type = "button";
     chip.dataset.status = status;
-    chip.style.borderLeft = `2px solid var(--status-${status}, var(--border))`;
     chip.addEventListener("click", () => {
       const activeStatuses = activeStatusSet(context);
       if (activeStatuses.has(status)) {
@@ -1944,6 +1973,7 @@ function buildActionsRow(task, detail, context) {
 
 function buildStatusUpdateControl(task, context) {
   const cell = el("span", { class: "status-cell" });
+  cell.dataset.status = task.status || "";
   const targets = statusTransitions(task).map((transition) => transition.status);
   // ORB-12445: an operator may move a task to any status from any status, the
   // same override the bare CLI spells `--force`. The governed targets keep the
@@ -1953,17 +1983,12 @@ function buildStatusUpdateControl(task, context) {
   const forcedTargets = statusOrder(context).filter(
     (status) => status && status !== task.status && !targets.includes(status),
   );
-  const color = `var(--status-${task.status}, var(--fg))`;
   const mutable = canMutateTask(task);
   const feedback = statusFeedback.get(task.id);
   const label = `Update status for ${task.id}`;
   const select = el("select", {
     class: "task-status-select mono",
     title: mutable ? label : aggregateRefusalTitle(label, "change status"),
-    style: {
-      color,
-      borderLeftColor: color,
-    },
   });
   select.setAttribute("aria-label", label);
   const placeholder = el("option", { text: task.status || "status" });
@@ -2490,6 +2515,81 @@ function openDraftNodes(body) {
   return drafts;
 }
 
+function quickActionSignature(task) {
+  const state = quickActionState.get(task.id);
+  return `${task.job_run_id || ""}-${shipInFlightTaskIds.has(task.id)}-${state ? `${state.kind}:${state.text}` : ""}`;
+}
+
+// The one decision a row is waiting on, one click from the list: Approve a
+// proposed task, Ship a backlog one, open the run of one in progress. They hit
+// the same endpoints as the detail's actions; the detail keeps the full set.
+function buildQuickAction(task, context) {
+  const cell = el("span", { class: "task-quick-cell" });
+  stopRowInteraction(cell);
+  const state = quickActionState.get(task.id);
+  if (task.status === "in-progress" && task.job_run_id && task.job_run_navigable !== false) {
+    const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
+    link.href = `#runs?run_id=${encodeURIComponent(task.job_run_id)}`;
+    link.addEventListener("click", (event) => event.stopPropagation());
+    cell.appendChild(link);
+    return cell;
+  }
+  let spec = null;
+  if (task.status === "proposed") {
+    spec = { kind: "approve", text: "Approve", title: `Approve ${task.id}: move it to backlog so it can run` };
+  } else if (SHIP_STATUSES.has(task.status)) {
+    spec = { kind: "ship", text: "Ship", title: `Ship ${task.id}: dispatch it through the pipeline with its own crew` };
+  }
+  if (!spec) return cell;
+  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && shipInFlightTaskIds.has(task.id));
+  const btn = el("button", {
+    class: `task-quick ${spec.kind}`,
+    text: pending ? (spec.kind === "ship" ? "Shipping…" : "Approving…") : spec.text,
+    title: canMutateTask(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind),
+  });
+  btn.type = "button";
+  btn.disabled = pending || !canMutateTask(task);
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    runQuickAction(task, spec.kind, context);
+  });
+  cell.appendChild(btn);
+  if (state && state.kind === "error") {
+    const err = el("span", { class: "task-quick-error", text: state.text, title: state.text });
+    err.setAttribute("role", "status");
+    err.setAttribute("aria-live", "assertive");
+    cell.appendChild(err);
+  }
+  return cell;
+}
+
+async function runQuickAction(task, kind, context) {
+  if (quickActionState.get(task.id)?.kind === "pending") return;
+  if (kind === "ship" && shipInFlightTaskIds.has(task.id)) return;
+  quickActionState.set(task.id, { kind: "pending", text: kind });
+  if (kind === "ship") shipInFlightTaskIds.add(task.id);
+  renderTasks(taskList(context), context);
+  try {
+    if (kind === "ship") {
+      const result = await postJson("/api/workflows/ship", { task_ids: [task.id] });
+      const runId = result && result.run_id ? result.run_id : "(no run id)";
+      const state = result && result.state ? result.state : "submitted";
+      taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
+    } else {
+      await postJson(taskMutationPath(task, "/approve"), {});
+      taskActionNotice = `${task.id} approved and moved to backlog`;
+    }
+    quickActionState.delete(task.id);
+    await refreshTasks(context);
+  } catch (error) {
+    // A failed ship releases the duplicate-dispatch guard; a succeeded one keeps
+    // it, exactly as the detail's Ship does.
+    if (kind === "ship") shipInFlightTaskIds.delete(task.id);
+    quickActionState.set(task.id, { kind: "error", text: `${kind} failed: ${error.message || String(error)}` });
+    renderTasks(taskList(context), context);
+  }
+}
+
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -2559,6 +2659,7 @@ export function renderTasks(tasks, context) {
     el("span", { class: "title", text: "Title" }),
     el("span", { class: "status-cell", text: "Status" }),
     el("span", { class: "crew-cell", text: "Crew" }),
+    el("span", { class: "task-quick-cell", text: "Action" }),
   ]);
   colHeader.dataset.key = "task-col-header";
   nodes.push(colHeader);
@@ -2567,23 +2668,25 @@ export function renderTasks(tasks, context) {
     if (!groups.has(t.status)) groups.set(t.status, []);
     groups.get(t.status).push(t);
   }
-  const order = statusOrder(context);
-  const ordered = order.filter((s) => groups.has(s)).concat(
-    [...groups.keys()].filter((s) => !order.includes(s)),
+  const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
+    [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
   );
   for (const status of ordered) {
     const group = groups.get(status);
     const header = el("div", { class: "group-header" }, [
-      statusPill(status),
+      el("span", { class: "group-dot" }),
+      el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
       el("span", { class: "group-count", text: `${group.length}` }),
+      ...(GROUP_HINTS[status] ? [el("span", { class: "group-hint", text: GROUP_HINTS[status] })] : []),
     ]);
+    header.dataset.status = status;
     header.dataset.key = `header-${status}`;
     header.dataset.hash = `${status}-${group.length}`;
     nodes.push(header);
     for (const t of group) {
       const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      const rowHash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${expandedTaskIds.has(t.id)}`;
+      const rowHash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${expandedTaskIds.has(t.id)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -2610,6 +2713,7 @@ export function renderTasks(tasks, context) {
           titleCell,
           buildStatusUpdateControl(t, context),
           buildCrewUpdateControl(t, context),
+          buildQuickAction(t, context),
         ]);
         row.dataset.key = rowKey;
         row.dataset.hash = rowHash;

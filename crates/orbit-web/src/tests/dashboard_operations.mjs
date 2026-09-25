@@ -101,8 +101,9 @@ globalThis.fetch = async (path, options = {}) => {
 setWorkspace('one');
 initOperations({ getWorkspaces: () => ['one', 'two'].map(id => ({ id, name: id, status: 'active' })), formatAbsoluteTime: value => value });
 await fetchAndRenderOperations();
-// The Drain card keeps only what an operator acts on: duration, concurrency,
-// completion, Start/Stop, the slot line, two counts and the blocked-by list.
+// The Drain card keeps only what an operator acts on: the capacity line and
+// what a window would admit, two counts, the blocked-by list, then duration,
+// concurrency, completion and Start/Stop.
 const drainBody = get('auto-drain-body');
 const drainText = () => get('auto-drain-body').textContent;
 const drainButton = label => button('auto-drain-body', label);
@@ -111,10 +112,11 @@ assert(durations.map(node => node.textContent).join(' ') === '15m 30m 1h 2h 4h 8
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 assert(drainText().includes('Eligible now1') && drainText().includes('Blocked by running2'), `counts use strict server eligibility and lock reasons: ${drainText()}`);
-assert(drainText().includes('4/4 slots busy · admits up to 0 now'), 'slot line reads busy/limit and what a window admits now');
+assert(drainText().includes('4 running · limit 4') && drainText().includes('0 free slots'), `capacity reads busy against the limit: ${drainText()}`);
+assert(drainText().includes('A window started now admits nothing until 1 running task finishes.'), 'a full pool says how many runs must finish before a window admits anything');
 assert(drainText().includes('ORB-3 waits on ORB-30') && drainText().includes('lock · …/src/lib.rs'), 'a lock-blocked task names its holder and the shortened lock');
 assert(drainText().includes('ORB-4 waits on jrun-claimed-child'), 'a live-child claim names the claiming run');
-for (const gone of ['Task readiness', 'Waiting on deps', 'free slot', 'Snapshot only']) {
+for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot only']) {
   assert(!drainText().includes(gone), `the card no longer renders ${JSON.stringify(gone)}`);
 }
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
@@ -137,18 +139,20 @@ assert(descendants(drainBody).find(node => node.id === 'auto-drain-concurrency')
 drainButton('−').click(); drainButton('−').click(); drainButton('−').click(); drainButton('−').click(); drainButton('−').click();
 assert(descendants(drainBody).find(node => node.id === 'auto-drain-concurrency').value === '1', 'the stepper stops at the input minimum of 1');
 drainButton('+').click();
-assert(drainText().includes('leave in review'), 'unchecked completion reads leave in review');
-const completion = descendants(drainBody).find(node => node.type === 'checkbox');
-completion.checked = true; completion.dispatchEvent(new Event('change'));
-assert(drainText().includes('mark done · skip review'), 'checked completion states that it skips review');
+const completionOption = value => descendants(get('auto-drain-body')).find(node => node.type === 'radio' && node.value === value);
+assert(drainText().includes('Stop at review') && drainText().includes('Mark done'), 'completion names both outcomes');
+assert(completionOption('review').checked && !completionOption('done').checked, 'completion defaults to stopping at review');
+const markDone = completionOption('done');
+markDone.checked = true; markDone.dispatchEvent(new Event('change'));
+assert(completionOption('done').checked && !completionOption('review').checked, 'choosing Mark done selects it and releases review');
 drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
 const started = requests.find(r => r.path === '/api/workflows/auto');
 assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true, `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
-const freshCompletion = descendants(get('auto-drain-body')).find(node => node.type === 'checkbox');
-freshCompletion.checked = false; freshCompletion.dispatchEvent(new Event('change'));
-assert(drainText().includes('leave in review'), 'completion unchecks back to review');
+const backToReview = completionOption('review');
+backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
+assert(completionOption('review').checked, 'completion returns to review');
 
 // A live window: header link in short form, time left for a window this
 // browser started, and Stop enabled.

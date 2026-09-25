@@ -234,6 +234,21 @@ with a 400 that names them, `priority` becomes a supported update field end to
 end, `model` becomes declared provenance, and `agent` is a trap field pointing at
 `model` — extending the ORB-00042 `workspace` trap shape to the whole body.
 
+## Operator-First Dashboard Chrome
+
+**Recorded:** 2026-09-24
+
+### Context
+An audit of every dashboard view at 1440px found the chrome working against the operator: the workspace picker sat below the fold of an always-expanded rail, proposed tasks waiting on a human were mixed in with running work and approved through a small status select, the drain card summarised capacity as `8/5 slots busy · admits up to 0 now`, 150+ locked file paths filled the dock, the recent-runs table clipped its job names and action buttons, a failed run's detail did not say why it failed, and the Diagnostics summary card repeated beside every subtab.
+
+### Decision
+Keep every route, endpoint and control, and change the presentation around them: rail labels that name destinations (Runs, Health, Automation, Settings) over unchanged hashes; the open section alone expanded; tasks grouped by the decision they wait on with a one-click row action; capacity and completion in words; failures explained where they are viewed; Geist and a lighter status palette shared with the website.
+
+### Consequences
+- The operator's next action is visible on the Tasks screen without opening a row or another tab.
+- Bookmarks and copied links keep working because only labels and grouping moved.
+- Cost: two Ship buttons (row and detail) now share the duplicate-dispatch guard, and the rail's labels no longer match the route names one-to-one.
+
 ## Task References
 
 - [T20260427-29] — introduced the Canon Refined UI direction.
