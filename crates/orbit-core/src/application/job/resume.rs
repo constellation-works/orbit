@@ -6,8 +6,9 @@
 //! facts therefore have to be reconciled *before* the resumed run reaches its
 //! delivery tail (F2026-07-121 / F2026-07-122):
 //!
-//! 1. **Blocked tasks.** A terminal run failure blocks every coupled task
-//!    (`runtime::task::block_on_run_failure`), and `blocked` is not in the
+//! 1. **Blocked tasks.** A terminal run failure or interruption blocks every
+//!    coupled task (`runtime::task::block_on_run_failure`; `workflow_run_failed`
+//!    or `workflow_run_interrupted`), and `blocked` is not in the
 //!    workflow-admission allowlist. If the resumed run replays
 //!    `worktree_setup`, admission rejects the very task the resume exists to
 //!    recover — a catch-22.

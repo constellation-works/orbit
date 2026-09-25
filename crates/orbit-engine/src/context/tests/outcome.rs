@@ -5,9 +5,12 @@
 //! `error_message` — 9 entries carrying 16.6% of all history bytes. These tests
 //! pin the bound so that surface cannot silently return to inlining bulk.
 
+use orbit_types::task::TaskStatus;
+
 use crate::context::outcome::{
-    MAX_NOTE_ERROR_BYTES, WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
-    workflow_failure_note,
+    MAX_NOTE_ERROR_BYTES, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update, workflow_failure_note,
+    workflow_interruption_note,
 };
 
 const JOB_ID: &str = "task_pr_pipeline";
@@ -107,5 +110,51 @@ fn blocked_update_routes_through_the_capped_note() {
         note,
         workflow_failure_note(JOB_ID, RUN_ID, None, Some(&error))
     );
+    assert!(note.len() < 2 * MAX_NOTE_ERROR_BYTES);
+}
+
+/// An interrupted run's block must read as an interruption, not a failure, so
+/// an operator can tell "resume it" from "diagnose it" — while keeping the
+/// `run_id=…,` shape that failure-note readers already match on.
+#[test]
+fn interruption_update_names_the_interruption_and_its_resume() {
+    let update = blocked_workflow_interruption_update(
+        JOB_ID,
+        RUN_ID,
+        Some("process_not_found"),
+        Some("worker pid 4242 is gone"),
+    );
+
+    assert_eq!(update.status, Some(TaskStatus::Blocked));
+    assert_eq!(
+        update.status_event.as_deref(),
+        Some(WORKFLOW_RUN_INTERRUPTED_EVENT)
+    );
+    assert_ne!(WORKFLOW_RUN_INTERRUPTED_EVENT, WORKFLOW_RUN_FAILED_EVENT);
+    let note = update.status_note.expect("blocked update carries a note");
+    assert_eq!(
+        note,
+        workflow_interruption_note(
+            JOB_ID,
+            RUN_ID,
+            Some("process_not_found"),
+            Some("worker pid 4242 is gone"),
+        )
+    );
+    assert!(note.starts_with("workflow run interrupted:"), "{note}");
+    assert!(note.contains(&format!("run_id={RUN_ID},")), "{note}");
+    assert!(note.contains("error_code=process_not_found"), "{note}");
+    assert!(
+        note.contains(&format!("orbit job resume {RUN_ID}")),
+        "{note}"
+    );
+}
+
+/// The interruption note shares the failure note's elision cap.
+#[test]
+fn interruption_note_is_capped() {
+    let error = "z".repeat(50_000);
+    let note = workflow_interruption_note(JOB_ID, RUN_ID, None, Some(&error));
+    assert!(note.contains("elided"));
     assert!(note.len() < 2 * MAX_NOTE_ERROR_BYTES);
 }

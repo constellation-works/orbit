@@ -96,6 +96,34 @@ fn seed_failed_delivery_run(
     task_id: &str,
     retry_source: Option<&str>,
 ) -> String {
+    let run_id = seed_checkpointed_delivery_run(
+        runtime,
+        job_name,
+        task_id,
+        retry_source,
+        std::process::id(),
+    );
+    runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &run_id,
+            JobRunState::Failed,
+            Utc::now(),
+            Some(1),
+            TaskReservationReleaseReason::RunTerminal,
+        )
+        .expect("finalize source run as failed");
+    run_id
+}
+
+/// A running delivery run with its `worktree` and `implement_bundle` steps
+/// checkpointed and the task claimed, owned by `owner_pid`.
+fn seed_checkpointed_delivery_run(
+    runtime: &OrbitRuntime,
+    job_name: &str,
+    task_id: &str,
+    retry_source: Option<&str>,
+    owner_pid: u32,
+) -> String {
     let input = json!({"seconds": 0, "task_ids": [task_id]});
     let run = runtime
         .stores()
@@ -121,7 +149,7 @@ fn seed_failed_delivery_run(
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .mark_job_run_running(&run.run_id, Utc::now(), owner_pid)
         .expect("mark source run running");
 
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
@@ -141,18 +169,8 @@ fn seed_failed_delivery_run(
     )
     .expect("checkpoint implement step");
 
-    // `worktree_setup` claims the task; the terminal failure then blocks it.
+    // `worktree_setup` claims the task.
     couple_task_to_run(runtime, task_id, &run.run_id, TaskStatus::InProgress);
-    runtime
-        .finalize_job_run_with_reservation_cleanup(
-            &run.run_id,
-            JobRunState::Failed,
-            Utc::now(),
-            Some(1),
-            TaskReservationReleaseReason::RunTerminal,
-        )
-        .expect("finalize source run as failed");
-
     run.run_id
 }
 
@@ -228,6 +246,64 @@ fn resume_readmits_blocked_task_and_realigns_ownership_to_the_checkpointed_batch
     assert_eq!(
         resumed.retry_source_run_id.as_deref(),
         Some(source_run_id.as_str())
+    );
+}
+
+/// [ORB-12969] A reboot kills the worker; the sweep reconciles the run
+/// `interrupted` and blocks its task. Resuming that run must bring the task
+/// back to `in-progress` and realign its ownership with no manual task update,
+/// exactly as it does for a failed source.
+#[test]
+fn resume_readmits_a_task_blocked_by_an_interrupted_source() {
+    let (_root, runtime, _repo_root, global_root) = test_runtime();
+    let jobs_dir = global_root.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    write_delivery_tail_job(
+        &jobs_dir.join("qa_resume_interrupted.yaml"),
+        "qa_resume_interrupted",
+    );
+
+    let task_id = seed_task(&runtime, "interrupted resume fixture");
+    // An owner pid that cannot exist: the worker died with the host.
+    let source_run_id =
+        seed_checkpointed_delivery_run(&runtime, "qa_resume_interrupted", &task_id, None, 999_999);
+    runtime
+        .reconcile_stale_job_runs(None)
+        .expect("orphan sweep");
+    assert_eq!(
+        runtime
+            .show_job_run(&source_run_id)
+            .expect("source run")
+            .state,
+        JobRunState::Interrupted
+    );
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Blocked,
+        "the interruption blocks its coupled task",
+    );
+
+    // An intervening attempt in the lineage re-stamps the task, so the resume
+    // has real ownership drift to repair.
+    let intervening_run_id = seed_failed_delivery_run(
+        &runtime,
+        "qa_resume_interrupted",
+        &task_id,
+        Some(&source_run_id),
+    );
+    couple_task_to_run(&runtime, &task_id, &intervening_run_id, TaskStatus::Blocked);
+
+    let result = runtime
+        .resume_job_run(&source_run_id)
+        .expect("resume the interrupted source run");
+
+    assert!(result.success);
+    let task = runtime.get_task(&task_id).expect("task after resume");
+    assert_eq!(task.status, TaskStatus::InProgress);
+    assert_eq!(
+        task.job_run_id.as_deref(),
+        Some(source_run_id.as_str()),
+        "ownership is realigned to the checkpointed batch id",
     );
 }
 

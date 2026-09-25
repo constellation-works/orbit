@@ -3,7 +3,7 @@
 //! Split by concern; every item is re-exported here so `crate::context::X`
 //! paths (and the crate-root re-exports in `lib.rs`) stay stable:
 //! - [`outcome`] — run outcome types, error-code constants, and
-//!   workflow-failure helpers.
+//!   workflow-failure/interruption helpers.
 //! - [`hosts`] — the unified [`RuntimeHost`] boundary and task-update types.
 //! - [`env`] — subprocess provenance environment variables shared by every
 //!   engine spawn path.
@@ -23,5 +23,6 @@ pub use hosts::{
 };
 pub use outcome::{
     AGENT_INVOCATION_FAILED, AGENT_TIMEOUT, ActivityInvocationResult, WORKFLOW_RUN_FAILED_EVENT,
-    blocked_workflow_failure_update,
+    WORKFLOW_RUN_INTERRUPTED_EVENT, blocked_workflow_failure_update,
+    blocked_workflow_interruption_update,
 };

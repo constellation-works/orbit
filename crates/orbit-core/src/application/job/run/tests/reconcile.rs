@@ -693,3 +693,99 @@ fn assert_one_classification_per_run(run_ids: &[&str]) {
         );
     }
 }
+
+/// Couple a fresh task to `run_id` the way `worktree_setup` does.
+fn couple_new_task(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    status: orbit_types::task::TaskStatus,
+) -> String {
+    use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+
+    let task_id = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "interrupted-run fixture".to_string(),
+            description: "Fixture task coupled to a run the sweep reconciles.".to_string(),
+            plan: "Fixture plan.".to_string(),
+            ..Default::default()
+        })
+        .expect("add task")
+        .id;
+    runtime
+        .apply_task_automation_update(
+            &task_id,
+            TaskAutomationUpdate {
+                status: Some(status),
+                job_run_id: Some(run_id.to_string()),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("couple task to run");
+    task_id
+}
+
+fn interruption_note(runtime: &OrbitRuntime, task_id: &str) -> Option<String> {
+    runtime
+        .get_task_history(task_id)
+        .expect("task history")
+        .into_iter()
+        .filter(|entry| entry.event == orbit_engine::WORKFLOW_RUN_INTERRUPTED_EVENT)
+        .filter_map(|entry| entry.note)
+        .next_back()
+}
+
+/// [ORB-12969] The 2026-09-25 reboot shape: a running run whose owner pid is
+/// gone is reconciled `interrupted`, and its coupled `in-progress` task is
+/// blocked with a note naming the run and the reconciliation error code —
+/// while a coupled task in a protected status is left alone.
+#[test]
+fn reconciling_a_dead_owner_blocks_the_coupled_task_as_interrupted() {
+    use orbit_types::task::TaskStatus;
+
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "task_pr_pipeline");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now() - Duration::seconds(3), 999_999)
+        .expect("mark running with impossible pid");
+    let stranded = couple_new_task(&runtime, &run.run_id, TaskStatus::InProgress);
+    let shipped = couple_new_task(&runtime, &run.run_id, TaskStatus::Review);
+
+    assert_eq!(runtime.reconcile_stale_job_runs(None).expect("sweep"), 1);
+
+    let task = runtime.get_task(&stranded).expect("stranded task");
+    assert_eq!(task.status, TaskStatus::Blocked);
+    assert_eq!(task.job_run_id.as_deref(), Some(run.run_id.as_str()));
+    let note = interruption_note(&runtime, &stranded).expect("interruption note");
+    assert!(note.contains(&format!("run_id={},", run.run_id)), "{note}");
+    assert!(note.contains("error_code=process_not_found"), "{note}");
+
+    assert_eq!(
+        runtime.get_task(&shipped).expect("review task").status,
+        TaskStatus::Review
+    );
+    assert!(interruption_note(&runtime, &shipped).is_none());
+}
+
+/// [ORB-12969] A pending run nobody ever claimed takes the same path.
+#[test]
+fn reconciling_a_never_claimed_pending_run_blocks_the_coupled_task() {
+    use orbit_types::task::TaskStatus;
+
+    let _env = orbit_common::test_env::unset(["ORBIT_MANAGED_RUN_CONTEXT", "ORBIT_RUN_ID"]);
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "task_pr_pipeline");
+    backdate_run_created_at(&runtime, &run, Utc::now() - Duration::days(4));
+    let task_id = couple_new_task(&runtime, &run.run_id, TaskStatus::InProgress);
+
+    assert_eq!(runtime.reconcile_stale_job_runs(None).expect("sweep"), 1);
+
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Blocked
+    );
+    let note = interruption_note(&runtime, &task_id).expect("interruption note");
+    assert!(note.contains(&format!("run_id={},", run.run_id)), "{note}");
+    assert!(note.contains("error_code=never_claimed"), "{note}");
+}

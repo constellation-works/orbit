@@ -161,7 +161,8 @@ durable: the note carries a copy, and the copy is what gets dropped. Discarding
 a value that exists nowhere else is not permitted at write time — the note is a
 durable record and a lossy write cannot be undone later.
 
-The one such elision today is the `workflow_run_failed` note, whose
+The one such elision today is the `workflow_run_failed` note (and the
+`workflow_run_interrupted` note built by the same helper), whose
 `error_message` is retained in full by `job_run_steps.error_message` and read
 back with `orbit run show <run_id> --json` (field `.run.steps[].error_message`).
 Its size threshold is declared exactly once, in `orbit-engine`'s
