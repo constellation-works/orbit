@@ -79,7 +79,7 @@ impl OrbitRuntime {
     /// catalog definition and the source run's persisted input.
     ///
     /// Explicitly discards checkpoints — replay is the "run everything again"
-    /// surface, including agent steps. Use `resume_job_run` / `submit_resume_run`
+    /// surface, including agent steps. Use `submit_resume_run`
     /// to continue from the failed step instead.
     pub fn replay_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
         let source = self.show_job_run(source_run_id)?;
@@ -115,14 +115,14 @@ impl OrbitRuntime {
     /// re-admitted, and its `job_run_id` is realigned to the batch id the
     /// reused checkpoints carry. Tasks owned by an unrelated run are untouched.
     ///
-    /// This surface runs the job **in-process** and returns only at a terminal
-    /// state — it is the foreground CLI path (`orbit job resume`). Non-blocking
-    /// callers (the HTTP API, bridge) use
-    /// [`OrbitRuntime::submit_resume_run`](crate::OrbitRuntime::submit_resume_run).
+    /// Test-only in-process path for legacy execution and checkpoint fixtures.
+    /// Production resume uses [`OrbitRuntime::submit_resume_run`](crate::OrbitRuntime::submit_resume_run).
+    #[cfg(test)]
     pub fn resume_job_run(&self, source_run_id: &str) -> Result<V2JobRunResult, OrbitError> {
         let plan = self.plan_job_run_resume(source_run_id)?;
+        let (job_path, _) = self.load_v2_job_asset_by_name(&plan.source.job_id)?;
         self.run_job_v2_from_yaml_with_retry_source(
-            &plan.job_path,
+            &job_path,
             plan.input.clone(),
             Some(plan.source.run_id.clone()),
             plan.attempt,

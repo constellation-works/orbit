@@ -184,7 +184,7 @@ admission becomes:
    not-yet-started run. Stopping the drain stops new admissions, not live children.
 
 **Interrupted execution** is left for deliberate recovery. `orbit job resume` refuses claimed
-leaves (`resume_job_run` creates a new run that cannot inherit the binding). Recovery fences the old
+leaves (`submit_resume_run` creates a new run that cannot inherit the binding). Recovery fences the old
 claim before admitting a new claim/run; preserved branches may seed it, but validation and handoff
 are fresh. Step retries keep the bound run; pre-launch recovery may reuse the queued run, but an
 uncertain run is never restarted.

@@ -185,6 +185,11 @@ with `resume requires an interrupted, failed, or timed-out run`.
 orbit job resume <run_id>
 ```
 
+The command submits a detached worker and returns the new run ID. The worker
+continues after the CLI exits. Use `orbit run show <new_run_id>` to inspect it,
+or add `--wait` to block until it finishes and receive a nonzero exit status
+if the run does not succeed.
+
 A **claimed** leaf (distributed-drain execution bound to an immutable claim/run
 pair) cannot use this path. Resume would mint a different run and cannot inherit
 the binding; the command refuses and names deliberate recovery. Inspect the
