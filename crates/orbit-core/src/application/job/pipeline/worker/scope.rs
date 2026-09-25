@@ -20,7 +20,9 @@
 //! without a user bus) workers launch exactly as before and one warning per
 //! process says why.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Once;
 
