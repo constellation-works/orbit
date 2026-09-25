@@ -35,7 +35,7 @@ Family defaults were originally also used to pick activity role models, but that
 | Concern | File | Task |
 |---------|------|------|
 | Family inference and crew resolver | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00058], [ORB-10130] |
-| Task-level crew field | `crates/orbit-types/src/task/model.rs` | [ORB-00058] |
+| Task-level crew field | `crates/orbit-types/src/task/model/task.rs` | [ORB-00058] |
 | Runtime config loading | `crates/orbit-config/src/resolved.rs` | [ORB-00058] |
 | Default config template | `crates/orbit-config/assets/default-config.toml` | [ORB-00058] |
 | Run-time crew resolution | `crates/orbit-core/src/runtime/engine/crew.rs` | [ORB-00058] |

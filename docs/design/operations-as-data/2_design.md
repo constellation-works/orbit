@@ -125,7 +125,7 @@ present-and-empty; **required** parameters pass through verbatim so that
 "you passed only whitespace" is reported by the handler, where the domain rules
 live. That reproduces the pre-migration behavior exactly.
 
-Audit metadata is derived too. `command/operation.rs`'s friction arm reads
+Audit metadata is derived too. `command/operation_registry.rs`'s friction arm reads
 `invocation.spec.name` and `invocation.target_id()` — the latter resolved by
 looking up the spec's positional parameter — instead of matching verb by verb.
 

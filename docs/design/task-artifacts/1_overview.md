@@ -103,7 +103,7 @@ The canonical bundle lives in the local task store under `~/.orbit/tasks/workspa
 | Concern | File | Task |
 |---------|------|------|
 | V2 envelope, relations, JSONL rows, and manifest types | [crates/orbit-types/src/task/artifacts.rs](../../../crates/orbit-types/src/task/artifacts.rs) | — |
-| Public `Task` DTO | [crates/orbit-types/src/task/model.rs](../../../crates/orbit-types/src/task/model.rs) | — |
+| Public `Task` DTO | [crates/orbit-types/src/task/model/task.rs](../../../crates/orbit-types/src/task/model/task.rs) | — |
 | V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | — |
 | V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | — |
 | Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/driver/sqlite/task_registry/](../../../crates/orbit-store/src/driver/sqlite/task_registry/) | — |

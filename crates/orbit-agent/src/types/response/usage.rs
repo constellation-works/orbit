@@ -18,8 +18,7 @@ enum UsageKeyMode {
     TokenBlock,
 }
 
-// Visible through `response.rs` to sibling-layout tests for the file-rooted
-// response module.
+// Visible through the `response` module to sibling-layout tests.
 pub(in crate::types) fn sum_usage(documents: &[Value]) -> TokenUsage {
     let mut usage = TokenUsage::default();
     for document in documents {

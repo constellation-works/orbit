@@ -72,7 +72,7 @@ byte-oriented and `schema_version: 1` is unchanged.
 
 Evidence:
 
-- `crates/orbit-types/src/task/model.rs:504-660`
+- `crates/orbit-types/src/task/model/support.rs`
 - `crates/orbit-tools/src/builtin/orbit/task/artifact_get.rs:8-57`
 - `crates/orbit-core/src/adapter/tool_host/json.rs:213-279`
 - `crates/orbit-mcp/src/adapter/structured.rs:10-71`

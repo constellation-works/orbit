@@ -145,7 +145,7 @@ same role for MCP, where an empty `git diff` is the proof.
 ## Capability chokepoint for destructive operations outside MCP
 
 **Recorded:** 2026-07-26 21:49:30.348935Z · [ORB-10453]
-**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/adapter/tool_execution.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation.rs`
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-core/src/adapter/tool_execution.rs`, `crates/orbit-cli/src/main.rs`, `crates/orbit-cli/src/command/operation_registry.rs`
 
 ### Context
 

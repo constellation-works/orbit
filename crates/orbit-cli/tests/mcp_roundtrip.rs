@@ -1286,7 +1286,7 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
 /// a sibling checkout B must still be readable by ID alone from checkout A on
 /// every surface, and an explicit foreign `workspace` selector must stay a
 /// fail-closed filter on all three. This must fail if the CLI routing change
-/// in `command/operation.rs` is reverted.
+/// in `command/operation_registry.rs` is reverted.
 #[test]
 fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     let workspace = McpWorkspace::init();

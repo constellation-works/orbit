@@ -288,7 +288,7 @@ fn parse_json_envelope(
     Ok((envelope, state, trace))
 }
 
-// Visible through `response.rs` to sibling-layout tests; keeping this private
+// Visible through the `response` module to sibling-layout tests; keeping this private
 // would require nesting tests back under `envelope`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::types) fn synthesize_response(
@@ -402,7 +402,7 @@ fn exit_zero_terminal_failure(
 // `usage` block carries token counts even when the embedded Orbit response
 // envelope is malformed or missing — losing that data on the synthesize path
 // is what made claude show as zero tokens on the scoreboard.
-// Visible through `response.rs` to sibling-layout tests; this is a narrow
+// Visible through the `response` module to sibling-layout tests; this is a narrow
 // crate-internal seam for fallback trace behavior.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::types) fn synthesize_trace(exec_result: &ExecutionResult) -> InvocationTrace {
