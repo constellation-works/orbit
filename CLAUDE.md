@@ -10,6 +10,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 - Historical ADRs are not an authority; don't cite them. Judge from current code, tests, and requirements.
 - Don't touch `CHANGELOG.md` during tasks; it is compiled at release time ([`RELEASING.md`](RELEASING.md)).
 - Update affected docs in the same PR as the code. Stale docs are a review blocker.
+- Every test must exercise behavior. Don't write text-matching tests — `include_str!` plus `contains()` over source, assets, or UI copy pins wording, breaks on every edit, and proves nothing runs. The only exception is a narrow structural safety guard (CSP, sanitizer wrapper, no raw `innerHTML`) whose assertion message names what it protects.
 
 ## Branching
 
