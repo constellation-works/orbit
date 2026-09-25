@@ -34,6 +34,32 @@ before the subcommand.
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
 
+## Knowledge
+
+### Tasks
+
+| Command | Purpose |
+|---|---|
+| `orbit task add` | Create a task. `--title` and `--complexity` are required. |
+| `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`); `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules), and `--force` overrides it. |
+| `orbit task list` | List tasks. Status-neutral by default; filter with `--status`, `--tag`, `--path`, `--ready`, `--ref`. |
+| `orbit task show <id>` | Show one task, found by ID across registered workspaces. `--fields` projects specific fields. |
+| `orbit task archive <id>` | Archive a task from any status. Archived is terminal: restore to any other status with `task update <id> --status <status> --force`. |
+| `orbit task artifact` | Manage task artifact files. |
+| `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Omit the ID to sweep active tasks; `--restore-pruned` re-declares `context_files` entries an earlier prune recorded in task history; `--status` narrows the sweep. |
+| `orbit task flow` | Filed-vs-closed rates over time — is the backlog draining? |
+| `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
+| `orbit task export` \| `import` \| `reindex` | Portable `tar.zst` task bundles, and index rebuild. |
+| `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, verify, read, or restore a task snapshot. Nothing publishes automatically. |
+
+### Friction and search
+
+| Command | Purpose |
+|---|---|
+| `orbit friction add` \| `list` \| `show` \| `stats` \| `tags` \| `update` \| `resolve` | Report and triage friction records. |
+| `orbit search <query>` | Search tasks and frictions using lexical matching; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `--all-workspaces` searches every active workspace on this machine; task fields use FTS5 BM25 with non-adjacent term matching. |
+| `orbit search reindex` | Rebuild the lexical task index after imports or restores; reports task and chunk counts. |
+
 ## Operate
 
 ### Workflows
@@ -53,27 +79,15 @@ before the subcommand.
 
 See [Delivery Workflows](../../getting-started/workflows/).
 
-### Tasks
+### Run inspection
 
 | Command | Purpose |
 |---|---|
-| `orbit task add` | Create a task. `--title` and `--complexity` are required. |
-| `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`); `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules), and `--force` overrides it. |
-| `orbit task list` | List tasks. Status-neutral by default; filter with `--status`, `--tag`, `--path`, `--ready`, `--ref`. |
-| `orbit task show <id>` | Show one task, found by ID across registered workspaces. `--fields` projects specific fields. |
-| `orbit task archive <id>` | Archive a task from any status. Archived is terminal: restore to any other status with `task update <id> --status <status> --force`. |
-| `orbit task artifact` | Manage task artifact files. |
-| `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Omit the ID to sweep active tasks; `--restore-pruned` re-declares `context_files` entries an earlier prune recorded in task history; `--status` narrows the sweep. |
-| `orbit task flow` | Filed-vs-closed rates over time — is the backlog draining? |
-| `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
-| `orbit task export` \| `import` \| `reindex` | Portable `tar.zst` task bundles, and index rebuild. |
-| `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, verify, read, or restore a task snapshot. Nothing publishes automatically. |
-
-### Knowledge
-
-| Command | Purpose |
-|---|---|
-| `orbit friction add` \| `list` \| `show` \| `stats` \| `tags` \| `update` \| `resolve` | Report and triage friction records. |
+| `orbit run history` | Recent job runs. `-j <job_id>` filters to one job. |
+| `orbit run show [run_id]` | State and step summary for a run; defaults to the most recent. `-s <step_id>`. |
+| `orbit run logs [run_id]` | Raw stdout/stderr captured for a run. |
+| `orbit run events [run_id]` | Audit events recorded for a run. |
+| `orbit run trace [run_id]` | Parent/child run tree. |
 
 ### Maintenance
 
@@ -94,14 +108,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 
 | Command | Purpose |
 |---|---|
-| `orbit search reindex` | Rebuild the lexical task index after imports or restores; reports task and chunk counts. |
-| `orbit search <query>` | Search tasks and frictions using lexical matching; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `--all-workspaces` searches every active workspace on this machine; task fields use FTS5 BM25 with non-adjacent term matching. |
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
-| `orbit run history` | Recent job runs. `-j <job_id>` filters to one job. |
-| `orbit run show [run_id]` | State and step summary for a run; defaults to the most recent. `-s <step_id>`. |
-| `orbit run logs [run_id]` | Raw stdout/stderr captured for a run. |
-| `orbit run events [run_id]` | Audit events recorded for a run. |
-| `orbit run trace [run_id]` | Parent/child run tree. |
 | `orbit log tail` | Tail the unified Orbit log feed. |
 | `orbit doctor` | Diagnose workspace health: config, database, disk, indexes, locks, runs. The `--fix-*` flags are opt-in repairs. |
 | `orbit doctor providers` | Each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. `--json`. |
@@ -132,4 +139,4 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 | `orbit web serve` | Serve the Orbit dashboard. Serves the registry under the resolved root, so `orbit --root <ROOT> web serve` exposes only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one of them. `--operator` grants Operations controls without a TTY or `ORBIT_OPERATOR`. |
 | `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; it takes no `--root`. Spawns the remote server with `--operator` by default; `--no-operator` restores read-only Operations. |
 
-See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace scope, Operations controls, and authorization. See [Set Up MCP](../../how-to/mcp-integration/) for the agent tool surface.
+See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace scope, Operations controls, and authorization. See [Connect Your Agent](../../how-to/mcp-integration/) for the agent tool surface.

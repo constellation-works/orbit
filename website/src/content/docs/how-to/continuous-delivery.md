@@ -1,5 +1,5 @@
 ---
-title: Run a Continuous Delivery Window
+title: Run a Delivery Window
 description: "Prepare tasks, check readiness, authorize a bounded backlog drain, retune or stop it, and recover safely."
 sidebar:
   order: 3
@@ -34,14 +34,14 @@ orbit task show "$TASK_ID" --fields status,context_files
 Use an explicit task list only when you intend to inspect those exact tasks:
 
 ```bash
-orbit run task-pilot "TASK-123" "TASK-456" --wait
+orbit run task-pilot "$TASK_ID" "$OTHER_TASK_ID" --wait
 ```
 
 The generic job form is equivalent, and its input is a JSON array rather than a
 space-separated list:
 
 ```bash
-orbit run job task_pilot_pipeline --input 'task_ids=["TASK-123","TASK-456"]' --wait
+orbit run job task_pilot_pipeline --input "task_ids=[\"$TASK_ID\",\"$OTHER_TASK_ID\"]" --wait
 ```
 
 ## 2. Authorize the backlog

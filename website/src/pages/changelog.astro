@@ -21,15 +21,17 @@ const headings = getHeadings().filter((heading) => heading.depth >= 2);
   headings={headings}
 >
   <p>
-    Releases tag on <code>agent-main</code> and merge to <code>main</code>. Each entry below is
-    compiled from the work merged for that version. Task IDs in brackets identify the Orbit task
-    a change was delivered under; searching one on <a
-      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged"
+    What changed in each Orbit release, newest first, with breaking changes listed before
+    highlights. Task IDs in brackets name the Orbit task a change was delivered under; searching
+    one on <a href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged"
       >GitHub</a
-    > finds its pull request. Install the current release from <a
-      href="/getting-started/install/">Install Orbit</a
-    >.
+    > finds its pull request.
   </p>
+  <div class="orbit-changelog-upgrade">
+    <span>Check for a newer release:</span>
+    <code>orbit update --check</code>
+    <span>New here? <a href="/getting-started/install/">Install Orbit</a>.</span>
+  </div>
   <div class="orbit-changelog">
     <ChangelogContent />
   </div>

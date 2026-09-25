@@ -1,21 +1,61 @@
 ---
 import Default from '@astrojs/starlight/components/Footer.astro';
+
+const groups = [
+  {
+    title: 'Start',
+    links: [
+      { href: '/getting-started/install/', label: 'Install Orbit' },
+      { href: '/how-to/mcp-integration/', label: 'Connect your agent' },
+      { href: '/getting-started/first-task/', label: 'First task' },
+      { href: '/getting-started/workflows/', label: 'Delivery workflows' },
+    ],
+  },
+  {
+    title: 'Learn',
+    links: [
+      { href: '/concepts/', label: 'Concepts' },
+      { href: '/how-to/', label: 'Guides' },
+      { href: '/how-to/dashboard/', label: 'Dashboard' },
+    ],
+  },
+  {
+    title: 'Reference',
+    links: [
+      { href: '/reference/cli/', label: 'CLI commands' },
+      { href: '/reference/config/', label: 'Configuration' },
+      { href: '/reference/activity-job-yaml/', label: 'Activity and job YAML' },
+    ],
+  },
+  {
+    title: 'Project',
+    links: [
+      { href: 'https://github.com/constellation-works/orbit', label: 'GitHub' },
+      { href: '/changelog/', label: 'Changelog' },
+      { href: '/contributing/', label: 'Contributing' },
+      { href: '/privacy/', label: 'Privacy' },
+    ],
+  },
+];
 ---
 
 <Default><slot /></Default>
 
 <footer class="orbit-footer">
   <div class="orbit-footer-inner">
-    <div class="orbit-footer-brand-container" style="display: flex; align-items: baseline; gap: 0.75rem;">
+    <div class="orbit-footer-brand-block">
       <span class="orbit-footer-brand">Orbit</span>
+      <p>A local-first runtime for coding agents. MIT licensed; sends no telemetry.</p>
     </div>
-    <nav aria-label="Site">
-      <a href="/getting-started/">Docs</a>
-      <a href="/reference/cli/">Reference</a>
-      <a href="/how-to/">How-to</a>
-      <a href="/changelog/">Changelog</a>
-      <a href="https://github.com/constellation-works/orbit">GitHub</a>
-      <a href="/privacy/">Privacy</a>
-    </nav>
+    {
+      groups.map(({ title, links }) => (
+        <nav aria-label={title}>
+          <p class="orbit-footer-title">{title}</p>
+          {links.map(({ href, label }) => (
+            <a href={href}>{label}</a>
+          ))}
+        </nav>
+      ))
+    }
   </div>
 </footer>

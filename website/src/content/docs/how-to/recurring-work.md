@@ -248,7 +248,7 @@ orbit task update "$TASK_ID" --approve
 orbit run auto --for 4h
 ```
 
-See [Run a Continuous Delivery Window](../continuous-delivery/) for the drain
+See [Run a Delivery Window](../continuous-delivery/) for the drain
 itself.
 
 ## Unattended shipping

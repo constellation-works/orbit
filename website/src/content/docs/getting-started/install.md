@@ -14,7 +14,8 @@ npm install -g @orbit-tools/cli
 ```
 
 Node 18 or newer is required. The package downloads the matching native Orbit
-binary and puts `orbit` on your `PATH`. Confirm it:
+binary and puts `orbit` on your `PATH`. Release binaries ship for macOS and
+Linux, on x64 and arm64; there is no Windows build. Confirm it:
 
 ```bash
 orbit --version
@@ -107,7 +108,7 @@ orbit workspace init --inject-agent-rules   # add an Orbit rules block to CLAUDE
 `--mcp` registers the Orbit MCP server with **operator** authority, which is what
 lets an agent dispatch workflows and run governed operations. Plain
 `orbit mcp init` registers the agent-only surface instead. See
-[Set Up MCP](../../how-to/mcp-integration/) for the full picture.
+[Connect Your Agent](../../how-to/mcp-integration/) for the full picture.
 
 ## Prerequisites
 
@@ -126,7 +127,7 @@ source or contribute to the workspace.
 
 Orbit wraps each spawned agent subprocess in an OS-level sandbox — `sandbox-exec`
 on macOS, Bubblewrap on Linux (which fails closed without a trusted
-`/usr/bin/bwrap`), none on Windows; see
+`/usr/bin/bwrap`); see
 [Platform Support](../../concepts/agents/#platform-support).
 
 On Ubuntu 24.04 and other distributions that restrict unprivileged user

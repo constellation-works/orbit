@@ -53,7 +53,7 @@ a command. The destinations are listed below.
 
 Orbit runs agent work by launching the command-line tool of the provider you
 configure. The supported tools are Claude Code, Codex, Gemini CLI, Antigravity,
-Grok, GitHub Copilot, Cursor Agent, Pi, OpenCode, and Ollama. Orbit passes each
+Grok, GitHub Copilot, Cursor Agent, Pi, and OpenCode. Orbit passes each
 agent your task's context, such as the task description, prompts, and files in the
 workspace. The agent may send that content to its provider, and the provider's own
 terms and privacy policy apply. Orbit itself does not contact any AI provider's

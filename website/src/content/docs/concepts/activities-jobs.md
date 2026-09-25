@@ -13,7 +13,7 @@ Supported activity types:
 
 | Type | Use |
 |------|-----|
-| `agent_loop` | Run an agent with an instruction, provider, and tool allowlist. The retired `backend:` selector is covered in [Retired backend selection](../../reference/config/#retired-backend-selection). |
+| `agent_loop` | Run an agent with an instruction and tool allowlist; the run's crew selects provider and model. The retired `backend:` selector is covered in [Retired backend selection](../../reference/config/#retired-backend-selection). |
 | `deterministic` | Run a registered deterministic action. |
 
 For a task-backed `agent_loop`, the activity's `tools` are a baseline. Orbit
@@ -44,22 +44,32 @@ Activities make execution behavior reusable. Jobs make orchestration explicit. T
 **Example:** A job step referencing a reusable activity.
 
 ```yaml
-# .orbit/activities/analyze_code.yaml
+# .orbit/resources/activities/analyze_code.yaml
 schemaVersion: 2
 kind: Activity
-name: analyze_code
+metadata:
+  name: analyze_code
 spec:
   type: agent_loop
-  provider: claude
-  model: opus
+  description: Analyze the provided code.
   instruction: "Analyze the provided code."
+  tools:
+    - orbit.task.show
 
 ---
-# .orbit/jobs/review_pr.yaml
+# .orbit/resources/jobs/review_pr.yaml
 schemaVersion: 2
 kind: Job
-name: review_pr
-steps:
-  - id: analysis
-    target: activity:analyze_code
+metadata:
+  name: review_pr
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: analysis
+      target: activity:analyze_code
 ```
+
+The activity names no provider or model. The run resolves a
+[crew](../agents/#crews) at dispatch and applies its provider, model, and
+effort.

@@ -17,13 +17,13 @@ sidebar:
 | `orbit-registry` | Local machine identity and logical workspace catalog validation with atomic file persistence. |
 | `orbit-web` | HTTP API, embedded dashboard UI, dashboard mutations, and SSH web connection over Core and Registry. |
 | `orbit-engine` | Activity and job execution, template rendering, retry logic. Owns the CLI agent subprocess runner, which references `orbit-agent::{Agent, AgentConfig}` directly. |
-| `orbit-agent` | Per-provider `AgentRuntime` implementations under `providers/<name>/<name>_runtime.rs` (claude, codex, copilot, cursor, gemini, antigravity, gemini_http, grok, openai_compat, anthropic, ollama, pi, mock_agent). Also carries a standalone HTTP `LoopTransport` / `AgentLoop` SDK surface that Orbit's job execution no longer uses. |
+| `orbit-agent` | Per-provider `AgentRuntime` implementations under `providers/<name>/<name>_runtime.rs` (claude, codex, copilot, cursor, gemini, antigravity, grok, ollama, opencode, pi, mock_agent), plus HTTP transports under `providers/{anthropic,gemini_http,openai_compat}/`. Also carries a standalone HTTP `LoopTransport` / `AgentLoop` SDK surface that Orbit's job execution no longer uses. |
 | `orbit-tools` | Generic tool registry plus workspace-scoped builtins, filesystem tools, and policy-aware exec tools. |
 | `orbit-policy` | Filesystem-scoping policy engine. Owns `FsProfile` resolution and `denyRead` / `denyModify` evaluation. |
 | `orbit-exec` | Process / sandbox / supervision primitives for shell-command execution under an `FsProfile`. |
 | `orbit-store` | Generic YAML/SQLite stores, connection primitives, namespaced feature-migration ledger, and immutable historical bootstrap migrations. Feature crates own their active schemas and queries. |
 | `orbit-mcp` | RMCP framing, canonical discovery, server identity context, and direct SSH stdio proxy. |
-| `orbit-search` | Retrieval/ranking feature and workspace-local semantic index; also builds `orbit-search-companion`, a separately installed embedding companion binary, as an additional `[[bin]]` target. |
+| `orbit-search` | Workspace-local lexical task search: SQLite FTS5 chunks ranked by BM25, kept in sync as tasks change. |
 | `orbit-types` | Lowest contract leaf — domain-qualified shared types (`identity`, `workspace`, `task`, `workflow`, `policy`, `resource`, `tool`, `telemetry`, `record`) and `OrbitId`. No I/O or Orbit crate deps. |
 | `orbit-common` | Mechanism crate above `orbit-types` — `OrbitError`, governance, filesystem, process, storage, protocol, observability, and security helpers. |
 

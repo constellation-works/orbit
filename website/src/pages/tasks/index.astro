@@ -9,32 +9,39 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 
 <StarlightPage
   frontmatter={{
-    title: 'Task records are not published',
+    title: 'This task lives in an Orbit workspace',
     description:
-      'Orbit task IDs in pull requests point at workspace-local state. Find the delivery on GitHub instead.',
+      'Orbit task IDs in pull requests point at workspace-local records. Find the delivery on GitHub instead.',
     tableOfContents: false,
   }}
 >
   <p>
-    You followed a link of the form <code>orbit-cli.com/tasks/&lt;id&gt;</code>. Orbit writes
-    those links into pull-request descriptions so a merged change stays attributable to the
-    task it was delivered under. The task record itself lives in the owning host's Orbit root
-    (<code>~/.orbit/tasks/workspaces/&lt;workspace&gt;/</code>) and is not published on this site.
+    Orbit links each pull request to the task it delivered, so a merged change stays attributable
+    to the request behind it. Task records stay on the machine that owns the workspace and are not
+    published here, but you can still trace the change.
   </p>
   <p class="orbit-task-lookup" hidden>
-    Looking for <code data-task-id></code>? If it came from the Orbit repository, its merged
-    pull request is on <a
-      data-task-search
-      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged">GitHub</a
-    >, and the release that shipped it is in the <a href="/changelog/">changelog</a>.
+    You followed the link for <code data-task-id></code>.
   </p>
+  <div class="orbit-card-grid">
+    <a
+      class="orbit-card"
+      data-task-search
+      href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged"
+    >
+      <h3>Find its pull request</h3>
+      <p>Search merged pull requests on GitHub for the task ID.</p>
+    </a>
+    <a class="orbit-card" href="/changelog/">
+      <h3>See the release</h3>
+      <p>For Orbit's own tasks, the changelog cites the task IDs each release shipped.</p>
+    </a>
+  </div>
+  <h2>Own the workspace?</h2>
   <p>
-    To see what an ID delivered, search the owning repository's merged pull requests for it.
-    For Orbit's own tasks, the <a href="/changelog/">changelog</a> cites the task IDs each entry
-    was compiled from.
-    To inspect a task record in a workspace you have access to, run
-    <code>orbit task show &lt;id&gt;</code>. See <a href="/concepts/tasks/">Tasks</a> for what a
-    record contains.
+    Run <code>orbit task show &lt;id&gt;</code> on the owning machine for the full record: description,
+    acceptance criteria, and audit history. See <a href="/concepts/tasks/">Tasks</a> for what a record
+    contains.
   </p>
 </StarlightPage>
 
@@ -43,9 +50,9 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
   // is echoed back into the page, and only into text and a URL-encoded query.
   const id = new URLSearchParams(window.location.search).get('id') ?? '';
   const lookup = document.querySelector<HTMLElement>('.orbit-task-lookup');
-  if (lookup && /^[A-Z][A-Z0-9]{1,15}-\d{1,8}$/.test(id)) {
+  const search = document.querySelector<HTMLAnchorElement>('[data-task-search]');
+  if (lookup && search && /^[A-Z][A-Z0-9]{1,15}-\d{1,8}$/.test(id)) {
     lookup.querySelector('[data-task-id]')!.textContent = id;
-    const search = lookup.querySelector<HTMLAnchorElement>('[data-task-search]')!;
     search.href = `https://github.com/constellation-works/orbit/pulls?q=${encodeURIComponent(`is:pr is:merged "${id}"`)}`;
     lookup.hidden = false;
   }

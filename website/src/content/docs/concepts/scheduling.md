@@ -79,11 +79,36 @@ in-memory schedule, and no inline command payload: a target is always a catalog
 reference (`job:<name>`), so what a routine can do is exactly what a reviewed
 job can do. To fire a single activity on a schedule, wrap it in a one-step job.
 
+A routine can instead fire on backlog state. The seeded task-pilot routine uses
+a `state` trigger in place of `cron`:
+
+```yaml
+trigger:
+  state:
+    kind: preparation_eligible
+    owner_machine: <machine-id>
+    branch: main
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+target: job:task_pilot_pipeline
+```
+
+Each tick fingerprints eligible tasks (by default `proposed` or `backlog`)
+against the branch head and admits those with no fresh assessment, once each has
+settled for `debounce_minutes` or waited `max_wait_minutes`, up to `batch_size`
+per run. An unchanged backlog fires nothing; a material edit to a task makes it
+eligible again. It is still evaluated by the tick, not pushed by an event.
+
 Invariants that shape how routines behave:
 
-- **No host field.** A definition is evaluated by every machine with a
+- **No host field.** A cron definition is evaluated by every machine with a
   registered owner checkout and an enabled clock, each against its own store.
   Registration is the opt-in; to keep a routine off a machine, pause it there.
+  A `state` trigger is the exception: only its `owner_machine` evaluates it.
 - **Versioned enable, host-local pause.** `enabled` lives in the file and is a
   reviewed change; `orbit routine pause` is a per-host override that is never
   synced and survives reboots. Use pause for "not on this machine right now",
@@ -132,8 +157,9 @@ Invariants that shape how auto-tasks behave:
 - **Catch-up collapses.** A downtime gap mints one make-up task, not one per
   missed slot.
 - **Seeded disabled.** Orbit embeds a small default catalog — QA sweep,
-  friction curation, security review, code review, delivery code review, and
-  delivery QA — materialized by `orbit workspace init` with `enabled: false`
+  friction curation, security review, code review, delivery code review,
+  delivery QA, backlog hygiene, doc duties, and run-failure patterns —
+  materialized by `orbit workspace init` with `enabled: false`
   and refreshed by `orbit workspace sync`. Seeding never mints a task.
 
 ## Why both exist

@@ -59,8 +59,8 @@ orbit web connect my-server --no-operator
    `7878`).
 2. Reuses a remote `orbit web serve` that already answers `/healthz`, or
    starts `orbit web serve --no-open --operator --port <remote-port>` and
-   owns that process. Pass `--no-operator` to spawn the previous read-only
-   Operations surface instead.
+   owns that process. Pass `--no-operator` to spawn it without operator
+   capability; Operations controls and Config writes then stay read-only.
 3. Prints `http://localhost:<local-port>` and, unless `--no-open` is set,
    opens a browser.
 4. On Ctrl-C, tears down only the SSH process this invocation started. A
@@ -119,7 +119,7 @@ The left rail is the section map:
 ### Tasks
 
 Search by ID or title, filter by status, or type an ID into **Jump to
-ORB-NNNNN** in the top bar. Opening a task shows detail plus the actions
+task id** in the top bar. Opening a task shows detail plus the actions
 that apply to its current status:
 
 | Control | When it is present |
@@ -204,7 +204,7 @@ the view that matches the question you are asking.
 
 ```bash
 # CLI equivalents for the same facts. Identifiers are placeholders.
-orbit task show ORB-NNNNN
+orbit task show "$TASK_ID"
 orbit run show jrun-YYYYMMDD-HHMM-NN
 orbit audit list
 ```
@@ -269,9 +269,9 @@ orbit clock set --cadence-seconds 300
 
 A stats strip leads: definitions, how many are enabled, the next scheduled
 mint, and how many definitions have an open duplicate (the scheduler skips
-those slots). If the workspace defines an `auto_task_scheduler` routine and
-it is paused, the pane says so, because scheduled definitions will not mint
-until it runs.
+those slots). Definitions live in `.orbit/auto_tasks/` and are evaluated
+directly on every host sweep clock tick, with no scheduler routine in between.
+Pausing the clock pauses scheduled mints.
 
 Rows are grouped **On a schedule**, **On delivery** (minted after landed
 deliveries, not on a clock) and **Disabled**. Each shows the switch, the
@@ -305,25 +305,27 @@ calls.
 ### Jobs
 
 The Jobs subtab is the catalogue of job definitions the workspace uses,
-projected from what the dashboard already serves: every `job:` target a
-routine names plus every job id in the workspace's recent runs
-(`/api/job-runs`). There is no job endpoint yet, so the pane is read-only.
+projected from routine targets and recent runs: every `job:` target a
+routine names plus every job id in the workspace's last 100 runs
+(`/api/job-runs`).
 
 - **Running now** lists in-flight runs with their job, role, crew, start
   time and run link.
 - The catalogue is grouped **Sweeps** (housekeeping and intake, safe to run
-  by hand) and **Delivery** (task and workspace pipelines, normally started
-  by a ship or a drain). Each row shows which routines schedule the job and
-  at what cadence, the last run with outcome, duration and link, and how
-  many runs are active.
-- **Run ▸** is offered on every row but disabled; its tooltip and the row's
-  **Details** carry the exact CLI command, with a copy button:
+  by hand), **Delivery** (task and workspace pipelines, normally started by a
+  ship or a drain) and **Other**. Each row shows which routines schedule the
+  job and at what cadence, the last run with outcome, duration and link, and
+  how many runs are active.
+- **Run ▸** submits the job in the selected workspace with no input
+  (`POST /api/jobs/{id}/run`) and reports the new run id. It needs an
+  authorized operator session (see [Authorization](#authorization)). It is
+  disabled on **Delivery** rows: those jobs need a task id or a delivery
+  window, so start them with **ship** or the auto-drain window.
+- The row's **Details** carries the exact CLI command, with a copy button:
 
 ```bash
 orbit run job worktree_gc_pipeline --workspace orbit
 ```
-
-The button will submit the same run once a job endpoint lands.
 
 ### Auto-drain
 
@@ -346,7 +348,7 @@ above Locked files. Top to bottom:
 - **Eligible now** and **Blocked by running** — counts from the readiness
   snapshot.
 - **Blocked detail** — up to three tasks waiting on a running task, each as
-  `ORB-A waits on ORB-B` with the holder's slot phase and the contested lock,
+  `ABC-1 waits on ABC-2` with the holder's slot phase and the contested lock,
   then `+N more`.
 
 Start and Stop results appear in the card's status line. The snapshot is
@@ -452,7 +454,7 @@ Two independent gates still apply:
 1. **Workspace scope.** Aggregate view and inactive workspaces are
    read-only, even for an operator.
 2. **Operator capability** for Operations controls (routine/auto-task
-   toggle, mint, clock, auto-drain completion) and for
+   toggle, mint, job run, clock, auto-drain completion) and for
    Config writes. The
    server resolves the same capability vocabulary as the CLI. A local
    interactive terminal counts as an operator session. `orbit web serve
@@ -513,7 +515,7 @@ from a slow workspace.
   the CLI.
 - [Schedule Recurring Work](../recurring-work/) — routines, the sweep clock,
   and auto-task definitions.
-- [Run a Continuous Delivery Window](../continuous-delivery/) — bounded
+- [Run a Delivery Window](../continuous-delivery/) — bounded
   `orbit run auto`, including `--complete`.
-- [Set Up MCP](../mcp-integration/) — the tool surface agents use; distinct
+- [Connect Your Agent](../mcp-integration/) — the tool surface agents use; distinct
   from this operator UI.

@@ -41,7 +41,7 @@ sidebar:
     <p>Select artifact scopes and filesystem profiles.</p>
   </a>
   <a class="orbit-card" href="./mcp-integration/">
-    <h3>Set Up MCP</h3>
+    <h3>Connect Your Agent</h3>
     <p>Connect Orbit tools to agent clients.</p>
   </a>
 </div>

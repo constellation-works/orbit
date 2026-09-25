@@ -34,7 +34,7 @@ sidebar:
     worktrees/
     auto-tasks.json  # scheduler cursor
     layout.version
-    semantic.db
+    semantic.db      # lexical search index (historical file name)
   config.toml
   config.yaml
 ```

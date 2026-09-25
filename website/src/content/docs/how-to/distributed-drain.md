@@ -77,7 +77,7 @@ key from the owner's `~/.ssh/authorized_keys`. Leftover
 `~/.orbit/mcp-callers.toml` files are ignored; `orbit doctor` names them so
 you can delete them.
 
-See [Set Up MCP](../mcp-integration/) for client registration. Machine labels
+See [Connect Your Agent](../mcp-integration/) for client registration. Machine labels
 forwarded over SSH are audit attribution, not credentials.
 
 ## 4. Probe the owner, do not pull

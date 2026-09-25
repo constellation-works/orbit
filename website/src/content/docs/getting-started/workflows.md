@@ -66,7 +66,7 @@ when the window expires still finishes.
 
 Running a real delivery window — preparing work, choosing concurrency,
 restricting crews, retuning, stopping, and recovering — is covered end to end in
-[Run a Continuous Delivery Window](../../how-to/continuous-delivery/).
+[Run a Delivery Window](../../how-to/continuous-delivery/).
 
 ## `orbit run readiness`
 
