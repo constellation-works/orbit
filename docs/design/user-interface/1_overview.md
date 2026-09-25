@@ -41,7 +41,7 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 | Dashboard styles | `crates/orbit-web/assets/dashboard/css/` | One file per screen plus shared base, shell, and components layers; `DASHBOARD_CSS` in `lib.rs` joins them in cascade order and serves the result as `/static/dashboard.css`. |
 | CLI adapter | `crates/orbit-cli/src/command/web.rs` | Delegates `serve` and `connect` to `orbit-web`. |
 | Theme rules | `./specs/theme.md` | Canon Refined tokens and visual invariants. |
-| Dashboard implementation | [crates/orbit-web/src/lib.rs](../../../crates/orbit-web/src/lib.rs) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
+| Dashboard implementation | [crates/orbit-web/src/serve.rs](../../../crates/orbit-web/src/serve.rs), [assets.rs](../../../crates/orbit-web/src/assets.rs), [state/](../../../crates/orbit-web/src/state/), [api/](../../../crates/orbit-web/src/api/) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
 
 ## Task References
 

@@ -2,7 +2,7 @@
 type: runbook
 summary: Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations.
 tags: [operations, backup, restore, state, sqlite, task-publication]
-paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state.rs"]
+paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state/**"]
 related_features: [orbit-core, remote-access, task-publication]
 related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376, ORB-11426]
 last_validated: 2026-09-20

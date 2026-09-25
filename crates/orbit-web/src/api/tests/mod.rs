@@ -15,6 +15,7 @@ mod handlers;
 mod incidents;
 mod log;
 mod metrics;
+mod origin;
 mod plugins;
 mod reliability;
 mod routines;
