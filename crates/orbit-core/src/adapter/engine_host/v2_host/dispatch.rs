@@ -21,10 +21,10 @@ use crate::runtime::task::locks::{
     task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
 };
 
-use super::{
-    backlog_exclusion, ci_failure_tasks, dependabot_alert_tasks, pipeline_actions, scan_unresolved,
-    task_pilot, workspace_auto,
-};
+use super::admission::{backlog_exclusion, scan_unresolved};
+use super::ci_failure::filing as ci_failure_filing;
+use super::dependabot::{consolidate as dependabot_consolidate, filing as dependabot_filing};
+use super::{pipeline_actions, task_pilot, workspace_auto};
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
@@ -227,7 +227,7 @@ pub(crate) fn run_deterministic(
         // engine-private `collect_ci_evidence` step; this action only reads
         // that JSON and writes tasks.
         CoreDeterministicAction::FileCiFailureTasks => {
-            ci_failure_tasks::file_ci_failure_tasks(runtime, input).map_err(|error| {
+            ci_failure_filing::file_ci_failure_tasks(runtime, input).map_err(|error| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),
@@ -235,14 +235,15 @@ pub(crate) fn run_deterministic(
             })
         }
         CoreDeterministicAction::ConsolidateCodeScanningTasks => {
-            dependabot_alert_tasks::consolidate::consolidate_code_scanning_tasks(runtime, input)
-                .map_err(|error| DispatchError::DeterministicActionFailed {
+            dependabot_consolidate::consolidate_code_scanning_tasks(runtime, input).map_err(
+                |error| DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),
-                })
+                },
+            )
         }
         CoreDeterministicAction::FileDependabotAlertTasks => {
-            dependabot_alert_tasks::file_dependabot_alert_tasks(runtime, input).map_err(|error| {
+            dependabot_filing::file_dependabot_alert_tasks(runtime, input).map_err(|error| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),

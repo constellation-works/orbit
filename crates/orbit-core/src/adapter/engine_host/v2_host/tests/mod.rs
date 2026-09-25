@@ -1,16 +1,5 @@
-mod auto_admission;
-mod backlog_exclusion;
-mod ci_failure_admission;
-mod ci_failure_cancelled;
-mod ci_failure_tasks;
 mod cli_executor;
-mod code_scanning_consolidation;
-mod code_scanning_groups;
-mod dependabot_alert_tasks;
 mod dispatch;
-mod duplicate_tasks;
-mod leaf_occupancy;
-mod pipeline_actions;
 #[cfg(target_os = "linux")]
 mod recovery_authority_sandbox;
 #[cfg(target_os = "linux")]
@@ -18,14 +7,6 @@ mod recovery_execution_sandbox;
 mod required_tools;
 mod sandbox;
 mod sandbox_nested;
-mod scan_unresolved;
-mod sweep_duplicate_tasks;
 mod task_context;
-mod task_pilot;
-mod task_pilot_assessment;
-mod task_pilot_source;
-mod task_pilot_validation_tools;
 mod v2_host;
 mod workspace_auto;
-
-mod pull;

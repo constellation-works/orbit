@@ -76,7 +76,7 @@ Some runtime paths write targeted command-audit rows directly:
 - `crates/orbit-core/src/adapter/command/dispatch/execute.rs` records runtime-backed, in-process, and global CLI/MCP tool invocations as `command: tool` with `subcommand: "run"` or `"run-mcp"`.
 - `crates/orbit-cli/src/command/mcp/server.rs` composes `orbit-mcp` framing with `orbit-cmd` registered runtime selection and carries the session capability policy. Global discovery, unknown/unadvertised names, and workspace setup failures use Core's global audit seam; resolved workspace calls use the runtime seam. Core dispatch enforces governed operation authorization, while federated routing applies destination tool-class checks before delivery.
 - `crates/orbit-core/src/runtime/task/locks.rs` records task lock reservation checks, reservations, releases, and denials.
-- `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions.rs` records gate-starvation failures for task bundles.
+- `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions/gate_starvation.rs` records gate-starvation failures for task bundles.
 
 These producers share the SQLite schema and must preserve the same status, target, actor, and redaction expectations as CLI rows. Prescriptive coverage expectations live in [specs/coverage-matrix.md](./specs/coverage-matrix.md).
 

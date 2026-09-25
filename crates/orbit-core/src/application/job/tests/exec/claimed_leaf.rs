@@ -26,8 +26,8 @@ use serde_json::json;
 use super::review_gate::git_stdout;
 use super::{git_in, resolved_job, seed_default_catalogs, try_execute_job};
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::pull::{PullDrain, PullLauncher, PullPeer};
-use crate::adapter::engine_host::v2_host::pull_adapters::{LeafPullLauncher, OwnerPullPeer};
+use crate::adapter::engine_host::v2_host::pull::adapters::{LeafPullLauncher, OwnerPullPeer};
+use crate::adapter::engine_host::v2_host::pull::drain::{PullDrain, PullLauncher, PullPeer};
 use crate::application::distributed::owner_binary_version;
 use crate::application::task::TaskAddParams;
 

@@ -88,7 +88,7 @@ The default tracing subscriber appends redacted structured events to `~/.orbit/s
 | Redaction utilities | `crates/orbit-common/src/security/redaction.rs` | [T20260426-0605], [T20260426-2349] |
 | Global tracing JSONL feed and live projections | `crates/orbit-common/src/observability/logging.rs`, selected FS/proc/task producers | [T20260426-2343], [T20260427-0023] |
 | Friction feedback loop | `crates/orbit-store/src/repository/friction/`, `crates/orbit-web/src/api/frictions.rs` | [T20260510-13], [ORB-00062] |
-| V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host.rs` | [T20260426-0526] |
+| V2 invocation metrics persistence | `crates/orbit-store/src/driver/sqlite/invocation_store.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/invocation.rs` | [T20260426-0526] |
 | Task attribution fields | `crates/orbit-types/src/task/model.rs`, task update/runtime host paths | [T20260426-0605], [T20260427-47] |
 | Workflow git commit identity attribution | `crates/orbit-engine/src/executor/automation/vcs/commit/` | [T20260508-22], [T20260509-12] |
 
