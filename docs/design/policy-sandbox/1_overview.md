@@ -74,7 +74,7 @@ When the default policy denies workspace `.orbit/**`, the v2 host re-allows only
 | Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/lib.rs` | [ORB-10833] |
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/{dispatcher,job_executor,agent_loop_driver}.rs` | [T20260419-0503] |
 | Exec spawn primitive | `crates/orbit-exec/src/{lib,runner,process,sandbox}.rs` | [T20260417-0550] |
-| Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox.rs` | [ORB-10552] |
+| Linux CLI write confinement | `crates/orbit-exec/src/linux_sandbox/` | [ORB-10552] |
 | Process supervision | `crates/orbit-exec/src/supervision/{wait,cleanup,signal,tee}.rs` | [T20260417-0558-4], [T20260417-0558-5] |
 | Filesystem denial audit channel | `crates/orbit-tools/src/lib.rs` (`FsAuditLogger`) → `docs/design/auditability/2_design.md §3` | [T20260426-0605] |
 
