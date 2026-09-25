@@ -53,6 +53,26 @@ const DIAG_FULL_WIDTH_MAINS = {
   reliability: "diagnostics-reliability-main",
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
+// Rail labels name destinations the way an operator reads them. The hashes
+// underneath keep their original names so bookmarks and links still resolve.
+const RAIL_LABELS = {
+  tasks: "Tasks",
+  runs: "Runs",
+  audit: "Audit",
+  diagnostics: "Health",
+  operations: "Automation",
+  knowledge: "Knowledge",
+  plugins: "Plugins",
+  config: "Settings",
+  "run-detail": "Run detail",
+};
+
+// Runs is its own rail entry, so Health opens its remembered view unless that
+// view is the run list, in which case it opens Incidents.
+function railRoute(ctx, tab) {
+  if (tab === "diagnostics" && ctx.getDiagSubtab() === "runs") return "diagnostics/incidents";
+  return tab;
+}
 const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
 // `--scope` equivalents, and `keys` is the settable-key reference.
@@ -89,9 +109,18 @@ function setRunDetailSubtabImpl(ctx, name) {
   $("run-events-body").style.display = name === "events" ? "block" : "none";
 }
 
+const DIAG_TITLES = {
+  runs: "Runs",
+  metrics: "Step metrics",
+  errors: "Errors",
+  incidents: "Incidents",
+};
+
 function setDiagSubtabImpl(ctx, name) {
   if (!DIAG_SUBTABS.includes(name)) name = "runs";
   ctx.setDiagSubtab(name);
+  const title = $("diag-title");
+  if (title && DIAG_TITLES[name]) title.textContent = DIAG_TITLES[name];
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
   }
@@ -115,11 +144,18 @@ function setDiagSubtabImpl(ctx, name) {
     const node = $(mainId);
     if (node) node.style.display = subtab === name ? "grid" : "none";
   }
-  if (sideCol) sideCol.style.display = fullWidthMain ? "none" : "flex";
+  // The summary card (completion by complexity, implement_one durations) is
+  // about metrics, so it only rides beside Metrics; every other list gets the
+  // full width it needs for job names and messages.
+  const withSummary = !fullWidthMain && name === "metrics";
+  if (sideCol) sideCol.style.display = withSummary ? "flex" : "none";
+  // A full-width subtab brings its own panels; the list panel above it would
+  // otherwise sit there as an empty, titled box.
+  if (diagMain) diagMain.style.display = fullWidthMain ? "none" : "";
   if (diagMain) {
-    diagMain.style.gridTemplateColumns = fullWidthMain
-      ? "minmax(0, 1fr)"
-      : "minmax(0, 2fr) minmax(280px, 1.15fr)";
+    diagMain.style.gridTemplateColumns = withSummary
+      ? "minmax(0, 2fr) minmax(280px, 1.15fr)"
+      : "minmax(0, 1fr)";
   }
   document.body.classList.toggle("reliability-active", name === "reliability");
   markWorkspaceSelectorScope(name === "reliability");
@@ -205,6 +241,12 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
   }
+  // `#runs` with no run id is the Runs destination in the rail: the recent-runs
+  // list, which still lives at `#diagnostics/runs` so existing links resolve.
+  if (head === "runs" && !segments[1]) {
+    head = "diagnostics";
+    segments.splice(0, segments.length, "diagnostics", "runs");
+  }
   let top;
   if (head === "runs" && segments[1]) {
     top = "run-detail";
@@ -236,19 +278,19 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   ctx.setTab(top);
   // ORB-10972: the topbar breadcrumb names the active destination, since the
   // rail no longer sits above the content where the tab strip used to.
+  const diagSub = top === "diagnostics"
+    ? (DIAG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getDiagSubtab())
+    : null;
+  const railKey = top === "run-detail" || diagSub === "runs" ? "runs" : top;
   const crumb = $("topbar-crumb");
-  if (crumb) {
-    crumb.textContent = top === "run-detail"
-      ? "Run detail"
-      : top.charAt(0).toUpperCase() + top.slice(1);
-  }
+  if (crumb) crumb.textContent = RAIL_LABELS[railKey] || RAIL_LABELS[top] || top;
   document.body.classList.toggle("operations-active", top === "operations" || top === "config");
   // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
   // so the remembered-subtab highlight must be muted while another destination
   // is active — otherwise the rail shows two things selected at once. The
   // `.active` class itself is left alone; it is still the remembered choice.
   const diagSubtabs = $("diag-subtabs");
-  if (diagSubtabs) diagSubtabs.classList.toggle("dimmed", top !== "diagnostics");
+  if (diagSubtabs) diagSubtabs.classList.toggle("dimmed", railKey !== "diagnostics");
   // The Operations subtabs live in the rail the same way.
   const operationsSubtabs = $("operations-subtabs");
   if (operationsSubtabs) operationsSubtabs.classList.toggle("dimmed", top !== "operations");
@@ -259,7 +301,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     markWorkspaceSelectorScope(false);
   }
   for (const tab of document.querySelectorAll(".tab")) {
-    tab.classList.toggle("active", tab.dataset.tab === top);
+    const on = tab.dataset.tab === railKey;
+    tab.classList.toggle("active", on);
+    tab.setAttribute("aria-current", on ? "page" : "false");
   }
   for (const pane of document.querySelectorAll(".tab-pane")) {
     pane.classList.toggle("active", pane.dataset.tab === top);
@@ -269,7 +313,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   const indicator = $("tab-indicator") || el("div", {id: "tab-indicator", class: "tab-indicator"});
   if (!indicator.parentNode) document.querySelector(".tabs").appendChild(indicator);
   // For run-detail (no top tab button), hide the indicator
-  const activeTabEl = document.querySelector(`.tab[data-tab="${top}"]`);
+  const activeTabEl = document.querySelector(`.tab[data-tab="${railKey}"]`);
   if (activeTabEl) {
     indicator.style.display = "";
     indicator.style.width = `${activeTabEl.offsetWidth}px`;
@@ -399,7 +443,7 @@ function startDashboardPolling(ctx) {
 
 function initTabsImpl(ctx) {
   for (const tab of document.querySelectorAll(".tab")) {
-    tab.addEventListener("click", () => setActiveTabImpl(ctx, tab.dataset.tab, { refresh: false }));
+    tab.addEventListener("click", () => setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false }));
   }
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
     btn.addEventListener("click", () =>

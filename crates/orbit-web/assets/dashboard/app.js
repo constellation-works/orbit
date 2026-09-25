@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
+import { requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './audit.js';
 import { renderScoreboard } from './scoreboard.js';
@@ -309,7 +309,7 @@ function renderLocksPanel(payload) {
   const totalTasks = Number.isFinite(Number(payload && payload.total_tasks))
     ? Number(payload.total_tasks)
     : byTask.length;
-  count.textContent = `${totalLocked} files / ${totalTasks} tasks`;
+  count.textContent = `${totalLocked} files · ${totalTasks} tasks`;
 
   if (byTask.length === 0) {
     const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
@@ -319,48 +319,62 @@ function renderLocksPanel(payload) {
     return;
   }
 
+  // One line per task: who holds the locks, its status, how many paths and
+  // which run. The paths themselves fold away, and stay open across refreshes
+  // once opened, so a dozen tasks never bury the dock in file paths.
   const nodes = byTask.map((task) => {
     const taskId = String(task.id || "");
-    const group = el("div", { class: "lock-task-group" });
+    const files = Array.isArray(task.context_files) ? task.context_files : [];
+    const group = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-group" });
     group.dataset.key = `lock-task-${taskId}`;
     group.dataset.hash = JSON.stringify(task);
 
     const idButton = el("button", {
       class: "lock-task-id mono",
-      text: `[${taskId}]`,
+      text: taskId,
       title: `Open ${taskId} in the task list`,
     });
+    idButton.type = "button";
     idButton.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       openVisibleTask(taskId, taskContext());
     });
 
-    const header = el("div", { class: "lock-task-header" }, [
+    const header = el("summary", { class: "lock-task-header" }, [
       idButton,
-      el("span", { class: "lock-separator", text: "·" }),
       statusPill(task.status || "unknown"),
+      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
     ]);
     if (task.job_run_id) {
-      header.appendChild(el("span", { class: "lock-separator", text: "·" }));
       header.appendChild(el("span", {
         class: "lock-job mono",
-        text: `job_run=${task.job_run_id}`,
+        text: shortRunId(task.job_run_id),
         title: `job_run=${task.job_run_id}`,
       }));
     }
     group.appendChild(header);
 
-    const files = Array.isArray(task.context_files) ? task.context_files : [];
+    const list = el("div", { class: "lock-file-list" });
     for (const path of files) {
-      group.appendChild(el("div", {
+      list.appendChild(el("div", {
         class: "lock-file-row mono",
         text: String(path),
         title: String(path),
       }));
     }
+    group.appendChild(list);
     return group;
   });
   syncNodes(body, nodes);
+}
+
+// `jrun-20260925-0324-c9` reads as `…0324-c9`: the date is today's more often
+// than not, and the tail is what tells two runs apart.
+function shortRunId(runId) {
+  const text = String(runId || "");
+  const match = /^jrun-\d{8}-(.+)$/.exec(text);
+  return match ? `…${match[1]}` : text;
 }
 
 function fmtTimestamp(iso) {
@@ -1541,21 +1555,30 @@ function renderHealthStrip(data) {
   const failed = $("tile-failed");
   if (failed) {
     failed.classList.toggle("tile-alert", (data.failed_runs || 0) > 0);
-    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Recent Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Click to open failed runs.`;
-    failed.style.cursor = "pointer";
-    if (!failed.dataset.failedNavBound) {
-      failed.dataset.failedNavBound = "1";
-      failed.addEventListener("click", () => {
-        setRunFilter("failed");
-        sAT("diagnostics/runs");
-      });
-    }
+    failed.title = `Failed, timeout, and interrupted job runs in the ${windowLabel} window. Distinct from Runs' failed filter (durable Failed state, no window, most recent page) and Errors (step/event failures this month). Opens failed runs.`;
   }
+  const windowTag = $("kpi-window");
+  if (windowTag) windowTag.textContent = windowLabel;
 
   setRailCount("rail-count-audit", data.events);
-  setRailCount("rail-count-diagnostics", data.failed_runs, true);
-  setRailCount("rail-count-diag-errors", data.failed_runs, true);
+  setRailCount("rail-count-diag-runs", data.failed_runs, true);
   renderSparkline(data.sparkline || []);
+}
+
+// Each health count opens the view that explains it.
+function wireHealthStrip() {
+  const go = (id, route, before) => {
+    const node = $(id);
+    if (!node) return;
+    node.addEventListener("click", () => {
+      if (before) before();
+      sAT(route);
+    });
+  };
+  go("tile-failed", "diagnostics/runs", () => setRunFilter("failed"));
+  go("tile-active", "diagnostics/runs", () => setRunFilter("active"));
+  go("tile-denials", "audit/policy");
+  go("tile-events", "audit/events");
 }
 
 function formatBigInt(n) {
@@ -1650,6 +1673,7 @@ wireGlobalTaskResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);
+wireHealthStrip();
 wireReliabilityWindowSelector();
 setScopeChangeListener(() => {
   persistScopeToUrl();

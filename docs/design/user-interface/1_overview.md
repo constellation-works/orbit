@@ -3,7 +3,7 @@ summary: "User Interface — Overview"
 type: design
 title: "User Interface — Overview"
 owner: gemini
-last_updated: 2026-08-15
+last_updated: 2026-09-24
 last_validated: 2026-09-11
 status: Draft
 feature: user-interface
@@ -27,7 +27,7 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 
 ## 2. Core Concepts
 
-- **Canon Refined and typography:** Layered dark surfaces, fine borders, compact spacing, and muted status colors; `Inter` carries labels and prose while `JetBrains Mono` carries IDs, metrics, timestamps, code, and logs.
+- **Canon Refined and typography:** Layered dark surfaces, fine borders, compact spacing, and muted status colors; self-hosted `Geist` carries labels and prose while `Geist Mono` carries IDs, metrics, timestamps, code, and logs, the same pair the project website uses.
 - **Surfaces:** The dashboard assets and `/api/*` handlers live in `crates/orbit-web/`.
   Static docs and project pages should reuse the same visual grammar without importing
   runtime-only dashboard assumptions.

@@ -465,7 +465,7 @@ function runsEmptyText() {
 function runsScopeNote() {
   return el("div", {
     class: "runs-scope-note",
-    text: "Recent Runs lists durable job-run states with no time window (most recent page). Header Failed runs counts Failed, Timeout, and Interrupted job runs in the selected window. Errors lists step/event failures for the current month.",
+    text: "Every job run, newest first, with no time window. The top bar's failed-runs count covers Failed, Timeout, and Interrupted runs in the selected window only; Health › Errors lists step and event failures this month.",
   });
 }
 
@@ -474,7 +474,7 @@ function runsLimitNote(meta) {
   const total = Number.isFinite(meta.total) ? ` of ${meta.total}` : "";
   return el("div", {
     class: "runs-limit-note",
-    text: `Showing the most recent ${meta.limit} matching runs${total}. Raise the runs URL parameter to load older matches.`,
+    text: `Showing the newest ${meta.limit} matching runs${total}. Add ?runs=<n> to the address to load more.`,
   });
 }
 
@@ -487,11 +487,12 @@ function runsLoadingSkeleton() {
 }
 
 function runFilterControls() {
-  const controls = el("div", { class: "runs-filter", title: "Filter Recent Runs by state" });
+  const controls = el("div", { class: "runs-filter", title: "Filter runs by state" });
+  controls.setAttribute("role", "group");
+  controls.setAttribute("aria-label", "Filter runs by state");
   controls.dataset.key = "runs-filter";
   controls.dataset.hash = `runs-filter-${runFilter}`;
-  controls.appendChild(el("span", { class: "runs-filter-label", text: "state" }));
-  for (const [value, label] of [["all", "all"], ["active", "active"], ["failed", "failed"]]) {
+  for (const [value, label] of [["all", "All"], ["active", "Live"], ["failed", "Failed"]]) {
     const button = el("button", {
       class: `runs-filter-button${runFilter === value ? " active" : ""}`,
       text: label,
@@ -601,14 +602,14 @@ export function renderRuns(runs) {
     return;
   }
   const headerCells = [
-    runHeaderCell("when", "when"),
-    attributed ? el("span", { text: "workspace" }) : null,
-    runHeaderCell("job", "job"),
-    runHeaderCell("run id", "run_id"),
-    runHeaderCell("denials", "denials", { num: true }),
-    runHeaderCell("tool fails", "tool_fails", { num: true }),
-    runHeaderCell("duration", "duration", { style: { textAlign: "right" } }),
-    runHeaderCell("state", "state", { style: { textAlign: "right" } }),
+    runHeaderCell("State", "state"),
+    attributed ? el("span", { text: "Workspace" }) : null,
+    runHeaderCell("Job", "job"),
+    runHeaderCell("Run ID", "run_id"),
+    runHeaderCell("When", "when"),
+    runHeaderCell("Denials", "denials", { num: true }),
+    runHeaderCell("Tool fails", "tool_fails", { num: true }),
+    runHeaderCell("Duration", "duration", { style: { textAlign: "right" } }),
     el("span", { text: "" }),
   ];
   const header = el("div", { class: `runs-row runs-header${attributed ? " workspace-attributed" : ""}` }, headerCells);
@@ -658,14 +659,14 @@ export function renderRuns(runs) {
       runIdCell.appendChild(lineage);
     }
     const rowCells = [
-      el("span", { class: "when", text: fmtTimestampValue(ts) }),
+      el("span", { class: "state" }, [stateCell(r.state)]),
       attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
-      el("span", { class: "id", text: r.job_id }),
+      el("span", { class: "id", text: r.job_id, title: r.job_id }),
       runIdCell,
+      el("span", { class: "when", text: fmtTimestampValue(ts) }),
       runCountCell(friction.denials),
       runCountCell(friction.toolFails),
       runDurationCell(r),
-      el("span", { class: "state" }, [stateCell(r.state)]),
       el("span", { class: "run-actions" }, [
         runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
         runIsResumable(r) ? buildResumeRunButton(r, body) : null,

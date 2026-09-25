@@ -97,7 +97,7 @@ one active workspace before changing anything else. Inactive registry entries
 appear as `<name> (unavailable)` and cannot be selected.
 
 The selected workspace and time window live in the page URL, so a reload or
-copied link restores the same scope. **Diagnostics → Reliability** is
+copied link restores the same scope. **Health → Reliability** is
 fleet-wide: it ignores the selected workspace and says so in the rail.
 
 A dashboard aggregate or metric is not proof that a particular task or run
@@ -105,22 +105,36 @@ succeeded. Confirm the selected workspace before acting.
 
 ## Inspect tasks, runs, and errors
 
-The left rail is the section map:
+The left rail is the section map. The workspace picker sits at its top, and a
+section's views show under it only while that section is open:
 
 | Rail | What it shows |
 |---|---|
-| **Tasks** | Backlog and other statuses for the selected workspace (or the aggregate list). |
+| **Tasks** | Tasks for the selected workspace (or the aggregate list), grouped with the ones waiting on you first. |
+| **Runs** | Every job run, newest first, and run detail. |
 | **Audit** | Recent events and a 24-hour summary. |
-| **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
-| **Operations** | Three rail subtabs: **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
+| **Health** | Incidents, errors, reliability, step metrics, and the scoreboard. |
+| **Automation** | Three views: **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
-| **Config** | The effective `config.toml` for the selected workspace, with five rail subtabs: **Effective**, **Workspace file**, **Global file**, **Crews**, and **Keys**. |
+| **Plugins** | Installed plugins and the panels they declare. |
+| **Settings** | The effective `config.toml` for the selected workspace, with five views: **Effective**, **Workspace file**, **Global file**, **Crews**, and **Keys**. |
+
+The URLs underneath keep their earlier names (`#diagnostics/…`,
+`#operations/…`, `#config/…`), so existing links still open the same view.
+`#runs` opens the run list.
+
+The top bar counts failed runs, policy denials, runs running long, and audited
+events for the selected window. Each count opens the view that explains it.
 
 ### Tasks
 
-Search by ID or title, filter by status, or type an ID into **Jump to
-task id** in the top bar. Opening a task shows detail plus the actions
-that apply to its current status:
+Search by ID or title, filter by status, or type an ID into **Go to task
+ID** in the top bar. Tasks are grouped by status, with **Awaiting approval**
+(`proposed`) first, then review, blocked, in progress, and backlog. Each row
+carries the one action its group is waiting on: **Approve** on a proposed
+task, **Ship** on a backlog task, and **View run** on a task in progress.
+Opening a task shows detail plus every action that applies to its current
+status:
 
 | Control | When it is present |
 |---|---|
@@ -180,7 +194,8 @@ the rejected save leaves the draft in place so it can be corrected.
 
 ### Runs and errors
 
-**Diagnostics → Recent runs** lists job runs for the selected workspace.
+**Runs** lists job runs for the selected workspace, filtered to **All**,
+**Live**, or **Failed**.
 Click a row for run detail: metadata, steps, events, and a timing chart when
 the run has that data.
 
@@ -196,10 +211,13 @@ action. A 409 from ship or another governed start means a conflicting run
 or workspace claim is already held; refresh and inspect the named run
 instead of retrying blindly.
 
-**Diagnostics → Errors** is the step/event failure list for the current
-month. It is not the same counter as the top-bar **Failed runs** tile
+A failed, timed-out, or interrupted run's detail opens with the step it
+stopped at and the error it recorded.
+
+**Health → Errors** is the step/event failure list for the current
+month. It is not the same counter as the top-bar **failed runs** count
 (failed, timeout, and interrupted job runs in the selected health window)
-or Recent runs' **failed** filter (durable `Failed` state, no window). Use
+or the Runs **Failed** filter (durable `Failed` state, no window). Use
 the view that matches the question you are asking.
 
 ```bash
@@ -209,9 +227,9 @@ orbit run show jrun-YYYYMMDD-HHMM-NN
 orbit audit list
 ```
 
-## Operations: mint, toggle, clock, drain
+## Automation: mint, toggle, clock, drain
 
-Operations has three subtabs in the rail: **Routines**, which also holds the
+Automation has three views in the rail: **Routines**, which also holds the
 sweep clock bar; **Auto-tasks**; and **Jobs**. The auto-drain window is a
 card in the Tasks dock's **Drain** mode; `#auto-drain` and the older
 `#operations/auto-drain` links open Tasks with Drain selected. All of them
@@ -336,33 +354,35 @@ above Locked files. Top to bottom:
   is in its title, and it opens the run) while a window is live, otherwise
   `idle`. Time left is shown for a window started from this browser; the
   readiness snapshot does not carry the deadline of one started elsewhere.
-- **Duration** — `15m` to `8h`; the selected segment is filled.
-- **Concurrency** — `−` / `+` around the leaf-run limit. Blank means the
-  runtime default, shown as the placeholder.
-- **Completion** — unchecked reads `leave in review`; checked reads
-  `mark done · skip review` and turns amber.
-- **Start … window** submits `orbit run auto` with those settings after a
-  confirmation. **Stop** stops new admissions on the live window
-  (`orbit run auto --stop`); admitted workers keep running. The line under
-  them reads `busy/limit slots busy · admits up to N now`.
+- **Capacity** — `N running · limit M`, the free slots, a bar that shows any
+  runs over the limit, and one sentence on what a window started now would
+  do: admit up to N tasks, or admit nothing until N running tasks finish.
 - **Eligible now** and **Blocked by running** — counts from the readiness
   snapshot.
 - **Blocked detail** — up to three tasks waiting on a running task, each as
   `ABC-1 waits on ABC-2` with the holder's slot phase and the contested lock,
   then `+N more`.
+- **Window length** — `15m` to `8h`; the selected segment is filled.
+- **Parallel tasks** — `−` / `+` around the leaf-run limit. Blank means the
+  runtime default, shown as the placeholder.
+- **When a task finishes** — **Stop at review** (the default) or **Mark
+  done**, which turns amber.
+- **Start … window** submits `orbit run auto` with those settings after a
+  confirmation. **Stop** stops new admissions on the live window
+  (`orbit run auto --stop`); admitted workers keep running.
 
 Start and Stop results appear in the card's status line. The snapshot is
 read-only: nothing is reserved or started until you start a window.
 
-The completion checkbox is a governed operator action: it marks every task
+**Mark done** is a governed operator action: it marks every task
 the window ships as `done` (`review` → `done`), not only the ones visible at
 submit time. If the session is not authorized for that option, the window
 can still start with default review completion; the completion control stays
 disabled and says why.
 
-## Config: read and edit config.toml
+## Settings: read and edit config.toml
 
-**Manage → Config** (`#config/effective`) shows what this workspace actually
+**Manage → Settings** (`#config/effective`) shows what this workspace actually
 runs on. It is the browser view of `orbit config show`: the same layering,
 the same sections, and the same registry descriptions, read from the server
 rather than re-derived in the page.

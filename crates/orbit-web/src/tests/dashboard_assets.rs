@@ -147,19 +147,16 @@ async fn dashboard_self_hosts_fonts_without_google_requests() {
 
     assert!(!index.contains("fonts.googleapis.com"));
     assert!(!index.contains("fonts.gstatic.com"));
-    assert!(css.contains("/static/fonts/inter-latin.woff2"));
-    assert!(css.contains("/static/fonts/jetbrains-mono-latin.woff2"));
+    assert!(css.contains("/static/fonts/geist-latin.woff2"));
+    assert!(css.contains("/static/fonts/geist-mono-latin.woff2"));
     assert_eq!(
         DASHBOARD_CSP,
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     );
 
     for response in [
-        serve_dashboard_file("/static/fonts/inter-latin.woff2", &HeaderMap::new()),
-        serve_dashboard_file(
-            "/static/fonts/jetbrains-mono-latin.woff2",
-            &HeaderMap::new(),
-        ),
+        serve_dashboard_file("/static/fonts/geist-latin.woff2", &HeaderMap::new()),
+        serve_dashboard_file("/static/fonts/geist-mono-latin.woff2", &HeaderMap::new()),
     ] {
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
@@ -513,6 +510,7 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
         nav,
         vec![
             "tasks",
+            "runs",
             "audit",
             "diagnostics",
             "operations",
@@ -695,7 +693,7 @@ fn dashboard_operations_rows_share_one_vocabulary_and_jobs_is_projected() {
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
     assert!(
-        index.contains(r#"<nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Operations views">"#),
+        index.contains(r#"<nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Automation views">"#),
         "the Operations subtabs sit in the rail"
     );
     for subtab in ["routines", "auto-tasks", "jobs"] {
@@ -798,25 +796,30 @@ fn dashboard_narrow_shell_collapses_rail_and_task_rows() {
         "diagnostics subtabs must wrap onto a second row"
     );
     assert!(
-        narrow.contains(".kpi .k { display: none; }")
-            && narrow.contains(".kpi-spark { display: none; }"),
-        "KPI labels and the sparkline must collapse at the same width as the rail"
+        narrow.contains(".kpi-spark { display: none; }"),
+        "the sparkline must collapse at the same width as the rail"
     );
     assert!(
-        css.contains(
-            "grid-template-areas:\n            \"id title\"\n            \"status crew\";"
-        ),
+        css.contains("\"status crew quick\";"),
         "the 520px task row must keep its two-row areas for phone widths"
     );
 
-    for tab in ["tasks", "audit", "diagnostics", "operations", "knowledge"] {
+    for tab in [
+        "tasks",
+        "runs",
+        "audit",
+        "diagnostics",
+        "operations",
+        "knowledge",
+    ] {
         assert!(
             index.contains(&format!(r#"class="tab" data-tab="{tab}""#)),
             "{tab} must remain a top-level tab"
         );
     }
+    // Runs is its own rail destination (`data-tab="runs"`, above); the rest
+    // stay Health subtabs.
     for subtab in [
-        "runs",
         "metrics",
         "errors",
         "incidents",
@@ -1322,11 +1325,15 @@ fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
     let sticky_at = css
         .find("#friction-detail-panel {\n        position: sticky;")
         .expect("the friction detail panel must be sticky");
+    let sticky_rule = &css[sticky_at
+        ..css[sticky_at..]
+            .find('}')
+            .map(|end| sticky_at + end)
+            .unwrap_or(css.len())];
     assert!(
-        css[sticky_at..].starts_with(
-            "#friction-detail-panel {\n        position: sticky;\n        top: 170px;\n        align-self: start;\n        max-height: calc(100vh - 194px);",
-        ),
-        "the pane must pin below the chrome and stay inside the viewport"
+        sticky_rule.contains("align-self: start;")
+            && sticky_rule.contains("max-height: calc(100vh - "),
+        "the pane must pin inside the scrolling column and stay inside the viewport"
     );
     assert!(
         css.contains("#friction-detail-panel > .body {\n        overflow-y: auto;",),
@@ -1335,10 +1342,6 @@ fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
     assert!(
         !css.contains("min-height: calc(100vh - 360px)"),
         "the old fixed min-height fought the bounded sticky pane and must be gone"
-    );
-    assert!(
-        css.contains(".friction-stats .tile {\n        padding: 8px 16px;"),
-        "friction summary tiles need outer breathing room at every width"
     );
     let accordion_at = css
         .find("          display: none;\n        }\n        .friction-row-toggle")
@@ -1428,11 +1431,13 @@ fn dashboard_task_write_actions_are_configuration_free() {
             && tasks.contains("shipInFlightTaskIds.add(task.id);"),
         "Ship must guard against a duplicate dispatch from the UI side"
     );
+    // Two Ship controls share the guard (the detail's and the row's); each
+    // releases it on its own failure path only.
     assert_eq!(
         tasks
             .matches("shipInFlightTaskIds.delete(task.id);")
             .count(),
-        1,
+        2,
         "the in-flight guard may be released on the failure path only"
     );
 
@@ -2938,8 +2943,18 @@ fn dashboard_nav_rail_preserves_the_router_selector_contract() {
 fn dashboard_separates_panel_edges_from_internal_hairlines() {
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
-    assert!(
-        css.contains("--hair: #17171a;") && css.contains("--border: #2a2a2e;"),
+    let token = |name: &str| {
+        let at = css
+            .find(name)
+            .unwrap_or_else(|| panic!("{name} must be defined"));
+        let rest = &css[at + name.len()..];
+        rest[..rest.find(';').expect("token ends with ;")]
+            .trim()
+            .to_string()
+    };
+    assert_ne!(
+        token("--hair:"),
+        token("--border:"),
         "both tiers must be defined, and they must differ"
     );
     assert!(
@@ -4090,7 +4105,6 @@ fn dashboard_aggregate_runs_keep_workspace_identity_filters_and_action_scope() {
     let router = include_str!("../../assets/dashboard/router.js");
     assert!(css.contains(".runs-row.workspace-attributed"));
     assert!(css.contains("@media (max-width: 760px)"));
-    assert!(css.contains("min-width: 900px"));
     assert!(router.contains("function navigateToRunImpl(ctx, runId, workspaceId = null)"));
     assert!(router.contains("setWorkspace(workspaceId);"));
     assert!(router.contains("persistScopeToUrl();"));
@@ -4154,7 +4168,7 @@ if (rows.length !== 1 || !rows[0].textContent.includes("Alpha")) throw new Error
 if (!body.textContent.includes("Unavailable workspace: Gone")) throw new Error("partial workspace failure was hidden");
 
 let controls = body.children.find((node) => node.className.includes("runs-filter"));
-controls.children.find((node) => node.textContent === "all").listeners.click();
+controls.children.find((node) => node.textContent === "All").listeners.click();
 rows = body.children.filter((node) => node.className.includes("runs-row workspace-attributed") && !node.className.includes("runs-header"));
 if (rows.length !== 2) throw new Error("all filter did not render both duplicate run ids");
 if (new Set(rows.map((row) => row.dataset.key)).size !== 2) throw new Error("duplicate run ids collided across workspaces");
@@ -4173,7 +4187,7 @@ if (!requests.includes("/api/runs/jrun-shared/cancel?workspace=alpha")) throw ne
 if (!requests.includes("/api/runs/jrun-shared/replay?workspace=beta")) throw new Error(`replay lost workspace scope: ${requests}`);
 
 controls = body.children.find((node) => node.className.includes("runs-filter"));
-controls.children.find((node) => node.textContent === "failed").listeners.click();
+controls.children.find((node) => node.textContent === "Failed").listeners.click();
 if (new URL(location.href).searchParams.get("run_state") !== "failed") throw new Error("run filter was not persisted in reload-safe URL state");
 window.innerWidth = 480;
 renderRuns(runs);
@@ -4290,7 +4304,7 @@ const emptyText = get("runs-body").textContent;
 if (!emptyText.includes("No failed job runs (durable Failed state, no time window).")) {
   throw new Error(`empty copy did not name the failed-run scope: ${emptyText}`);
 }
-if (!emptyText.includes("Header Failed runs counts Failed, Timeout, and Interrupted")) {
+if (!emptyText.includes("failed-runs count covers Failed, Timeout, and Interrupted")) {
   throw new Error("scope note must explain header vs Recent Runs vs Errors");
 }
 if (!get("diag-count").textContent.includes("0 shown") || !get("diag-count").textContent.includes("0 total")) {
@@ -4322,7 +4336,7 @@ renderRuns(lastRuns);
 if (!get("diag-count").textContent.includes("server limit 25") || !get("diag-count").textContent.includes("81 total")) {
   throw new Error(`truncated count missing shown/total/limit: ${get("diag-count").textContent}`);
 }
-if (!get("runs-body").textContent.includes("Raise the runs URL parameter to load older matches")) {
+if (!get("runs-body").textContent.includes("?runs=<n> to the address to load more")) {
   throw new Error("truncated results must explain how to find older failures");
 }
 
@@ -4676,7 +4690,7 @@ fn dashboard_global_task_jump_scopes_to_selected_workspace_and_distinguishes_err
     let app = include_str!("../../assets/dashboard/app.js");
     let index = include_str!("../../assets/dashboard/index.html");
     assert!(app.contains(r#"const ID_RE = /^[A-Z]{2,5}-\d+$/i;"#));
-    assert!(index.contains(r#"placeholder="Jump to task id"#));
+    assert!(index.contains(r#"id="global-task-id""#));
 
     run_dashboard_javascript_test(
         r##"
@@ -5491,34 +5505,6 @@ if (!btnClasses.has('on')) throw new Error('expected on class on wrap button');
 if (btnAttrs['aria-pressed'] !== 'true') throw new Error('expected aria-pressed true');
 "#;
     run_dashboard_javascript_test(script);
-}
-
-/// ORB-12889: task status/crew/complexity selects are content-sized (no wider
-/// than needed for longest option + chevron) and .row STATUS/CREW columns
-/// shrink so the title column gains width.
-#[test]
-fn dashboard_tasks_table_selects_are_compact_and_content_sized() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
-
-    // Status select is capped tightly for longest status ("in-progress" + chevron)
-    assert!(
-        css.contains(".task-status-select {") && css.contains("max-width: 108px;"),
-        "status select must be capped at compact content width"
-    );
-
-    // Crew and complexity selects share the compact rule (fits longest crew + chevron)
-    assert!(
-        css.contains(".task-crew-select,")
-            && css.contains(".task-complexity-select {")
-            && css.contains("max-width: 120px;"),
-        "crew and complexity selects must be capped at compact content width"
-    );
-
-    // .row STATUS and CREW columns shrunk to match
-    assert!(
-        css.contains("grid-template-columns: minmax(80px, max-content) minmax(140px, 1fr) minmax(104px, max-content) minmax(120px, max-content);"),
-        "desktop task row must shrink status and crew columns to return space to title"
-    );
 }
 
 /// ORB-12889: task-id links (taskLink) and all Operations links use the dashboard

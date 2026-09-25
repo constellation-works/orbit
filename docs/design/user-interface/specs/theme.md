@@ -17,33 +17,37 @@ As Orbit matures, the extreme constraints of the "Trading Terminal" aesthetic (p
 
 ### Background & Elevation
 The theme uses a layered dark mode, relying on subtle lightness shifts rather than shadows.
-- `--bg`: `#000000` (Base canvas)
-- `--bg-elev`: `#0a0a0a` (Cards, panels, buttons)
-- Expanded task details use `#050505`; there is no dedicated `--bg-sunk` token in the live stylesheet.
+- `--bg`: `#0a0a0b` (Base canvas)
+- `--bg-elev`: `#111114` (Cards, panels, buttons)
+- `--bg-rail`: `#0c0c0f` (Navigation rail)
+- `--bg-sunk`: `#0d0d10` (Sticky group headings and wells)
+- `--bg-selected`: `#161b28` (The selected rail entry)
 
 ### Borders
 Borders delineate structure without heavy contrast.
-- `--border`: `#2a2a2e` (Panel and control edges)
-- `--hair`: `#17171a` (Dividers inside panels and controls)
+- `--border`: `#26262d` (Panel and control edges)
+- `--hair`: `#1b1b21` (Dividers inside panels and controls)
 - Focused inputs use the `--accent` border; there is no dedicated `--border-strong` token.
 
 ### Typography
-- **Sans-serif (Primary):** `Inter` with `Geist Sans` fallback, used for prose, titles, and general UI text.
-- **Monospace (Secondary/Data):** `Geist Mono` with `JetBrains Mono` fallback, used for IDs, metrics, timestamps, and code snippets.
+- **Sans-serif (Primary):** `Geist`, self-hosted, used for prose, titles, and general UI text.
+- **Monospace (Secondary/Data):** `Geist Mono`, self-hosted, used for IDs, metrics, timestamps, and code snippets.
 - **Base Size:** `14px` with `1.5` line height.
 
 ### Semantic Colors
 Colors are muted but distinct, avoiding harsh neon tones while maintaining semantic meaning.
-- **Text:** `--fg` (`#dcdcdc`), `--fg-dim` (`#71717a`)
-- **Accent (Blue):** `--accent` (`#6e9fff`)
-- **Success/Done (Green):** `--status-done` (`#10b981`)
-- **In-Progress (Teal):** `--status-in-progress` (`#06b6d4`)
-- **Review (Purple):** `--status-review` (`#d946ef`)
-- **Warning/Proposed (Amber):** `--status-proposed` (`#f59e0b`)
-- **Error/Blocked (Red):** `--status-blocked` (`#ef4444`)
+- **Text:** `--fg` (`#ededf0`), `--fg-dim` (`#8f8f99`), `--fg-mute` (`#6b6b75`)
+- **Accent (Blue):** `--accent` (`#8ab3ff`)
+- **Success/Done (Green):** `--status-done` (`#5ad8a0`)
+- **In-Progress (Teal):** `--status-in-progress` (`#5cc8de`)
+- **Review (Purple):** `--status-review` (`#d39bff`)
+- **Warning/Proposed (Amber):** `--status-proposed` (`#f2b35e`)
+- **Error/Blocked (Red):** `--status-blocked` (`#ff8a80`)
+
+Status colours are lighter than the Tailwind 500 steps they replaced so a 7px dot stays distinct on the near-black canvas; each is paired with a word, so colour is never the only signal.
 
 ### Structural Rules
-- **Radii:** The stylesheet uses `2px` for many controls, `4px` for small components, and `6px` for panel-like containers.
+- **Radii:** `12px` for panels, `8px` (`--radius`) for cards and segmented controls, `6–7px` for buttons, inputs and selects, and fully round for filter chips and status dots.
 - **Density:** Padding remains tight (e.g., `12px 16px` for headers, `8px` gaps), but text is allowed to breathe more than in the legacy terminal theme.
 - **Animation:** Minimal, purposeful motion. Used primarily for loading indicators (e.g., `pulse-skeleton 1.5s infinite ease-in-out`).
 

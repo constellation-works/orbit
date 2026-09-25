@@ -170,7 +170,12 @@ export function renderRunDetailMeta() {
     grid.appendChild(cell);
   };
   addCell("job", run.job_id);
-  addCell("state", run.state);
+  {
+    const cell = el("div");
+    cell.appendChild(el("div", { class: "label", text: "state" }));
+    cell.appendChild(el("div", { class: "value" }, [stateCell(run.state || "unknown")]));
+    grid.appendChild(cell);
+  }
   addCell("attempt", run.attempt);
   addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
   addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
@@ -188,7 +193,7 @@ export function renderRunDetailMeta() {
   }
 
   const wrap = el("div");
-  const back = el("button", { class: "back-action", text: "← back to runs" });
+  const back = el("button", { class: "back-action", text: "← Runs" });
   back.addEventListener("click", () => setActiveTab("diagnostics/runs"));
   const actions = el("div", { class: "run-detail-actions" }, [back]);
   if (run.retry_source_run_id) {
@@ -204,10 +209,38 @@ export function renderRunDetailMeta() {
   if (run.run_id) actions.appendChild(buildReplayRunButton(run, wrap));
   if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton(run, wrap));
   wrap.appendChild(actions);
+  const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
+  if (failure) wrap.appendChild(failure);
   wrap.appendChild(grid);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
   syncNodes(meta, [wrap]);
+}
+
+const FAILED_RUN_STATES = new Set(["failed", "timeout", "interrupted"]);
+const FAILED_STEP_STATES = new Set(["error", "failed", "timeout", "interrupted"]);
+
+// A failed run leads with why: the step it stopped at and the error it
+// recorded, above the metadata, so nobody has to open Errors or expand every
+// step to find the one line that matters. The run-level message wins; a
+// failed step's own message stands in when the run carries none.
+function buildRunFailure(run, steps) {
+  if (!FAILED_RUN_STATES.has(run.state)) return null;
+  const step = steps.find((candidate) => FAILED_STEP_STATES.has(candidate.state)) || null;
+  const message = run.error_message || (step && step.error_message) || "";
+  const where = step
+    ? `at step ${step.step_index} of ${steps.length} · ${step.target_id || step.target_type || "step"}`
+    : "";
+  const verb = run.state === "timeout" ? "Timed out" : run.state === "interrupted" ? "Interrupted" : "Failed";
+  const head = el("div", { class: "run-failure-head" }, [
+    el("strong", { text: verb }),
+    where ? el("span", { class: "run-failure-where", text: ` ${where}` }) : null,
+    run.error_code ? el("span", { class: "run-failure-code mono", text: run.error_code }) : null,
+  ]);
+  const box = el("section", { class: "run-failure" }, [head]);
+  box.setAttribute("aria-label", "Why this run failed");
+  if (message) box.appendChild(el("pre", { class: "run-failure-message mono", text: message }));
+  return box;
 }
 
 /// Normalize the run's stored `executed_on` into the shape the shared
@@ -370,7 +403,7 @@ export function renderRunGantt() {
   if (derivedStart == null) derivedStart = derivedEnd - 1000;
   if (derivedEnd <= derivedStart) derivedEnd = derivedStart + 1000;
 
-  const PAD_LEFT = 56;   // step-index gutter
+  const PAD_LEFT = 230;  // step-name gutter
   const PAD_RIGHT = 12;
   const PAD_TOP = 18;
   const ROW_H = 22;
@@ -402,7 +435,8 @@ export function renderRunGantt() {
     label.setAttribute("class", "gantt-lane-label");
     label.setAttribute("x", String(8));
     label.setAttribute("y", String(y + ROW_H / 2 + 3));
-    label.textContent = `#${step.step_index}`;
+    const name = String(step.target_id || `#${step.step_index}`);
+    label.textContent = name.length > 34 ? `${name.slice(0, 33)}…` : name;
     svg.appendChild(label);
   });
 

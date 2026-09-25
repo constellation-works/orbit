@@ -223,7 +223,13 @@ function panelMessage(bodyId, state) {
     note.setAttribute("aria-live", "polite");
     body.insertBefore(note, body.children[0] || null);
   }
-  note.className = state.error ? "panel-placeholder action-error" : "panel-placeholder";
+  // Only a cold load and an error need to take up room in the panel. "Updated"
+  // and "Refreshing" stay in the live region for assistive tech but are not
+  // painted, so a 30s poll never shifts the rows under the reader.
+  const quiet = !state.error && (state.loaded || !state.pending);
+  note.className = state.error
+    ? "panel-placeholder action-error"
+    : quiet ? "panel-placeholder quiet" : "panel-placeholder";
   if (state.error) {
     const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
     note.textContent = `${label}: ${state.error.message}. Use Refresh to retry.`;
@@ -371,10 +377,8 @@ export function detailsPanel(key, opts = {}) {
 }
 
 export function statusPill(status) {
-  const color = `var(--status-${status}, var(--fg))`;
-  const pill = el("span", { class: "pill mono", text: status });
-  pill.style.color = color;
-  pill.style.borderLeft = `2px solid ${color}`;
+  const pill = el("span", { class: "pill", text: status });
+  pill.dataset.status = status;
   return pill;
 }
 
@@ -385,8 +389,8 @@ export function priorityCell(p) {
 }
 
 export function stateCell(state) {
-  const node = el("span", { class: "mono", text: state });
-  node.style.color = `var(--state-${state}, var(--fg-dim))`;
+  const node = el("span", { class: "state-label", text: state });
+  node.dataset.state = state;
   return node;
 }
 

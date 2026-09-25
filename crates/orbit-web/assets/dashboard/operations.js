@@ -1368,7 +1368,7 @@ function autoDrainDurationControl(payload) {
 function autoDrainConcurrencyControl(payload) {
   const capacity = payload.capacity || {};
   const fallback = Number.isFinite(Number(capacity.max_active_leaf_runs)) ? String(capacity.max_active_leaf_runs) : "";
-  const label = el("label", { class: "drain-field-label", text: "Concurrency" });
+  const label = el("label", { class: "drain-field-label", text: "Parallel tasks" });
   label.htmlFor = "auto-drain-concurrency";
   const input = el("input", { class: "drain-stepper-value mono", title: "Leaf-run concurrency (blank = runtime default)" });
   input.id = "auto-drain-concurrency";
@@ -1398,26 +1398,38 @@ function autoDrainConcurrencyControl(payload) {
   ]);
 }
 
-// The completion opt-in states its effect in its own label, and turns amber
-// when set, in place of the separate warning banner.
+// Completion is a choice between two outcomes, so it reads as two named
+// options rather than a checkbox whose label describes its current state.
+// "Mark done" turns amber, in place of a separate warning banner.
 function autoDrainCompletionControl(payload, reasons) {
-  const checkbox = el("input");
-  checkbox.type = "checkbox";
-  checkbox.checked = autoDrainComplete;
-  checkbox.disabled = Boolean(reasons.complete);
-  checkbox.dataset.drainFocus = "complete";
-  checkbox.addEventListener("change", () => {
-    autoDrainComplete = checkbox.checked;
-    renderAutoDrain(payload);
-  });
-  const label = el("label", {
-    class: `drain-complete${autoDrainComplete ? " on" : ""}`,
-    title: reasons.complete || AUTO_DRAIN_COMPLETE_WARNING,
-  }, [checkbox, el("span", { text: autoDrainComplete ? "mark done · skip review" : "leave in review" })]);
-  return el("div", { class: "drain-field drain-field-complete" }, [
-    el("span", { class: "drain-field-label", text: "Completion" }),
-    label,
-  ]);
+  const group = el("div", { class: "drain-completion" });
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-labelledby", "auto-drain-completion-label");
+  const option = (value, text, title) => {
+    const input = el("input");
+    input.type = "radio";
+    input.name = "auto-drain-completion";
+    input.value = value;
+    input.checked = autoDrainComplete === (value === "done");
+    input.disabled = value === "done" && Boolean(reasons.complete);
+    input.dataset.drainFocus = `complete-${value}`;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      autoDrainComplete = value === "done";
+      renderAutoDrain(payload);
+    });
+    return el("label", {
+      class: `drain-completion-option${input.checked ? " selected" : ""}${value === "done" ? " done" : ""}`,
+      title: input.disabled ? reasons.complete : title,
+    }, [input, el("span", { text })]);
+  };
+  group.append(
+    option("review", "Stop at review", "Shipped tasks stay in review; a separate action completes them."),
+    option("done", "Mark done", AUTO_DRAIN_COMPLETE_WARNING),
+  );
+  const label = el("span", { class: "drain-field-label", text: "When a task finishes" });
+  label.id = "auto-drain-completion-label";
+  return el("div", { class: "drain-field drain-field-complete" }, [label, group]);
 }
 
 function autoDrainStartButton(payload) {
@@ -1520,12 +1532,47 @@ function autoDrainStopButton(payload) {
   return button;
 }
 
-function autoDrainSlotsLine(capacity, counts) {
-  const busy = capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs ?? "—";
-  const limit = capacity.max_active_leaf_runs ?? "—";
+// Capacity in words: how many leaf runs hold a slot against the limit, a bar
+// that shows any overflow past the limit, and one sentence on what a window
+// started now would do with that.
+function autoDrainCapacity(capacity, counts) {
+  const busy = Number(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
+  const limit = Number(capacity.max_active_leaf_runs);
   const free = Number(capacity.free_slots);
+  const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
   const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
-  return el("p", { class: "drain-slots mono", text: `${busy}/${limit} slots busy · admits up to ${admits} now` });
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  let summary;
+  if (Number.isFinite(free) && free <= 0 && known) {
+    const toFinish = Math.max(1, busy - limit + 1);
+    summary = `A window started now admits nothing until ${plural(toFinish, "running task")} ${toFinish === 1 ? "finishes" : "finish"}.`;
+  } else if (counts.eligible === 0) {
+    summary = counts.waiting > 0
+      ? `Nothing is eligible yet; ${plural(counts.waiting, "task")} ${counts.waiting === 1 ? "waits" : "wait"} in the pool.`
+      : "Nothing is waiting in the backlog.";
+  } else {
+    summary = `A window started now admits up to ${plural(admits, "task")}.`;
+  }
+  const head = el("div", { class: "drain-capacity-head" }, [
+    el("span", { class: "drain-capacity-count", text: known ? `${busy} running · limit ${limit}` : "Capacity unknown" }),
+    el("span", {
+      class: `drain-capacity-free${Number.isFinite(free) && free <= 0 ? " full" : ""}`,
+      text: Number.isFinite(free) ? `${plural(Math.max(0, free), "free slot")}` : "",
+    }),
+  ]);
+  const bar = el("div", { class: "drain-capacity-bar" });
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", known ? `${busy} of ${limit} slots in use` : "Capacity unknown");
+  if (known) {
+    const within = Math.min(busy, limit);
+    const over = Math.max(0, busy - limit);
+    const scale = Math.max(limit, busy);
+    bar.append(
+      el("span", { class: "drain-capacity-used", style: { width: `${(within / scale) * 100}%` } }),
+      el("span", { class: "drain-capacity-over", style: { width: `${(over / scale) * 100}%` } }),
+    );
+  }
+  return el("div", { class: "drain-capacity" }, [head, bar, el("p", { class: "drain-slots", text: summary })]);
 }
 
 function autoDrainStat(tone, label, value) {
@@ -1595,17 +1642,25 @@ function renderAutoDrain(payload) {
   }
   const counts = autoDrainCounts(payload);
   const blocked = autoDrainBlocked(payload);
+  // Read top to bottom: what the queue looks like now, then the window you
+  // could start against it.
   body.append(
-    autoDrainDurationControl(payload),
-    el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload), autoDrainCompletionControl(payload, reasons)]),
-    el("div", { class: "drain-actions" }, [autoDrainStartButton(payload), autoDrainStopButton(payload)]),
-    autoDrainSlotsLine(payload.capacity || {}, counts),
+    autoDrainCapacity(payload.capacity || {}, counts),
     el("div", { class: "drain-stats" }, [
       autoDrainStat("eligible", "Eligible now", counts.eligible),
       autoDrainStat("blocked", "Blocked by running", blocked.length),
     ]),
   );
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
+  const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
+  body.append(
+    el("div", { class: "drain-form" }, [
+      durationLabel,
+      autoDrainDurationControl(payload),
+      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload), autoDrainCompletionControl(payload, reasons)]),
+      el("div", { class: "drain-actions" }, [autoDrainStartButton(payload), autoDrainStopButton(payload)]),
+    ]),
+  );
   if (focusKey) body.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();
 }
 

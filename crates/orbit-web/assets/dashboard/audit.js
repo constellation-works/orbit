@@ -887,7 +887,6 @@ function buildAuditChips(ctx) {
   for (const status of AUDIT_STATUSES) {
     const chip = el("button", { class: "chip", text: status });
     chip.dataset.status = status;
-    chip.style.borderLeft = `2px solid var(--audit-status-${status}, var(--border))`;
     chip.addEventListener("click", () => {
       auditFilter.status = auditFilter.status === status ? null : status;
       syncAuditControls();

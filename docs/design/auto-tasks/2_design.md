@@ -323,7 +323,7 @@ cursor-neutral on every surface.
 
 ## 5c. Dashboard Operations surface [ORB-10876]
 
-The dashboard Operations tab exposes the same CRUD/mint runtime rather than a
+The dashboard Automation tab (`#operations`) exposes the same CRUD/mint runtime rather than a
 second scheduler. `#operations/auto-tasks` lists the selected workspace's
 definitions (name, enabled, schedule, template summary including complexity,
 dedupe, last scheduler evaluation, last minted task id, and a structured
