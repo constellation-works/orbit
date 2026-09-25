@@ -146,6 +146,23 @@ pub(crate) fn invalid_input_message<T>(result: Result<T, OrbitError>) -> String 
     }
 }
 
+/// The ordinary CLI caller for tool-host tests that are not about attribution.
+pub(crate) fn default_identity() -> (Option<String>, Option<String>) {
+    (
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+    )
+}
+
+pub(crate) fn call(runtime: &OrbitRuntime, tool: &str, input: Value) -> Result<Value, OrbitError> {
+    let (agent, model) = default_identity();
+    runtime.execute_tool_command(tool, input, agent, model)
+}
+
+pub(crate) fn call_err(runtime: &OrbitRuntime, tool: &str, input: Value) -> String {
+    invalid_input_message(call(runtime, tool, input))
+}
+
 /// Every variable an `orbit-engine` managed run exports that a tool-host test
 /// must state rather than inherit.
 const TOOL_ENV: [&str; 8] = [
