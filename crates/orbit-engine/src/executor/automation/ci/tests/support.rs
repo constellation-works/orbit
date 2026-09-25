@@ -311,3 +311,37 @@ pub(super) fn failed_job(job_id: u64, name: &str) -> Value {
         "failed_steps": [{"name": name, "conclusion": "failure"}],
     })
 }
+
+pub(super) fn current_ids(evidence: &Value) -> Vec<u64> {
+    evidence["current_failures"]
+        .as_array()
+        .expect("current failures")
+        .iter()
+        .filter_map(|run| run["run_id"].as_u64())
+        .collect()
+}
+
+pub(super) fn in_flight_ids(evidence: &Value) -> Vec<u64> {
+    evidence["in_flight"]
+        .as_array()
+        .expect("in flight")
+        .iter()
+        .filter_map(|run| run["run_id"].as_u64())
+        .collect()
+}
+
+pub(super) fn deferred_ids(evidence: &Value) -> Vec<u64> {
+    evidence["deferred"]
+        .as_array()
+        .expect("deferred")
+        .iter()
+        .filter_map(|run| run["run_id"].as_u64())
+        .collect()
+}
+
+pub(super) const HEAD: &str = "1111111111111111111111111111111111111111";
+pub(super) const OLD: &str = "2222222222222222222222222222222222222222";
+
+pub(super) fn input() -> Value {
+    json!({"integration_branch": "topic", "max_checkout_log_reads": 1})
+}

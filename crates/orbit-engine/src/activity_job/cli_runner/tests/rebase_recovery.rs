@@ -8,7 +8,7 @@ use std::time::Duration;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 
 use super::super::run_cli_backend;
-use super::orchestrator::{
+use super::orchestrator_worktree::{
     LinkedWorktreeFixture, git_bytes, git_ok, linked_worktree_fixture, test_audit, worktree_input,
 };
 use super::test_support::{TestHost, test_agent_loop_spec, write_executable};

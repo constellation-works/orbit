@@ -13,7 +13,8 @@ use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
     git_stdout, git_stdout_bytes, nul_paths,
 };
-use super::{DispatchError, WorktreeBoundaryGuard, safe_relative_path};
+use super::recovery::safe_relative_path;
+use super::{DispatchError, WorktreeBoundaryGuard};
 
 pub(super) struct RebaseRecoveryCheckpoint {
     metadata: RecoveryMetadata,

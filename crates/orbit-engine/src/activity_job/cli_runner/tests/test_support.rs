@@ -551,3 +551,13 @@ pub(in crate::activity_job::cli_runner) fn sandbox_exec_can_apply_for_test() -> 
         .status()
         .is_ok_and(|status| status.success())
 }
+
+pub(in crate::activity_job::cli_runner) fn linux_sandbox_for_test(
+    allow_fallback: bool,
+) -> ResolvedSandbox {
+    ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        allow_fallback,
+        ..sandbox_for_test()
+    }
+}

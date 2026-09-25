@@ -9,10 +9,7 @@ use orbit_agent::{
     provider_invocation_diagnostic,
 };
 use orbit_common::process::identity::process_start_identity_token;
-use orbit_common::security::redaction::{
-    PatternRedactor, argv_redactor, redact_sensitive_env_text,
-};
-use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+use orbit_common::security::redaction::argv_redactor;
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
@@ -34,25 +31,26 @@ use super::envelope::{
     task_id_from_input, task_ids_from_input,
 };
 use super::inspection::SourceInspection;
+use super::launcher::{orbit_tool_env, resolve_provider_launcher};
+use super::response_diagnostics::{
+    bounded_diagnostic, completion_diagnostic, declared_failure_diagnostic, response_diagnostic,
+    with_sandbox_write_attribution,
+};
 use super::spawn::{
-    CODEX_CA_CERTIFICATE_ENV, PreparedSandbox, SSL_CERT_FILE_ENV,
+    CODEX_CA_CERTIFICATE_ENV, PreparedSandbox, SSL_CERT_FILE_ENV, prepare_sandbox_for_dispatch,
+};
+use super::spawn_diagnostics::{
     copilot_model_unavailable_diagnostic, linux_bwrap_failed_write_diagnostic,
-    macos_keychain_auth_diagnostic, macos_sandbox_apply_failure_diagnostic, orbit_tool_env,
-    prepare_sandbox_for_dispatch, resolve_provider_launcher,
+    macos_keychain_auth_diagnostic, macos_sandbox_apply_failure_diagnostic,
+};
+use super::stdout_preview::{
+    STDOUT_TEXT_PREVIEW_LIMIT_BYTES, StdoutTextPreview, stdout_text_preview,
 };
 use super::supervisor::{
     DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS, SpawnTraceContext, SpawnWithTimeoutRequest,
     spawn_for_supervision, spawn_with_timeout,
 };
 use crate::context::RuntimeHost;
-
-const STDOUT_TEXT_PREVIEW_LIMIT_BYTES: usize = 64 * 1024;
-/// Extra bytes kept around the 64 KiB preview so a secret that straddles the
-/// cut is still fully inside the redaction window. After redaction, a windowed
-/// source drops this untrusted edge so a split fragment cannot survive when
-/// earlier substitutions shrink the text by more than the margin.
-const STDOUT_TEXT_PREVIEW_REDACTION_MARGIN_BYTES: usize = 1024;
-const RESPONSE_DIAGNOSTIC_LIMIT_CHARS: usize = 1024;
 
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
@@ -943,154 +941,4 @@ pub(crate) fn provider_child_environment(
 
 pub(super) fn resolved_activity_fs_profile_name(fs_profile: Option<&str>) -> &str {
     fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE)
-}
-
-/// Append the Orbit-owned write-denial attribution to a step message that was
-/// classified from the protocol frame alone.
-///
-/// A provider that exits 0 after a policy-denied write yields a frame-shaped
-/// message ("no terminating envelope") that says nothing about *why* the agent
-/// stopped. The sandbox diagnostic is the only text in the system that names
-/// the attempted path and the rule that shadowed it, so it rides along rather
-/// than replacing the frame classification — the step still failed for the
-/// protocol reason, and the denial is the cause worth acting on.
-///
-/// `diagnostic` is already the `linux_bwrap_write_grant_diagnostic` string
-/// (bounded and redacted); this deliberately does not reformat it, so operators
-/// and greps see one message format for a write denial regardless of which
-/// branch surfaced it.
-// pub(super) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(super) fn with_sandbox_write_attribution(message: String, diagnostic: Option<&str>) -> String {
-    match diagnostic {
-        Some(diagnostic) => format!("{message} {diagnostic}"),
-        None => message,
-    }
-}
-
-fn response_diagnostic(error: &str, redactor: &PatternRedactor) -> String {
-    format!(
-        "cli response envelope invalid: {}",
-        bounded_diagnostic(error, redactor)
-    )
-}
-
-/// [ORB-10449] Name the protocol violation for what it is. The old surfaced
-/// failure was whatever deterministic gate tripped several steps later, which
-/// reads as a downstream defect; this says the agent stopped before finishing
-/// its turn and points at the evidence.
-fn completion_diagnostic(error: &str, redactor: &PatternRedactor) -> String {
-    format!(
-        "agent step did not complete: the provider exited 0 but stdout carried no valid \
-         terminating Orbit response envelope ({}). The invocation ended without finishing its \
-         contract — typically an agent that yielded mid-work — so this step's work is incomplete \
-         and only what it persisted before stopping is durable.",
-        bounded_diagnostic(error, redactor)
-    )
-}
-
-fn declared_failure_diagnostic(
-    status: &str,
-    failure: Option<&orbit_agent::DeclaredResponseFailure>,
-    redactor: &PatternRedactor,
-) -> String {
-    let prefix =
-        format!("cli subprocess reported declared envelope status={status:?} despite exit 0");
-    let Some(error) = failure.and_then(|failure| failure.error.as_ref()) else {
-        return format!("{prefix}: declared envelope error details unavailable");
-    };
-
-    format!(
-        "{prefix}: error.code={}; error.message={}",
-        bounded_diagnostic(&error.code, redactor),
-        bounded_diagnostic(&error.message, redactor),
-    )
-}
-
-fn bounded_diagnostic(error: &str, redactor: &PatternRedactor) -> String {
-    let redacted = redactor.apply_str(&redact_sensitive_env_text(error));
-    let bounded: String = redacted
-        .chars()
-        .take(RESPONSE_DIAGNOSTIC_LIMIT_CHARS)
-        .collect();
-    let suffix = if bounded.len() < redacted.len() {
-        "…"
-    } else {
-        ""
-    };
-    format!("{bounded}{suffix}")
-}
-
-pub(super) struct StdoutTextPreview {
-    pub(super) text: String,
-    pub(super) truncated: bool,
-    pub(super) preview_bytes: usize,
-}
-
-pub(super) fn stdout_text_preview(
-    raw: &str,
-    redactor: &PatternRedactor,
-    prefer_tail: bool,
-) -> StdoutTextPreview {
-    let limit = STDOUT_TEXT_PREVIEW_LIMIT_BYTES;
-    let window = preview_source_window(
-        raw,
-        prefer_tail,
-        limit,
-        STDOUT_TEXT_PREVIEW_REDACTION_MARGIN_BYTES,
-    );
-    let redacted = redactor.apply_str(&redact_sensitive_env_text(window));
-    // A secret that straddles the far window edge is split, so the in-window
-    // fragment is not a redactor match. Earlier substitutions can shrink the
-    // redacted window by more than the margin and pull that fragment inside
-    // `limit`. Drop the untrusted raw edge (`window.len() - limit`) from the
-    // redacted text whenever the source was larger than the window.
-    let source_windowed = raw.len() > window.len();
-    let untrusted_edge = window.len().saturating_sub(limit);
-    let keep = if source_windowed {
-        redacted.len().saturating_sub(untrusted_edge).min(limit)
-    } else {
-        limit
-    };
-    let truncated = source_windowed || redacted.len() > keep;
-    let text = if redacted.len() > keep {
-        truncate_preview_text(&redacted, prefer_tail, keep)
-    } else {
-        redacted
-    };
-    let preview_bytes = text.len();
-
-    StdoutTextPreview {
-        text,
-        truncated,
-        preview_bytes,
-    }
-}
-
-fn preview_source_window(raw: &str, prefer_tail: bool, limit: usize, margin: usize) -> &str {
-    let cap = limit.saturating_add(margin);
-    if raw.len() <= cap {
-        return raw;
-    }
-    if prefer_tail {
-        let requested_start = raw.len() - cap;
-        let boundary = ceil_char_boundary(raw, requested_start);
-        &raw[boundary..]
-    } else {
-        let boundary = floor_char_boundary(raw, cap);
-        &raw[..boundary]
-    }
-}
-
-fn truncate_preview_text(redacted: &str, prefer_tail: bool, limit: usize) -> String {
-    if prefer_tail {
-        let requested_start = redacted.len() - limit;
-        let boundary = ceil_char_boundary(redacted, requested_start);
-        let line_boundary = redacted[boundary..]
-            .find('\n')
-            .map_or(boundary, |idx| boundary + idx + 1);
-        redacted[line_boundary..].to_string()
-    } else {
-        let boundary = floor_char_boundary(redacted, limit);
-        redacted[..boundary].to_string()
-    }
 }

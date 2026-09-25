@@ -16,6 +16,8 @@ targets=(
   "crates/orbit-core/src/application/task/add.rs"
   "crates/orbit-web/src/api/tasks.rs"
   "crates/orbit-engine/src/activity_job/cli_runner/orchestrator.rs"
+  "crates/orbit-engine/src/activity_job/cli_runner/response_diagnostics.rs"
+  "crates/orbit-engine/src/activity_job/cli_runner/stdout_preview.rs"
   "crates/orbit-engine/src/activity_job/cli_runner/argv.rs"
 )
 

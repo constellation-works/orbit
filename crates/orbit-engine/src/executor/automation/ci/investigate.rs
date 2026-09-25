@@ -2,10 +2,8 @@
 
 use serde_json::{Value, json};
 
-use super::collect::{
-    Bounds, investigation_slots, job_is_cancelled_without_failed_steps, push_retryable_error,
-    run_is_completed,
-};
+use super::collect::{Bounds, investigation_slots, push_retryable_error};
+use super::partition::{job_is_cancelled_without_failed_steps, run_is_completed};
 use super::query::{CiQueries, LogScope};
 
 /// Inspect each failed job independently. The row keeps run freshness metadata,
