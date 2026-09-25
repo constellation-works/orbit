@@ -1,5 +1,6 @@
 use super::*;
 use crate::contracts::*;
+use orbit_common::OrbitError;
 
 pub(super) fn identity() -> AdmissionIdentity {
     AdmissionIdentity::trusted_remote(ExecutionLocation {

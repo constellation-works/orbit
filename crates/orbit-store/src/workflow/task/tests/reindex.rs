@@ -140,3 +140,55 @@ fn reindex_does_not_resurrect_task_deleted_after_envelope_read() {
     assert!(!indexed.contains_key("ORB-00000"));
     assert!(indexed.contains_key("ORB-00001"));
 }
+
+#[test]
+fn reindex_reregisters_disk_bundles_and_drops_stale() {
+    let temp = TempDir::new().unwrap();
+    let ws = "orbit-idx-dddddd";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "a", Vec::new()),
+    );
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00003", "b", Vec::new()),
+    );
+
+    // Simulate drift: drop ORB-00003's index+binding (dir still on disk) and add
+    // a stale binding for ORB-00009 whose dir does not exist.
+    registry.unregister_task_bundle("ORB-00003", ws).unwrap();
+    let stale_dir = registry
+        .canonical_task_bundle_path(ws, "ORB-00009")
+        .unwrap();
+    fs::create_dir_all(&stale_dir).unwrap();
+    registry
+        .register_task_bundle("ORB-00009", ws, &stale_dir)
+        .unwrap();
+    fs::remove_dir_all(&stale_dir).unwrap();
+
+    let outcome = reindex_workspace(&registry, ws).expect("reindex");
+    assert_eq!(outcome.indexed, 2, "two on-disk bundles reindexed");
+    assert_eq!(outcome.removed_stale, 1, "stale ORB-00009 dropped");
+
+    let registered: Vec<String> = registry
+        .tasks_for_workspace(ws)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.task_id)
+        .collect();
+    assert_eq!(registered, vec!["ORB-00000", "ORB-00003"]);
+    // Allocator moved past the highest on-disk id.
+    assert!(registry.allocator_next_number().unwrap() >= 4);
+
+    let again = reindex_workspace(&registry, ws).expect("reindex again");
+    assert_eq!(again.indexed, outcome.indexed);
+    assert_eq!(again.removed_stale, 0);
+    assert_eq!(registry.allocator_next_number().unwrap(), 4);
+}

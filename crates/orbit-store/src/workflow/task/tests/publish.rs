@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 use super::super::publish::{clear_before_push_hook, set_before_push_hook};
 use super::*;
+use orbit_common::OrbitError;
 
 struct BeforePushGuard;
 

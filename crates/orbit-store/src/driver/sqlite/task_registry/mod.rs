@@ -5,14 +5,20 @@
 //! `schema` owns SQLite schema setup, migrations, and registry user-version guards.
 //! `queries` contains internal SQL helpers and row-to-type mapping.
 //! `util` contains shared path, time, relation, and WAL helpers used by the registry.
-//! `store` contains the `TaskRegistryStore` implementation and transaction orchestration.
+//! `store` defines `TaskRegistryStore` and opens it; the rest of its implementation
+//! is split by concern: `workspaces` (checkout and workspace bindings), `bindings`
+//! (task-bundle bindings), `index` (task index rows and projections) and `allocator`
+//! (task-id allocation and prefix authority).
 //! `relations` validates task relations: target existence, dangling targets, and cycles.
 //! `listing` contains the index reads behind bounded task listing: freshness rows,
 //! filtered selection, and the workspace-scoped status projection.
-//! `tests` contains the registry unit tests; split it further if it grows past the file-size budget.
+//! `tests` contains the registry unit tests, split to mirror the source modules.
 
 use std::path::{Path, PathBuf};
 
+mod allocator;
+mod bindings;
+mod index;
 mod listing;
 mod partition_id;
 mod queries;
@@ -20,6 +26,7 @@ mod relations;
 mod schema;
 mod store;
 mod util;
+mod workspaces;
 
 // Reader compatibility floor, not a counter for additive setup. Action keys
 // preserve the v5 task/allocator format and can be ignored by older readers.
@@ -69,8 +76,8 @@ pub use crate::contracts::{
     RegisterWorkspaceParams, TaskBundleBinding, TaskIndexFilter, TaskIndexSelection,
     WorkspaceBinding, WorkspaceCheckoutBinding,
 };
+pub(crate) use allocator::parse_orb_task_number;
 pub use store::TaskRegistryStore;
-pub(crate) use store::parse_orb_task_number;
 pub(crate) use util::is_terminal_status;
 
 #[cfg(test)]

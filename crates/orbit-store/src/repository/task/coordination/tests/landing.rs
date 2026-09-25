@@ -3,6 +3,7 @@
 use super::handoff::{accept, approve, fixture, observation, operator, starts, worker};
 use super::*;
 use crate::contracts::*;
+use orbit_common::OrbitError;
 use orbit_types::workflow::handoff::*;
 
 fn dispatch(
