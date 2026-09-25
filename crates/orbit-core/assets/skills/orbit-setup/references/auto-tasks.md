@@ -27,7 +27,7 @@ orbit auto-task add \
   --criterion "The audit command and its output are recorded in the execution summary" \
   --type chore \
   --tag dependency-audit \
-  --required-tool github.run.list \
+  --required-tools github.run.list \
   --priority medium \
   --complexity medium
 ```
@@ -38,12 +38,12 @@ review it in a PR like any other definition.
 | Flag | Notes |
 |---|---|
 | `--name` | Unique in the workspace; lowercase alphanumeric plus `-`/`_`. |
-| `--cron` / `--every-minutes` | Mutually exclusive. Cron is 5-field, host-local time. |
+| `--cron` / `--every-minutes` / `--deliveries-landed` | Mutually exclusive; `add` requires exactly one. Cron is 5-field, host-local time. `--deliveries-landed` takes the delivery-trigger JSON. |
 | `--title` / `--body` | The minted task's title and description. |
 | `--criterion` | Repeatable. This is the acceptance criteria of every minted task — write them as observably as you would for a hand-authored task. |
 | `--type` | `feature`, `bug`, `refactor`, `chore`. Defaults to `chore`. |
 | `--tag` | Repeatable, and worth setting: it is how the minted tasks are found later. A provenance tag is added automatically. |
-| `--required-tool` | Repeatable exact canonical tool name. Scheduled fires and manual `mint` copy the normalized list onto each task. |
+| `--required-tools` | Repeatable exact canonical tool name. `--required-tool` is an alias. Scheduled fires and manual `mint` copy the normalized list onto each task. |
 | `--complexity` | Optional assessed complexity: `low`, `medium`, `hard`, or `xhard`. It is copied to every minted task. |
 | `--status` | Status the minted task enters. Defaults to `backlog`; use `proposed` when a human should approve each instance before it becomes shippable work. |
 | `--crew` | Crew override for minted tasks. |
@@ -61,7 +61,7 @@ Legacy and custom definitions may omit `complexity`. They remain valid and mint
 the explicit non-answer `unassessed`, preserving the historical behavior rather
 than silently treating omission as `medium`. `unassessed` round-trips through
 task persistence, but human and agent `task.add`/`task.update` surfaces still
-accept only `low`/`medium`/`hard`; they can assess such a minted task but cannot
+accept only assessed values (`low`, `medium`, `hard`, `xhard`); they can assess such a minted task but cannot
 re-clear the assessment. Ordinary updates that omit complexity continue to
 succeed. An omitted template falls through to the default crew because there is
 no `unassessed` complexity pool.
@@ -153,9 +153,9 @@ as `skipped` with a reason naming the plugin. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The six seeded definitions
+## The nine seeded definitions
 
-`orbit workspace init` seeds all six, disabled:
+`orbit workspace init` seeds all nine, disabled:
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
   through their real user-facing paths rather than just re-running the test
@@ -181,6 +181,15 @@ plugin being removed.
   typed coverage evidence.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
   records typed coverage evidence.
+- **`doc-duties`** (`low`) — daily. Validates a small batch of the oldest
+  workspace documentation against current behavior, and corrects factual drift
+  and broken links. A batch whose claims are already accurate is a successful
+  no-diff run.
+- **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
+  stalled and untriaged tasks. It does not change task status or dispatch work.
+- **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
+  evidence for recurring failures that nobody has filed, and records one
+  friction or proposed task per untracked pattern.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
