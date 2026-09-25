@@ -2,7 +2,7 @@
 type: runbook
 summary: Check Orbit workspace, database, dashboard, log-sink, job-run, and routine-clock health.
 tags: [operations, health, doctor, dashboard, routines]
-paths: ["crates/orbit-cmd/src/doctor.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
+paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244]
 last_validated: 2026-09-20

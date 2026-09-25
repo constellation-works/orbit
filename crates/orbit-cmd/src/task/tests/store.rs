@@ -1,4 +1,4 @@
-//! Sibling tests for `task_store.rs` — which partition a checkout's task state
+//! Sibling tests for `task/store.rs` — which partition a checkout's task state
 //! lives in, and what removing one retires [ORB-12119].
 
 use std::fs;

@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Why task authority is per task_prefix rather than per host, why a task runs where it was minted, and why disjoint id ranges were retired in favour of prefixes.
 tags: [task-migration, multi-host, task-prefix]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-config/src/raw.rs"]
+paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-config/src/raw.rs"]
 related_features: [task-migration, host-registry]
 related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 ---
@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Task authority is per prefix, not per host
 
 **Recorded:** 2026-09 · [ORB-12126]
-**Code anchors:** `crates/orbit-store/src/workflow/task/mod.rs::import_tasks`, `crates/orbit-cmd/src/registry_runtime.rs::sync_task_prefix`
+**Code anchors:** `crates/orbit-store/src/workflow/task/mod.rs::import_tasks`, `crates/orbit-cmd/src/registry/runtime/selection.rs::sync_task_prefix`
 
 ### Context
 

@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner.
 tags: [distributed-drain, multi-host, pull, federated-mcp, resident-orchestrator]
-paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
+paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, state-compatibility, task-migration, automation-triggers]
 related_artifacts: [ORB-12488]
 ---
@@ -95,7 +95,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Request receipt + claim + reservation + status in one transaction | [crates/orbit-core/src/runtime/task/locks.rs](../../../crates/orbit-core/src/runtime/task/locks.rs) | — | to file |
 | Pull-mode drain loop (`orbit run auto --pull`) | [workspace_auto_pipeline.yaml](../../../crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml) | — | to file |
 | Claimed leaf dispatch, binding, and terminal settlement | [task_pr_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_pr_pipeline.yaml) | — | to file |
-| Replica task reads and coordination writes route to the owner | [crates/orbit-cmd/src/registry_runtime.rs](../../../crates/orbit-cmd/src/registry_runtime.rs), [crates/orbit-mcp](../../../crates/orbit-mcp) | — | to file |
+| Replica task reads and coordination writes route to the owner | [crates/orbit-cmd/src/registry/runtime/mod.rs](../../../crates/orbit-cmd/src/registry/runtime/mod.rs), [crates/orbit-mcp](../../../crates/orbit-mcp) | — | to file |
 | Manual claim inspection and recovery | [2_design.md §3.1](./2_design.md#31-attempt-ownership-and-recovery) | — | to file |
 | Durable handoff and authorized landing consumer | [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | to file |
 | Review-only handoff approval and revocation | [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | to file |

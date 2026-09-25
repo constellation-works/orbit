@@ -25,10 +25,10 @@ pub mod agent_rules;
 pub mod diagnostics;
 pub mod doctor;
 pub mod migrate;
-pub mod registry_routines;
-pub mod registry_runtime;
-pub mod task_owner;
-pub mod task_store;
+pub mod registry;
+pub mod task;
+pub use registry::{routines as registry_routines, runtime as registry_runtime};
+pub use task::{owner as task_owner, store as task_store};
 pub mod update;
 pub mod workspace_catalog;
 

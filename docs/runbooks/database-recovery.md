@@ -2,7 +2,7 @@
 type: runbook
 summary: Recover a corrupted Orbit SQLite database from backup, salvage, or regeneration.
 tags: [operations, sqlite, corruption, recovery]
-paths: ["crates/orbit-store/**", "crates/orbit-cmd/src/doctor.rs"]
+paths: ["crates/orbit-store/**", "crates/orbit-cmd/src/doctor/mod.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-10473]
 last_validated: 2026-09-12

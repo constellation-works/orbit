@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: From one-shot export/import to a repeatable owner-wins sync between hosts that each mint under their own task_prefix.
 tags: [task-migration, multi-host, task-prefix, sync]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-cmd/src/registry_runtime.rs"]
+paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [task-migration, host-registry, remote-access, federated-mcp]
 related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 ---

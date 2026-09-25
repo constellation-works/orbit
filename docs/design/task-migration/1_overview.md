@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Move orbit tasks between hosts with export/import (tar.zst); hosts stay disjoint by task_prefix, and the minting host owns each task.
 tags: [task-migration, multi-host, task-prefix]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry_runtime.rs"]
+paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [task-migration, task-artifacts, host-registry]
 related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 ---
@@ -74,7 +74,7 @@ machine a disjoint id range).
 | Export / validated import + renumber | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-00034] |
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
 | Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/store.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/store.rs) | [ORB-00034], [ORB-10721] |
-| Prefix projection into the allocator | [crates/orbit-cmd/src/registry_runtime.rs](../../../crates/orbit-cmd/src/registry_runtime.rs) | [ORB-10721] |
+| Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/mod.rs](../../../crates/orbit-cmd/src/registry/runtime/mod.rs) | [ORB-10721] |
 | Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
