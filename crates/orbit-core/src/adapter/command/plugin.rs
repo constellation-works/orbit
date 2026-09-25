@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::plugin;
-use crate::runtime::plugin_host;
+use crate::runtime::plugin::discovery;
 
 pub use crate::application::plugin::skills::PluginSkillLink;
 
@@ -21,7 +21,7 @@ pub use crate::application::plugin::{
     PluginSummary, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport,
     PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
 };
-pub use crate::runtime::plugin_host::{PluginCliGroup, PluginCliVerb};
+pub use crate::runtime::plugin::discovery::{PluginCliGroup, PluginCliVerb};
 
 /// What `orbit plugin add --enable` produced, kept alongside the install
 /// summary rather than collapsed into it, so the CLI can render seeded
@@ -175,7 +175,7 @@ impl OrbitRuntime {
     /// uses [`host_plugin_cli_groups`]; this is the same projection for a
     /// caller that already holds one.
     pub fn plugin_cli_groups(&self) -> Vec<PluginCliGroup> {
-        plugin_host::plugin_cli_groups(self.plugin_load())
+        discovery::plugin_cli_groups(self.plugin_load())
     }
 }
 
@@ -183,7 +183,7 @@ impl OrbitRuntime {
 /// runtime (design §4.6).
 pub fn host_plugin_cli_groups(global_root: &Path) -> Result<Vec<PluginCliGroup>, OrbitError> {
     let config = global_only_config(global_root)?;
-    plugin_host::host_plugin_cli_groups(global_root, &config.persistence.audit_db, &config.plugins)
+    discovery::host_plugin_cli_groups(global_root, &config.persistence.audit_db, &config.plugins)
 }
 
 /// Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. No
@@ -203,7 +203,7 @@ pub fn host_plugin_mcp_definitions(
     global_root: &Path,
 ) -> Result<Vec<McpToolDefinition>, OrbitError> {
     let config = global_only_config(global_root)?;
-    plugin_host::host_plugin_mcp_definitions(
+    discovery::host_plugin_mcp_definitions(
         global_root,
         &config.persistence.audit_db,
         &config.plugins,
@@ -221,7 +221,7 @@ pub fn execute_global_plugin_tool(
     session_context: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
     let config = global_only_config(global_root)?;
-    let (registry, _load) = plugin_host::host_plugin_registry(
+    let (registry, _load) = discovery::host_plugin_registry(
         global_root,
         &config.persistence.audit_db,
         &config.plugins,

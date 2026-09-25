@@ -48,7 +48,7 @@ pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] =
     &["state/plugin-callbacks", "plugins/.grants"];
 
 /// Host-owned directory beside the namespace install directories, holding one
-/// grant-authorization witness per plugin (`orbit-core`'s `plugin_grants`).
+/// grant-authorization witness per plugin (`orbit-core`'s `runtime::plugin::grants`).
 /// Named here because the sandbox decides who may read it.
 pub const PLUGIN_GRANT_WITNESS_DIR: &str = ".grants";
 

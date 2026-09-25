@@ -18,8 +18,9 @@ use orbit_types::plugin::{
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_grants::{record_authorized_grants, verify_install_path};
-use crate::runtime::plugin_host::{plugin_install_path, plugin_namespace_dir, projected_status};
+use crate::runtime::plugin::grants::{record_authorized_grants, verify_install_path};
+use crate::runtime::plugin::host::projected_status;
+use crate::runtime::plugin::paths::{plugin_install_path, plugin_namespace_dir};
 
 use super::inspect::{PluginSummary, summary_for_installed};
 use super::lifecycle::unrequested_grant_warnings;

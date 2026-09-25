@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use serde::Serialize;
 
-use crate::runtime::workspace_catalog::WorkspaceScope;
+use crate::runtime::workspace::catalog::WorkspaceScope;
 
 use super::{DEFAULT_LIMIT, MAX_LIMIT};
 

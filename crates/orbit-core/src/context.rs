@@ -17,7 +17,7 @@ use orbit_tools::ToolRegistry;
 use orbit_types::identity::{Crew, require_canonical_agent_family};
 use orbit_types::workspace::WorkspacePaths;
 
-use crate::runtime::plugin_host::PluginHostLoad;
+use crate::runtime::plugin::host::PluginHostLoad;
 use crate::skill_catalog::SkillCatalog;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy, PersistenceConfig};
 

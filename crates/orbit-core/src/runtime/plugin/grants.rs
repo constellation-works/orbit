@@ -65,7 +65,7 @@ use orbit_types::plugin::{InstalledPlugin, is_valid_namespace};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::plugin_host::{plugin_install_root, plugin_namespace_dir};
+use super::paths::{plugin_install_root, plugin_namespace_dir};
 
 /// Host-owned directory beside the namespace install directories. A namespace
 /// must start with a lowercase letter (`is_valid_segment`), so the leading dot

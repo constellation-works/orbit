@@ -1,0 +1,646 @@
+//! [`OrbitRuntime`]: construction, identity, and the accessors command
+//! handlers reach stores, policy, and settings through.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
+
+use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventRow};
+use orbit_store::{Store, workspace_id_for_orbit_dir};
+use orbit_types::record::{Audit, OrbitEvent};
+use orbit_types::workflow::ShipMode;
+use orbit_types::workspace::WorkspacePaths;
+use serde_json::Value;
+
+use super::config_path::validated_runtime_config_path;
+use super::workspace::binding::WorkspaceRuntimeBinding;
+use super::workspace::catalog;
+use super::{builder, event_bus, worker_coordination};
+use crate::context::{ActorIdentity, OrbitContext, OrbitStores};
+
+#[cfg(test)]
+pub(crate) type AfterLockedStateReadHook = Arc<dyn Fn(&orbit_types::task::Task) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct OrbitRuntime {
+    pub(super) worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
+    pub(super) owner_coordinator: Option<Arc<dyn orbit_tools::OwnerCoordinator>>,
+    pub(crate) context: OrbitContext,
+    workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
+    /// A higher-level registry may mark this local checkout as a replica. Core
+    /// stays registry-neutral; it only carries the refusal supplied by that
+    /// owner so every task-record writer shares one fail-closed gate.
+    coordination_write_owner: Option<Arc<str>>,
+    automation_machine_identity: Option<Arc<str>>,
+    /// Supplied by the same registry-owning composition layer, for reads that
+    /// span more than one workspace. Absent on a standalone runtime, which
+    /// then answers only for its own checkout [ORB-11027].
+    workspace_catalog: Option<Arc<dyn catalog::WorkspaceCatalog>>,
+    pub event_log: event_bus::EventLog,
+    /// Outcome of the [ORB-10012] workspace-layout pre-flight that ran when
+    /// this runtime opened (empty `applied` when the layout was already
+    /// current). Surfaced by `orbit migrate`.
+    layout_report: Arc<orbit_store::workflow::layout::LayoutUpgradeReport>,
+    _temp_dir: Option<Arc<builder::TempDir>>,
+    /// Test-only seam for `apply_task_automation_update`: fired after the
+    /// authoritative locked `get_task`, before the derived write. The lock is
+    /// re-entrant, so a hook may mutate the same task and observe whether the
+    /// automation write merges or refuses.
+    #[cfg(test)]
+    after_locked_state_read: Arc<Mutex<Option<AfterLockedStateReadHook>>>,
+    /// Test-only seam for approve/start/reject: after the locked `get_task`,
+    /// mutate the named task so compare-and-set can observe a lost race.
+    /// Instance-scoped so concurrent `cargo test` threads cannot collide on
+    /// the deterministic first task ID.
+    #[cfg(test)]
+    transition_read_hook: Arc<Mutex<Option<(String, orbit_types::task::TaskStatus)>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrbitRuntimeRoots {
+    pub global_root: PathBuf,
+    pub shared_root: PathBuf,
+    pub local_root: PathBuf,
+}
+
+/// Whether the constructing process retains this runtime past a single command.
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostLifetime {
+    ShortLived,
+    LongLived,
+}
+
+impl OrbitRuntime {
+    /// Only the accepting transport's authenticated facts may label artifact bytes.
+    pub(crate) fn artifact_origin(
+        &self,
+        session: &orbit_types::tool::ToolSessionContext,
+    ) -> Option<orbit_types::task::ExecutionLocation> {
+        if let Some(binding) = &session.worker_invocation {
+            return Some(binding.execution.clone());
+        }
+        // Remote caller labels do not identify artifact authorship. Until trusted
+        // claim propagation supplies execution provenance, keep remote origin unknown.
+        if session
+            .transport
+            .is_some_and(|transport| transport != orbit_types::tool::McpTransport::Local)
+        {
+            return None;
+        }
+        session
+            .process_machine_id
+            .as_deref()
+            .or_else(|| self.automation_machine_identity())
+            .map(|machine_id| orbit_types::task::ExecutionLocation {
+                machine_id: machine_id.into(),
+                machine_name: session.process_machine_name.clone(),
+            })
+    }
+
+    pub(crate) fn build_from_resolved_config(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: Option<WorkspaceRuntimeBinding>,
+        runtime_config: &orbit_config::ResolvedConfig,
+        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        Self::finish_from_context(
+            builder::build_context_from_roots(
+                global_root,
+                shared_root,
+                local_root,
+                binding.as_ref(),
+                runtime_config,
+                host_lifetime,
+                false,
+            )?,
+            binding,
+            global_root,
+            layout_report,
+        )
+    }
+
+    pub(crate) fn build_from_resolved_config_write_free(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: Option<WorkspaceRuntimeBinding>,
+        runtime_config: &orbit_config::ResolvedConfig,
+        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        Self::finish_from_context(
+            builder::build_context_from_roots(
+                global_root,
+                shared_root,
+                local_root,
+                binding.as_ref(),
+                runtime_config,
+                host_lifetime,
+                true,
+            )?,
+            binding,
+            global_root,
+            layout_report,
+        )
+    }
+
+    fn finish_from_context(
+        context: crate::context::OrbitContext,
+        binding: Option<WorkspaceRuntimeBinding>,
+        global_root: &Path,
+        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+    ) -> Result<Self, OrbitError> {
+        Ok(Self {
+            context,
+            workspace_binding: binding.map(Arc::new),
+            worker_invocation: worker_coordination::restore_process_binding(global_root)?,
+            owner_coordinator: None,
+            coordination_write_owner: None,
+            automation_machine_identity: None,
+            workspace_catalog: None,
+            event_log: event_bus::EventLog::default(),
+            layout_report: Arc::new(layout_report),
+            _temp_dir: None,
+            #[cfg(test)]
+            after_locked_state_read: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            transition_read_hook: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    pub(crate) fn build_in_memory_from_resolved_config(
+        data_root: &Path,
+        workspace_root: &Path,
+        runtime_config: &orbit_config::ResolvedConfig,
+        temp_dir: builder::TempDir,
+    ) -> Result<Self, OrbitError> {
+        // Use a distinct checkout root so the normal workspace builder creates
+        // its identity and task partition. A shared explicit data root assumes
+        // those were already initialized by workspace init.
+        let binding = WorkspaceRuntimeBinding {
+            logical_workspace_id: "ws_memory".to_string(),
+            task_partition_id: "ws_memory".to_string(),
+            owner_machine_id: None,
+            repo_root: data_root.to_path_buf(),
+            ship_mode: ShipMode::Local,
+            base_branch: None,
+        };
+        let context = builder::build_context_from_roots(
+            data_root,
+            workspace_root,
+            workspace_root,
+            Some(&binding),
+            runtime_config,
+            HostLifetime::ShortLived,
+            false,
+        )?;
+        Ok(Self {
+            context,
+            workspace_binding: Some(Arc::new(binding)),
+            worker_invocation: None,
+            owner_coordinator: None,
+            coordination_write_owner: None,
+            automation_machine_identity: None,
+            workspace_catalog: None,
+            event_log: event_bus::EventLog::default(),
+            layout_report: Arc::new(orbit_store::workflow::layout::LayoutUpgradeReport::default()),
+            _temp_dir: Some(Arc::new(temp_dir)),
+            #[cfg(test)]
+            after_locked_state_read: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            transition_read_hook: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Outcome of the workspace-layout pre-flight that ran when this runtime
+    /// opened: which layout migrations (if any) were auto-applied.
+    pub fn layout_upgrade_report(&self) -> &orbit_store::workflow::layout::LayoutUpgradeReport {
+        &self.layout_report
+    }
+
+    pub fn with_actor(mut self, actor: ActorIdentity) -> Self {
+        self.context.set_actor(actor);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_after_locked_state_read_hook(&self, hook: AfterLockedStateReadHook) {
+        *self
+            .after_locked_state_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn invoke_after_locked_state_read(&self, task: &orbit_types::task::Task) {
+        let hook = self
+            .after_locked_state_read
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook(task);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_transition_read_hook_status(
+        &self,
+        id: Option<&str>,
+        status: Option<orbit_types::task::TaskStatus>,
+    ) {
+        *self
+            .transition_read_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            id.zip(status).map(|(id, status)| (id.to_string(), status));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transition_read_hook_status(
+        &self,
+    ) -> Option<(String, orbit_types::task::TaskStatus)> {
+        self.transition_read_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Registry-owning composition supplies stable machine identity; Core never discovers it.
+    pub fn with_automation_machine_identity(mut self, machine_id: Option<String>) -> Self {
+        self.context
+            .set_execution_location(machine_id.as_ref().map(|machine_id| {
+                orbit_types::task::ExecutionLocation {
+                    machine_id: machine_id.clone(),
+                    machine_name: None,
+                }
+            }));
+        self.automation_machine_identity = machine_id.map(Arc::from);
+        self
+    }
+
+    pub fn automation_machine_identity(&self) -> Option<&str> {
+        self.automation_machine_identity.as_deref()
+    }
+
+    /// Registered owner of the bound workspace, when composition supplied a
+    /// binding that names one. Delivery automation resolves its default owner
+    /// from this rather than from cwd or the running executor.
+    pub(crate) fn workspace_owner_machine_id(&self) -> Option<&str> {
+        self.workspace_binding
+            .as_ref()
+            .and_then(|binding| binding.owner_machine_id.as_deref())
+    }
+
+    /// Attach the declared remote owner for a replica checkout. This is set by
+    /// the registry-owning composition layer, never inferred by Core.
+    pub fn with_coordination_write_owner(mut self, owner_machine_id: Option<String>) -> Self {
+        self.coordination_write_owner = owner_machine_id.map(Arc::from);
+        self
+    }
+
+    /// Attach the workspace catalog that resolves federated search scope. Like
+    /// the replica owner above, it is supplied by the registry-owning layer and
+    /// never constructed by Core.
+    pub fn with_workspace_catalog(mut self, catalog: Arc<dyn catalog::WorkspaceCatalog>) -> Self {
+        self.workspace_catalog = Some(catalog);
+        self
+    }
+
+    pub(crate) fn workspace_catalog(&self) -> Option<&Arc<dyn catalog::WorkspaceCatalog>> {
+        self.workspace_catalog.as_ref()
+    }
+
+    /// Refuse control-plane work in a replica checkout.
+    ///
+    /// The refusal is a catalog-role capability outcome, not a malformed call:
+    /// federated routing has to tell "this destination will not run that class"
+    /// apart from "that request was invalid", so this reports
+    /// `CapabilityRefused` [ORB-11012].
+    pub(crate) fn ensure_coordination_task_write_permitted(&self) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::PolicyDenied(
+                "claimed coordination writes require the owner route".into(),
+            ));
+        }
+        let Some(owner_machine_id) = self.coordination_write_owner.as_deref() else {
+            return Ok(());
+        };
+        Err(OrbitError::CapabilityRefused(format!(
+            "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
+        )))
+    }
+
+    pub(crate) fn coordination_task_reads_visible(&self) -> bool {
+        self.coordination_write_owner.is_none()
+    }
+
+    /// The remote owner declared for a replica checkout, if this is one.
+    pub(crate) fn coordination_write_owner(&self) -> Option<&str> {
+        self.coordination_write_owner.as_deref()
+    }
+
+    /// Test seam: restate the registered workspace owner that registry
+    /// composition supplies in production, so ownership resolution can be
+    /// exercised on an in-memory runtime.
+    #[cfg(test)]
+    pub(crate) fn with_workspace_owner_machine_id(mut self, owner: Option<&str>) -> Self {
+        if let Some(binding) = self.workspace_binding.as_ref() {
+            let mut rebound = (**binding).clone();
+            rebound.owner_machine_id = owner.map(ToOwned::to_owned);
+            self.workspace_binding = Some(Arc::new(rebound));
+        }
+        self
+    }
+
+    /// Returns in-process events recorded during this session only. Not persisted across process
+    /// boundaries — the log is empty at startup and discarded on exit. For the persistent CLI
+    /// audit log written on every invocation, see [`OrbitRuntime::list_audit_events`].
+    pub fn list_session_events(&self, limit: usize) -> Result<Vec<Audit>, OrbitError> {
+        let events = self.event_log.snapshot();
+        let audits = events
+            .into_iter()
+            .enumerate()
+            .map(|(idx, event)| orbit_event_to_audit((idx + 1) as i64, event))
+            .rev()
+            .take(limit)
+            .collect();
+        Ok(audits)
+    }
+
+    pub fn shared_root(&self) -> PathBuf {
+        self.context.shared_root().to_path_buf()
+    }
+
+    pub fn local_root(&self) -> PathBuf {
+        self.context.local_root().to_path_buf()
+    }
+
+    pub fn data_root(&self) -> PathBuf {
+        self.shared_root()
+    }
+
+    pub fn global_root(&self) -> PathBuf {
+        self.context.global_root().to_path_buf()
+    }
+
+    /// Higher-level workspace metadata used to construct this runtime, when
+    /// the caller supplied an authoritative binding.
+    pub fn workspace_runtime_binding(&self) -> Option<&WorkspaceRuntimeBinding> {
+        self.workspace_binding.as_deref()
+    }
+
+    /// Returns the effective `config.toml` path.
+    ///
+    /// Workspace config replaces global if present; a genuinely missing
+    /// workspace config falls back to global. Rejected workspace entries and
+    /// inspection failures remain visible to the caller instead of silently
+    /// changing precedence. This pathname records selection only; readers must
+    /// still open the file through a race-safe boundary.
+    pub fn config_path(&self) -> Result<PathBuf, OrbitError> {
+        validated_runtime_config_path(self)
+    }
+
+    pub fn persistence_config_json(&self) -> Value {
+        self.context.persistence().as_json_value()
+    }
+
+    pub fn automation_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
+        Ok(Arc::clone(&self.context.stores().host.automation))
+    }
+
+    /// Before-PR review ledgers, certificates, and landings [ORB-11333].
+    pub fn review_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::ReviewStoreBackend>, OrbitError> {
+        Ok(Arc::clone(&self.context.stores().host.review))
+    }
+
+    pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
+        Ok(self.context.stores().host.sqlite.clone())
+    }
+
+    /// Probe the configured database path independently of cached runtime
+    /// handles. Diagnostics must observe missing or replaced files and must
+    /// not repair or migrate them as a side effect.
+    pub fn sqlite_store_for_diagnostics(&self) -> Result<Store, OrbitError> {
+        Store::open_read_only(&self.context.persistence().audit_db)
+    }
+
+    /// Check write readiness at the configured path without recreating or
+    /// migrating the database, independently of cached runtime connections.
+    pub fn check_sqlite_store_writable(&self) -> Result<(), OrbitError> {
+        Store::check_path_writable(&self.context.persistence().audit_db)
+    }
+
+    pub fn v2_audit_store(
+        &self,
+    ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
+        Ok(Arc::clone(&self.context.stores().host.v2_audit))
+    }
+
+    pub fn ensure_persistence_ready(&self) -> Result<(), OrbitError> {
+        orbit_store::compose::ensure_sqlite_store_ready(&self.context.persistence().audit_db)
+    }
+
+    pub fn workspace_id(&self) -> Result<String, OrbitError> {
+        workspace_id_for_orbit_dir(&self.context.paths().orbit_dir)
+    }
+
+    pub fn list_v2_audit_events(
+        &self,
+        mut filter: V2AuditEventFilter,
+    ) -> Result<Vec<V2AuditEventRow>, OrbitError> {
+        if filter.workspace_id.trim().is_empty() {
+            filter.workspace_id = self.workspace_id()?;
+        }
+        self.v2_audit_store()?.list_v2_audit_events(&filter)
+    }
+
+    pub fn insert_v2_audit_event(
+        &self,
+        params: &orbit_store::contracts::V2AuditEventInsertParams,
+    ) -> Result<(), OrbitError> {
+        self.v2_audit_store()?.insert_v2_audit_event(params)
+    }
+
+    pub fn scoring_enabled(&self) -> bool {
+        self.context.scoring_enabled()
+    }
+
+    /// Minutes a deferred delivery-automation reason may persist before the
+    /// evaluator escalates it to a warning and one friction record.
+    pub fn automation_stall_window_minutes(&self) -> u32 {
+        self.context.settings().automation_stall_window_minutes()
+    }
+
+    pub fn pr_config(&self) -> &orbit_engine::PrConfig {
+        self.context.settings().pr_config()
+    }
+
+    /// Config-only `[workflow] base_branch` fallback (default `"main"`).
+    /// Delivery defaults must use [`Self::workspace_base_branch`], which
+    /// prefers the registered workspace base branch when a binding exists.
+    pub fn workflow_base_branch(&self) -> &str {
+        self.context.settings().workflow_base_branch()
+    }
+
+    /// Commands this owner requires a distributed execution claim to pass on
+    /// its exact candidate before accepting the delivery handoff
+    /// (`[workflow] required_validation_commands`). Empty is fail-closed: the
+    /// claim journal refuses a handoff whose owner requirements are unset.
+    pub fn workflow_required_validation_commands(&self) -> &[String] {
+        self.context
+            .settings()
+            .workflow_required_validation_commands()
+    }
+
+    /// The branch this workspace integrates into: the registered workspace
+    /// base branch when a registry binding exists, else `[workflow]
+    /// base_branch`. Delivery automation defaults are seeded against it.
+    pub fn workspace_base_branch(&self) -> &str {
+        self.workspace_runtime_binding()
+            .and_then(|binding| binding.base_branch.as_deref())
+            .unwrap_or_else(|| self.workflow_base_branch())
+    }
+
+    /// Whether this workspace opted into unattended ship dispatch
+    /// (`[workflow] auto_ship` in the active `config.toml`; defaults to
+    /// `false`). Consulted by `orbit run ship-sweep` and other schedulers
+    /// before dispatching ship runs nobody explicitly asked for.
+    pub fn workflow_auto_ship(&self) -> bool {
+        self.context.settings().workflow_auto_ship()
+    }
+
+    /// The resolved `[operation]` review preferences (layered over the
+    /// built-in no-review defaults) with per-field provenance [ORB-11333].
+    pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {
+        self.context.settings().operation()
+    }
+
+    pub(crate) fn actor(&self) -> &ActorIdentity {
+        self.context.actor()
+    }
+
+    pub(crate) fn actor_label(&self) -> &str {
+        self.context.actor().label.as_str()
+    }
+
+    pub(crate) fn policy_engine(&self) -> &orbit_policy::PolicyEngine {
+        self.context.policy()
+    }
+
+    pub(crate) fn tool_registry(&self) -> &orbit_tools::ToolRegistry {
+        self.context.registry()
+    }
+
+    pub(crate) fn stores(&self) -> &OrbitStores {
+        self.context.stores()
+    }
+
+    /// What the host plugin load pass registered and refused when this
+    /// runtime was built.
+    pub(crate) fn plugin_load(&self) -> &crate::runtime::plugin::host::PluginHostLoad {
+        self.context.plugin_load()
+    }
+
+    pub(crate) fn skill_catalog(&self) -> &crate::skill_catalog::SkillCatalog {
+        self.context.skill_catalog()
+    }
+
+    /// Resolved workspace paths. `pub` for the command surfaces extracted to
+    /// `orbit-cmd` [ORB-10016].
+    pub fn paths(&self) -> &WorkspacePaths {
+        self.context.paths()
+    }
+
+    pub(crate) fn data_root_path(&self) -> &Path {
+        self.shared_root_path()
+    }
+
+    pub(crate) fn shared_root_path(&self) -> &Path {
+        self.context.shared_root()
+    }
+
+    pub(crate) fn execution_env_policy(&self) -> &orbit_config::ExecutionEnvPolicy {
+        self.context.execution_env_policy()
+    }
+
+    pub(crate) fn codex_execution_policy(&self) -> &orbit_config::CodexExecutionPolicy {
+        self.context.codex_execution_policy()
+    }
+
+    pub fn list_executor_defs(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::ExecutorDef>, OrbitError> {
+        self.stores().executors().list_executor_defs()
+    }
+
+    pub fn get_executor_def(
+        &self,
+        name: &str,
+    ) -> Result<Option<orbit_types::workflow::ExecutorDef>, OrbitError> {
+        self.stores().executors().get_executor_def(name)
+    }
+
+    /// Where a dispatch from this workspace would launch an executor's
+    /// `program` from, or `None` when it would fail to find it. Uses the same
+    /// lookup as dispatch (`PATH`, conventional home bins, system prefixes).
+    pub fn locate_provider_launcher(&self, program: &str) -> Option<std::path::PathBuf> {
+        orbit_engine::activity_job::cli_runner::locate_provider_launcher(
+            program,
+            Some(&self.paths().repo_root),
+        )
+    }
+
+    pub fn upsert_executor_def(
+        &self,
+        def: &orbit_types::workflow::ExecutorDef,
+    ) -> Result<(), OrbitError> {
+        self.stores().executors().upsert_executor_def(def)
+    }
+
+    pub fn list_policy_defs(&self) -> Result<Vec<orbit_types::policy::PolicyDef>, OrbitError> {
+        self.stores().policies().list_policy_defs()
+    }
+
+    pub fn get_policy_def(
+        &self,
+        name: &str,
+    ) -> Result<Option<orbit_types::policy::PolicyDef>, OrbitError> {
+        self.stores().policies().get_policy_def(name)
+    }
+
+    pub fn upsert_policy_def(
+        &self,
+        def: &orbit_types::policy::PolicyDef,
+    ) -> Result<(), OrbitError> {
+        self.stores().policies().upsert_policy_def(def)
+    }
+}
+
+fn orbit_event_to_audit(id: i64, event: OrbitEvent) -> Audit {
+    let payload = serde_json::to_value(&event).unwrap_or(Value::Null);
+    let event_type = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown")
+        .to_string();
+
+    Audit {
+        id,
+        event_type: event_type.clone(),
+        payload,
+        message: event_type,
+        created_at: Utc::now(),
+    }
+}

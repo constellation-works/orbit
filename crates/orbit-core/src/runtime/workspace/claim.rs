@@ -36,9 +36,11 @@ use orbit_store::contracts::{
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
-use super::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
-use super::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 use crate::OrbitRuntime;
+use crate::runtime::audit::coordination::{
+    CoordinationAuditEvent, record_coordination_audit_event,
+};
+use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 
 /// Environment fallback for the holder's token, so an operator shell does not
 /// have to repeat `--claim-token` on every dispatch. An explicit argument always

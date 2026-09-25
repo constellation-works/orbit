@@ -6,7 +6,7 @@
 //! for one of them* — while Core keeps ownership of fan-out, fusion,
 //! attribution, and degradation notes [ORB-11027].
 //!
-//! The seam mirrors [`super::OrbitRuntime::with_coordination_write_owner`]: a
+//! The seam mirrors [`OrbitRuntime::with_coordination_write_owner`]: a
 //! standalone runtime constructed without a catalog still works, and simply
 //! refuses any scope wider than its own workspace.
 
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 
-use super::OrbitRuntime;
+use crate::runtime::OrbitRuntime;
 
 /// Which workspaces one search covers.
 ///

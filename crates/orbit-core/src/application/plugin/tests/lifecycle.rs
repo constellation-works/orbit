@@ -622,7 +622,7 @@ fn a_relocated_row_is_refused_by_every_lifecycle_verb_and_leaves_that_tree_alone
         .expect("record-only removal clears a row it cannot verify");
     assert!(list_plugins(&runtime).expect("list").is_empty());
     assert!(
-        !crate::runtime::plugin_grants::plugin_grant_witness_path(&runtime.global_root(), "demo")
+        !crate::runtime::plugin::grants::plugin_grant_witness_path(&runtime.global_root(), "demo")
             .exists(),
         "the grant witness goes with the record"
     );

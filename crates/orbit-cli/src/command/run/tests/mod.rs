@@ -12,7 +12,7 @@ mod task_pilot;
 
 use chrono::Utc;
 use clap::{Parser, error::ErrorKind};
-use orbit_core::runtime::run_audit::RunAuditEvent;
+use orbit_core::runtime::audit::run::RunAuditEvent;
 use orbit_core::{OrbitRuntime, V2AuditEventInsertParams};
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};

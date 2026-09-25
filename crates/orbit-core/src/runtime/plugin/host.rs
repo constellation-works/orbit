@@ -8,32 +8,30 @@
 //! untouched.
 
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::SystemTime;
+use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::Value;
 
-use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::Store;
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{
-    LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec,
-    PluginConfigSection, PluginLoadError, PluginTool, PluginToolBinding, PluginValidationPolicy,
-    load_plugin_dir, manifest_digest, refuse_covering_fs_write_roots, validate_loaded_plugin,
+    LoadedPlugin, PluginToolBinding, PluginValidationPolicy, refuse_covering_fs_write_roots,
+    validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, MANIFEST_FILE_NAME, PLUGIN_HOST_API, PluginBackendType, PluginGrantSet,
-    PluginMcpScope, PluginPinFile, PluginProvenance, PluginStatus, SemverRange, Version,
-    parse_stored_grants, plugin_tool_name,
+    InstalledPlugin, PluginMcpScope, PluginProvenance, PluginStatus, parse_stored_grants,
 };
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::{McpToolDefinition, McpToolScope};
+use orbit_types::tool::McpToolScope;
 
-use super::plugin_grants::{verify_install_path, verify_recorded_grants};
+use super::backend::{plugin_backend, plugin_tool};
+use super::cache::load_installed_plugin;
+use super::grants::{verify_install_path, verify_recorded_grants};
+use super::paths::read_pin_file;
+use super::requirements::unmet_requirement;
 
 /// Why a plugin is not on the active tool surface, and what would fix it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,118 +121,6 @@ impl PluginHostLoad {
     }
 }
 
-/// The cheap facts used to decide whether a previously loaded manifest can be
-/// reused without walking its whole install tree again.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PluginManifestStamp {
-    modified: Option<SystemTime>,
-    len: u64,
-    is_file: bool,
-    is_symlink: bool,
-}
-
-impl PluginManifestStamp {
-    fn read(plugin_root: &Path) -> Option<Self> {
-        let metadata = std::fs::symlink_metadata(plugin_root.join(MANIFEST_FILE_NAME)).ok()?;
-        Some(Self {
-            modified: metadata.modified().ok(),
-            len: metadata.len(),
-            is_file: metadata.is_file(),
-            is_symlink: metadata.file_type().is_symlink(),
-        })
-    }
-}
-
-/// One reusable part of a host load.
-///
-/// The exact row is part of the key because enable state, grants, install
-/// path, and recorded digest all affect admission. The manifest stamp is the
-/// common fast path. When only that stamp changes, the bytes are hashed before
-/// the expensive symlink walk: an unchanged digest still names the same
-/// manifest this process already resolved.
-#[derive(Clone)]
-struct CachedPluginLoad {
-    installed: InstalledPlugin,
-    manifest_stamp: Option<PluginManifestStamp>,
-    loaded: Arc<LoadedPlugin>,
-}
-
-/// Process-local manifest half of [`PluginHostLoad`], shared by pre-clap CLI
-/// discovery, runtime construction, and host-global MCP discovery.
-#[derive(Default)]
-struct PluginHostLoadCache {
-    plugins: BTreeMap<PathBuf, CachedPluginLoad>,
-}
-
-static PLUGIN_HOST_LOAD_CACHE: OnceLock<Mutex<PluginHostLoadCache>> = OnceLock::new();
-
-fn plugin_host_load_cache() -> MutexGuard<'static, PluginHostLoadCache> {
-    PLUGIN_HOST_LOAD_CACHE
-        .get_or_init(|| Mutex::new(PluginHostLoadCache::default()))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-}
-
-pub(crate) fn load_installed_plugin(
-    installed: &InstalledPlugin,
-) -> Result<Arc<LoadedPlugin>, PluginLoadError> {
-    let root = PathBuf::from(&installed.install_path);
-    let manifest_stamp = PluginManifestStamp::read(&root);
-    let cached = plugin_host_load_cache().plugins.get(&root).cloned();
-    if let Some(cached) = cached.filter(|cached| cached.installed == *installed) {
-        if cached.manifest_stamp == manifest_stamp {
-            return Ok(cached.loaded);
-        }
-        if std::fs::read(root.join(MANIFEST_FILE_NAME))
-            .ok()
-            .is_some_and(|bytes| manifest_digest(&bytes) == cached.loaded.manifest_digest)
-        {
-            plugin_host_load_cache().plugins.insert(
-                root,
-                CachedPluginLoad {
-                    manifest_stamp,
-                    ..cached.clone()
-                },
-            );
-            return Ok(cached.loaded);
-        }
-    }
-
-    #[cfg(test)]
-    record_plugin_dir_load(&root);
-    let loaded = Arc::new(load_plugin_dir(&root)?);
-    plugin_host_load_cache().plugins.insert(
-        root,
-        CachedPluginLoad {
-            installed: installed.clone(),
-            manifest_stamp,
-            loaded: Arc::clone(&loaded),
-        },
-    );
-    Ok(loaded)
-}
-
-#[cfg(test)]
-static PLUGIN_DIR_LOAD_COUNTS: OnceLock<Mutex<BTreeMap<PathBuf, usize>>> = OnceLock::new();
-
-#[cfg(test)]
-fn record_plugin_dir_load(root: &Path) {
-    let counts = PLUGIN_DIR_LOAD_COUNTS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut counts = counts.lock().unwrap_or_else(PoisonError::into_inner);
-    *counts.entry(root.to_path_buf()).or_default() += 1;
-}
-
-#[cfg(test)]
-pub(super) fn plugin_dir_load_count(root: &Path) -> usize {
-    PLUGIN_DIR_LOAD_COUNTS
-        .get_or_init(|| Mutex::new(BTreeMap::new()))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(root)
-        .copied()
-        .unwrap_or_default()
-}
-
 #[derive(Debug, Default)]
 struct ActiveDefinitionOwners {
     activities: BTreeMap<String, String>,
@@ -245,7 +131,7 @@ impl ActiveDefinitionOwners {
     fn refuse_collision(
         &self,
         namespace: &str,
-        definitions: &super::plugin_definitions::PluginDefinitionSet,
+        definitions: &super::definitions::PluginDefinitionSet,
     ) -> Result<(), String> {
         for (name, _) in &definitions.activities {
             if let Some(owner) = self.activities.get(name) {
@@ -266,11 +152,7 @@ impl ActiveDefinitionOwners {
         Ok(())
     }
 
-    fn record(
-        &mut self,
-        namespace: &str,
-        definitions: &super::plugin_definitions::PluginDefinitionSet,
-    ) {
+    fn record(&mut self, namespace: &str, definitions: &super::definitions::PluginDefinitionSet) {
         for (name, _) in &definitions.activities {
             self.activities.insert(name.clone(), namespace.to_string());
         }
@@ -289,243 +171,8 @@ pub(crate) fn validate_plugin_contributions(
     plugin: &LoadedPlugin,
     plugin_config: &BTreeMap<String, Value>,
 ) -> Result<(), String> {
-    super::plugin_definitions::load_plugin_definitions(
-        plugin,
-        &super::plugin_definitions::shipped_job_names(),
-    )?;
-    super::plugin_config::validate_plugin_config(plugin, plugin_config)
-}
-
-/// Where a plugin lives on this host: `<global>/plugins/<ns>/<version>`.
-pub fn plugin_install_root(global_root: &Path) -> PathBuf {
-    global_root.join("plugins")
-}
-
-/// The one directory this host installs every version of `name` into.
-///
-/// Trusted layout: it is derived from the namespace and the global root, never
-/// from the `plugins` row, so a lifecycle verb can clean up after a row whose
-/// recorded `install_path` it refuses to touch [ORB-12800].
-pub fn plugin_namespace_dir(global_root: &Path, name: &str) -> PathBuf {
-    plugin_install_root(global_root).join(name)
-}
-
-pub fn plugin_install_path(global_root: &Path, name: &str, version: &str) -> PathBuf {
-    plugin_namespace_dir(global_root, name).join(version)
-}
-
-/// Per-plugin state directory handed to the backend as `ORBIT_PLUGIN_STATE`.
-pub fn plugin_state_dir(global_root: &Path, name: &str) -> PathBuf {
-    global_root.join("state").join("plugins").join(name)
-}
-
-/// The workspace's committed pin file, when it has one.
-pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitError> {
-    let Ok(path) = validated_pin_file_path(orbit_dir) else {
-        return Ok(None);
-    };
-    let Ok(mut file) = orbit_common::fs::io::open_read_only_no_follow(&path) else {
-        return Ok(None);
-    };
-    let Ok(metadata) = file.metadata() else {
-        return Ok(None);
-    };
-    if !metadata.is_file() {
-        return Ok(None);
-    }
-    let mut raw = String::new();
-    if file.read_to_string(&mut raw).is_err() {
-        return Ok(None);
-    }
-    let pins: PluginPinFile = serde_yaml::from_str(&raw).map_err(|error| {
-        OrbitError::InvalidInput(format!("invalid {}: {error}", path.display()))
-    })?;
-    pins.validate()
-        .map_err(|error| OrbitError::InvalidInput(format!("{}: {error}", path.display())))?;
-    Ok(Some(pins))
-}
-
-/// Resolve the runtime-selected `.orbit` directory before appending the fixed
-/// pin filename. The leaf is opened with no-follow semantics by the caller.
-fn validated_pin_file_path(orbit_dir: &Path) -> std::io::Result<PathBuf> {
-    let root = super::validated_existing_config_root(orbit_dir)
-        .map_err(|error| std::io::Error::other(error.to_string()))?
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "plugin pin root does not exist",
-            )
-        })?;
-    if !std::fs::metadata(&root)?.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotADirectory,
-            "plugin pin root is not a directory",
-        ));
-    }
-    Ok(root.join(orbit_types::plugin::PIN_FILE_NAME))
-}
-
-/// Every active plugin tool this host serves, with the scope its manifest
-/// declares.
-///
-/// Host-global by construction: plugin installs are per host, so this answers
-/// without a workspace runtime and is what lets the MCP surface advertise
-/// plugin tools to a session that has not named a workspace yet.
-///
-/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
-/// sections (config layered over itself, no workspace); without it a plugin
-/// whose config schema requires a key only `config.toml` sets is refused
-/// here even though the workspace runtime loads it fine.
-pub fn host_plugin_mcp_definitions(
-    global_root: &Path,
-    audit_db: &Path,
-    plugin_config: &BTreeMap<String, Value>,
-) -> Result<Vec<McpToolDefinition>, OrbitError> {
-    let registry = host_plugin_registry(global_root, audit_db, plugin_config)?.0;
-    registry
-        .mcp_tool_definitions()
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-}
-
-/// One `orbit <ns>` command group, derived from an active plugin's manifest
-/// (design §4.6).
-///
-/// Only an **active** plugin contributes a group: a disabled or refused
-/// plugin has no `orbit <ns>` at all, so `orbit <ns>` is the ordinary
-/// unknown-command error rather than a group whose every call fails.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PluginCliGroup {
-    pub namespace: String,
-    pub version: String,
-    pub description: String,
-    pub verbs: Vec<PluginCliVerb>,
-}
-
-/// One `orbit <ns> <verb>`: the tool it dispatches to and the schema its
-/// flags are derived from.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PluginCliVerb {
-    /// The subcommand name: `cli.verb` when the manifest overrides it.
-    pub verb: String,
-    /// Canonical registry name this subcommand dispatches to.
-    pub tool_name: String,
-    pub description: String,
-    /// The tool's resolved `input_schema`.
-    pub input_schema: Value,
-    /// `cli.positional`, in manifest order.
-    pub positional: Vec<String>,
-    pub mutating: bool,
-}
-
-/// Every `orbit <ns>` group this host serves.
-///
-/// Read host-globally and without a workspace runtime, because the CLI
-/// builds its clap tree before it bootstraps one. A host with no enabled
-/// plugin answers without touching a manifest.
-///
-/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
-/// sections (config layered over itself, no workspace); without it a plugin
-/// whose config schema requires a key only `config.toml` sets is refused
-/// here even though the workspace runtime loads it fine.
-pub fn host_plugin_cli_groups(
-    global_root: &Path,
-    audit_db: &Path,
-    plugin_config: &BTreeMap<String, Value>,
-) -> Result<Vec<PluginCliGroup>, OrbitError> {
-    let store = Store::open_read_only(audit_db)?;
-    if !store
-        .list_plugins()?
-        .iter()
-        .any(|installed| installed.enabled)
-    {
-        return Ok(Vec::new());
-    }
-    let mut registry = ToolRegistry::new();
-    let load = load_host_plugins_without_refusal_audit(
-        global_root,
-        global_root,
-        &store,
-        &mut registry,
-        plugin_config,
-    );
-    Ok(plugin_cli_groups(&load))
-}
-
-/// Project one load pass into its CLI groups.
-pub fn plugin_cli_groups(load: &PluginHostLoad) -> Vec<PluginCliGroup> {
-    let mut groups: Vec<PluginCliGroup> = load
-        .registered
-        .iter()
-        .filter(|entry| entry.status == PluginStatus::Active)
-        .filter_map(|entry| {
-            let plugin = entry.loaded.as_ref()?;
-            let first_party = plugin.manifest.claims_first_party_namespace();
-            let verbs = plugin
-                .tools
-                .iter()
-                .map(|tool| {
-                    let shape = plugin
-                        .manifest
-                        .spec
-                        .tools
-                        .iter()
-                        .find(|declared| declared.name == tool.verb)
-                        .and_then(|declared| declared.cli.as_ref());
-                    PluginCliVerb {
-                        verb: shape
-                            .and_then(|shape| shape.verb.clone())
-                            .unwrap_or_else(|| tool.verb.clone()),
-                        tool_name: plugin_tool_name(plugin.namespace(), &tool.verb, first_party),
-                        description: tool.description.clone(),
-                        input_schema: tool.input_schema.clone(),
-                        positional: shape
-                            .map(|shape| shape.positional.clone())
-                            .unwrap_or_default(),
-                        mutating: tool.execution_kind
-                            == orbit_types::plugin::PluginExecutionKind::Mutating,
-                    }
-                })
-                .collect();
-            Some(PluginCliGroup {
-                namespace: plugin.namespace().to_string(),
-                version: plugin.manifest.metadata.version.clone(),
-                description: plugin.manifest.metadata.description.clone(),
-                verbs,
-            })
-        })
-        .collect();
-    groups.sort_by(|left, right| left.namespace.cmp(&right.namespace));
-    groups
-}
-
-/// A registry holding this host's plugin tools and nothing else.
-///
-/// Namespace validation still runs against the real built-in names, so a
-/// colliding plugin is refused here exactly as it is in a workspace runtime.
-///
-/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
-/// sections (config layered over itself, no workspace); without it a plugin
-/// whose config schema requires a key only `config.toml` sets is refused
-/// here even though the workspace runtime loads it fine, and any
-/// `mcp_scope: global` tool this registry executes renders
-/// `{{config.<key>}}` from manifest defaults only.
-pub fn host_plugin_registry(
-    global_root: &Path,
-    audit_db: &Path,
-    plugin_config: &BTreeMap<String, Value>,
-) -> Result<(ToolRegistry, PluginHostLoad), OrbitError> {
-    let store = Store::open_read_only(audit_db)?;
-    let mut registry = ToolRegistry::new();
-    // No workspace here, so no pin file: the global root holds none, and an
-    // absent pin file is a valid configuration.
-    let load = load_host_plugins_without_refusal_audit(
-        global_root,
-        global_root,
-        &store,
-        &mut registry,
-        plugin_config,
-    );
-    Ok((registry, load))
+    super::definitions::load_plugin_definitions(plugin, &super::definitions::shipped_job_names())?;
+    super::config::validate_plugin_config(plugin, plugin_config)
 }
 
 /// Register every enabled installed plugin, plus one diagnostic per plugin
@@ -547,7 +194,7 @@ pub fn load_host_plugins(
 /// writable runtime load records the refusal audit event. Attempting that
 /// insert here only produces a misleading error about an audit that is
 /// subsequently recorded by the writable pass.
-fn load_host_plugins_without_refusal_audit(
+pub(super) fn load_host_plugins_without_refusal_audit(
     global_root: &Path,
     orbit_dir: &Path,
     store: &Store,
@@ -842,9 +489,9 @@ fn register_installed_plugin(
     // decide alone: two active plugins may not contribute the same catalog
     // name. The store is ordered by namespace, so the first valid owner keeps
     // serving and only the later plugin is refused.
-    let definitions = match super::plugin_definitions::load_plugin_definitions(
+    let definitions = match super::definitions::load_plugin_definitions(
         &plugin,
-        &super::plugin_definitions::shipped_job_names(),
+        &super::definitions::shipped_job_names(),
     ) {
         Ok(definitions) => definitions,
         Err(message) => {
@@ -1068,200 +715,4 @@ pub fn missing_grant_diagnostic(
         installed.name,
         if missing.len() == 1 { "it" } else { "them" },
     ))
-}
-
-/// The backend every tool of this plugin shares: the spec for `exec`, or one
-/// long-lived server proxy for `mcp` (design §4.2).
-pub(crate) fn plugin_backend(
-    global_root: &Path,
-    installed: &InstalledPlugin,
-    plugin: &LoadedPlugin,
-    plugin_config: &BTreeMap<String, Value>,
-) -> PluginBackend {
-    // A row reaching this point either parsed cleanly, or is on the
-    // register-inactive-tools path where the grant set no longer matters
-    // (`unknown_grant_diagnostic` already refused it); either way there is no
-    // error to surface here.
-    let grants = parse_stored_grants(&installed.grants).unwrap_or_default();
-    // `{{config.<key>}}` resolves against the effective section: what the
-    // operator configured in `[plugins.<ns>]`, over what the manifest
-    // defaults (§1).
-    let config = super::plugin_config::plugin_config_section(plugin, plugin_config);
-    build_plugin_backend(
-        plugin,
-        PluginProvenance {
-            name: installed.name.clone(),
-            version: installed.version.clone(),
-            manifest_digest: plugin.manifest_digest.clone(),
-            // The audit row carries the set as recorded, scopes included:
-            // "ran with `fs`" and "ran with `fs` narrowed to one directory"
-            // are different facts about the same call (design §4.4).
-            grants: grants.to_recorded(),
-        },
-        &plugin_state_dir(global_root, &installed.name),
-        global_root,
-        grants,
-        config,
-    )
-}
-
-/// Construct the backend shared by runtime registration and conformance.
-pub(crate) fn build_plugin_backend(
-    plugin: &LoadedPlugin,
-    provenance: PluginProvenance,
-    state_dir: &Path,
-    global_root: &Path,
-    grants: PluginGrantSet,
-    config: PluginConfigSection,
-) -> PluginBackend {
-    let spec = Arc::new(PluginBackendSpec {
-        provenance,
-        plugin_root: plugin.root.clone(),
-        state_dir: state_dir.to_path_buf(),
-        global_root: global_root.to_path_buf(),
-        command: plugin.backend_command.clone(),
-        args: plugin.manifest.spec.backend.args.clone(),
-        timeout_ms: plugin.manifest.spec.backend.timeout_ms,
-        sandbox: plugin.manifest.spec.backend.sandbox,
-        permissions: plugin.manifest.spec.permissions.clone(),
-        programs: plugin.manifest.spec.requires.programs.clone(),
-        config,
-        grants,
-    });
-    match plugin.manifest.spec.backend.backend_type {
-        PluginBackendType::Exec => PluginBackend::Exec(spec),
-        PluginBackendType::Mcp => {
-            let expected = plugin
-                .tools
-                .iter()
-                .map(|tool| McpExpectedTool {
-                    verb: tool.verb.clone(),
-                    input_schema: tool
-                        .input_schema_declared
-                        .then(|| tool.input_schema.clone()),
-                })
-                .collect();
-            PluginBackend::Mcp(Arc::new(McpBackend::new(spec, expected)))
-        }
-    }
-}
-
-fn plugin_tool(
-    plugin: &LoadedPlugin,
-    tool: &orbit_tools::plugin::ResolvedPluginTool,
-    name: &str,
-    binding: Arc<PluginToolBinding>,
-    backend: PluginBackend,
-) -> PluginTool {
-    PluginTool {
-        name: name.to_string(),
-        verb: tool.verb.clone(),
-        description: plugin_tool_description(plugin, tool),
-        parameters: tool.parameters.clone(),
-        execution_kind: tool.execution_kind,
-        output_schema: tool.output_schema.clone(),
-        binding,
-        backend,
-    }
-}
-
-/// A plugin tool's own description, with the plugin named so an agent
-/// reading `tools/list` can tell where the tool came from.
-fn plugin_tool_description(
-    plugin: &LoadedPlugin,
-    tool: &orbit_tools::plugin::ResolvedPluginTool,
-) -> String {
-    let attribution = format!(
-        "Provided by the '{}' plugin v{}.",
-        plugin.namespace(),
-        plugin.manifest.metadata.version
-    );
-    if tool.description.trim().is_empty() {
-        attribution
-    } else {
-        format!("{} {attribution}", tool.description.trim())
-    }
-}
-
-/// `requires.orbit` / `requires.host_api` / `requires.platforms` against this
-/// binary and machine. `None` means every requirement holds.
-///
-/// `host_api` one major behind [`PLUGIN_HOST_API`] is a requirement that
-/// holds, not a mismatch (§4.8's compatibility window): the plugin still
-/// registers, and [`host_api_deprecation`] is what surfaces the nudge to
-/// rebuild for the current major. Every other value — ahead of this host, or
-/// more than one major behind — refuses, same as an exact-match check would.
-pub fn unmet_requirement(plugin: &LoadedPlugin) -> Option<String> {
-    let requires = &plugin.manifest.spec.requires;
-    if let Some(host_api) = requires.host_api
-        && host_api != PLUGIN_HOST_API
-        && Some(host_api) != PLUGIN_HOST_API.checked_sub(1)
-    {
-        return Some(format!(
-            "plugin '{}' requires host_api {host_api}; this Orbit speaks {PLUGIN_HOST_API}. \
-             Install a build of the plugin for this host API.",
-            plugin.namespace()
-        ));
-    }
-    if let Some(range) = &requires.orbit {
-        let host_version = host_version();
-        match SemverRange::parse(range) {
-            Ok(range) if !range.matches(&host_version) => {
-                return Some(format!(
-                    "plugin '{}' requires orbit {range}; this host is {host_version}. Upgrade \
-                     Orbit or install a plugin version that supports it.",
-                    plugin.namespace()
-                ));
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return Some(format!(
-                    "plugin '{}' declares an unreadable `requires.orbit`: {error}",
-                    plugin.namespace()
-                ));
-            }
-        }
-    }
-    let platform = current_platform();
-    if !requires.platforms.is_empty()
-        && !requires
-            .platforms
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(platform))
-    {
-        return Some(format!(
-            "plugin '{}' supports {} only; this machine is {platform}.",
-            plugin.namespace(),
-            requires.platforms.join(", ")
-        ));
-    }
-    None
-}
-
-/// Whether `plugin` is running on [`unmet_requirement`]'s previous-major
-/// grace: still active, but built for a `host_api` this host will refuse
-/// once it drops the grace window. `orbit plugin doctor` reports this so the
-/// deprecation is visible before the plugin actually breaks.
-pub fn host_api_deprecation(plugin: &LoadedPlugin) -> Option<String> {
-    let host_api = plugin.manifest.spec.requires.host_api?;
-    if Some(host_api) == PLUGIN_HOST_API.checked_sub(1) {
-        return Some(format!(
-            "plugin '{}' declares host_api {host_api}; this Orbit speaks {PLUGIN_HOST_API} and \
-             keeps the previous major working for now, but a future release will refuse it. \
-             Install a build of the plugin for host_api {PLUGIN_HOST_API}.",
-            plugin.namespace()
-        ));
-    }
-    None
-}
-
-/// This binary's version, as `requires.orbit` compares against it.
-pub fn host_version() -> Version {
-    env!("CARGO_PKG_VERSION")
-        .parse()
-        .unwrap_or_else(|_| Version::new(0, 0, 0))
-}
-
-fn current_platform() -> &'static str {
-    std::env::consts::OS
 }

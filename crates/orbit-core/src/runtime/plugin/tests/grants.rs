@@ -1,4 +1,4 @@
-//! Sibling tests for `plugin_grants.rs`: the integrity value states which
+//! Sibling tests for `grants.rs`: the integrity value states which
 //! grants were authorized and for which plugin, and a row it does not cover is
 //! never verified into authority [ORB-12778].
 
@@ -6,11 +6,11 @@ use std::path::Path;
 
 use orbit_types::plugin::InstalledPlugin;
 
-use super::super::plugin_grants::{
+use super::super::grants::{
     plugin_grant_witness_path, plugin_grants_digest, record_authorized_grants, verify_install_path,
     verify_recorded_grants,
 };
-use super::super::plugin_host::plugin_install_path;
+use super::super::paths::plugin_install_path;
 
 fn record(name: &str, enabled: bool, grants: &[&str]) -> InstalledPlugin {
     InstalledPlugin {
@@ -246,8 +246,7 @@ fn an_install_path_is_accepted_only_strictly_beneath_the_namespace_install_dir()
         // A link left inside the namespace directory — by an operator, or by
         // the `current` entry an Orbit before ORB-12823 wrote there — is
         // resolved physically, so its target is what decides.
-        let alias =
-            super::super::plugin_host::plugin_namespace_dir(global_root, "demo").join("previous");
+        let alias = super::super::paths::plugin_namespace_dir(global_root, "demo").join("previous");
         std::os::unix::fs::symlink(&versioned, &alias).expect("link alias");
         verify_install_path(global_root, &record_at("demo", &alias))
             .expect("a link onto a version directory resolves into the install root");

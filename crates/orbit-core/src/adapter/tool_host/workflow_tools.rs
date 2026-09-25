@@ -8,7 +8,7 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
-use crate::runtime::run_audit::{
+use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
     RunRecoveryAttempts,
 };

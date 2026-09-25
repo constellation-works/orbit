@@ -1,4 +1,4 @@
-//! Sibling tests for `plugin_host.rs`: one broken plugin must not take the
+//! Sibling tests for `host.rs`: one broken plugin must not take the
 //! runtime, the built-ins, or another plugin down with it (design §4.9).
 
 use std::collections::BTreeMap;
@@ -7,56 +7,19 @@ use std::sync::{Arc, Mutex};
 
 use orbit_store::Store;
 use orbit_tools::ToolRegistry;
-use orbit_tools::plugin::{load_plugin_dir, refuse_covering_fs_write_roots, render_fs_roots};
-use orbit_types::plugin::{
-    InstalledPlugin, PIN_FILE_NAME, PLUGIN_HOST_API, PluginGrant, PluginGrantSet, PluginPinFile,
-    PluginProvenance, PluginStatus, PluginTemplateVars,
-};
+use orbit_tools::plugin::load_plugin_dir;
+use orbit_types::plugin::{InstalledPlugin, PLUGIN_HOST_API, PluginStatus};
 use orbit_types::telemetry::AuditEventStatus;
 
 use crate::OrbitRuntime;
 use crate::application::plugin::list_plugins;
 
-use super::super::plugin_grants::{plugin_grant_witness_path, record_authorized_grants};
-use super::super::plugin_host::{
-    build_plugin_backend, host_api_deprecation, host_plugin_cli_groups, host_plugin_registry,
-    load_host_plugins, plugin_backend, plugin_dir_load_count, plugin_install_path,
-    plugin_state_dir, read_pin_file, unmet_requirement,
-};
-
-#[test]
-fn read_pin_file_preserves_valid_fixed_leaf_reads() {
-    let root = tempfile::tempdir().expect("tempdir");
-    std::fs::write(
-        root.path().join(PIN_FILE_NAME),
-        "schemaVersion: 1\nplugins: []\n",
-    )
-    .expect("write pin file");
-
-    assert_eq!(
-        read_pin_file(root.path()).expect("read pin file"),
-        Some(PluginPinFile::default())
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn read_pin_file_does_not_follow_a_symlinked_leaf() {
-    use std::os::unix::fs::symlink;
-
-    let root = tempfile::tempdir().expect("tempdir");
-    let orbit_dir = root.path().join(".orbit");
-    std::fs::create_dir(&orbit_dir).expect("create workspace state directory");
-    let outside = root.path().join(PIN_FILE_NAME);
-    std::fs::write(&outside, "schemaVersion: 1\nplugins: []\n").expect("write target pin file");
-    symlink(&outside, orbit_dir.join(PIN_FILE_NAME)).expect("link pin file outside state root");
-
-    assert_eq!(
-        read_pin_file(&orbit_dir).expect("read pin file"),
-        None,
-        "the fixed pin filename must not redirect through a symlink"
-    );
-}
+use super::super::cache::plugin_dir_load_count;
+use super::super::discovery::{host_plugin_cli_groups, host_plugin_registry};
+use super::super::grants::{plugin_grant_witness_path, record_authorized_grants};
+use super::super::host::load_host_plugins;
+use super::super::paths::plugin_install_path;
+use super::super::requirements::{host_api_deprecation, unmet_requirement};
 
 fn write_plugin(root: &Path, name: &str, requires: &str) {
     write_plugin_verb(root, name, "hello", requires);
@@ -85,85 +48,6 @@ fn write_plugin_verb(root: &Path, name: &str, verb: &str, requires: &str) {
     .expect("write manifest");
 }
 
-/// A plugin whose `[plugins.<ns>]` schema declares `index_dir`, optionally
-/// `required`, and an optional manifest default — the ORB-12826 fixture: a
-/// key the operator can only satisfy through `config.toml`'s global section
-/// when the schema requires it and the manifest ships no default. The tool is
-/// `mcp_scope: global` so it exercises the same registry
-/// `execute_global_plugin_tool` dispatches through.
-fn write_plugin_with_config(root: &Path, name: &str, required: bool, default: Option<&str>) {
-    std::fs::create_dir_all(root.join("bin")).expect("create bin dir");
-    let backend = root.join("bin/backend.sh");
-    std::fs::write(
-        &backend,
-        "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true,\"output\":{}}'\n",
-    )
-    .expect("write backend");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod backend");
-    }
-    std::fs::create_dir_all(root.join("schemas")).expect("create schema dir");
-    let required_line = if required {
-        "\"required\": [\"index_dir\"],\n  "
-    } else {
-        ""
-    };
-    std::fs::write(
-        root.join("schemas/config.json"),
-        format!(
-            "{{\n  \"type\": \"object\",\n  {required_line}\"properties\": {{\n    \
-             \"index_dir\": {{ \"type\": \"string\" }}\n  }}\n}}\n"
-        ),
-    )
-    .expect("write config schema");
-    let defaults_line = match default {
-        Some(value) => format!("    defaults: {{ index_dir: \"{value}\" }}\n"),
-        None => String::new(),
-    };
-    std::fs::write(
-        root.join("plugin.yaml"),
-        format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: 1.0.0\nspec:\n  \
-             backend:\n    type: exec\n    command: bin/backend.sh\n  config:\n    schema: \
-             schemas/config.json\n{defaults_line}  tools:\n    - name: hello\n      \
-             execution_kind: read_only\n      mcp_scope: global\n"
-        ),
-    )
-    .expect("write manifest");
-}
-
-fn write_plugin_with_typed_config_roots(root: &Path, name: &str) {
-    std::fs::create_dir_all(root.join("bin")).expect("create bin dir");
-    std::fs::create_dir_all(root.join("schemas")).expect("create schema dir");
-    std::fs::write(root.join("bin/backend.sh"), "#!/bin/sh\n").expect("write backend");
-    std::fs::write(
-        root.join("schemas/config.json"),
-        "{\n  \"type\": \"object\",\n  \"properties\": {\n    \
-         \"directory\": { \"type\": \"string\" },\n    \
-         \"port\": { \"type\": \"integer\" },\n    \
-         \"enabled\": { \"type\": \"boolean\" }\n  }\n}\n",
-    )
-    .expect("write config schema");
-    std::fs::write(
-        root.join("plugin.yaml"),
-        format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: 1.0.0\nspec:\n  \
-             backend:\n    type: exec\n    command: bin/backend.sh\n  config:\n    schema: \
-             schemas/config.json\n    defaults: {{ directory: default, port: 7, enabled: true }}\n  \
-             permissions:\n    fs:\n      read:\n        - \"{{{{config.directory}}}}/read\"\n        \
-             - \"{{{{config.port}}}}/read\"\n        - \"{{{{config.enabled}}}}/read\"\n        - \
-             relative/read\n      write:\n        - \"{{{{config.directory}}}}/write\"\n        - \
-             \"{{{{config.port}}}}/write\"\n        - \"{{{{config.enabled}}}}/write\"\n        - \
-             relative/write\n  tools:\n    - name: hello\n      execution_kind: read_only\n      \
-             mcp_scope: workspace\n"
-        ),
-    )
-    .expect("write manifest");
-}
-
 /// The same fixture with `backend.sandbox: none`, so a `unsandboxed` grant in
 /// the row is the only thing between it and an unconfined registration.
 fn write_plugin_unsandboxed(root: &Path, name: &str) {
@@ -180,7 +64,7 @@ fn write_plugin_unsandboxed(root: &Path, name: &str) {
     .expect("write manifest");
 }
 
-fn record(global_root: &Path, name: &str) -> InstalledPlugin {
+pub(super) fn record(global_root: &Path, name: &str) -> InstalledPlugin {
     let install_path = plugin_install_path(global_root, name, "1.0.0");
     let manifest_digest = std::fs::read(install_path.join("plugin.yaml"))
         .map(|bytes| orbit_tools::plugin::manifest_digest(&bytes))
@@ -1294,287 +1178,5 @@ fn fs_write_traversal_to_a_protected_global_path_is_refused_at_registration() {
     assert!(
         registry.has("traversal.hello") && !registry.is_active("traversal.hello"),
         "the refused plugin is visible but inactive"
-    );
-}
-
-#[test]
-fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_conformance() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let plugin_root = temp.path().join("plugin");
-    let global_root = temp.path().join("global");
-    let workspace_root = temp.path().join("workspace");
-    let state_dir = plugin_state_dir(&global_root, "rooted");
-    for dir in [&global_root, &workspace_root, &state_dir] {
-        std::fs::create_dir_all(dir).expect("create phase root");
-    }
-    write_plugin_with_typed_config_roots(&plugin_root, "rooted");
-    let plugin = load_plugin_dir(&plugin_root).expect("load manifest");
-
-    // The string and boolean are effective operator overrides; the integer
-    // stays a typed manifest default. Every phase must stringify all three.
-    let config = BTreeMap::from([(
-        "rooted".to_string(),
-        serde_json::json!({"directory": "../configured", "enabled": false}),
-    )]);
-    let section = super::super::plugin_config::plugin_config_section(&plugin, &config);
-    assert_eq!(
-        section.as_value(),
-        &serde_json::json!({"directory": "../configured", "enabled": false, "port": 7}),
-        "the backend's own view of the section keeps every JSON type"
-    );
-    let config_values = section.rendered_values();
-    assert_eq!(
-        config_values,
-        BTreeMap::from([
-            ("directory".to_string(), "../configured".to_string()),
-            ("enabled".to_string(), "false".to_string()),
-            ("port".to_string(), "7".to_string()),
-        ])
-    );
-
-    let grants = PluginGrantSet::from_grants([PluginGrant::Fs]);
-    let provenance = || PluginProvenance {
-        name: "rooted".to_string(),
-        version: plugin.manifest.metadata.version.clone(),
-        manifest_digest: plugin.manifest_digest.clone(),
-        grants: vec!["fs".to_string()],
-    };
-
-    // `validate_plugin_dir` and conformance both construct their backends
-    // through this builder. Registration additionally derives the same
-    // effective values from the installed row and resolved config.
-    let validate = build_plugin_backend(
-        &plugin,
-        provenance(),
-        &state_dir,
-        &global_root,
-        grants.clone(),
-        section.clone(),
-    );
-    refuse_covering_fs_write_roots(validate.spec(), None).expect("validate roots");
-
-    let installed = InstalledPlugin {
-        name: "rooted".to_string(),
-        version: plugin.manifest.metadata.version.clone(),
-        source: "fixture".to_string(),
-        install_path: plugin_root.to_string_lossy().into_owned(),
-        archive_digest: None,
-        manifest_digest: plugin.manifest_digest.clone(),
-        enabled: true,
-        grants: vec!["fs".to_string()],
-        first_party: false,
-        certified_orbit_version: None,
-        installed_at: String::new(),
-        updated_at: String::new(),
-    };
-    let registration = plugin_backend(&global_root, &installed, &plugin, &config);
-    refuse_covering_fs_write_roots(registration.spec(), None).expect("registration roots");
-
-    let conformance = build_plugin_backend(
-        &plugin,
-        provenance(),
-        &state_dir,
-        &global_root,
-        grants,
-        section,
-    );
-    refuse_covering_fs_write_roots(conformance.spec(), None).expect("conformance roots");
-
-    let render = |backend: &orbit_tools::plugin::PluginBackend| {
-        let spec = backend.spec();
-        let vars = PluginTemplateVars {
-            workspace: Some(workspace_root.to_string_lossy().into_owned()),
-            plugin_root: spec.plugin_root.to_string_lossy().into_owned(),
-            plugin_state: spec.state_dir.to_string_lossy().into_owned(),
-            config: spec.config_values(),
-        };
-        render_fs_roots(spec, &vars).expect("render roots")
-    };
-    let validate_roots = render(&validate);
-    let registration_roots = render(&registration);
-    let conformance_roots = render(&conformance);
-
-    let call_profile = registration
-        .spec()
-        .sandbox_profile(Some(&workspace_root))
-        .expect("call-time profile");
-    assert_eq!(
-        call_profile.read[1..],
-        registration_roots.read,
-        "call time adds only the mandatory plugin-root read before the declared roots"
-    );
-    assert_eq!(call_profile.write, registration_roots.write);
-    assert_eq!(validate_roots, registration_roots);
-    assert_eq!(registration_roots, conformance_roots);
-
-    assert_eq!(
-        registration_roots.read,
-        vec![
-            plugin_root.join("../configured/read"),
-            plugin_root.join("7/read"),
-            plugin_root.join("false/read"),
-            plugin_root.join("relative/read"),
-        ]
-    );
-    assert_eq!(
-        registration_roots.write,
-        vec![
-            plugin_root.join("../configured/write"),
-            plugin_root.join("7/write"),
-            plugin_root.join("false/write"),
-            plugin_root.join("relative/write"),
-        ]
-    );
-}
-
-/// ORB-12826: `host_plugin_cli_groups` and `host_plugin_registry` used to
-/// pass `&BTreeMap::new()` for the plugin config no matter what the caller
-/// resolved, so a plugin's `orbit <ns>` group and MCP `tools/list` entry were
-/// built without ever consulting `config.toml`'s global `[plugins.<ns>]`
-/// section — while the workspace runtime, which threads its resolved config
-/// through, always has it. `index_dir` is schema-`required`; the manifest
-/// ships a placeholder default only because a schema whose defaults do not
-/// self-satisfy it fails to load at all for *any* caller (loader.rs's
-/// `resolve_config_section`), so an unsatisfiable-without-config manifest can
-/// never be installed to demonstrate a load/no-load split. The reachable,
-/// fixed split is the *value* the host surfaces actually carry — this test
-/// proves both surfaces exist and both reflect the global section, not the
-/// placeholder.
-#[test]
-fn a_schema_required_key_set_in_the_global_config_section_gets_a_cli_group_and_mcp_listing() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let global_root = temp.path().join("global");
-    write_plugin_with_config(
-        &plugin_install_path(&global_root, "graph", "1.0.0"),
-        "graph",
-        true,
-        Some("__unset__"),
-    );
-
-    let audit_db = global_root.join("orbit.db");
-    {
-        let store = Store::open(&audit_db).expect("open store");
-        store
-            .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, "graph")))
-            .expect("record the install");
-    }
-
-    let mut plugin_config = std::collections::BTreeMap::new();
-    plugin_config.insert(
-        "graph".to_string(),
-        serde_json::json!({"index_dir": "/var/graph-index"}),
-    );
-
-    let groups = host_plugin_cli_groups(&global_root, &audit_db, &plugin_config)
-        .expect("cli groups load without the workspace runtime");
-    assert!(
-        groups.iter().any(|group| group.namespace == "graph"),
-        "the plugin's `orbit graph` CLI group is present when the host resolves the global \
-         config section: {groups:?}"
-    );
-
-    let (registry, load) =
-        host_plugin_registry(&global_root, &audit_db, &plugin_config).expect("registry loads");
-    assert!(
-        load.is_active("graph"),
-        "the plugin registers active: {:?}",
-        load.diagnostics
-    );
-    let advertised: Vec<String> = registry
-        .mcp_tool_definitions()
-        .expect("mcp definitions")
-        .into_iter()
-        .map(|definition| definition.schema.name)
-        .collect();
-    assert!(
-        advertised.iter().any(|name| name == "graph.hello"),
-        "the plugin's tool is in MCP tools/list: {advertised:?}"
-    );
-
-    // Both surfaces are built from the same load pass, so the value they
-    // carry proves it came from the passed-in global section, not the
-    // manifest's placeholder — an empty map (the bug) would carry
-    // "__unset__" here instead.
-    let entry = load
-        .registered
-        .iter()
-        .find(|entry| entry.name == "graph")
-        .expect("the plugin is registered");
-    assert_eq!(
-        entry.config_values.get("index_dir").map(String::as_str),
-        Some("/var/graph-index"),
-        "the CLI group and MCP listing are for a plugin resolved with the global section's \
-         value, not the manifest placeholder: {:?}",
-        entry.config_values
-    );
-}
-
-/// ORB-12826: `execute_global_plugin_tool` builds its registry through
-/// `host_plugin_registry`, which used to ignore `config.toml`'s global
-/// section entirely. A `mcp_scope: global` tool's backend renders
-/// `{{config.<key>}}` from `RegisteredPlugin::config_values` — "what the
-/// backend and the manifest's templates see" — so the value that dispatch
-/// path's child process would receive is exactly this map. Before the fix it
-/// held only the manifest default; after the fix it holds the global
-/// section's override.
-#[test]
-fn a_global_scope_tool_renders_config_from_the_global_section_over_the_manifest_default() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let global_root = temp.path().join("global");
-    write_plugin_with_config(
-        &plugin_install_path(&global_root, "graph", "1.0.0"),
-        "graph",
-        false,
-        Some(".index"),
-    );
-
-    let audit_db = global_root.join("orbit.db");
-    {
-        let store = Store::open(&audit_db).expect("open store");
-        store
-            .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, "graph")))
-            .expect("record the install");
-    }
-
-    let mut plugin_config = std::collections::BTreeMap::new();
-    plugin_config.insert(
-        "graph".to_string(),
-        serde_json::json!({"index_dir": "/var/graph-index"}),
-    );
-
-    let (_, load) =
-        host_plugin_registry(&global_root, &audit_db, &plugin_config).expect("registry loads");
-    let entry = load
-        .registered
-        .iter()
-        .find(|entry| entry.name == "graph")
-        .expect("the plugin is registered");
-    assert_eq!(
-        entry.config_values.get("index_dir").map(String::as_str),
-        Some("/var/graph-index"),
-        "the global section's value reaches the child, not the manifest default: {:?}",
-        entry.config_values
-    );
-
-    // Without the resolved global config, the same dispatch path fell back to
-    // the manifest default — the divergence ORB-12826 describes between the
-    // workspace and global-tool execution paths.
-    let (_, load_without_config) =
-        host_plugin_registry(&global_root, &audit_db, &std::collections::BTreeMap::new())
-            .expect("registry still opens");
-    let entry_without_config = load_without_config
-        .registered
-        .iter()
-        .find(|entry| entry.name == "graph")
-        .expect("the plugin is registered");
-    assert_eq!(
-        entry_without_config
-            .config_values
-            .get("index_dir")
-            .map(String::as_str),
-        Some(".index"),
-        "sanity check: an empty config map falls back to the manifest default, confirming the \
-         assertion above depends on the fix: {:?}",
-        entry_without_config.config_values
     );
 }

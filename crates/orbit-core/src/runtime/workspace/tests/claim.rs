@@ -16,7 +16,7 @@ use crate::adapter::tool_host::test_support::{
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
-use crate::runtime::workspace_claim::CLAIM_TOKEN_ENV;
+use crate::runtime::workspace::claim::CLAIM_TOKEN_ENV;
 
 /// Acquire the claim and return its token.
 fn acquire_claim(runtime: &OrbitRuntime, actor: &str) -> String {

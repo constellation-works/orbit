@@ -24,7 +24,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::redact_sensitive_env_text;
-use crate::runtime::plugin_grants::verify_install_path;
+use crate::runtime::plugin::grants::verify_install_path;
 use crate::runtime::run_input::{
     managed_run_context_from_env, managed_run_context_run_id_from_env,
 };

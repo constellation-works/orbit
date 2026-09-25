@@ -29,7 +29,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ExecutionResult;
 use serde_json::json;
 
-use super::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
+use super::audit::coordination::{CoordinationAuditEvent, record_coordination_audit_event};
 use crate::OrbitRuntime;
 
 const COMMAND_TOOL_NAME: &str = "orbit.command.exec";

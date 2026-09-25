@@ -594,7 +594,7 @@ Mismatched output falls back to `json`; `group` is a presentation hint.
 
 - `requires.host_api` must equal the host's `PLUGIN_HOST_API` or be one major behind it; one
   behind still registers, and `doctor` prints a deprecation. Anything else refuses
-  (`unmet_requirement` in `orbit-core/src/runtime/plugin_host.rs`).
+  (`unmet_requirement` in `orbit-core/src/runtime/plugin/requirements.rs`).
 - `requires.orbit` is checked on `enable` and again at runtime build; a mismatch after an
   upgrade flips the plugin Inactive with a diagnostic rather than failing the runtime.
 - v1 `*.orbit-tool.yaml` sidecars and `orbit tool add` keep working;

@@ -1,5 +1,5 @@
 use clap::Args;
-use orbit_core::runtime::run_audit::RunProviderProcess;
+use orbit_core::runtime::audit::run::RunProviderProcess;
 use orbit_core::{CatalogReferenceLayer, NotFoundKind, OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 

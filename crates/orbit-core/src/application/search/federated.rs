@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use orbit_common::OrbitError;
 
 use crate::OrbitRuntime;
-use crate::runtime::workspace_catalog::{
+use crate::runtime::workspace::catalog::{
     FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
 };
 

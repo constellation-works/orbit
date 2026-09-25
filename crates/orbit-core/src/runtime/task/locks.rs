@@ -24,7 +24,9 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::runtime::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
+use crate::runtime::audit::coordination::{
+    CoordinationAuditEvent, record_coordination_audit_event,
+};
 use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 
 pub(crate) const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
