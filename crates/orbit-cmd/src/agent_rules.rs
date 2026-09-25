@@ -46,16 +46,36 @@ pub struct InjectAgentRulesResult {
 /// A target that is a symlink (commonly `CLAUDE.md -> AGENTS.md`) is written
 /// through to the file it names: the atomic rename would otherwise replace
 /// the link with a copy, and both names would then drift apart. A file
-/// reached through more than one name is written once.
+/// reached through more than one name is written once. Links outside the
+/// workspace are rejected before either guide is changed.
 pub fn inject_agent_rules(workspace_root: &Path) -> Result<InjectAgentRulesResult, OrbitError> {
     let block = normalized_block(AGENT_RULES_TEMPLATE)?;
-    let mut outcomes: Vec<InjectionOutcome> = Vec::with_capacity(TARGET_FILES.len());
+    let root = std::fs::canonicalize(workspace_root)
+        .map_err(|e| OrbitError::Io(format!("resolve {}: {e}", workspace_root.display())))?;
+    let mut targets = Vec::with_capacity(TARGET_FILES.len());
     for name in TARGET_FILES {
-        let name = workspace_root.join(name);
-        let path = std::fs::canonicalize(&name).unwrap_or(name);
-        if outcomes.iter().any(|outcome| outcome.path == path) {
-            continue;
+        let guide = root.join(name);
+        let path = match std::fs::symlink_metadata(&guide) {
+            Ok(_) => std::fs::canonicalize(&guide)
+                .map_err(|e| OrbitError::Io(format!("resolve {}: {e}", guide.display())))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => guide.clone(),
+            Err(e) => return Err(OrbitError::Io(format!("inspect {}: {e}", guide.display()))),
+        };
+        if !path.starts_with(&root) {
+            return Err(OrbitError::InvalidInput(format!(
+                "{} resolves outside workspace {} to {} — refusing to inject agent rules",
+                guide.display(),
+                root.display(),
+                path.display()
+            )));
         }
+        if !targets.contains(&path) {
+            targets.push(path);
+        }
+    }
+
+    let mut outcomes: Vec<InjectionOutcome> = Vec::with_capacity(TARGET_FILES.len());
+    for path in targets {
         let action = apply_to_file(&path, &block)?;
         outcomes.push(InjectionOutcome { path, action });
     }
