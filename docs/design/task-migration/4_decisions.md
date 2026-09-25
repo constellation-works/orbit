@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Task authority is per prefix, not per host
 
 **Recorded:** 2026-09 · [ORB-12126]
-**Code anchors:** `crates/orbit-store/src/workflow/task/mod.rs::import_tasks`, `crates/orbit-cmd/src/registry/runtime/selection.rs::sync_task_prefix`
+**Code anchors:** `crates/orbit-store/src/workflow/task/import.rs::import_tasks`, `crates/orbit-cmd/src/registry/runtime/selection.rs::sync_task_prefix`
 
 ### Context
 
@@ -85,7 +85,7 @@ unreachable; it never falls back to the local prefix.
 ## Disjoint id ranges (superseded by prefixes)
 
 **Recorded:** 2026-07 · [ORB-00034] · superseded 2026-08 by [ORB-10721]
-**Code anchors:** `crates/orbit-config/src/raw.rs` (`[tasks] id_start`), `crates/orbit-store/src/driver/sqlite/task_registry/store.rs`
+**Code anchors:** `crates/orbit-config/src/raw.rs` (`[tasks] id_start`), `crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs`
 
 ### Context
 

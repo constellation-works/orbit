@@ -310,3 +310,42 @@ fn validate_migration_name(feature: &str, version: u32, name: &str) -> Result<()
         "feature migration '{feature}' v{version} has an invalid name; names must be normalized, non-empty, control-free, and at most {MIGRATION_NAME_MAX_BYTES} bytes"
     )))
 }
+
+/// v9 `feature_schema_ledger` migration (ORB-10319): generic append-only
+/// migration ledger for vertical feature crates. Feature versions advance
+/// independently from the Store-global schema after this one-time ownership
+/// boundary and are recorded transactionally with their feature-owned DDL.
+pub(super) fn apply_feature_schema_ledger(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS feature_schema_meta (
+                feature    TEXT NOT NULL,
+                version    INTEGER NOT NULL,
+                name       TEXT NOT NULL,
+                applied_at TEXT NOT NULL,
+                PRIMARY KEY(feature, version),
+                CHECK (length(feature) > 0 AND feature = trim(feature)),
+                CHECK (
+                    typeof(version) = 'integer'
+                    AND version > 0
+                    AND version <= 4294967295
+                ),
+                CHECK (length(name) > 0 AND name = trim(name)),
+                CHECK (length(applied_at) > 0)
+            );
+
+            CREATE TRIGGER IF NOT EXISTS feature_schema_meta_immutable_update
+            BEFORE UPDATE ON feature_schema_meta
+            BEGIN
+                SELECT RAISE(ABORT, 'feature schema migration records are immutable');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS feature_schema_meta_immutable_delete
+            BEFORE DELETE ON feature_schema_meta
+            BEGIN
+                SELECT RAISE(ABORT, 'feature schema migration records are append-only');
+            END;
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}

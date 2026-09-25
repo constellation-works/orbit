@@ -16,7 +16,8 @@ use crate::driver::sqlite::audit_event_store::incident::{
     normalize_message, signature_for,
 };
 
-use super::super::AuditEventInsertParams;
+use crate::AuditEventFilter;
+use crate::contracts::AuditEventInsertParams;
 
 fn base_ts() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2031, 3, 4, 5, 0, 0)
@@ -629,7 +630,7 @@ fn the_store_query_groups_failures_without_hiding_any_audit_row() {
     assert!(!report.truncated);
 
     let all_rows = store
-        .list_audit_events(&super::super::AuditEventFilter {
+        .list_audit_events(&AuditEventFilter {
             limit: 100,
             ..Default::default()
         })

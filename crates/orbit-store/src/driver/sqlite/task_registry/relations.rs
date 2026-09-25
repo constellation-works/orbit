@@ -11,12 +11,12 @@ use orbit_types::task::{
 };
 use rusqlite::{Connection, params, params_from_iter};
 
+use super::allocator::{
+    active_task_prefix, known_task_prefixes, registered_task_ids, task_prefix_is_registered,
+};
 use super::partition_id::validate_partition_id;
 use super::queries::workspace_by_id;
-use super::store::{
-    TaskRegistryStore, active_task_prefix, known_task_prefixes, registered_task_ids,
-    task_prefix_is_registered,
-};
+use super::store::TaskRegistryStore;
 use super::util::{parse_relation_type_name, relation_type_name};
 use crate::contracts::DanglingRelationTarget;
 

@@ -71,14 +71,14 @@ machine a disjoint id range).
 | Concern | File | Task |
 |---------|------|------|
 | Archive pack/unpack (tar.zst) | [crates/orbit-store/src/workflow/task/archive.rs](../../../crates/orbit-store/src/workflow/task/archive.rs) | [ORB-00034] |
-| Export / validated import + renumber | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-00034] |
+| Export / validated import + renumber | [crates/orbit-store/src/workflow/task/export.rs](../../../crates/orbit-store/src/workflow/task/export.rs), [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-00034] |
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
-| Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/store.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/store.rs) | [ORB-00034], [ORB-10721] |
+| Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs) | [ORB-00034], [ORB-10721] |
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/mod.rs](../../../crates/orbit-cmd/src/registry/runtime/mod.rs) | [ORB-10721] |
 | Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
-| Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/mod.rs](../../../crates/orbit-store/src/workflow/task/mod.rs) | [ORB-12126] |
+| Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-12126] |
 
 ## 4. The migration recipe
 

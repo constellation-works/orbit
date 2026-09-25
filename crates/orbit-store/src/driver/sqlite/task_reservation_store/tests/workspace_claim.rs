@@ -3,7 +3,10 @@
 //! exclusive and TTL-bounded, and the two dimensions stay invisible to each
 //! other.
 
-use super::super::*;
+use crate::Store;
+use crate::TaskReservationReleaseParams;
+use crate::TaskReservationReleaseReason;
+use crate::TaskReservationReserveParams;
 use crate::{WorkspaceClaimAcquireParams, WorkspaceClaimCheckParams, WorkspaceClaimReleaseParams};
 
 fn acquire_params(actor: &str) -> WorkspaceClaimAcquireParams {

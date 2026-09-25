@@ -1,10 +1,5 @@
-mod metrics;
-mod records;
-
-/// [ORB-10367] Insert-bound invocation columns, re-exported for the schema
-/// drift regression test in `sqlite::migration::tests`.
-#[cfg(test)]
-pub(crate) use records::INVOCATION_INSERT_COLUMNS;
+//! `InvocationStoreBackend` for the SQLite `Store`, delegating to the
+//! inherent record and metrics methods.
 
 impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connection::Store {
     fn insert_invocation_trace_record(

@@ -1,2 +1,2 @@
-mod task_reservation_store;
+mod reservations;
 mod workspace_claim;

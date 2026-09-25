@@ -396,7 +396,7 @@ pub enum ClaimMutation {
     Evidence(ClaimEvidence),
     Update(ClaimWorkerUpdate),
     /// Friction allocation and publication share the claim's commit transaction.
-    Friction(super::FrictionAddParams),
+    Friction(super::super::FrictionAddParams),
     /// Legacy serialized shape retained for reading only; new writes are refused.
     Handoff(ClaimEvidence),
     AcceptHandoff(orbit_types::workflow::handoff::TaskHandoff),
@@ -466,7 +466,7 @@ pub struct ClaimMutationResult {
 pub(crate) struct ClaimCommitEffects {
     pub replacements: Vec<(TaskCoordinationRow, TaskCoordinationRow)>,
     pub release_reservation: Option<String>,
-    pub friction: Option<(super::FrictionAddParams, String)>,
+    pub friction: Option<(super::super::FrictionAddParams, String)>,
     pub execution_origin: Option<ExecutionLocation>,
     pub worker_update: Option<ClaimWorkerUpdate>,
 }
