@@ -92,10 +92,6 @@
             <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
           </div>
           <span class="topbar-spacer"></span>
-          <div class="global-id-wrap">
-            <input type="search" id="global-task-id" placeholder="Go to task ID" aria-label="Go to task ID" autocomplete="off" spellcheck="false" />
-            <span id="global-task-id-error" class="global-id-error"></span>
-          </div>
           <button id="refresh-btn" class="refresh-btn" type="button">Refresh</button>
         </header>
 
@@ -105,7 +101,10 @@
           <section class="panel" id="tasks-panel">
             <header class="tasks-head">
               <h2 class="panel-title">Tasks</h2>
-              <input type="search" id="task-search" placeholder="Filter by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" />
+              <div class="task-search-wrap">
+                <input type="search" id="task-search" placeholder="Filter by ID or title" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title" aria-describedby="task-lookup-status" title="Press Enter on a task ID to open it, even outside this list or workspace" />
+                <span id="task-lookup-status" class="task-lookup-status" role="status"></span>
+              </div>
               <span class="count" id="tasks-count">-</span>
             </header>
             <div class="controls">

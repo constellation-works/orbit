@@ -789,23 +789,23 @@ function wireFrictionResponsiveDetail() {
   });
 }
 
-/* Global task ID resolver (ORB-00211 / ORB-11560).
+/* Task ID resolver (ORB-00211 / ORB-11560), on the Tasks search box.
+   Typing filters the list; Enter on a task ID opens that task even when the
+   filter, the page, or the selected workspace hides it.
    GET /api/tasks/:id is workspace-scoped. A raw fetch without ?workspace=
    hits the server default (often not the selected workspace) and reports an
    existing task as not found — the Diagnostics jump failure on ws_orbit.
-   - Only fires on a task id shaped like ^[A-Z]{2,5}-\d+$ (case-insens)
-     after trim/upper.
-   - 250ms debounce; Enter looks up immediately.
+   - Only fires on Enter, on a task id shaped like ^[A-Z]{2,5}-\d+$
+     (case-insens) after trim/upper.
    - Lookup uses the selected workspace first when one is selected; aggregate
      mode probes active workspaces and adopts the owner.
    - Stale replies after a workspace change or a newer lookup are ignored.
    - Not-found is reserved for a confirmed miss; loading / 403 / 5xx / network
      have distinct copy.
 */
-function wireGlobalTaskResolver() {
-  const input = $("global-task-id");
+function wireTaskIdResolver() {
+  const input = $("task-search");
   if (!input) return;
-  let debounce = null;
   let lookupSeq = 0;
   const ID_RE = /^[A-Z]{2,5}-\d+$/i;
 
@@ -820,7 +820,7 @@ function wireGlobalTaskResolver() {
       wrap.classList.remove("error");
       wrap.classList.remove("pending");
     }
-    const err = $("global-task-id-error");
+    const err = $("task-lookup-status");
     if (err) err.textContent = "";
   }
 
@@ -831,7 +831,7 @@ function wireGlobalTaskResolver() {
       wrap.classList.toggle("error", kind === "error");
       wrap.classList.toggle("pending", kind === "pending");
     }
-    const err = $("global-task-id-error");
+    const err = $("task-lookup-status");
     if (err) err.textContent = msg;
   }
 
@@ -988,32 +988,16 @@ function wireGlobalTaskResolver() {
     showLookupStatus("error", `${id} not found`);
   }
 
-  function scheduleLookup() {
-    if (debounce) clearTimeout(debounce);
-    const raw = (input.value || "").trim();
-    if (!raw) {
-      lookupSeq += 1;
-      clearLookupStatus();
-      return;
-    }
-    const candidate = raw.toUpperCase();
-    if (!ID_RE.test(candidate)) {
-      lookupSeq += 1;
-      return;
-    }
-    debounce = setTimeout(() => lookupTask(candidate), 250);
-  }
-
+  // Editing the query abandons any lookup still in flight.
   input.addEventListener("input", () => {
+    lookupSeq += 1;
     clearLookupStatus();
-    scheduleLookup();
   });
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     const candidate = (input.value || "").trim().toUpperCase();
     if (!ID_RE.test(candidate)) return;
     if (event.preventDefault) event.preventDefault();
-    if (debounce) clearTimeout(debounce);
     lookupTask(candidate);
   });
 }
@@ -1669,7 +1653,7 @@ wireSearch(tasksContext);
 wireFrictionSearch();
 wireFrictionStatusFilter();
 wireFrictionResponsiveDetail();
-wireGlobalTaskResolver();
+wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
 $("refresh-btn").addEventListener("click", refreshDashboard);

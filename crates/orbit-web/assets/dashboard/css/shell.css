@@ -5,7 +5,7 @@
    content column that owns its own scrolling. */
 .shell {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: 200px minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -226,8 +226,6 @@
 .kpi-spark path { fill: none; stroke: var(--accent); stroke-width: 1.2px; }
 .kpi-spark .baseline { stroke: var(--hair); stroke-width: 1px; }
 
-.topbar .global-id-wrap { position: relative; display: inline-block; flex: 0 0 auto; }
-
 .refresh-btn {
   height: 32px;
   padding: 0 12px;
@@ -320,11 +318,6 @@
   }
   .kpi-spark { display: none; }
   .kpi-window { display: none; }
-  .global-id-error {
-    white-space: normal;
-    max-width: min(100vw - 24px, 280px);
-    overflow-wrap: anywhere;
-  }
   .tab-pane[data-tab="operations"] .subtabs,
   #operations-subtabs {
     overflow-x: auto;
@@ -444,16 +437,6 @@
   vertical-align: middle;
 }
 
-/* ORB-00211 global resolver (added after task comment; minimal to make input usable in header + error visible + pinned distinguishable) */
-header .global-id-wrap { position: relative; display: inline-block; margin: 0 2px; }
-#global-task-id { width: 142px; height: 26px; font: 12px/1.2 var(--font-mono); background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px; padding: 3px 6px; vertical-align: middle; }
-#global-task-id:focus { border-color: var(--accent); outline: none; }
-#global-task-id.error { border-color: #f66; }
-.global-id-error { position: absolute; top: 28px; left: 0; font-size: 10px; color: #f66; white-space: nowrap; background: var(--bg-elev); border: 1px solid var(--border); padding: 1px 4px; border-radius: 2px; z-index: 150; display: none; }
-.global-id-wrap.error .global-id-error { display: block; }
-.global-id-wrap.pending .global-id-error { display: block; color: var(--fg-dim); }
-.pinned-task-wrap { margin-bottom: 6px; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg-elev); }
-.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); }
 
 main {
   display: grid;

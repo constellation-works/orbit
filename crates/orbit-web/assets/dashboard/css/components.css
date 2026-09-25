@@ -10,7 +10,7 @@
 .panel {
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   overflow: hidden;
   min-width: 0;
 }

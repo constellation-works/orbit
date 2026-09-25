@@ -4704,7 +4704,7 @@ fn dashboard_global_task_jump_scopes_to_selected_workspace_and_distinguishes_err
     let app = include_str!("../../assets/dashboard/app.js");
     let index = include_str!("../../assets/dashboard/index.html");
     assert!(app.contains(r#"const ID_RE = /^[A-Z]{2,5}-\d+$/i;"#));
-    assert!(index.contains(r#"id="global-task-id""#));
+    assert!(index.contains(r#"id="task-lookup-status""#));
 
     run_dashboard_javascript_test(
         r##"
@@ -4784,10 +4784,10 @@ const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((t
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 const tabsStrip = new Node("tabs");
 tabsStrip.className = "tabs";
-const wrap = get("global-id-wrap");
-wrap.className = "global-id-wrap";
-wrap.appendChild(get("global-task-id"));
-wrap.appendChild(get("global-task-id-error"));
+const wrap = get("task-search-wrap");
+wrap.className = "task-search-wrap";
+wrap.appendChild(get("task-search"));
+wrap.appendChild(get("task-lookup-status"));
 globalThis.document = {
   body: new Node("body"),
   hidden: false,
@@ -4924,8 +4924,8 @@ if (getWorkspace() !== "ws_polaris") throw new Error(`selected workspace should 
 if (!get("tasks-body").textContent.includes("Polaris cached task")) throw new Error("initial ws_polaris task cache did not render");
 if (get("rail-count-audit").textContent !== "101") throw new Error(`initial rail count was not scoped to ws_polaris: ${get("rail-count-audit").textContent}`);
 
-const input = get("global-task-id");
-const err = get("global-task-id-error");
+const input = get("task-search");
+const err = get("task-lookup-status");
 function jump(id) {
   input.value = id;
   if (input.listeners.keydown) input.listeners.keydown({ key: "Enter", preventDefault() {} });

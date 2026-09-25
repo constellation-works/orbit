@@ -16,7 +16,27 @@
   min-height: 0;
 }
 .panel > header.tasks-head { flex-wrap: nowrap; padding-block: 10px; }
-.panel > header.tasks-head #task-search { flex: 0 1 260px; margin-left: auto; }
+.panel > header.tasks-head .task-search-wrap { flex: 0 1 260px; margin-left: auto; min-width: 0; }
+.task-search-wrap { position: relative; }
+.task-search-wrap #task-search { width: 100%; }
+.task-search-wrap.error #task-search { border-color: var(--state-failed); }
+
+/* ORB-00211: Enter on a task ID in the search box looks the task up anywhere.
+   Its progress and failures float under the box so the header keeps its
+   height; the element is always present for aria-describedby. */
+.task-lookup-status {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 150;
+  display: none; max-width: min(100vw - 24px, 320px);
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elev); color: var(--state-failed);
+  font-size: 12px; font-weight: 400; overflow-wrap: anywhere;
+}
+.task-search-wrap.error .task-lookup-status { display: block; }
+.task-search-wrap.pending .task-lookup-status { display: block; color: var(--fg-dim); }
+
+/* A task opened by ID that the current filter or page would hide. */
+.pinned-task-wrap { margin-bottom: 6px; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg-elev); }
+.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); }
 .panel > header.tasks-head .count { flex: 0 0 auto; }
 #tasks-panel > .controls { border-bottom: 0; padding-bottom: 6px; }
 
@@ -350,15 +370,18 @@
 #tasks-page-status.error { color: var(--state-error); }
 
 @media (max-width: 760px) {
-  .row {
-    grid-template-columns: 80px minmax(0, 1fr) 108px 96px 84px;
-    gap: 4px 8px;
-  }
   #task-filter { max-width: none; }
 }
 
 @media (max-width: 520px) {
   .task-pagination { justify-content: space-between; padding-inline: 10px; }
+}
+
+/* The one-line row needs about 610px (five columns and their gaps). The
+   panel's own width decides, not the window's: beside the dock on a laptop
+   the panel is often narrower than that while the window is wide. */
+#tasks-panel { container: tasks-panel / inline-size; }
+@container tasks-panel (max-width: 620px) {
   .row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     grid-template-areas:
@@ -377,6 +400,7 @@
   .task-complexity-select {
     max-width: none;
   }
+  #tasks-body .row.header { display: none; }
 }
 
 .row.header {
@@ -461,6 +485,3 @@ main.tasks-layout {
   }
 }
 
-@media (max-width: 520px) {
-  #tasks-body .row.header { display: none; }
-}

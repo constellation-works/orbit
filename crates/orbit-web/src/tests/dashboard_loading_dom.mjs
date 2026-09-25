@@ -79,10 +79,10 @@ const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((t
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 const tabsStrip = new Node("tabs");
 tabsStrip.className = "tabs";
-const wrap = get("global-id-wrap");
-wrap.className = "global-id-wrap";
-wrap.appendChild(get("global-task-id"));
-wrap.appendChild(get("global-task-id-error"));
+const wrap = get("task-search-wrap");
+wrap.className = "task-search-wrap";
+wrap.appendChild(get("task-search"));
+wrap.appendChild(get("task-lookup-status"));
 const documentListeners = {};
 globalThis.document = {
   body: new Node("body"),
