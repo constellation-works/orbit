@@ -248,7 +248,9 @@ impl OrbitRuntime {
     /// [ORB-10002] Orphaned runs (owner process conclusively gone) become
     /// `interrupted`, not `failed`: the job did not fail, its worker died.
     /// Interrupted runs are resumable from their step checkpoints via
-    /// `orbit job resume <run_id>`.
+    /// `orbit job resume <run_id>`. [ORB-12969] Their coupled `in-progress`
+    /// tasks are blocked with a `workflow_run_interrupted` note naming the run
+    /// and error code; the resume re-admits them.
     fn finalize_orphaned_job_run_with_provider_probe<P>(
         &self,
         run_id: &str,
@@ -278,12 +280,16 @@ impl OrbitRuntime {
                 .num_milliseconds()
                 .max(0) as u64
         });
-        let changed = self.finalize_job_run_with_reservation_cleanup(
+        // [ORB-12969] The diagnostic is handed to finalization so the coupled
+        // tasks' interruption block names the error code; the step itself is
+        // recorded below, only once the interrupted write has won.
+        let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
             JobRunState::Interrupted,
             finished_at,
             duration_ms,
             TaskReservationReleaseReason::StaleRunReconciled,
+            Some((&error_code, &message)),
         )?;
         if !changed {
             return Ok(false);

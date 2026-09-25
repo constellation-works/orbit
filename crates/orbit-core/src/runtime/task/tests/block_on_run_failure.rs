@@ -1,10 +1,12 @@
 //! Sibling tests for `block_on_run_failure.rs`: a coupled task is moved
-//! to `blocked` when its `task_pr_pipeline` run terminalizes as a failure, the
-//! transition is idempotent, and it leaves `review`/`done` tasks (and the
-//! workflow-admission allowlist) untouched.
+//! to `blocked` when its `task_pr_pipeline` run terminalizes as a failure or is
+//! interrupted, the transition is idempotent, and it leaves `review`/`done`
+//! tasks (and the workflow-admission allowlist) untouched.
 
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT};
+use orbit_engine::{
+    RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT,
+};
 use orbit_store::{JobRunStepParams, TaskCreateParams, TaskReservationReleaseReason};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
@@ -304,29 +306,118 @@ fn cancelled_pipeline_run_blocks_coupled_task() {
     );
 }
 
+fn finalize_interrupted(runtime: &OrbitRuntime, run_id: &str, diagnostic: Option<(&str, &str)>) {
+    runtime
+        .finalize_job_run_with_reservation_cleanup_and_diagnostic(
+            run_id,
+            JobRunState::Interrupted,
+            Utc::now(),
+            Some(1),
+            TaskReservationReleaseReason::StaleRunReconciled,
+            diagnostic,
+        )
+        .expect("finalize interrupted run");
+}
+
+fn interruption_history_entries(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Vec<orbit_types::task::TaskHistoryEntry> {
+    runtime
+        .get_task_history(task_id)
+        .expect("task history")
+        .into_iter()
+        .filter(|entry| entry.event == WORKFLOW_RUN_INTERRUPTED_EVENT)
+        .collect()
+}
+
+/// [ORB-12969] An interrupted run strands its task just like a failed one:
+/// nothing resumes it automatically. The task is blocked, and the block says
+/// "interrupted" (run id + reconciliation error code), never "failed".
 #[test]
-fn interrupted_pipeline_run_leaves_coupled_task_in_progress() {
+fn interrupted_pipeline_run_blocks_coupled_task_as_an_interruption() {
     let (_root, runtime, repo_root) = test_runtime();
     let task_id = create_backlog_task(&runtime, &repo_root, "interrupted");
     let run = insert_running_pipeline_run(&runtime);
     couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
 
-    // Interrupted runs are resumable from checkpoints — the task must stay
-    // `in_progress` for the resume, not blocked.
-    runtime
-        .finalize_job_run_with_reservation_cleanup(
-            &run.run_id,
-            JobRunState::Interrupted,
-            Utc::now(),
-            Some(1),
-            TaskReservationReleaseReason::StaleRunReconciled,
-        )
-        .expect("finalize interrupted run");
-
-    assert_eq!(
-        runtime.get_task(&task_id).expect("task").status,
-        TaskStatus::InProgress
+    finalize_interrupted(
+        &runtime,
+        &run.run_id,
+        Some((
+            "process_not_found",
+            "recorded worker process is no longer alive",
+        )),
     );
+
+    let task = runtime.get_task(&task_id).expect("task");
+    assert_eq!(task.status, TaskStatus::Blocked);
+    assert_eq!(task.job_run_id.as_deref(), Some(run.run_id.as_str()));
+    assert!(
+        failure_history_entries(&runtime, &task_id).is_empty(),
+        "an interruption must not be recorded as a workflow failure"
+    );
+    let entries = interruption_history_entries(&runtime, &task_id);
+    assert_eq!(
+        entries.len(),
+        1,
+        "exactly one workflow-run-interrupted event"
+    );
+    assert_eq!(entries[0].to_status, Some(TaskStatus::Blocked));
+    let note = entries[0].note.as_deref().unwrap_or_default();
+    assert!(note.contains("interrupted"), "{note}");
+    assert!(note.contains(&format!("run_id={},", run.run_id)), "{note}");
+    assert!(note.contains("error_code=process_not_found"), "{note}");
+}
+
+/// A caller that persists its diagnostic step before terminalizing (the worker
+/// supervisor's startup path) needs no explicit diagnostic: the note reads the
+/// recorded step, as the failure path does.
+#[test]
+fn interrupted_run_note_falls_back_to_the_recorded_step() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task_id = create_backlog_task(&runtime, &repo_root, "interrupted-step");
+    let run = insert_running_pipeline_run(&runtime);
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+    record_failing_step(&runtime, &run.run_id);
+
+    finalize_interrupted(&runtime, &run.run_id, None);
+
+    let entries = interruption_history_entries(&runtime, &task_id);
+    assert_eq!(entries.len(), 1);
+    let note = entries[0].note.as_deref().unwrap_or_default();
+    assert!(note.contains("error_code=STEP_FAILED"), "{note}");
+}
+
+/// [ORB-12969] Protected statuses stay protected for interruptions too.
+#[test]
+fn interrupted_pipeline_run_leaves_protected_statuses_untouched() {
+    for protected in [
+        TaskStatus::Review,
+        TaskStatus::Done,
+        TaskStatus::Rejected,
+        TaskStatus::Archived,
+        TaskStatus::Proposed,
+        TaskStatus::Someday,
+        TaskStatus::Blocked,
+    ] {
+        let (_root, runtime, repo_root) = test_runtime();
+        let task_id = create_backlog_task(&runtime, &repo_root, "protected");
+        let run = insert_running_pipeline_run(&runtime);
+        couple_task(&runtime, &task_id, &run.run_id, protected);
+
+        finalize_interrupted(&runtime, &run.run_id, Some(("process_not_found", "gone")));
+
+        assert_eq!(
+            runtime.get_task(&task_id).expect("task").status,
+            protected,
+            "{protected} must survive an interruption"
+        );
+        assert!(
+            interruption_history_entries(&runtime, &task_id).is_empty(),
+            "{protected} must not be annotated as interrupted"
+        );
+    }
 }
 
 #[test]

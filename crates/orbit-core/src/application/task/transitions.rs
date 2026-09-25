@@ -622,7 +622,7 @@ impl OrbitRuntime {
     /// reconciliation:
     ///
     /// - `blocked` → `in-progress`, undoing the block that the source run's own
-    ///   failure applied. This is a *restoration*, not a fresh admission: the
+    ///   failure or interruption applied. This is a *restoration*, not a fresh admission: the
     ///   lineage already admitted this task (it was `in-progress` under the
     ///   source run), so the plan guard that gates a cold `blocked` → started
     ///   transition does not apply here.

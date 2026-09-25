@@ -199,6 +199,30 @@ impl OrbitRuntime {
         duration_ms: Option<u64>,
         release_reason: TaskReservationReleaseReason,
     ) -> Result<bool, OrbitError> {
+        self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+            release_reason,
+            None,
+        )
+    }
+
+    /// [`Self::finalize_job_run_with_reservation_cleanup`] for a caller that
+    /// records its `(error_code, message)` diagnostic step only after the
+    /// terminal write — orphan reconciliation, which must not leave a step on
+    /// a run a live worker completed first. The diagnostic goes straight into
+    /// the coupled tasks' block note instead of being read back from steps.
+    pub(crate) fn finalize_job_run_with_reservation_cleanup_and_diagnostic(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic: Option<(&str, &str)>,
+    ) -> Result<bool, OrbitError> {
         // Capture the state the run was in *before* finalizing:
         // `finalize_run` reports `changed == true` even when re-finalizing an
         // already-terminal run, so it can't distinguish the terminalizing write
@@ -229,15 +253,16 @@ impl OrbitRuntime {
         if state.is_terminal() {
             self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
             // Coupling-out: block the run's coupled tasks only on the first
-            // terminalization into a failure state. Gating on
+            // terminalization into a failure or interrupted state. Gating on
             // `!was_terminal_before` keeps this idempotent — a replayed
             // terminalization is a no-op and never clobbers a task a human
             // already moved on. Blocking is best-effort so a status-write
             // failure never blocks the run from terminalizing or its
             // reservations/file locks from being released.
-            if !was_terminal_before && super::block_on_run_failure::is_workflow_failure_state(state)
+            if !was_terminal_before
+                && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
             {
-                self.best_effort_block_tasks_for_failed_run(run_id, state);
+                self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
             }
         }
         Ok(changed)
