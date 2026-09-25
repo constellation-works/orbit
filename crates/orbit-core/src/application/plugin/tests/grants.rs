@@ -10,7 +10,7 @@ use super::super::{
     plugin_doctor, show_plugin,
 };
 use super::fixture::{PluginFixture, PluginSpecFixture};
-use crate::runtime::plugin_grants::plugin_grant_witness_path;
+use crate::runtime::plugin::grants::plugin_grant_witness_path;
 
 fn install(fixture: &PluginFixture, spec: PluginSpecFixture<'_>) {
     let source = fixture.write_plugin(spec);

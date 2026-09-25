@@ -13,7 +13,7 @@ use orbit_core::application::job::{
     ActivityInvocationEvidence, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
     job_run_to_json_with_activity_provenance,
 };
-use orbit_core::runtime::run_audit::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
+use orbit_core::runtime::audit::run::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
 use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
 use serde_json::{Value, json};
 

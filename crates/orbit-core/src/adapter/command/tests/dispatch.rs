@@ -20,7 +20,7 @@ use crate::adapter::command::dispatch::{
     override_activity_tools_for_test, reservation_owner_from_env, resolve_audit_context,
     take_tool_audit_recorded, trusted_mcp_audit_context,
 };
-use crate::runtime::plugin_host::plugin_install_path;
+use crate::runtime::plugin::paths::plugin_install_path;
 
 #[test]
 fn dispatch_records_success_audit_with_mcp_subcommand_and_clamped_duration() {

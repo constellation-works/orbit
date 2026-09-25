@@ -12,7 +12,7 @@ use crate::application::search::federated::{
     ensure_federated_scope_permitted, ensure_federated_scope_supported, federated_worker_count,
     with_managed_run_override,
 };
-use crate::runtime::workspace_catalog::{
+use crate::runtime::workspace::catalog::{
     FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
 };
 

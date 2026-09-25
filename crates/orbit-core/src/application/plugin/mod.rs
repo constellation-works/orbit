@@ -23,12 +23,12 @@ pub(crate) mod skills;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use crate::runtime::plugin_definitions::shipped_job_names;
+pub(crate) use crate::runtime::plugin::definitions::shipped_job_names;
 /// The definition rules and the provenance header live in the runtime kernel:
 /// the plugin host applies them while it builds the tool surface, and the
 /// lifecycle here reads the same rules when it seeds. Re-exported so one
 /// import path serves the whole use case.
-pub use crate::runtime::plugin_definitions::{
+pub use crate::runtime::plugin::definitions::{
     PluginDefinition, PluginDefinitionSet, load_plugin_definitions, read_definition_provenance,
     seeded_definition_name,
 };

@@ -2,7 +2,7 @@
 type: runbook
 summary: Query and interpret Orbit invocation, run, step, and activity audit history.
 tags: [operations, audit, observability, debugging]
-paths: ["crates/orbit-core/src/runtime/run_audit.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
+paths: ["crates/orbit-core/src/runtime/audit/run.rs", "crates/orbit-core/src/runtime/audit/run_projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
 last_validated: 2026-09-16

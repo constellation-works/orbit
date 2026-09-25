@@ -101,7 +101,7 @@ pub use application::workspace_sync::{
     WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,
 };
 pub use context::ActorIdentity;
-pub use runtime::workspace_catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
+pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
 pub use application::auto_tasks::{AutoTaskAddParams, AutoTaskUpdateParams};

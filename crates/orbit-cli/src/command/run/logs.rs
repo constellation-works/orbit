@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::application::job::PipelineWorkerLogSnapshot;
-use orbit_core::runtime::run_audit::RunCliInvocationRecord;
+use orbit_core::runtime::audit::run::RunCliInvocationRecord;
 use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
 

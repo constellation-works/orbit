@@ -13,15 +13,16 @@ use orbit_types::plugin::{
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_grants::{
+use crate::runtime::plugin::grants::{
     forget_authorized_grants, record_authorized_grants, verify_install_path,
 };
-use crate::runtime::plugin_host::{plugin_namespace_dir, projected_status, read_pin_file};
+use crate::runtime::plugin::host::projected_status;
+use crate::runtime::plugin::paths::{plugin_namespace_dir, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
 use super::skills::{PluginSkillLink, link_plugin_skills, unlink_plugin_skills};
-use crate::runtime::plugin_definitions::load_plugin_definitions;
+use crate::runtime::plugin::definitions::load_plugin_definitions;
 
 /// What `orbit plugin enable` was asked to do beyond recording grants.
 #[derive(Debug, Clone, Default)]
@@ -39,7 +40,7 @@ pub struct PluginEnableOptions {
 /// operator-facing refusal that says why it may not.
 ///
 /// The `plugins` row is writable by any backend holding `orbit_tools` (see the
-/// `runtime::plugin_grants` module docs), so `install_path` is authority only
+/// `runtime::plugin::grants` module docs), so `install_path` is authority only
 /// once it has been held to the install root — the same check the loader
 /// applies before it reads the tree [ORB-12785]. Callers run this *before*
 /// their first mutation: a refused row is the one an operator most needs to be

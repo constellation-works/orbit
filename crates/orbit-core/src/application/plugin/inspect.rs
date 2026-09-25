@@ -20,11 +20,11 @@ use orbit_types::plugin::{
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_config::plugin_config_section;
-use crate::runtime::plugin_host::{
-    build_plugin_backend, host_api_deprecation, load_installed_plugin, plugin_backend,
-    plugin_state_dir, read_pin_file, unmet_requirement,
-};
+use crate::runtime::plugin::backend::{build_plugin_backend, plugin_backend};
+use crate::runtime::plugin::cache::load_installed_plugin;
+use crate::runtime::plugin::config::plugin_config_section;
+use crate::runtime::plugin::paths::{plugin_state_dir, read_pin_file};
+use crate::runtime::plugin::requirements::{host_api_deprecation, unmet_requirement};
 
 /// One plugin tool as the CLI reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,7 +452,7 @@ fn stale_seeded_definition_rows(
                 continue;
             }
             let Some((namespace, seeded_version)) =
-                crate::runtime::plugin_definitions::read_definition_provenance(&path)
+                crate::runtime::plugin::definitions::read_definition_provenance(&path)
             else {
                 continue;
             };

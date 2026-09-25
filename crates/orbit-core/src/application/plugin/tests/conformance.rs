@@ -11,7 +11,7 @@ use crate::OrbitRuntime;
 use crate::application::plugin::{
     PluginAddOptions, PluginTestOptions, PluginTestReport, install_plugin, test_plugin_dir,
 };
-use crate::runtime::plugin_host::host_version;
+use crate::runtime::plugin::requirements::host_version;
 
 /// A plugin whose one tool answers deterministically, with a golden file
 /// that either matches it or deliberately does not.

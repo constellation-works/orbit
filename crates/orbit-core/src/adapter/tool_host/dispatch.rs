@@ -121,12 +121,12 @@ pub(super) fn execute(
             super::workflow_tools::workers(runtime, input, agent, model)
         }
         OrbitBuiltinAction::WorkspaceClaimAcquire => {
-            crate::runtime::workspace_claim::acquire(runtime, input, agent, model)
+            crate::runtime::workspace::claim::acquire(runtime, input, agent, model)
         }
         OrbitBuiltinAction::WorkspaceClaimRelease => {
-            crate::runtime::workspace_claim::release(runtime, input, agent, model)
+            crate::runtime::workspace::claim::release(runtime, input, agent, model)
         }
-        OrbitBuiltinAction::WorkspaceClaimShow => crate::runtime::workspace_claim::show(runtime),
+        OrbitBuiltinAction::WorkspaceClaimShow => crate::runtime::workspace::claim::show(runtime),
     }?;
     super::artifact_redaction::finish_tool_response(
         runtime,

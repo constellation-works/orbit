@@ -1,4 +1,4 @@
-//! Sibling tests for `run_audit.rs` (migrated per ORB-00246 / docs/design-patterns/test_layout.md).
+//! Sibling tests for `run.rs` (migrated per ORB-00246 / docs/design-patterns/test_layout.md).
 
 use crate::{OrbitRuntime, V2AuditEventInsertParams};
 use chrono::{DateTime, Utc};

@@ -37,8 +37,9 @@ use orbit_types::plugin::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_config::plugin_config_section;
-use crate::runtime::plugin_host::{build_plugin_backend, host_version, unmet_requirement};
+use crate::runtime::plugin::backend::build_plugin_backend;
+use crate::runtime::plugin::config::plugin_config_section;
+use crate::runtime::plugin::requirements::{host_version, unmet_requirement};
 
 /// One golden's outcome.
 #[derive(Debug, Clone, PartialEq)]

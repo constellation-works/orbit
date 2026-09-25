@@ -464,7 +464,7 @@ The full reasoning is preserved in [Workflow alone creates shipment commits whil
 ## Provider subprocess liveness is a separate audit event probed at read time
 
 **Recorded:** 2026-07-27 02:57:13.483354Z · [ORB-10496]
-**Paths:** `crates/orbit-engine/src/activity_job/cli_runner/**`, `crates/orbit-core/src/runtime/run_audit.rs`, `crates/orbit-common/src/process/identity.rs`, `crates/orbit-web/src/api/runs.rs`
+**Paths:** `crates/orbit-engine/src/activity_job/cli_runner/**`, `crates/orbit-core/src/runtime/audit/run.rs`, `crates/orbit-common/src/process/identity.rs`, `crates/orbit-web/src/api/runs.rs`
 
 ### Context
 
@@ -496,7 +496,7 @@ Liveness is computed at read time, not stored. `orbit_common::process::identity:
 ## Provider completions correlate by invocation ancestry
 
 **Recorded:** 2026-09-05 · [ORB-11284]
-**Paths:** `crates/orbit-core/src/runtime/run_audit.rs`, `crates/orbit-core/src/runtime/tests/run_audit.rs`
+**Paths:** `crates/orbit-core/src/runtime/audit/run.rs`, `crates/orbit-core/src/runtime/audit/tests/run.rs`
 
 ### Context
 

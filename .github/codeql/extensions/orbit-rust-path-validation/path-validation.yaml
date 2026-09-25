@@ -4,7 +4,7 @@ extensions:
       extensible: barrierModel
     data:
       - [
-          "orbit_core::runtime::plugin_host::validated_pin_file_path",
+          "orbit_core::runtime::plugin::paths::validated_pin_file_path",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
           "manual",
@@ -16,13 +16,13 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_core::runtime::validated_existing_config_root",
+          "orbit_core::runtime::config_path::validated_existing_config_root",
           "ReturnValue",
           "path-injection",
           "manual",
         ]
       - [
-          "orbit_core::runtime::validated_runtime_config_path",
+          "orbit_core::runtime::config_path::validated_runtime_config_path",
           "ReturnValue",
           "path-injection",
           "manual",
@@ -120,7 +120,7 @@ extensions:
       # The helper validates plugin namespaces before using one as a filename;
       # malformed names map to a fixed reserved leaf under the witness directory.
       - [
-          "orbit_core::runtime::plugin_grants::plugin_grant_witness_path",
+          "orbit_core::runtime::plugin::grants::plugin_grant_witness_path",
           "ReturnValue",
           "path-injection",
           "manual",

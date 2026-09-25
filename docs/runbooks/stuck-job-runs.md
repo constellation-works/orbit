@@ -2,7 +2,7 @@
 type: runbook
 summary: Diagnose, cancel, resume, or replay pending and running Orbit job runs.
 tags: [operations, jobs, runs, recovery, debugging]
-paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/run_audit.rs"]
+paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
 last_validated: 2026-09-12

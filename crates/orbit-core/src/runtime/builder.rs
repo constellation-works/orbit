@@ -184,7 +184,7 @@ pub(crate) fn build_context_from_roots(
     load_external_tools(&store, &mut registry)?;
     // Plugins register after the builtins so a namespace collision is caught
     // against the real surface, and each plugin fails closed on its own.
-    let plugin_load = crate::runtime::plugin_host::load_host_plugins(
+    let plugin_load = crate::runtime::plugin::host::load_host_plugins(
         global_root,
         &paths.orbit_dir,
         &store,
@@ -194,7 +194,7 @@ pub(crate) fn build_context_from_roots(
     // Config admission needs the installed plugins' schemas to tell a declared
     // `plugins.<ns>.<key>` from a typo, and a `[plugins.<ns>]` section with no
     // plugin behind it is a warning, never a failed build (§3).
-    crate::runtime::plugin_config::publish_plugin_config_contracts(
+    crate::runtime::plugin::config::publish_plugin_config_contracts(
         &plugin_load
             .active()
             .map(std::sync::Arc::as_ref)

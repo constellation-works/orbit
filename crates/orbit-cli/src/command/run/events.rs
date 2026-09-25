@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::runtime::run_audit::RunAuditEvent;
+use orbit_core::runtime::audit::run::RunAuditEvent;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
