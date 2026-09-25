@@ -68,9 +68,10 @@ def source_contracts(repo: Path):
     }
     mcp_snapshot = json.loads((repo / "crates/orbit-cli/tests/snapshots/mcp_tools_list.json").read_text())
     mcp = {entry["name"] for entry in mcp_snapshot}
-    api_source = (repo / "crates/orbit-web/src/api/mod.rs").read_text()
+    api_source = (repo / "crates/orbit-web/src/api/routes.rs").read_text()
     api = set(re.findall(r'\.route\(\s*"([^"]+)"', api_source))
-    web_source = (repo / "crates/orbit-web/src/lib.rs").read_text()
+    web_source = (repo / "crates/orbit-web/src/serve.rs").read_text()
+    web_source += (repo / "crates/orbit-web/src/assets.rs").read_text()
     dashboard = set(re.findall(r'\.route\(\s*"([^"]+)"', web_source))
     # Embedded dashboard files are routed from the `DASHBOARD_FILES` table; a
     # body is an embedded file or a joined constant such as `DASHBOARD_CSS`.

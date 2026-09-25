@@ -31,7 +31,7 @@ use tempfile::tempdir;
 
 /// Upper bound this test allows between SIGTERM and process exit. Generous
 /// relative to orbit-web's own `SHUTDOWN_GRACE_PERIOD` (10s, see
-/// `crates/orbit-web/src/lib.rs`) so the assertion only fires on a real
+/// `crates/orbit-web/src/serve.rs`) so the assertion only fires on a real
 /// regression back to "hangs until systemd's SIGKILL", not on CI jitter, while
 /// staying far below `orbit-web.service`'s `TimeoutStopUSec=90s`.
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(20);
@@ -40,7 +40,7 @@ const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(20);
 const STARTUP_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Must exceed orbit-web's own `SHUTDOWN_GRACE_PERIOD` (10s, see
-/// `crates/orbit-web/src/lib.rs`) so that outliving it is meaningful evidence:
+/// `crates/orbit-web/src/serve.rs`) so that outliving it is meaningful evidence:
 /// ORB-11255's regression started that grace-period timeout counting down
 /// when serving began rather than when a shutdown signal arrived, so an
 /// unsignaled server was killed at exactly this deadline.

@@ -1,6 +1,6 @@
 //! `orbit web connect <ssh-host>` — client-side SSH-tunnel convenience.
 //!
-//! The dashboard binds loopback-only by design (see [`crate::check_bindable_host`]):
+//! The dashboard binds loopback-only by design (see [`crate::serve::check_bindable_host`]):
 //! it has no authentication, so it must never be exposed to a network directly.
 //! To view a workspace's dashboard from another machine the supported path is
 //! an authenticated SSH tunnel — historically the manual

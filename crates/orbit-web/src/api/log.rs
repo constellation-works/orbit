@@ -76,7 +76,7 @@ fn global_log_stream_gate() -> &'static LogStreamGate {
     GATE.get_or_init(|| LogStreamGate::new(LOG_STREAM_MAX_CONCURRENT))
 }
 
-/// Set once a shutdown signal is received (see [`crate::shutdown_signal`]), so
+/// Set once a shutdown signal is received (see [`crate::serve::shutdown_signal`]), so
 /// every open (and future) `/api/log/stream` polling thread closes on its next
 /// tick instead of running until the client disconnects. An open stream that
 /// outlives the client is exactly the ownership gap that let a live restart
