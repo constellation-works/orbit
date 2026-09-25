@@ -1429,6 +1429,84 @@ fn ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run() {
     );
 }
 
+/// Preparation and other jobs can mention a task without reserving its
+/// delivery. The real shared submission path must still accept that task.
+#[test]
+fn ship_submission_accepts_a_task_listed_by_non_delivery_runs() {
+    let (_root, runtime) = test_runtime();
+    let _worker = WorkerOverride::shell("exit 0");
+    seed_task_auto_pipeline(&runtime);
+    let task_id = add_backlog_task(&runtime);
+    for job_id in ["task_pilot_pipeline", "unrelated_pipeline"] {
+        let run = runtime
+            .stores()
+            .jobs()
+            .insert_job_run(
+                job_id,
+                1,
+                Utc::now(),
+                Some(serde_json::json!({"task_ids": [task_id]})),
+                None,
+            )
+            .expect("insert non-delivery run");
+        assert!(!run.state.is_terminal());
+    }
+
+    let submitted = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&task_id),
+            CompletionPolicy::Review,
+            &[],
+            Some("test"),
+            None,
+        )
+        .expect("non-delivery runs must not block explicit Ship");
+    let run = runtime
+        .show_job_run(&submitted.run_id)
+        .expect("show submitted delivery run");
+    assert_eq!(run.job_id, "task_auto_pipeline");
+    assert_eq!(
+        run.input.as_ref().and_then(|input| input.get("task_ids")),
+        Some(&serde_json::json!([task_id]))
+    );
+}
+
+#[test]
+fn ship_submission_refuses_a_task_carried_by_a_drain_child() {
+    let (_root, runtime) = test_runtime();
+    let task_id = add_backlog_task(&runtime);
+    let gate = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_gate_pipeline",
+            1,
+            Utc::now(),
+            Some(serde_json::json!({"task_ids": [task_id]})),
+            None,
+        )
+        .expect("insert drain child");
+
+    let error = runtime
+        .submit_ship_run(
+            ShipMode::Local,
+            Some("main"),
+            std::slice::from_ref(&task_id),
+            CompletionPolicy::Review,
+            &[],
+            Some("test"),
+            None,
+        )
+        .expect_err("a drain child carrying the task must block explicit Ship");
+    assert!(matches!(
+        error,
+        OrbitError::ShipRunInFlight { task_id: guarded_task, run_id }
+            if guarded_task == task_id && run_id == gate.run_id
+    ));
+}
+
 /// The shared guard is keyed on the explicit selection: an unrelated task is
 /// still shippable while another one is in flight, and auto (backlog-discovery)
 /// mode — which names no tasks — is never keyed and so never refused.

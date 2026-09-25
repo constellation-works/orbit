@@ -68,9 +68,9 @@ pub(super) struct ShipBody {
 /// [ORB-10544] Duplicate dispatch of an explicitly-selected task is refused by
 /// the shared submission path, not here: `submit_ship_run` returns
 /// `OrbitError::ShipRunInFlight` when one of the named tasks is already carried
-/// by a non-terminal run, which `map_runtime_error` projects to this endpoint's
-/// stable 409. Auto (backlog-discovery) mode has no task ids to guard and is
-/// unaffected.
+/// by a non-terminal delivery run, which `map_runtime_error` projects to this
+/// endpoint's stable 409. Auto (backlog-discovery) mode has no task ids to guard
+/// and is unaffected.
 pub(super) async fn ship_workflow_action(
     Ws(runtime): Ws,
     body: Option<Json<ShipBody>>,

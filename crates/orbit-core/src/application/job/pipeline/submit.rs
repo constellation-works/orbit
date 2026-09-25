@@ -5,6 +5,18 @@ use super::*;
 /// enough to spot a duplicate dispatch without walking the whole history.
 const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
 
+/// Jobs that carry a task through delivery or its reservation gate. The
+/// workspace drain and preparation jobs may list task IDs, but do not hold a
+/// task's delivery slot; their dispatched children are listed here instead.
+const SHIP_DELIVERY_JOBS: &[&str] = &[
+    "task_auto_pipeline",
+    "task_gate_pipeline",
+    "task_pr_pipeline",
+    "task_local_pipeline",
+    "task_claimed_pr_pipeline",
+    "task_claimed_local_pipeline",
+];
+
 /// One durable pipeline submission: what to run, with what input, and how the
 /// detached worker will find the definition again.
 pub(crate) struct PipelineSubmission<'a> {
@@ -100,7 +112,7 @@ impl OrbitRuntime {
     ///
     /// [ORB-10544] An explicit task selection is guarded against duplicate
     /// dispatch here rather than in any one adapter: if a named task is already
-    /// carried by a non-terminal run, the submission is refused with
+    /// carried by a non-terminal delivery run, the submission is refused with
     /// [`OrbitError::ShipRunInFlight`] naming that task and run, so two runs
     /// cannot contend for one worktree and task reservation no matter which
     /// surface submitted them. Auto mode has no task ids to key on and is
@@ -260,7 +272,7 @@ impl OrbitRuntime {
         }
         Ok(canonical.into_iter().collect())
     }
-    /// The duplicate-dispatch refusal for the newest non-terminal run already
+    /// The duplicate-dispatch refusal for the newest non-terminal delivery run
     /// carrying one of `task_ids`, or `None` when the selection is free.
     ///
     /// A run's task selection lives in its persisted `input.task_ids`, which is
@@ -278,7 +290,7 @@ impl OrbitRuntime {
             ..Default::default()
         })?;
         Ok(runs.into_iter().find_map(|run| {
-            if run.state.is_terminal() {
+            if run.state.is_terminal() || !SHIP_DELIVERY_JOBS.contains(&run.job_id.as_str()) {
                 return None;
             }
             let task_id = run

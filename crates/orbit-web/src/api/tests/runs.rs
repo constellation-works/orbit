@@ -946,6 +946,43 @@ async fn ship_endpoint_refuses_second_dispatch_while_task_run_is_in_flight() {
 }
 
 #[tokio::test]
+async fn ship_endpoint_accepts_task_listed_by_live_pilot() {
+    substitute_pipeline_worker();
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "task_auto_pipeline");
+    let task_id = runtime
+        .add_task(TaskAddParams {
+            title: "pilot-listed ship fixture".to_string(),
+            description: "pilot lists this backlog task".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed task")
+        .id;
+    let mut pilot = seed_run(
+        &runtime,
+        "jrun-live-pilot",
+        "task_pilot_pipeline",
+        JobRunState::Pending,
+    );
+    pilot.input = Some(json!({ "task_ids": [task_id] }));
+    write_seeded_run(&runtime, &pilot);
+
+    let response = request_ship(
+        runtime.clone(),
+        Some(json!({ "task_ids": [task_id], "mode": "local" })),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    let run_id = payload["run_id"].as_str().expect("submitted run id");
+    assert_ne!(run_id, pilot.run_id);
+    let submitted = runtime.show_job_run(run_id).expect("show submitted run");
+    assert_eq!(submitted.job_id, "task_auto_pipeline");
+}
+
+#[tokio::test]
 async fn ship_endpoint_rejects_duplicate_task_ids() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     write_replay_job(&runtime, "task_auto_pipeline");
