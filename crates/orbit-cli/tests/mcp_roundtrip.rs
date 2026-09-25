@@ -121,29 +121,13 @@ impl McpWorkspace {
             "--task-prefix",
             "TST",
         ];
-        let output = Self::orbit_command(&work, &home)
-            .args(init_args)
-            .output()
-            .expect("run global init");
-        assert!(
-            output.status.success(),
-            "global init failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let output = orbit_ok(Self::orbit_command(&work, &home).args(init_args));
+        assert!(output.status.success());
 
         let mut workspace_init_args = vec!["workspace", "init", "--name", workspace_name];
         workspace_init_args.extend_from_slice(extra_workspace_args);
-        let output = Self::orbit_command(&work, &home)
-            .args(workspace_init_args)
-            .output()
-            .expect("run workspace init");
-        assert!(
-            output.status.success(),
-            "workspace init failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let output = orbit_ok(Self::orbit_command(&work, &home).args(workspace_init_args));
+        assert!(output.status.success());
 
         Self {
             _temp: temp,
@@ -248,15 +232,10 @@ impl McpWorkspace {
     /// `_meta.orbit.workspace`.
     fn initialize(&self, client: &mut McpClient) {
         let workspace = self.work.to_str().expect("utf8 workspace path");
-        let response = client.request(
-            "initialize",
-            json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": { "name": "orbit-mcp-roundtrip-test", "version": "0" },
-                "_meta": { "orbit": { "workspace": workspace } },
-            }),
-        );
+        let response = client.initialize(McpClient::initialize_params(
+            "orbit-mcp-roundtrip-test",
+            Some(workspace),
+        ));
         let result = &response["result"];
         assert_eq!(result["protocolVersion"], "2025-06-18");
         assert_eq!(result["serverInfo"]["name"], "orbit-mcp");
@@ -264,8 +243,20 @@ impl McpWorkspace {
             result["capabilities"]["tools"].is_object(),
             "tools capability missing: {result}"
         );
-        client.notify("notifications/initialized");
     }
+}
+
+/// Run a fixture CLI command in its already-isolated child process and keep
+/// both streams in the failure report. The caller can inspect stdout/stderr.
+fn orbit_ok(command: &mut Command) -> std::process::Output {
+    let output = command.output().expect("run fixture orbit CLI");
+    assert!(
+        output.status.success(),
+        "orbit CLI failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
 }
 
 /// Reserve a loopback port by binding it and letting it go again. This is the
@@ -309,6 +300,31 @@ struct McpClient {
 }
 
 impl McpClient {
+    fn initialize_params(name: &str, workspace: Option<&str>) -> Value {
+        let mut params = json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": name, "version": "0" },
+        });
+        if let Some(workspace) = workspace {
+            params["_meta"] = json!({ "orbit": { "workspace": workspace } });
+        }
+        params
+    }
+
+    /// Complete the standard MCP handshake for a custom server launch.
+    fn initialized(child: Child, params: Value) -> (Self, Value) {
+        let mut client = Self::new(child);
+        let response = client.initialize(params);
+        (client, response)
+    }
+
+    fn initialize(&mut self, params: Value) -> Value {
+        let response = self.request("initialize", params);
+        self.notify("notifications/initialized");
+        response
+    }
+
     fn new(mut child: Child) -> Self {
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
@@ -642,16 +658,11 @@ fn a_replica_mcp_session_enforces_checkout_capability_classes() {
         );
     }
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["friction", "list", "--json"])
-        .output()
-        .expect("list frictions on a replica via CLI");
-    assert!(
-        output.status.success(),
-        "CLI friction list failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["friction", "list", "--json"]),
     );
+    assert!(output.status.success());
     let listed: Value = serde_json::from_slice(&output.stdout).expect("friction list JSON");
     let items = listed.as_array().or_else(|| {
         listed
@@ -806,10 +817,10 @@ fn leftover_caller_authorization_files_are_ignored_rather_than_enforced() {
     drop(client);
 
     // And `orbit doctor` is where the operator is told to delete them.
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["doctor", "--format", "json"])
-        .output()
-        .expect("run orbit doctor");
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["doctor", "--format", "json"]),
+    );
     let rendered = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -956,23 +967,17 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
     std::fs::create_dir_all(workspace.work.join(".claude")).expect("create .claude marker");
 
     let reconcile = || {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .args([
+        let output = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
                 "workspace",
                 "init",
                 "--name",
                 "mcp-roundtrip",
                 "--force",
                 "--mcp",
-            ])
-            .output()
-            .expect("run workspace init --force --mcp");
-        assert!(
-            output.status.success(),
-            "workspace init --force --mcp failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            ]),
         );
+        assert!(output.status.success());
     };
 
     let read_generated_args = || -> Vec<String> {
@@ -1045,16 +1050,10 @@ fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn checkout-independent MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "outside-checkout", "version": "0" }
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("outside-checkout", None),
     );
-    client.notify("notifications/initialized");
 
     let listed = client.request("tools/list", Value::Null);
     let names = listed["result"]["tools"]
@@ -1147,16 +1146,10 @@ fn task_artifact_get_resolves_globally_outside_any_checkout() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn checkout-independent MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "artifact-get-outside-checkout", "version": "0" }
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("artifact-get-outside-checkout", None),
     );
-    client.notify("notifications/initialized");
 
     // An unknown id is reported as not found, following the id through the
     // host task registry, exactly like `orbit_task_show` — never the
@@ -1192,16 +1185,15 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
         .output()
         .expect("initialize the second Git checkout");
     assert!(output.status.success(), "git init failed: {output:?}");
-    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
-        .args(["workspace", "init", "--name", "mcp-elsewhere"])
-        .output()
-        .expect("register the second workspace");
-    assert!(
-        output.status.success(),
-        "second workspace init failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "mcp-elsewhere",
+        ]),
     );
+    assert!(output.status.success());
 
     let elsewhere_selector = elsewhere.to_str().expect("utf8 checkout path");
     let add_input = json!({
@@ -1212,16 +1204,16 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("author a task in the second workspace");
-    assert!(
-        output.status.success(),
-        "task add failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
     );
+    assert!(output.status.success());
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     let task_id = created["id"].as_str().expect("task id").to_string();
 
@@ -1235,22 +1227,16 @@ fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_fi
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.artifact.put",
             "--input",
             &put_input,
-        ])
-        .output()
-        .expect("attach the artifact in the second workspace");
-    assert!(
-        output.status.success(),
-        "artifact put failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        ]),
     );
+    assert!(output.status.success());
 
     // The session announces the *first* workspace at initialize.
     let mut client = workspace.serve();
@@ -1299,16 +1285,15 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
         .output()
         .expect("initialize the second Git checkout");
     assert!(output.status.success(), "git init failed: {output:?}");
-    let output = McpWorkspace::orbit_command(&checkout_b, &workspace.home)
-        .args(["workspace", "init", "--name", "checkout-b"])
-        .output()
-        .expect("register checkout B");
-    assert!(
-        output.status.success(),
-        "checkout B init failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&checkout_b, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "checkout-b",
+        ]),
     );
+    assert!(output.status.success());
 
     let checkout_b_selector = checkout_b.to_str().expect("utf8 checkout path");
     let add_input = json!({
@@ -1319,16 +1304,16 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&checkout_b, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("author a task owned by checkout B");
-    assert!(
-        output.status.success(),
-        "task add failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&checkout_b, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
     );
+    assert!(output.status.success());
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     let task_id = created["id"].as_str().expect("task id").to_string();
 
@@ -1345,58 +1330,45 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&checkout_b, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&checkout_b, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.artifact.put",
             "--input",
             &put_input,
-        ])
-        .output()
-        .expect("attach the artifact from checkout B");
-    assert!(
-        output.status.success(),
-        "artifact put failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        ]),
     );
+    assert!(output.status.success());
 
     // Checkout A (`workspace.work`) does not own the task. An id-only read
     // must follow the id past cwd on every surface.
     let checkout_a_selector = workspace.work.to_str().expect("utf8 checkout path");
     let get_input = json!({ "id": task_id, "path": "qa/note.md" }).to_string();
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.artifact.get",
             "--input",
             &get_input,
-        ])
-        .output()
-        .expect("run id-only tool artifact get from checkout A");
-    assert!(
-        output.status.success(),
-        "`orbit tool run orbit.task.artifact.get` must follow the task id from a sibling \
-         checkout\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        ]),
     );
+    assert!(output.status.success());
     let via_tool_run: Value = serde_json::from_slice(&output.stdout).expect("parse tool run get");
     assert_eq!(via_tool_run["content"], "globally addressable payload");
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["task", "artifact", "get", &task_id, "qa/note.md"])
-        .output()
-        .expect("run id-only task artifact get from checkout A");
-    assert!(
-        output.status.success(),
-        "`orbit task artifact get` must follow the task id from a sibling checkout\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "task",
+            "artifact",
+            "get",
+            &task_id,
+            "qa/note.md",
+        ]),
     );
+    assert!(output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("globally addressable payload"),
         "`orbit task artifact get` must print the artifact content: {}",
@@ -1483,16 +1455,10 @@ fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn checkout-independent MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "selector-wording-audit", "version": "0" }
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("selector-wording-audit", None),
     );
-    client.notify("notifications/initialized");
 
     let definitions = orbit_mcp::canonical_mcp_tool_definitions()
         .expect("canonical MCP tool definitions must build");
@@ -1568,17 +1534,11 @@ fn uninitialized_unbound_mcp_launch_gives_setup_guidance_without_operator_author
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn clean registry-style MCP server");
-    let mut client = McpClient::new(child);
-    let initialized = client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "registry-clean-launch", "version": "0" }
-        }),
+    let (mut client, initialized) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("registry-clean-launch", None),
     );
     assert_eq!(initialized["result"]["serverInfo"]["name"], "orbit-mcp");
-    client.notify("notifications/initialized");
 
     let listed = client.request("tools/list", Value::Null);
     assert!(
@@ -1635,18 +1595,11 @@ fn ssh_marked_mcp_server_audits_caller_and_server_identity_separately() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn SSH-marked MCP server");
-    let mut client = McpClient::new(child);
-    let initialized = client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "remote-roundtrip", "version": "0" },
-            "_meta": { "orbit": { "workspace": "ws_mcp-roundtrip" } },
-        }),
+    let (mut client, initialized) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("remote-roundtrip", Some("ws_mcp-roundtrip")),
     );
     assert_eq!(initialized["result"]["serverInfo"]["name"], "orbit-mcp");
-    client.notify("notifications/initialized");
 
     let listed = client.request("tools/list", Value::Null);
     let names = listed["result"]["tools"]
@@ -1927,67 +1880,51 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
         })
     );
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["task", "show", &task_id])
-        .output()
-        .expect("show task through the human CLI");
-    assert!(
-        output.status.success(),
-        "human task show failed: {output:?}"
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["task", "show", &task_id]),
     );
+    assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Execution Crew: sol"), "{stdout}");
     assert!(stdout.contains("Orchestrator: terra"), "{stdout}");
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "task",
             "show",
             &task_id,
             "--json",
             "--fields",
             "orchestrator",
-        ])
-        .output()
-        .expect("show orchestrator field through the CLI");
-    assert!(
-        output.status.success(),
-        "field projection failed: {output:?}"
+        ]),
     );
+    assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).expect("orchestrator JSON"),
         json!("terra")
     );
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["task", "show", &task_id, "--json", "--fields", "status"])
-        .output()
-        .expect("show status field through the CLI");
-    assert!(
-        output.status.success(),
-        "status field projection failed: {output:?}"
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["task", "show", &task_id, "--json", "--fields", "status"]),
     );
+    assert!(output.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).expect("status JSON"),
         json!("proposed")
     );
 
-    let tool_run = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let tool_run = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.show",
             "--input",
             &format!(r#"{{"id":"{task_id}","fields":["status"]}}"#),
-        ])
-        .output()
-        .expect("show status through orbit tool run");
-    assert!(
-        tool_run.status.success(),
-        "tool-run status projection failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&tool_run.stdout),
-        String::from_utf8_lossy(&tool_run.stderr)
+        ]),
     );
+    assert!(tool_run.status.success());
     assert_eq!(
         serde_json::from_slice::<Value>(&tool_run.stdout).expect("tool-run status JSON"),
         json!("proposed")
@@ -2003,24 +1940,23 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
         "external_refs": [],
         "job_run_id": "jrun-mcp-projection",
     });
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "task",
             "show",
             &task_id,
             "--json",
             "--fields",
             "status,relations,external_refs,job_run_id",
-        ])
-        .output()
-        .expect("show mixed public DTO fields through the CLI");
+        ]),
+    );
     assert_command_succeeded("mixed CLI task-show projection", &output);
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).expect("mixed CLI projection JSON"),
         expected_projection
     );
 
-    let tool_run = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+    let tool_run = orbit_ok(McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args([
             "tool",
             "run",
@@ -2029,9 +1965,7 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
             &format!(
                 r#"{{"id":"{task_id}","fields":["status","relations","external_refs","job_run_id"]}}"#
             ),
-        ])
-        .output()
-        .expect("show mixed public DTO fields through orbit tool run");
+        ]));
     assert_command_succeeded("mixed tool-run task-show projection", &tool_run);
     assert_eq!(
         serde_json::from_slice::<Value>(&tool_run.stdout).expect("mixed tool-run projection JSON"),
@@ -2187,15 +2121,11 @@ fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
     );
     let id = task["id"].as_str().expect("id");
     let search = |query: &str| {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .args(["search", query, "--kind", "task", "--json"])
-            .output()
-            .expect("CLI search");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+        let output = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["search", query, "--kind", "task", "--json"]),
         );
+        assert!(output.status.success());
         serde_json::from_slice::<Value>(&output.stdout).expect("search JSON")
     };
     assert_eq!(search("Cobalt observatory")["results"][0]["id"], id);
@@ -2210,15 +2140,11 @@ fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
             .expect("results")
             .is_empty()
     );
-    let rebuilt = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["search", "reindex", "--json"])
-        .output()
-        .expect("CLI reindex");
-    assert!(
-        rebuilt.status.success(),
-        "{}",
-        String::from_utf8_lossy(&rebuilt.stderr)
+    let rebuilt = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["search", "reindex", "--json"]),
     );
+    assert!(rebuilt.status.success());
     let report: Value = serde_json::from_slice(&rebuilt.stdout).expect("reindex JSON");
     assert!(report["chunks"].as_u64().expect("chunk count") > 0);
     assert_eq!(search("Quartz telescope")["results"][0]["id"], id);
@@ -2252,15 +2178,11 @@ fn mcp_calls_are_audited_once_including_unknown_raw_names() {
         ("orbit.task.add", "failure"),
         ("orbit.workflow.ship", "denied"),
     ] {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .args(["audit", "list", "--tool", tool_name, "--json"])
-            .output()
-            .expect("query MCP audit rows");
-        assert!(
-            output.status.success(),
-            "audit list failed for {tool_name}: {}",
-            String::from_utf8_lossy(&output.stderr)
+        let output = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["audit", "list", "--tool", tool_name, "--json"]),
         );
+        assert!(output.status.success());
         let rows: Value = serde_json::from_slice(&output.stdout).expect("parse audit rows");
         let rows = rows.as_array().expect("audit row array");
         assert_eq!(rows.len(), 1, "exactly one audit row for {tool_name}");
@@ -2280,10 +2202,15 @@ fn mcp_calls_are_audited_once_including_unknown_raw_names() {
         assert!(row["duration_ms"].as_i64().is_some_and(|value| value >= 1));
     }
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["audit", "list", "--tool", "orbit_removed_tool", "--json"])
-        .output()
-        .expect("query unknown-tool audit rows");
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "audit",
+            "list",
+            "--tool",
+            "orbit_removed_tool",
+            "--json",
+        ]),
+    );
     assert!(output.status.success());
     let rows: Value =
         serde_json::from_slice(&output.stdout).expect("parse unknown-tool audit rows");
@@ -2308,10 +2235,10 @@ fn mcp_calls_are_audited_once_including_unknown_raw_names() {
     // which cannot match the NULL the global seam writes before any workspace
     // resolves — the unknown-name denial above would vanish from the log while
     // the attributed rows stayed visible.
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["audit", "list", "--json", "--limit", "500"])
-        .output()
-        .expect("query unscoped audit rows");
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["audit", "list", "--json", "--limit", "500"]),
+    );
     assert!(output.status.success());
     let rows: Value = serde_json::from_slice(&output.stdout).expect("parse unscoped audit rows");
     let rows = rows.as_array().expect("unscoped audit row array");
@@ -2370,16 +2297,16 @@ fn worktree_backed_activity_routes_task_and_search_by_advertised_workspace_argum
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("author task through the CLI fallback");
-    assert!(
-        output.status.success(),
-        "CLI task add failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
     );
+    assert!(output.status.success());
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     let task_id = created["id"].as_str().expect("task id").to_string();
 
@@ -2394,16 +2321,10 @@ fn worktree_backed_activity_routes_task_and_search_by_advertised_workspace_argum
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn worktree-backed MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "managed-executor", "version": "0" }
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("managed-executor", None),
     );
-    client.notify("notifications/initialized");
 
     // Every workspace-scoped tool must advertise the selector it requires.
     let listed = client.request("tools/list", Value::Null);
@@ -2464,8 +2385,8 @@ fn worktree_backed_activity_routes_task_and_search_by_advertised_workspace_argum
 
     // The `orbit tool run` fallback stays functional from the worktree, and it
     // observes the write MCP just made — both surfaces address one partition.
-    let output = McpWorkspace::orbit_command(&worktree, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&worktree, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.show",
@@ -2473,15 +2394,9 @@ fn worktree_backed_activity_routes_task_and_search_by_advertised_workspace_argum
             &format!(r#"{{"id":"{task_id}"}}"#),
             "--fields",
             "id,execution_summary",
-        ])
-        .output()
-        .expect("run the CLI fallback from the worktree");
-    assert!(
-        output.status.success(),
-        "CLI fallback failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        ]),
     );
+    assert!(output.status.success());
     let shown: Value = serde_json::from_slice(&output.stdout).expect("parse CLI task show");
     assert_eq!(shown["id"], json!(task_id));
     assert_eq!(shown["execution_summary"], "Routed from a linked worktree");
@@ -2581,16 +2496,10 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn federated MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "federated-roundtrip", "version": "0" },
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("federated-roundtrip", None),
     );
-    client.notify("notifications/initialized");
 
     let listed = client.request("tools/list", Value::Null);
     for tool_name in ["orbit_task_list", "orbit_task_show", "orbit_crew_list"] {
@@ -2649,16 +2558,10 @@ fn federated_client(workspace: &McpWorkspace) -> McpClient {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn federated MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "federated-roundtrip", "version": "0" },
-        }),
+    let (client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("federated-roundtrip", None),
     );
-    client.notify("notifications/initialized");
     client
 }
 
@@ -2750,15 +2653,16 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
     federated.call_tool_ok("orbit_crew_list", json!({ "workspace": selector }));
     drop(federated);
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["audit", "list", "--tool", "orbit.crew.list", "--json"])
-        .output()
-        .expect("query direct and federated audit rows");
-    assert!(
-        output.status.success(),
-        "audit list failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "audit",
+            "list",
+            "--tool",
+            "orbit.crew.list",
+            "--json",
+        ]),
     );
+    assert!(output.status.success());
     let rows: Value = serde_json::from_slice(&output.stdout).expect("parse audit rows");
     let rows = rows.as_array().expect("audit row array");
     assert_eq!(rows.len(), 2, "one direct and one federated call: {rows:?}");
@@ -3043,10 +2947,13 @@ fn managed_cli_from_linked_worktree_updates_canonical_workspace() {
         "model": "codex",
     })
     .to_string();
-    let update = managed_cli(&workspace, &worktree)
-        .args(["tool", "run", "orbit.task.update", "--input", &update_input])
-        .output()
-        .expect("managed CLI task update");
+    let update = orbit_ok(managed_cli(&workspace, &worktree).args([
+        "tool",
+        "run",
+        "orbit.task.update",
+        "--input",
+        &update_input,
+    ]));
     assert_command_succeeded("managed CLI orbit.task.update", &update);
 
     let friction_input = json!({
@@ -3054,23 +2961,23 @@ fn managed_cli_from_linked_worktree_updates_canonical_workspace() {
         "model": "codex",
     })
     .to_string();
-    let friction = managed_cli(&workspace, &worktree)
-        .args([
-            "tool",
-            "run",
-            "orbit.friction.add",
-            "--input",
-            &friction_input,
-        ])
-        .output()
-        .expect("managed CLI friction add");
+    let friction = orbit_ok(managed_cli(&workspace, &worktree).args([
+        "tool",
+        "run",
+        "orbit.friction.add",
+        "--input",
+        &friction_input,
+    ]));
     assert_command_succeeded("managed CLI orbit.friction.add", &friction);
 
     let list_input = json!({ "limit": 10, "model": "codex" }).to_string();
-    let listed = managed_cli(&workspace, &worktree)
-        .args(["tool", "run", "orbit.task.list", "--input", &list_input])
-        .output()
-        .expect("managed CLI task list");
+    let listed = orbit_ok(managed_cli(&workspace, &worktree).args([
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        &list_input,
+    ]));
     assert_command_succeeded("managed CLI orbit.task.list", &listed);
     let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("parse list");
     assert!(
@@ -3133,16 +3040,8 @@ fn unmanaged_orbit_workspace_env_does_not_bind_mcp() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn unbound MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "unmanaged-env", "version": "0" },
-        }),
-    );
-    client.notify("notifications/initialized");
+    let (mut client, _) =
+        McpClient::initialized(child, McpClient::initialize_params("unmanaged-env", None));
     let unscoped = client.call_tool_err("orbit_task_list", json!({}));
     assert!(
         unscoped["message"]
@@ -3169,16 +3068,10 @@ fn managed_source_inspection_mcp_search_uses_the_dispatching_workspace() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn inspection MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "inspection-provider", "version": "0" },
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("inspection-provider", None),
     );
-    client.notify("notifications/initialized");
 
     let listed = client.request("tools/list", Value::Null);
     let description = tool_workspace_description(&listed, "orbit_search");
@@ -3236,10 +3129,15 @@ fn author_task(workspace: &McpWorkspace, title: &str) -> String {
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &input])
-        .output()
-        .expect("author task through the CLI fallback");
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &input,
+        ]),
+    );
     assert_command_succeeded("orbit.task.add", &output);
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     created["id"].as_str().expect("task id").to_string()
@@ -3249,17 +3147,16 @@ fn author_task(workspace: &McpWorkspace, title: &str) -> String {
 /// the exact argv the integration it generated launches Orbit with.
 fn generate_managed_mcp_config(workspace: &McpWorkspace) -> Vec<String> {
     std::fs::create_dir_all(workspace.work.join(".claude")).expect("create .claude marker");
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "workspace",
             "init",
             "--name",
             "mcp-roundtrip",
             "--force",
             "--mcp",
-        ])
-        .output()
-        .expect("run workspace init --force --mcp");
+        ]),
+    );
     assert_command_succeeded("workspace init --force --mcp", &output);
     read_generated_claude_args(workspace)
 }
@@ -3267,10 +3164,10 @@ fn generate_managed_mcp_config(workspace: &McpWorkspace) -> Vec<String> {
 /// Run the agent-authority registration (`orbit mcp init --claude`) and return
 /// the argv the integration it generated launches Orbit with.
 fn generate_agent_mcp_config(workspace: &McpWorkspace) -> Vec<String> {
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["mcp", "init", "--claude"])
-        .output()
-        .expect("run orbit mcp init --claude");
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["mcp", "init", "--claude"]),
+    );
     assert_command_succeeded("mcp init --claude", &output);
     read_generated_claude_args(workspace)
 }
@@ -3299,33 +3196,24 @@ fn spawn_generated_server(workspace: &McpWorkspace, cwd: &Path, args: &[String])
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn the server launched by the generated config");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "managed-executor", "version": "0" },
-        }),
+    let (client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("managed-executor", None),
     );
-    client.notify("notifications/initialized");
     client
 }
 
 /// Read one task's execution summary back through the CLI surface at `cwd`.
 fn cli_task_execution_summary(workspace: &McpWorkspace, cwd: &Path, task_id: &str) -> String {
-    let output = McpWorkspace::orbit_command(cwd, &workspace.home)
-        .args([
-            "tool",
-            "run",
-            "orbit.task.show",
-            "--input",
-            &format!(r#"{{"id":"{task_id}"}}"#),
-            "--fields",
-            "id,execution_summary",
-        ])
-        .output()
-        .expect("run the CLI fallback");
+    let output = orbit_ok(McpWorkspace::orbit_command(cwd, &workspace.home).args([
+        "tool",
+        "run",
+        "orbit.task.show",
+        "--input",
+        &format!(r#"{{"id":"{task_id}"}}"#),
+        "--fields",
+        "id,execution_summary",
+    ]));
     assert_command_succeeded("orbit.task.show", &output);
     let shown: Value = serde_json::from_slice(&output.stdout).expect("parse CLI task show");
     assert_eq!(shown["id"], json!(task_id));
@@ -3346,16 +3234,10 @@ fn spawn_managed_env_server(workspace: &McpWorkspace, cwd: &Path, selector: &str
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn managed-envelope MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "managed-executor", "version": "0" },
-        }),
+    let (client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("managed-executor", None),
     );
-    client.notify("notifications/initialized");
     client
 }
 
@@ -3448,16 +3330,15 @@ fn mcp_task_show_follows_the_global_id_and_explicit_workspace_stays_a_filter() {
         .output()
         .expect("initialize the second Git checkout");
     assert!(output.status.success(), "git init failed: {output:?}");
-    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
-        .args(["workspace", "init", "--name", "mcp-elsewhere"])
-        .output()
-        .expect("register the second workspace");
-    assert!(
-        output.status.success(),
-        "second workspace init failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "mcp-elsewhere",
+        ]),
     );
+    assert!(output.status.success());
 
     let add_input = json!({
         "title": "Owned by the other workspace",
@@ -3467,16 +3348,16 @@ fn mcp_task_show_follows_the_global_id_and_explicit_workspace_stays_a_filter() {
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("author a task in the second workspace");
-    assert!(
-        output.status.success(),
-        "task add failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
     );
+    assert!(output.status.success());
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     let task_id = created["id"].as_str().expect("task id").to_string();
 
@@ -3530,16 +3411,15 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
         .output()
         .expect("initialize the second Git checkout");
     assert!(output.status.success(), "git init failed: {output:?}");
-    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
-        .args(["workspace", "init", "--name", "mcp-elsewhere"])
-        .output()
-        .expect("register the second workspace");
-    assert!(
-        output.status.success(),
-        "second workspace init failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&elsewhere, &workspace.home).args([
+            "workspace",
+            "init",
+            "--name",
+            "mcp-elsewhere",
+        ]),
     );
+    assert!(output.status.success());
 
     let add_input = json!({
         "title": "Owned despite runtime identity ws_orbit-5c61b3",
@@ -3549,16 +3429,16 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("author a task in the diverged workspace");
-    assert!(
-        output.status.success(),
-        "task add failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
     );
+    assert!(output.status.success());
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     let task_id = created["id"].as_str().expect("task id").to_string();
     let show_input = json!({ "id": task_id, "model": "codex" }).to_string();
@@ -3568,17 +3448,15 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
     std::fs::create_dir_all(&scratch).expect("create a non-workspace directory");
 
     for cwd in [&worktree, &elsewhere, &scratch] {
-        let output = McpWorkspace::orbit_command(cwd, &workspace.home)
-            .args(["tool", "run", "orbit.task.show", "--input", &show_input])
-            .output()
-            .expect("run id-only task show");
+        let output = orbit_ok(McpWorkspace::orbit_command(cwd, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.show",
+            "--input",
+            &show_input,
+        ]));
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            output.status.success(),
-            "id-only tool run from {} must follow the task id\nstdout:\n{}\nstderr:\n{stderr}",
-            cwd.display(),
-            String::from_utf8_lossy(&output.stdout)
-        );
+        assert!(output.status.success());
         assert!(
             !stderr.contains("ws_orbit-5c61b3"),
             "tool run must not promote the runtime identity into a selector from {}: {stderr}",
@@ -3637,12 +3515,7 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
     let mut client = serve_mcp_from(
         &worktree,
         &workspace.home,
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "managed-executor", "version": "0" },
-            "_meta": { "orbit": { "workspace": "ws_orbit-5c61b3" } },
-        }),
+        McpClient::initialize_params("managed-executor", Some("ws_orbit-5c61b3")),
     );
     let listed = client.request("tools/list", Value::Null);
     let task_show = listed["result"]["tools"]
@@ -3685,11 +3558,7 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
     let mut client = serve_mcp_from(
         &scratch,
         &workspace.home,
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "no-initialize-workspace", "version": "0" },
-        }),
+        McpClient::initialize_params("no-initialize-workspace", None),
     );
     let shown = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
     assert_eq!(shown["id"], json!(task_id));
@@ -3704,14 +3573,10 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
     let mut client = serve_mcp_from(
         &scratch,
         &workspace.home,
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "other-session", "version": "0" },
-            "_meta": {
-                "orbit": { "workspace": elsewhere.to_str().expect("utf8 elsewhere") }
-            },
-        }),
+        McpClient::initialize_params(
+            "other-session",
+            Some(elsewhere.to_str().expect("utf8 elsewhere")),
+        ),
     );
     let shown = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
     assert_eq!(
@@ -3762,16 +3627,16 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
         "model": "codex",
     })
     .to_string();
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("author a task naming the remote crew");
-    assert!(
-        output.status.success(),
-        "task add failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
     );
+    assert!(output.status.success());
     let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
     let task_id = created["id"].as_str().expect("task id").to_string();
 
@@ -3785,23 +3650,17 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
     std::fs::create_dir_all(&scratch).expect("create a non-workspace directory");
     // `--full` because tool-run projects a minimal task shape by default, and
     // the crew fields are what this asserts.
-    let output = McpWorkspace::orbit_command(&scratch, &workspace.home)
-        .args([
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&scratch, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.show",
             "--full",
             "--input",
             &show_input,
-        ])
-        .output()
-        .expect("run id-only task show");
-    assert!(
-        output.status.success(),
-        "tool-run show must stay readable\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        ]),
     );
+    assert!(output.status.success());
     assert_unresolved_crew_projection(
         &serde_json::from_slice(&output.stdout).expect("parse tool run show"),
     );
@@ -3837,17 +3696,10 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn SSH-marked MCP server");
-    let mut client = McpClient::new(child);
-    client.request(
-        "initialize",
-        json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "remote-crew-roundtrip", "version": "0" },
-            "_meta": { "orbit": { "workspace": "ws_mcp-roundtrip" } },
-        }),
+    let (mut client, _) = McpClient::initialized(
+        child,
+        McpClient::initialize_params("remote-crew-roundtrip", Some("ws_mcp-roundtrip")),
     );
-    client.notify("notifications/initialized");
     assert_unresolved_crew_projection(
         &client.call_tool_ok("orbit_task_show", json!({ "id": task_id })),
     );
@@ -3900,10 +3752,7 @@ fn serve_mcp_from(cwd: &Path, home: &Path, initialize: Value) -> McpClient {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn orbit mcp serve");
-    let mut client = McpClient::new(child);
-    client.request("initialize", initialize);
-    client.notify("notifications/initialized");
-    client
+    McpClient::initialized(child, initialize).0
 }
 
 /// ORB-10963: managed executors may see the primary Orbit state through a
@@ -3929,10 +3778,15 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         "model": "codex",
     })
     .to_string();
-    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
-        .output()
-        .expect("create the fixture task");
+    let created = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &add_input,
+        ]),
+    );
     assert_command_succeeded("fixture task add", &created);
     let created: Value = serde_json::from_slice(&created.stdout).expect("parse fixture task");
     let task_id = created["id"].as_str().expect("fixture task id");
@@ -3940,8 +3794,8 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     // Materialize every optional cache/import/index before the mount changes.
     // The assertions below still prove that opening and reading those stores
     // does not require a new sidecar, access-time, or audit write.
-    let warm_search = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let warm_search = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.search",
@@ -3952,9 +3806,8 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
                 "model": "codex"
             })
             .to_string(),
-        ])
-        .output()
-        .expect("warm fixture search state");
+        ]),
+    );
     assert_command_succeeded("fixture search warmup", &warm_search);
 
     // Leave a committed registry write behind in the WAL, the state the mount
@@ -3964,8 +3817,8 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     let canonical_root = workspace.home.join(".orbit");
     let registry = canonical_root.join("tasks").join("index.sqlite");
     let registry_holder = hold_uncheckpointed_registry_snapshot(&registry);
-    let wal_only = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let wal_only = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.add",
@@ -3978,9 +3831,8 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
                 "model": "codex",
             })
             .to_string(),
-        ])
-        .output()
-        .expect("create the WAL-only fixture task");
+        ]),
+    );
     assert_command_succeeded("WAL-only task add", &wal_only);
     let wal_only: Value = serde_json::from_slice(&wal_only.stdout).expect("parse WAL-only task");
     let wal_only_task_id = wal_only["id"].as_str().expect("WAL-only task id");
@@ -3993,15 +3845,15 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     let workspace_state_root = workspace.work.join(".orbit");
     let protected_state = snapshot_fixture_state(&[&canonical_root, &workspace_state_root]);
 
-    let tool_list = readonly_orbit_command(
-        &worktree,
-        &workspace.home,
-        &canonical_root,
-        &workspace_state_root,
-    )
-    .args(["tool", "list", "--json"])
-    .output()
-    .expect("list tools through the read-only mount");
+    let tool_list = orbit_ok(
+        readonly_orbit_command(
+            &worktree,
+            &workspace.home,
+            &canonical_root,
+            &workspace_state_root,
+        )
+        .args(["tool", "list", "--json"]),
+    );
     assert_command_succeeded("read-only orbit.tool.list", &tool_list);
 
     for (name, input) in [
@@ -4026,23 +3878,23 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
             }),
         ),
     ] {
-        let output = readonly_orbit_command(
-            &worktree,
-            &workspace.home,
-            &canonical_root,
-            &workspace_state_root,
-        )
-        .args([
-            "tool",
-            "run",
-            name,
-            "--root",
-            canonical_root.to_str().expect("utf8 Orbit root"),
-            "--input",
-            &input.to_string(),
-        ])
-        .output()
-        .unwrap_or_else(|error| panic!("run {name} through the read-only mount: {error}"));
+        let output = orbit_ok(
+            readonly_orbit_command(
+                &worktree,
+                &workspace.home,
+                &canonical_root,
+                &workspace_state_root,
+            )
+            .args([
+                "tool",
+                "run",
+                name,
+                "--root",
+                canonical_root.to_str().expect("utf8 Orbit root"),
+                "--input",
+                &input.to_string(),
+            ]),
+        );
         assert_command_succeeded(name, &output);
     }
 
@@ -4090,16 +3942,15 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut client = McpClient::new(child.spawn().expect("spawn read-only MCP server"));
-    let initialize = json!({
-        "protocolVersion": "2025-06-18",
-        "capabilities": {},
-        "clientInfo": { "name": "readonly-managed-executor", "version": "0" },
-        "_meta": { "orbit": { "workspace": worktree } },
-    });
-    let initialized = client.request("initialize", initialize);
+    let initialize = McpClient::initialize_params(
+        "readonly-managed-executor",
+        Some(worktree.to_str().expect("utf8 worktree")),
+    );
+    let (mut client, initialized) = McpClient::initialized(
+        child.spawn().expect("spawn read-only MCP server"),
+        initialize,
+    );
     assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
-    client.notify("notifications/initialized");
 
     let listed = client.request("tools/list", Value::Null);
     assert!(listed["result"]["tools"].is_array(), "{listed}");
@@ -4175,8 +4026,8 @@ fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
     let sentinel_before = snapshot_fixture_state(&[&sentinel_registry_root]);
 
     let workspace = McpWorkspace::init();
-    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let created = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.add",
@@ -4189,9 +4040,8 @@ fn readonly_orbit_command_scrubs_inherited_managed_run_authority() {
                 "model": "codex",
             })
             .to_string(),
-        ])
-        .output()
-        .expect("create the fixture task");
+        ]),
+    );
     assert_command_succeeded("fixture task add", &created);
     let created: Value = serde_json::from_slice(&created.stdout).expect("parse fixture task");
     let task_id = created["id"].as_str().expect("fixture task id");
@@ -4267,8 +4117,8 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
         .join(".orbit")
         .join("tasks")
         .join("index.sqlite");
-    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let created = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.add",
@@ -4281,14 +4131,13 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
                 "model": "codex",
             })
             .to_string(),
-        ])
-        .output()
-        .expect("create the warmup task");
+        ]),
+    );
     assert_command_succeeded("warmup task add", &created);
 
     let registry_holder = hold_uncheckpointed_registry_snapshot(&registry);
-    let wal_only = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let wal_only = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.add",
@@ -4301,9 +4150,8 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
                 "model": "codex",
             })
             .to_string(),
-        ])
-        .output()
-        .expect("create the WAL-only task");
+        ]),
+    );
     assert_command_succeeded("WAL-only task add", &wal_only);
     let wal_only: Value = serde_json::from_slice(&wal_only.stdout).expect("parse WAL-only task");
     let wal_only_task_id = wal_only["id"].as_str().expect("WAL-only task id");
@@ -4325,16 +4173,15 @@ fn read_only_registry_files_keep_uncheckpointed_wal_reads_observational() {
         .map(|file| std::fs::read(file).expect("snapshot registry file"))
         .collect();
 
-    let shown = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let shown = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.show",
             "--input",
             &json!({ "id": wal_only_task_id, "model": "codex" }).to_string(),
-        ])
-        .output()
-        .expect("show the WAL-only task through the read-only registry");
+        ]),
+    );
     assert_command_succeeded("read-only orbit.task.show", &shown);
     let shown: Value = serde_json::from_slice(&shown.stdout).expect("parse shown task");
     assert_eq!(shown["id"], json!(wal_only_task_id));
@@ -4364,8 +4211,8 @@ fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
     use std::os::unix::fs::PermissionsExt;
 
     let workspace = McpWorkspace::init();
-    let created = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args([
+    let created = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
             "tool",
             "run",
             "orbit.task.add",
@@ -4378,9 +4225,8 @@ fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
                 "model": "codex",
             })
             .to_string(),
-        ])
-        .output()
-        .expect("create the fixture task");
+        ]),
+    );
     assert_command_succeeded("fixture task add", &created);
     let created: Value = serde_json::from_slice(&created.stdout).expect("parse fixture task");
     let task_id = created["id"].as_str().expect("fixture task id");
@@ -4411,24 +4257,24 @@ fn absent_global_semantic_index_keeps_read_only_cli_reads_observational() {
         return;
     }
 
-    let listed = McpWorkspace::orbit_command(&worktree, &workspace.home)
-        .env("ORBIT_ROOT", &canonical_root)
-        .args(["tool", "list", "--json"])
-        .output()
-        .expect("list tools with an unavailable semantic index");
-    let shown = McpWorkspace::orbit_command(&worktree, &workspace.home)
-        .env("ORBIT_ROOT", &canonical_root)
-        .args([
-            "tool",
-            "run",
-            "orbit.task.show",
-            "--root",
-            canonical_root.to_str().expect("utf8 Orbit root"),
-            "--input",
-            &json!({ "id": task_id, "model": "codex" }).to_string(),
-        ])
-        .output()
-        .expect("show a task with an unavailable semantic index");
+    let listed = orbit_ok(
+        McpWorkspace::orbit_command(&worktree, &workspace.home)
+            .env("ORBIT_ROOT", &canonical_root)
+            .args(["tool", "list", "--json"]),
+    );
+    let shown = orbit_ok(
+        McpWorkspace::orbit_command(&worktree, &workspace.home)
+            .env("ORBIT_ROOT", &canonical_root)
+            .args([
+                "tool",
+                "run",
+                "orbit.task.show",
+                "--root",
+                canonical_root.to_str().expect("utf8 Orbit root"),
+                "--input",
+                &json!({ "id": task_id, "model": "codex" }).to_string(),
+            ]),
+    );
     std::fs::set_permissions(&state_dir, original).expect("restore state permissions");
 
     assert_command_succeeded("read-only orbit.tool.list", &listed);
@@ -4729,16 +4575,13 @@ fn workspace_tool_calls_reuse_one_runtime_until_the_registry_changes() {
         .output()
         .expect("initialize the second checkout");
     assert!(output.status.success(), "git init failed: {output:?}");
-    let output = McpWorkspace::orbit_command(&second, &workspace.home)
-        .args(["workspace", "init", "--name", "second"])
-        .output()
-        .expect("register a second workspace");
-    assert!(
-        output.status.success(),
-        "second workspace init failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = orbit_ok(McpWorkspace::orbit_command(&second, &workspace.home).args([
+        "workspace",
+        "init",
+        "--name",
+        "second",
+    ]));
+    assert!(output.status.success());
 
     client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
     assert_eq!(
