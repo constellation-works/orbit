@@ -1,10 +1,10 @@
 use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::worker_command_override;
-use crate::application::routine::RETIRED_ROUTINE_FILES;
 use crate::application::routines::RoutineMachineIdentity;
 use crate::application::routines::clock::{ClockSettings, save_clock_settings};
 use crate::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::sweep::{
     SweepOptions, SweepOutcome, configured_sweep_options, refresh_discovered_token_scoreboards,
     run_sweep_at_with_providers, run_sweep_at_with_providers_at,

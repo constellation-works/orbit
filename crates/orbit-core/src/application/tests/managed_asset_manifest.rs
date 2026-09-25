@@ -7,8 +7,10 @@ use tempfile::tempdir;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use super::super::MANAGED_ASSET_MANIFEST_FILE;
-use super::super::{managed_manifest_write_is_skippable, record_managed_manifest_write};
+use super::super::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
+use super::super::managed_assets::{
+    managed_manifest_write_is_skippable, record_managed_manifest_write,
+};
 use crate::OrbitRuntime;
 use crate::application::job::JobCatalogFilter;
 use crate::bootstrap::activity::seed_default_activities;

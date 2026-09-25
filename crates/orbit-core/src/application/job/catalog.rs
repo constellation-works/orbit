@@ -10,7 +10,7 @@ use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::{
+use crate::application::managed_assets::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 

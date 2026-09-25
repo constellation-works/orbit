@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
 
-use crate::OrbitRuntime;
-use crate::application::activity_catalog_health::remove_spec_backend_key;
-use crate::application::artifact_health::{
+use super::super::activity_catalog::remove_spec_backend_key;
+use super::super::artifact::{
     ArtifactCondition, ArtifactHealth, ArtifactKind, ArtifactProvenance,
     FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
 };
+use crate::OrbitRuntime;
 use crate::runtime::OrbitRuntimeRoots;
 
 fn workspace_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {

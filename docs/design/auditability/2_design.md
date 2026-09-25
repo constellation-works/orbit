@@ -44,7 +44,7 @@ For `orbit tool run`, [T20260427-52] first collapsed duplicate `agent` + `model`
 
 After [T20260428-4], tool-invocation audit is written at Core's dispatch boundary for
 registered CLI/MCP tools. The current implementation is
-`crates/orbit-core/src/adapter/command/dispatch.rs`: a `ToolEntryPoint` becomes
+`crates/orbit-core/src/adapter/command/dispatch/execute.rs`: a `ToolEntryPoint` becomes
 `subcommand: "run"` or `"run-mcp"`, setup and handler failures inside the boundary are
 audited, and `duration_ms` is at least `1`. The CLI RAII guard covers top-level command
 execution and suppresses its duplicate after Core records a tool row; pre-runtime CLI
@@ -73,7 +73,7 @@ the executing-process hostname, while caller/process fields are additive.
 
 Some runtime paths write targeted command-audit rows directly:
 
-- `crates/orbit-core/src/adapter/command/dispatch.rs` records runtime-backed, in-process, and global CLI/MCP tool invocations as `command: tool` with `subcommand: "run"` or `"run-mcp"`.
+- `crates/orbit-core/src/adapter/command/dispatch/execute.rs` records runtime-backed, in-process, and global CLI/MCP tool invocations as `command: tool` with `subcommand: "run"` or `"run-mcp"`.
 - `crates/orbit-cli/src/command/mcp/server.rs` composes `orbit-mcp` framing with `orbit-cmd` registered runtime selection and carries the session capability policy. Global discovery, unknown/unadvertised names, and workspace setup failures use Core's global audit seam; resolved workspace calls use the runtime seam. Core dispatch enforces governed operation authorization, while federated routing applies destination tool-class checks before delivery.
 - `crates/orbit-core/src/runtime/task/locks.rs` records task lock reservation checks, reservations, releases, and denials.
 - `crates/orbit-core/src/adapter/engine_host/v2_host/pipeline_actions.rs` records gate-starvation failures for task bundles.

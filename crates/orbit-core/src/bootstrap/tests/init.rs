@@ -10,7 +10,7 @@ use orbit_config::ConfigSeed;
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
-use crate::application::routine::RoutineSeedIdentity;
+use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::skill::seed_default_skills;
 
 use super::super::init::{
@@ -147,7 +147,7 @@ fn fresh_workspace_init_seeds_disabled_worktree_gc_routine() {
 
     assert_eq!(
         result.refreshed_default_routines,
-        crate::application::routine::DEFAULT_ROUTINE_FILES.len()
+        crate::application::routines::seed::DEFAULT_ROUTINE_FILES.len()
     );
     let yaml = fs::read_to_string(orbit_root.join("routines/worktree_gc.yaml"))
         .expect("read seeded worktree GC routine");

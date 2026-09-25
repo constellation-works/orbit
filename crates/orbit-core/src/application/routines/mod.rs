@@ -16,20 +16,20 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::RoutineStoreBackend;
 
 pub mod clock;
-pub mod clock_unit;
 pub use orbit_automation::routines::due;
 pub mod loader;
+pub(crate) mod materialize;
+pub(crate) mod seed;
 pub mod status;
 pub mod sweep;
+pub(crate) mod template;
 
 pub use clock::{
-    ClockInstallReport, ClockSettings, ClockStatus, DEFAULT_CLOCK_CADENCE_SECONDS, clock_status,
-    install_clock, load_clock_settings, save_clock_settings, set_clock_cadence, set_clock_enabled,
-};
-pub use clock_unit::{
-    ClockUnitConvergence, ClockUnitDrift, ClockUnitInspection, ClockUnitReload, ClockUnitRewrite,
-    ClockUnitVerdict, RunningBinary, clock_unit_drift_warning, converge_clock_unit,
-    inspect_clock_unit, probe_program_version,
+    ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence, ClockUnitDrift,
+    ClockUnitInspection, ClockUnitReload, ClockUnitRewrite, ClockUnitVerdict,
+    DEFAULT_CLOCK_CADENCE_SECONDS, RunningBinary, clock_status, clock_unit_drift_warning,
+    converge_clock_unit, inspect_clock_unit, install_clock, load_clock_settings,
+    probe_program_version, save_clock_settings, set_clock_cadence, set_clock_enabled,
 };
 pub use due::{DueDecision, due_decision, parse_cron};
 pub use loader::{
