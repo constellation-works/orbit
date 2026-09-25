@@ -1,0 +1,204 @@
+/* Live log tail in the Tasks dock: status bar, stream, and filters.
+   run-detail.css also styles .log-line (step logs); this file loads later,
+   so where both set a property, these values apply to both. */
+
+@media (max-width: 760px) {
+  .log-statusbar { overflow: hidden; }
+}
+
+/* ORB-10972: always-on ambient line, present on every tab. Replaces what
+   the collapsed log panel used to do. */
+.log-statusbar {
+  flex: 0 0 auto;
+  height: 30px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-width: 0;
+}
+
+/* ORB-10972: the live dot is used in the dock header and the status bar
+   now, so it needs a rule of its own rather than one scoped to the log
+   panel header it used to live in. */
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(110, 159, 255, 0.08);
+  animation: livePulse 2.4s ease-in-out infinite;
+}
+.log-statusbar .live-dot { flex: 0 0 auto; }
+.log-statusbar .sb-label,
+.log-statusbar .sb-t { color: var(--fg-mute); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.log-statusbar .sb-ag { color: var(--fg-dim); flex: 0 0 auto; }
+.log-statusbar .sb-m {
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.log-statusbar .sb-m b { color: var(--fg); font-weight: 500; }
+.log-statusbar .sb-m[data-level="err"] { color: var(--status-blocked); }
+.log-statusbar .sb-m[data-level="deny"] { color: var(--status-review); }
+.log-statusbar .sb-m[data-level="warn"] { color: var(--status-proposed); }
+.log-statusbar.empty .sb-label { opacity: 0.6; }
+#side-dock.disconnected .live-dot,
+.log-statusbar.disconnected .live-dot {
+  background: var(--fg-mute);
+  box-shadow: none;
+  animation: none;
+}
+.log-statusbar.disconnected .sb-label {
+  color: var(--status-blocked);
+}
+
+/* ORB-10972: #log-panel is a pane of the dock now — it fills the dock's
+   height rather than negotiating its own. The ORB-10874 collapse toggle
+   and drag handle are gone with the geometry that needed them; the
+   always-on .log-statusbar and the dock's Status mode replaced them. */
+#log-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.log-stream {
+  flex: 1; overflow: auto; position: relative;
+  min-height: 0;
+  container-type: inline-size;
+  background:
+    linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px) 0 0 / 100% 22px,
+    var(--bg-elev);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.log-stream .inner {
+  padding: 8px 0;
+  font-family: var(--font-mono);
+  width: max-content;
+  min-width: 100%;
+}
+.log-line {
+  display: grid;
+  grid-template-columns: 56px 62px max-content;
+  gap: 10px;
+  padding: 0 14px 0 12px;
+  border-left: 2px solid transparent;
+  font-size: 11.5px; line-height: 22px;
+  color: var(--fg);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: background 0.15s ease;
+}
+.log-line:hover { background: rgba(255,255,255,0.03); }
+.log-line.expanded { background: rgba(255,255,255,0.02); border-bottom-color: var(--hair); }
+.log-line .t  { color: var(--fg-dim); font-feature-settings: "tnum"; white-space: nowrap; }
+.log-line .ag { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The level text is replaced by the row keyline; the element stays for
+   assistive tech and for the title tooltip. */
+.log-line .lv { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.log-line.lv-ok   { border-left-color: var(--status-done); }
+.log-line.lv-info { border-left-color: transparent; }
+.log-line.lv-warn { border-left-color: var(--status-proposed); }
+.log-line.lv-err  { border-left-color: var(--status-blocked); }
+.log-line.lv-deny { border-left-color: var(--status-review); }
+.log-line .lv.ok   { color: var(--status-done); }
+.log-line .lv.info { color: var(--status-in-progress); }
+.log-line .lv.warn { color: var(--status-proposed); }
+.log-line .lv.err  { color: var(--status-blocked); }
+.log-line .lv.deny { color: var(--status-review); }
+
+/* collapsed: single line, truncated */
+.log-line .m  { color: var(--fg-dim); white-space: nowrap; overflow: visible; text-overflow: unset; min-width: 0; }
+
+/* expanded: full message wraps below the grid row */
+.log-line.expanded .m {
+  grid-column: 1 / -1;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: unset;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(100cqw - 26px);
+  padding: 4px 0 8px;
+  border-top: 1px dashed rgba(255,255,255,0.06);
+  line-height: 1.6;
+}
+.log-stream.wrap .inner { width: auto; }
+.log-stream.wrap .log-line { grid-template-columns: 56px 62px minmax(0, 1fr); }
+.log-stream.wrap .log-line .m { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-stream.wrap .log-line.expanded .m { width: auto; max-width: 100%; }
+.log-line .m b { color: var(--fg); font-weight: 500; }
+.log-line .m code {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-hi);
+  background: rgba(110, 159, 255, 0.08); padding: 0 4px; border-radius: 2px;
+}
+.log-line.fresh { animation: logIn .6s ease-out; }
+@keyframes logIn {
+  from { background: rgba(110, 159, 255, 0.08); }
+  to   { background: transparent; }
+}
+.log-stream::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 0;
+  height: 18px; background: linear-gradient(var(--bg-elev), transparent);
+  pointer-events: none;
+}
+.log-filters {
+  flex: 0 0 auto;
+  border-top: none !important;
+  border-bottom: 1px solid var(--hair);
+  padding: 7px 12px;
+  gap: 5px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.log-filters .filter-pill { padding: 2px 7px; }
+.log-filters .seg.right { margin-left: auto; }
+.log-foot {
+  border-top: 1px solid var(--border);
+  padding: 9px 16px;
+  background: var(--bg);
+  display: flex; align-items: center; gap: 12px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim);
+}
+
+/* ORB-11658: the log-foot controls are real <button>s so they are
+   focusable and announced as toggles; strip the user-agent chrome the
+   <span>s they replaced never carried. */
+.log-foot button { font: inherit; background: none; border: none; color: inherit; padding: 0; }
+.log-foot .filter-pill:focus-visible,
+.log-foot .seg:focus-visible,
+.log-foot .seg.right:focus-visible,
+.log-foot .count:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 2px;
+}
+.log-foot .seg { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.log-foot .seg b { color: var(--fg); font-weight: 500; }
+.log-foot .seg.on { color: var(--accent); }
+.log-foot .filter-pill {
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 3px;
+  color: var(--fg); cursor: pointer;
+}
+.log-foot .filter-pill.on { color: var(--accent); border-color: var(--accent); background: rgba(110, 159, 255, 0.08); }
+.log-foot .filter-pill:hover { border-color: var(--fg-dim); }
+.log-foot .filter-pill.on:hover { border-color: var(--accent-hover); }
+.log-foot .right { margin-left: auto; cursor: pointer; user-select: none; }
+.log-foot .right.on { color: var(--accent); }

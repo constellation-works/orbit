@@ -1,0 +1,487 @@
+/* Tasks tab: the page grid, filter chips, status groups, task rows with
+   their inline selects and quick actions, and pagination. */
+
+.main-col > .tab-pane[data-tab="tasks"] { overflow: hidden; }
+.main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
+  height: 100%;
+  align-items: stretch;
+}
+.main-col > .tab-pane[data-tab="tasks"] .col-tasks {
+  min-height: 0;
+}
+.main-col > .tab-pane[data-tab="tasks"] .col-tasks > .panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel > header.tasks-head { flex-wrap: nowrap; padding-block: 10px; }
+.panel > header.tasks-head .task-search-wrap { flex: 0 1 260px; margin-left: auto; min-width: 0; }
+.task-search-wrap { position: relative; }
+.task-search-wrap #task-search { width: 100%; }
+.task-search-wrap.error #task-search { border-color: var(--state-failed); }
+
+/* ORB-00211: Enter on a task ID in the search box looks the task up anywhere.
+   Its progress and failures float under the box so the header keeps its
+   height; the element is always present for aria-describedby. */
+.task-lookup-status {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 150;
+  display: none; max-width: min(100vw - 24px, 320px);
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elev); color: var(--state-failed);
+  font-size: 12px; font-weight: 400; overflow-wrap: anywhere;
+}
+.task-search-wrap.error .task-lookup-status { display: block; }
+.task-search-wrap.pending .task-lookup-status { display: block; color: var(--fg-dim); }
+
+/* A task opened by ID that the current filter or page would hide. */
+.pinned-task-wrap { margin-bottom: 6px; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg-elev); }
+.pinned-task-wrap .row.pinned-external { background: var(--bg-elev); }
+.panel > header.tasks-head .count { flex: 0 0 auto; }
+#tasks-panel > .controls { border-bottom: 0; padding-bottom: 6px; }
+
+#tasks-panel > .body {
+  max-height: none;
+  flex: 1 1 auto;
+  /* ORB-10874: floor so the task inventory stays usable (a few visible
+     rows) even on a short viewport or with the log panel expanded — it
+     never gets squeezed toward zero by the surrounding chrome. */
+  min-height: 240px;
+  overflow-y: auto;
+  overflow-x: auto;
+  view-transition-name: task-list;
+}
+
+#task-filter {
+  display: flex;
+  flex: 1 1 100%;
+  gap: 2px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: none;
+}
+
+.group-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 0 16px;
+  background: var(--bg-sunk);
+  border-top: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+.group-header .group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--dot, var(--fg-dim));
+}
+.group-header .group-hint {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.group-header .group-count {
+  color: var(--fg-dim);
+  font-weight: 400;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 84px minmax(140px, 1fr) 124px 92px 84px;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 16px;
+  margin: 0;
+  border-radius: 0;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-bottom: 1px solid var(--hair);
+}
+
+.row:hover { background: var(--bg-hover); }
+
+.row.expanded { background: var(--accent-wash); }
+
+.row .id {
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  transition: color 0.1s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.row .id:hover { color: var(--accent); cursor: copy; }
+.row .title {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 450;
+  font-size: 13.5px;
+  min-width: 0;
+}
+.status-cell {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 2px;
+  min-width: 0;
+}
+.status-cell::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dot, var(--fg-dim));
+}
+.status-cell > :not(.task-status-select) { grid-column: 1 / -1; }
+.row.header .status-cell::before { display: none; }
+.row.header .status-cell { display: block; }
+.crew-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.task-status-select {
+  width: 100%;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background-color: transparent;
+  color: #c4c4cc;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 0 20px 0 6px;
+  outline: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.task-status-select:hover:not(:disabled),
+.task-status-select:focus {
+  border-color: var(--border);
+  background-color: var(--bg);
+  outline: none;
+}
+.task-status-select:disabled {
+  color: var(--fg-dim);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.task-status-select option {
+  color: var(--fg);
+  background: var(--bg);
+}
+.task-status-select optgroup {
+  color: var(--fg-dim);
+  background: var(--bg);
+  font-style: italic;
+}
+.task-crew-select,
+.task-complexity-select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 0 22px 0 8px;
+  outline: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-crew-select:hover:not(:disabled),
+.task-crew-select:focus,
+.task-complexity-select:hover:not(:disabled),
+.task-complexity-select:focus {
+  border-color: var(--accent);
+}
+
+/* In a list row the crew reads as text until it is hovered or focused;
+   the control is still there, one click away. */
+/* Row selects draw their own chevron so the text keeps the cell's width
+   instead of losing it to the native arrow's reserved gutter. */
+.task-status-select,
+.row .task-crew-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%238f8f99' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 20px;
+}
+.row .task-crew-select { border-color: transparent; background-color: transparent; color: #c4c4cc; }
+.row .task-crew-select:hover:not(:disabled),
+.row .task-crew-select:focus { border-color: var(--border); background-color: var(--bg); }
+.row .task-crew-select:disabled { opacity: 1; }
+
+.task-quick-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+.task-quick {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: #16161a;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.task-quick:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-hi); }
+.task-quick.approve { background: #0f1f18; border-color: #24493e; color: #bdf0d6; }
+.task-quick.approve:hover:not(:disabled) { border-color: var(--state-success); color: #d8fbe9; }
+.task-quick:disabled { opacity: 0.6; cursor: not-allowed; }
+.task-quick:focus-visible,
+.task-quick-link:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.task-quick-link { font-size: 12.5px; color: var(--accent); white-space: nowrap; text-decoration: none; }
+.task-quick-link:hover { color: var(--accent-hi); }
+.task-quick-error {
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--state-failed);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-crew-select:disabled,
+.task-complexity-select:disabled {
+  color: var(--fg-dim);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.task-crew-select option,
+.task-complexity-select option {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+/* ORB-10874: inline pending/success/error feedback for the status/crew
+   selects. Never color-only — each state carries its own text, and
+   `success`/`error` additionally offer a bounded undo. */
+.mutation-feedback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.25;
+}
+.mutation-feedback.pending { color: var(--fg-dim); font-style: italic; }
+.mutation-feedback.success { color: var(--state-success); }
+.mutation-feedback.error {
+  color: var(--state-failed);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mutation-undo {
+  font: inherit;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  padding: 0 5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mutation-undo:hover { background: rgba(110, 159, 255, 0.1); }
+
+/* ORB-10874: task/status controls must be usable without relying on
+   color alone — a visible focus ring on top of the existing
+   border-color change. */
+.task-status-select:focus-visible,
+.task-crew-select:focus-visible,
+.task-complexity-select:focus-visible,
+.field-edit:focus-visible,
+.chip:focus-visible,
+.mutation-undo:focus-visible,
+.rail .tab:focus-visible,
+.rail-subtabs .subtab:focus-visible,
+.dock-seg:focus-visible,
+.subtab:focus-visible,
+.operation-button:focus-visible,
+.operation-cadence:focus-visible,
+.operation-details summary:focus-visible,
+.operation-action-unavailable:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 2px;
+}
+
+.filter-summary {
+  padding: 0 16px 10px;
+  font-size: 12px;
+  color: var(--fg-mute);
+  background: transparent;
+}
+
+.task-pagination[hidden] { display: none; }
+.task-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 34px;
+  padding: 5px 16px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--bg);
+}
+.task-pagination button {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: 11px var(--font-mono);
+}
+.task-pagination button:disabled { color: var(--fg-dim); opacity: 0.55; }
+.task-pagination button:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+#tasks-page-status { margin-right: auto; color: var(--fg-dim); font: 11px var(--font-mono); }
+#tasks-page-status.error { color: var(--state-error); }
+
+@media (max-width: 760px) {
+  #task-filter { max-width: none; }
+}
+
+@media (max-width: 520px) {
+  .task-pagination { justify-content: space-between; padding-inline: 10px; }
+}
+
+/* The one-line row needs about 610px (five columns and their gaps). The
+   panel's own width decides, not the window's: beside the dock on a laptop
+   the panel is often narrower than that while the window is wide. */
+#tasks-panel { container: tasks-panel / inline-size; }
+@container tasks-panel (max-width: 620px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas:
+      "id title title"
+      "status crew quick";
+    padding-block: 8px;
+  }
+  .row .id { grid-area: id; }
+  .row .title { grid-area: title; }
+  .row .status-cell { grid-area: status; }
+  .row .crew-cell { grid-area: crew; }
+  .row .task-quick-cell { grid-area: quick; }
+  .group-header .group-hint { display: none; }
+  .task-status-select,
+  .task-crew-select,
+  .task-complexity-select {
+    max-width: none;
+  }
+  #tasks-body .row.header { display: none; }
+}
+
+.row.header {
+  cursor: default;
+  background: transparent;
+  border-bottom: none;
+  min-height: 32px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-mute);
+  pointer-events: none;
+}
+.row.header:hover {
+  background: transparent;
+  border-color: var(--hair);
+}
+.row.header .id,
+.row.header .title,
+.row.header .status-cell,
+.row.header .crew-cell,
+.row.header .task-quick-cell {
+  font-size: inherit;
+  color: inherit;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* text-align + grid-area (in narrow) inherited from .row.* + @media rules so columns align with data rows */
+}
+
+main.tasks-layout {
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) var(--dock-w, clamp(336px, 32%, 720px));
+}
+@media (max-width: 1250px) {
+  main.tasks-layout {
+    grid-template-columns: minmax(0, 2fr) var(--dock-w, minmax(280px, 1.15fr)) !important;
+  }
+}
+
+/* ORB-10874: below ~760px the two-column task/log layout has no room
+   left for either column, so stack them — the task list keeps its own
+   independently-scrolling, min-height-guaranteed body (below) and the
+   log panel follows underneath rather than both being squeezed into
+   slivers side by side. */
+@media (max-width: 760px) {
+  main.tasks-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* The stacked dock makes the task layout taller than the remaining
+     shell. Let the pane scroll instead of constraining its first grid
+     row to zero height, which leaves the task-body clipped below its
+     column header. */
+  .main-col > .tab-pane[data-tab="tasks"] { overflow-y: auto; }
+  .main-col > .tab-pane[data-tab="tasks"] > main.tasks-layout {
+    height: auto;
+    min-height: 100%;
+  }
+}
+
+/* Overlay the splitter on the dock's left edge. Every grid item needs
+   an explicit row: CSS Grid places definite row+column items first, so
+   a splitter-only grid-row occupies the dock's cell and auto-places
+   #side-dock onto row 2. */
+@media (min-width: 761px) {
+  main.tasks-layout > .col-tasks {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  main.tasks-layout > #side-dock {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  main.tasks-layout > .dock-splitter {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: start;
+    margin-left: -13px;
+    height: 100%;
+    z-index: 5;
+  }
+}
+

@@ -1,7 +1,7 @@
 // Drives the shipped Config module against a fetch stub [ORB-12724]: what it
 // paints for a layered payload, and what it writes when a row is edited.
-const { setWorkspace } = await import('./common.js');
-const { fetchAndRenderConfig, initConfig, setConfigSubtab } = await import('./config.js');
+const { setWorkspace } = await import('./js/common.js');
+const { fetchAndRenderConfig, initConfig, setConfigSubtab } = await import('./js/config.js');
 
 const panel = id => document.getElementById(id);
 const descendants = node => [node, ...Array.from(node.children || []).flatMap(descendants)];

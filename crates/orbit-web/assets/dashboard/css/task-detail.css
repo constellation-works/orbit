@@ -1,0 +1,750 @@
+/* An expanded task: detail layout, properties, relations, artifacts,
+   field blocks and editors, history, comments, and the row's action forms. */
+
+/* ORB-00037: full workspace location in a task's Details box. */
+.detail-side .ws-location {
+  font-size: 11px;
+  color: var(--fg-dim);
+  word-break: break-all;
+}
+
+.detail-side .complexity {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.row-detail {
+  padding: 16px 20px;
+  background: #050505;
+  border-radius: 0;
+  margin: 0;
+  display: grid;
+  gap: 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--hair);
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.row-detail.split-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .row-detail.split-layout { grid-template-columns: 1fr; }
+}
+.detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.detail-side .meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+.detail-side .meta-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+  padding-bottom: 4px;
+}
+.detail-side .meta-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.detail-side .meta-item .label {
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: lowercase;
+}
+.detail-side .meta-item .value {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+.detail-side .meta-item .value a,
+.external-ref-line a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.detail-side .meta-item .value a:hover,
+.external-ref-line a:hover {
+  text-decoration: underline;
+}
+.detail-side .meta-item .value a:focus-visible,
+.external-ref-line a:focus-visible {
+  text-decoration: underline;
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 2px;
+}
+.detail-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.property-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.property-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 6px 16px;
+}
+
+/* The label lines up with a 28px control, and stays on the first line
+   when the tags editor opens beside it. */
+.property-row .label {
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 28px;
+}
+.property-row .task-complexity-select {
+  width: 120px;
+  min-width: 0;
+}
+.property-row .field-editor-cell {
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: flex-end;
+}
+.property-row .field-editor {
+  width: 100%;
+  align-items: flex-end;
+}
+.property-row .detail-tag-row {
+  justify-content: flex-end;
+}
+.detail-tag-row .chip {
+  cursor: default;
+}
+.external-ref-line {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.relation-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.relation-group:last-child {
+  margin-bottom: 0;
+}
+.relation-group .label {
+  min-width: 112px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.relation-target {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg);
+  color: var(--accent);
+  cursor: pointer;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+.relation-target:hover {
+  border-color: var(--accent);
+}
+.artifact-row {
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.artifact-row:hover {
+  border-color: var(--accent);
+  background: rgba(110, 159, 255, 0.08);
+}
+.artifact-preview {
+  margin: 8px 0 12px;
+  overflow-x: auto;
+}
+.artifact-image-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+/* The preview scales down to the detail column instead of forcing the
+   panel to scroll sideways, and never scales a small image up past its
+   own resolution. `height: auto` keeps the aspect ratio at every width. */
+.artifact-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  /* A checkerboard so a transparent PNG reads as transparent rather than
+     as whatever the panel background happens to be. */
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(45deg, var(--border) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--border) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--border) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.artifact-error {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--state-failed);
+}
+@media (max-width: 760px) {
+  /* Narrow viewports get the full column width and a bounded height, so
+     a tall screenshot cannot push the rest of the task detail offscreen. */
+  .artifact-image {
+    width: 100%;
+    max-height: 60vh;
+    object-fit: contain;
+  }
+}
+
+.field-block {
+  margin-bottom: 0;
+  padding: 16px 20px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.field-block:last-child {
+  margin-bottom: 0;
+}
+
+.field-block h4 {
+  font-size: 13px;
+  text-transform: capitalize;
+  letter-spacing: 0;
+  color: var(--fg);
+  margin: 0 0 12px 0;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 8px;
+  transition: color 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+}
+
+/* The header holds the title, an optional count, and the field's own
+   action (its edit button) pushed to the far end. */
+.field-block h4 .field-count {
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.field-block h4 .field-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+.field-block h4 .field-actions:empty { display: none; }
+
+.field-block.collapsible h4 {
+  cursor: pointer;
+  user-select: none;
+  justify-content: space-between;
+}
+
+.field-block.collapsible h4:hover {
+  color: var(--fg);
+}
+
+.field-block.collapsible h4::after {
+  content: "▼";
+  font-size: 9px;
+  transition: transform 0.2s ease;
+}
+
+.field-block.collapsible.collapsed h4::after {
+  transform: rotate(-90deg);
+}
+
+.field-block.collapsible.collapsed h4 {
+  margin-bottom: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.field-block.collapsible.collapsed > :not(h4) {
+  display: none;
+}
+
+/* ORB-12235: an editable field block shows its value with an `edit`
+   affordance, and swaps in a textarea with save/cancel while editing. The
+   editor is full width because the values it holds (markdown, one
+   selector per line) are written in lines, not in a cell. */
+.field-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.field-editor-cell,
+.complexity-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field-editor > * {
+  max-width: 100%;
+}
+.field-edit {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.field-edit:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.field-edit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.field-editor-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+}
+input.field-editor-input {
+  min-height: 0;
+  resize: none;
+}
+.field-editor-input:focus {
+  border-color: var(--accent);
+}
+.field-editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.field-editor-hint,
+.field-editor-status {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+.field-editor-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.field-editor-error {
+  border-left: 3px solid var(--state-failed);
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: var(--state-failed);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(239, 68, 68, 0.1);
+  overflow-wrap: anywhere;
+}
+.field-empty {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+.ac-list a,
+.artifact-preview a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.ac-list a:hover,
+.artifact-preview a:hover {
+  text-decoration: underline;
+}
+
+.row-detail .ac-list {
+  margin: 0;
+  padding-left: 24px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.row-detail .file-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.row-detail .file-list .selector-dim {
+  color: var(--fg-mute);
+}
+
+.row-detail .history-line {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.6;
+  padding: 4px 8px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.row-detail .history-line:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.row-detail .history-line .actor { color: var(--accent-hover); font-weight: 500; }
+
+/* ORB-12645/ORB-12651: the comment thread. It sits in the left/main
+   detail column, capped to keep actions visible, with per-card collapse,
+   Markdown bodies at ~72ch measure, and a sticky header inside the thread. */
+.comments-panel .comment-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(60vh, 640px);
+  overflow-y: auto;
+  padding-right: 4px;
+  position: relative;
+}
+.comment-pref {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+.comment-pref:hover { color: var(--fg); border-color: var(--fg-dim); }
+.comment-pref:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+.comments-panel h4 .field-actions { gap: 6px; }
+
+.comment-card {
+  container-type: inline-size;
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.015);
+  padding: 10px 12px 8px 12px;
+}
+.comment-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: 10px;
+}
+
+/* The header is the card's handle: while a long comment is open it stays
+   on screen so the author and the actions never scroll away from the
+   body they belong to. */
+.comment-card.expanded .comment-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-elev);
+  margin: -10px -12px 10px -12px;
+  padding: 10px 12px 8px 12px;
+}
+.comment-initial {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: none;
+}
+.comment-by { color: var(--fg); font-size: 12px; font-weight: 600; }
+.comment-by.agent { color: var(--accent-hover); }
+.comment-agent-pill {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.comment-at,
+.comment-age,
+.comment-size {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-mute);
+}
+.comment-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.comment-action {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-mute);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 5px;
+  cursor: pointer;
+}
+.comment-action:hover { color: var(--fg); border-color: var(--border); }
+.comment-action:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
+.comment-layout { display: block; }
+.comment-layout.outlined { display: block; }
+
+/* The outline reads as a margin note, so it stacks above the body in
+   a narrower column, but sits beside it when the card is at least 760px wide. */
+@container (min-width: 760px) {
+  .comment-layout.outlined {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px;
+    gap: 16px;
+    align-items: start;
+  }
+  .comment-layout.outlined .comment-outline { grid-column: 2; grid-row: 1; }
+  .comment-layout.outlined .comment-bodies { grid-column: 1; grid-row: 1; }
+}
+.comment-bodies { min-width: 0; }
+.comment-body {
+  font-size: 13px;
+  line-height: 1.65;
+  max-width: 72ch;
+}
+.comment-body h2 { scroll-margin-top: 48px; }
+.comment-raw {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.comment-card.collapsed .comment-bodies {
+  position: relative;
+  max-height: 300px;
+  overflow: hidden;
+}
+.comment-card.collapsed .comment-bodies::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(5, 5, 5, 0), var(--bg-elev));
+}
+.comment-outline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid var(--hair);
+  padding-left: 10px;
+  position: sticky;
+  top: 48px;
+}
+.comment-outline-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-mute);
+  margin-bottom: 4px;
+}
+.comment-outline-link {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  padding: 2px 0 2px 6px;
+  margin-left: -12px;
+  color: var(--fg-dim);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.comment-outline-link:hover { color: var(--fg); }
+.comment-outline-link.active { color: var(--accent-hover); border-left-color: var(--accent); }
+.comment-outline-link:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
+.comment-foot {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.comment-summary {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-mute);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+.comment-toggle {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  flex: none;
+}
+.comment-toggle:hover { background: rgba(110, 159, 255, 0.1); }
+.comment-toggle:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
+.comment-form-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  font-weight: 600;
+}
+.comment-form-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-mute);
+}
+.comment-preview {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.row-detail .actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+}
+
+.reject-form,
+.comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  animation: fadeIn 0.3s ease;
+}
+
+.reject-form textarea,
+.comment-form textarea {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  min-height: 80px;
+  resize: vertical;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.reject-form textarea:focus,
+.comment-form textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.task-action-notice {
+  padding: 8px 12px;
+  border-left: 3px solid var(--state-success);
+  border-radius: 4px;
+  color: var(--state-success);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(16, 185, 129, 0.1);
+}

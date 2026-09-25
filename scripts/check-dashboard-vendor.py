@@ -2,8 +2,9 @@
 """Fail when vendored dashboard JS drifts from its recorded pins.
 
 The dashboard self-hosts DOMPurify and marked as checked-in blobs. Pins,
-upstream URLs, and SHA-256 digests live in vendor-manifest.json; npm identity
-for Dependabot lives in the sibling package.json and package-lock.json. This
+upstream URLs, and SHA-256 digests live in vendor/vendor-manifest.json; npm
+identity for Dependabot lives in package.json and package-lock.json at the
+dashboard root. This
 check is the regression gate: an undocumented swap, a version bump that does
 not refresh the copies, or a missing or drifted lockfile cannot land silently.
 
@@ -22,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 
-VENDOR_DIR = Path("crates/orbit-web/assets/dashboard")
+PACKAGE_DIR = Path("crates/orbit-web/assets/dashboard")
+VENDOR_DIR = PACKAGE_DIR / "vendor"
 MANIFEST_NAME = "vendor-manifest.json"
 PACKAGE_NAME = "package.json"
 LOCKFILE_NAME = "package-lock.json"
@@ -61,11 +63,11 @@ def check_vendor(root: Path) -> list[str]:
     """Return human-readable failures for one repository root."""
     vendor = root / VENDOR_DIR
     manifest_path = vendor / MANIFEST_NAME
-    package_path = vendor / PACKAGE_NAME
-    lockfile_path = vendor / LOCKFILE_NAME
+    package_path = root / PACKAGE_DIR / PACKAGE_NAME
+    lockfile_path = root / PACKAGE_DIR / LOCKFILE_NAME
     manifest_label = str(VENDOR_DIR / MANIFEST_NAME)
-    package_label = str(VENDOR_DIR / PACKAGE_NAME)
-    lockfile_label = str(VENDOR_DIR / LOCKFILE_NAME)
+    package_label = str(PACKAGE_DIR / PACKAGE_NAME)
+    lockfile_label = str(PACKAGE_DIR / LOCKFILE_NAME)
     failures: list[str] = []
 
     manifest = load_json(manifest_path, "vendor manifest")
@@ -280,7 +282,7 @@ def write_fixture(root: Path, *, digest: str | None = None, package_version: str
         "private": True,
         "dependencies": {"dompurify": package_version, "marked": "18.0.5"},
     }
-    (vendor / PACKAGE_NAME).write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+    (root / PACKAGE_DIR / PACKAGE_NAME).write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
     lockfile = {
         "name": "orbit-dashboard-vendor",
         "lockfileVersion": 3,
@@ -294,7 +296,7 @@ def write_fixture(root: Path, *, digest: str | None = None, package_version: str
             "node_modules/marked": {"version": "18.0.5"},
         },
     }
-    (vendor / LOCKFILE_NAME).write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
+    (root / PACKAGE_DIR / LOCKFILE_NAME).write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
     return blob
 
 
@@ -329,7 +331,7 @@ def verify_fixture_reporting() -> None:
         write_fixture(root, package_version="9.9.9")
         failures = check_vendor(root)
         expected = (
-            f"{VENDOR_DIR / PACKAGE_NAME}: dompurify is '9.9.9', manifest records '3.4.8'"
+            f"{PACKAGE_DIR / PACKAGE_NAME}: dompurify is '9.9.9', manifest records '3.4.8'"
         )
         if expected not in failures:
             raise RuntimeError(
@@ -340,9 +342,9 @@ def verify_fixture_reporting() -> None:
     with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
         root = Path(temporary) / "lock-missing"
         write_fixture(root)
-        (root / VENDOR_DIR / LOCKFILE_NAME).unlink()
+        (root / PACKAGE_DIR / LOCKFILE_NAME).unlink()
         failures = check_vendor(root)
-        expected = f"{VENDOR_DIR / LOCKFILE_NAME}: missing"
+        expected = f"{PACKAGE_DIR / LOCKFILE_NAME}: missing"
         if expected not in failures:
             raise RuntimeError(
                 "deleted-lockfile fixture did not report missing lockfile: "
@@ -352,17 +354,17 @@ def verify_fixture_reporting() -> None:
     with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
         root = Path(temporary) / "lock-drift"
         write_fixture(root)
-        lockfile_path = root / VENDOR_DIR / LOCKFILE_NAME
+        lockfile_path = root / PACKAGE_DIR / LOCKFILE_NAME
         lockfile = json.loads(lockfile_path.read_text(encoding="utf-8"))
         lockfile["packages"][""]["dependencies"]["dompurify"] = "1.0.0"
         lockfile["packages"]["node_modules/dompurify"]["version"] = "1.0.0"
         lockfile_path.write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
         failures = check_vendor(root)
         expected_root = (
-            f"{VENDOR_DIR / LOCKFILE_NAME}: dompurify is '1.0.0', manifest records '3.4.8'"
+            f"{PACKAGE_DIR / LOCKFILE_NAME}: dompurify is '1.0.0', manifest records '3.4.8'"
         )
         expected_resolved = (
-            f"{VENDOR_DIR / LOCKFILE_NAME}: node_modules/dompurify is '1.0.0', "
+            f"{PACKAGE_DIR / LOCKFILE_NAME}: node_modules/dompurify is '1.0.0', "
             "manifest records '3.4.8'"
         )
         if expected_root not in failures or expected_resolved not in failures:
@@ -374,13 +376,13 @@ def verify_fixture_reporting() -> None:
     with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
         root = Path(temporary) / "lock-extra"
         write_fixture(root)
-        lockfile_path = root / VENDOR_DIR / LOCKFILE_NAME
+        lockfile_path = root / PACKAGE_DIR / LOCKFILE_NAME
         lockfile = json.loads(lockfile_path.read_text(encoding="utf-8"))
         lockfile["packages"][""]["dependencies"]["leftpad"] = "1.0.0"
         lockfile_path.write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
         failures = check_vendor(root)
         expected = (
-            f"{VENDOR_DIR / LOCKFILE_NAME}: dependency leftpad is not recorded in {PACKAGE_NAME}"
+            f"{PACKAGE_DIR / LOCKFILE_NAME}: dependency leftpad is not recorded in {PACKAGE_NAME}"
         )
         if expected not in failures:
             raise RuntimeError(
@@ -409,7 +411,7 @@ def main() -> int:
     if failures:
         print(
             "vendored dashboard JS does not match crates/orbit-web/assets/dashboard/"
-            "vendor-manifest.json (refresh with ./scripts/refresh-dashboard-vendor.sh):",
+            "vendor/vendor-manifest.json (refresh with ./scripts/refresh-dashboard-vendor.sh):",
             file=sys.stderr,
         )
         for failure in failures:

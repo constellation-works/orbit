@@ -1,6 +1,6 @@
 // Runs against shipped modules in both the Node DOM harness and Chromium.
-const { setWorkspace } = await import('./common.js');
-const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./operations.js');
+const { setWorkspace } = await import('./js/common.js');
+const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./js/operations.js');
 // The Operations tab and the Tasks dock's Drain card refresh separately in the
 // app; the harness drives both so every panel's behaviour is asserted together.
 const fetchAndRenderOperations = async () => {

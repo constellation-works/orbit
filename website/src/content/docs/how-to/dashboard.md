@@ -128,8 +128,9 @@ events for the selected window. Each count opens the view that explains it.
 
 ### Tasks
 
-Search by ID or title, filter by status, or type an ID into **Go to task
-ID** in the top bar. Tasks are grouped by status, with **Awaiting approval**
+Search by ID or title and filter by status. Press Enter on a full task ID
+to open that task even when the filter, the page, or the selected workspace
+hides it. Tasks are grouped by status, with **Awaiting approval**
 (`proposed`) first, then review, blocked, in progress, and backlog. Each row
 carries the one action its group is waiting on: **Approve** on a proposed
 task, **Ship** on a backlog task, and **View run** on a task in progress.

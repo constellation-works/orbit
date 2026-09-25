@@ -224,10 +224,11 @@ failure, never a success-by-skip.
 ## Vendored dashboard JavaScript
 
 The embedded dashboard vendors DOMPurify and marked as checked-in files under
-[`crates/orbit-web/assets/dashboard/`](../crates/orbit-web/assets/dashboard/).
+[`crates/orbit-web/assets/dashboard/vendor/`](../crates/orbit-web/assets/dashboard/vendor/).
 Pins, upstream URLs, SHA-256 digests, and the refresh command are in
-[`vendor-manifest.json`](../crates/orbit-web/assets/dashboard/vendor-manifest.json);
-the procedure is in [`VENDOR.md`](../crates/orbit-web/assets/dashboard/VENDOR.md).
+[`vendor-manifest.json`](../crates/orbit-web/assets/dashboard/vendor/vendor-manifest.json);
+the procedure is in [`VENDOR.md`](../crates/orbit-web/assets/dashboard/vendor/VENDOR.md).
+The npm `package.json` and `package-lock.json` sit at the dashboard root.
 `make ci-fast` runs [`scripts/check-dashboard-vendor.py`](../scripts/check-dashboard-vendor.py),
 which fails if a blob no longer matches its recorded digest, if those
 versions drift from `package.json`, or if `package-lock.json` is missing or

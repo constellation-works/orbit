@@ -1,0 +1,154 @@
+/* Fonts, colour tokens, the status/state dot colours, and element defaults.
+   Loaded first: every other file builds on the tokens defined here. */
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/static/fonts/geist-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/static/fonts/geist-mono-latin.woff2") format("woff2");
+}
+
+:root {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --font-display: var(--font-sans);
+  
+  --bg: #0a0a0b;
+  --bg-elev: #111114;
+  --bg-rail: #0c0c0f;
+  /* ORB-10972 two-tier border scale. `--border` draws the edge of a
+     panel or control; `--hair` draws every hairline *inside* one (table
+     rows, group splits, log lines). Before this they were the same
+     #333333, which made the grid read as loud as its contents. */
+  --border: #26262d;
+  --hair: #1b1b21;
+  --fg: #ededf0;
+  --fg-dim: #8f8f99;
+  --fg-mute: #6b6b75;
+  --accent: #8ab3ff;
+  --accent-hover: #a9c6ff;
+  --accent-hi: #c9ddff;
+  --status-proposed: #f2b35e;
+  --status-backlog: #a3a3ae;
+  --status-in-progress: #5cc8de;
+  --status-review: #d39bff;
+  --status-done: #5ad8a0;
+  --status-blocked: #ff8a80;
+  --status-rejected: #e0726a;
+  --status-archived: #6b6b75;
+  --status-someday: #8f8f99;
+  --status-open: #f2b35e;
+  --status-triaged: #5cc8de;
+  --status-resolved: #5ad8a0;
+  
+  --priority-high: #ef4444;
+  --priority-medium: #f59e0b;
+  --priority-low: #71717a;
+  --priority-critical: #f87171;
+  --complexity-low: #71717a;
+  --complexity-medium: #f59e0b;
+  --complexity-hard: #ef4444;
+  
+  --state-success: #5ad8a0;
+  --state-active: #5ad8a0;
+  --state-running: #5cc8de;
+  --state-pending: #f2b35e;
+  --state-failed: #ff8a80;
+  --state-error: #ff8a80;
+  --state-cancelled: #e0a39d;
+  --state-interrupted: #f97316; /* orange-500 — orphaned run, resumable */
+  --state-disabled: #6b6b75;
+
+  /* Per-agent identity colors (matches raw/scoreboard-league.html mock). */
+  --ag-codex:  #5ec8d4;
+  --ag-claude: #c97cf0;
+  --ag-gemini: #f5b14a;
+  --ag-grok:   #4cc38a;
+  --ag-codex-low:  rgba(94, 200, 212, 0.12);
+  --ag-claude-low: rgba(201, 124, 240, 0.12);
+  --ag-gemini-low: rgba(245, 177, 74, 0.12);
+  --ag-grok-low:   rgba(76, 195, 138, 0.12);
+
+  /* Washes and control surfaces shared by the redesigned chrome. */
+  --bg-sunk: #0d0d10;
+  --bg-hover: rgba(255, 255, 255, 0.04);
+  --bg-selected: #161b28;
+  --accent-wash: rgba(138, 179, 255, 0.1);
+  --accent-line: #2c4a86;
+  --danger-wash: #1d1111;
+  --danger-line: #4a2522;
+  --danger-fg: #ffc7c0;
+  --radius-panel: 12px;
+  --radius: 8px;
+  --radius-sm: 6px;
+}
+
+/* One dot colour per status and run state, read by every dot-and-label
+   control (status pills, filter chips, row status cells, group heads)
+   from the element's own data attribute. */
+[data-status] { --dot: var(--fg-dim); }
+[data-status="proposed"] { --dot: var(--status-proposed); }
+[data-status="backlog"] { --dot: var(--status-backlog); }
+[data-status="in-progress"] { --dot: var(--status-in-progress); }
+[data-status="review"] { --dot: var(--status-review); }
+[data-status="done"] { --dot: var(--status-done); }
+[data-status="blocked"] { --dot: var(--status-blocked); }
+[data-status="rejected"] { --dot: var(--status-rejected); }
+[data-status="archived"] { --dot: var(--status-archived); }
+[data-status="someday"] { --dot: var(--status-someday); }
+[data-status="open"] { --dot: var(--status-open); }
+[data-status="triaged"] { --dot: var(--status-triaged); }
+[data-status="resolved"] { --dot: var(--status-resolved); }
+[data-status="success"] { --dot: var(--state-success); }
+[data-status="failure"] { --dot: var(--state-failed); }
+[data-status="denied"] { --dot: var(--accent); }
+[data-state] { --dot: var(--fg-dim); }
+[data-state="success"], [data-state="active"] { --dot: var(--state-success); }
+[data-state="running"] { --dot: var(--state-running); }
+[data-state="pending"], [data-state="retrying"] { --dot: var(--state-pending); }
+[data-state="failed"], [data-state="error"], [data-state="timeout"] { --dot: var(--state-failed); }
+[data-state="cancelled"] { --dot: var(--state-cancelled); }
+[data-state="interrupted"] { --dot: var(--state-interrupted); }
+[data-state="disabled"], [data-state="skipped"] { --dot: var(--state-disabled); }
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ORB-10972: the document is a vertical split — the two-column shell
+   above, the always-on log status bar pinned beneath it. */
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mono { font-family: var(--font-mono); }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); }

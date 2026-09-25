@@ -4,15 +4,15 @@
 // fixture data is the only input, which is the point of the generic
 // renderer.
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-await import('./marked.umd.js');
-await import('./purify.min.js');
+await import('./vendor/marked.umd.js');
+await import('./vendor/purify.min.js');
 assert(globalThis.DOMPurify?.isSupported, 'the Plugins harness must run the vendored DOMPurify runtime');
 const sanitizerProbe = globalThis.DOMPurify.sanitize('<p>kept</p><script>removed()</script>');
 assert(sanitizerProbe.includes('<p>kept</p>'), `DOMPurify dropped safe markdown output: ${sanitizerProbe}`);
 assert(!sanitizerProbe.includes('<script'), `DOMPurify did not strip a script from markdown output: ${sanitizerProbe}`);
 
-const { setWorkspace } = await import('./common.js');
-const { fetchAndRenderPlugins } = await import('./plugins.js');
+const { setWorkspace } = await import('./js/common.js');
+const { fetchAndRenderPlugins } = await import('./js/plugins.js');
 
 const descendants = node => [node, ...(node.children || []).flatMap(descendants)];
 const hasClass = (node, name) => String(node.className || '').split(/\s+/).includes(name);

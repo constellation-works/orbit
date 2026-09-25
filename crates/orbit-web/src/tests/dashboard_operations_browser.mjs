@@ -3,19 +3,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dashboardFile } from './dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
-const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
 const test = fileURLToPath(new URL('./dashboard_operations.mjs', import.meta.url));
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const file = name === '/test.mjs' ? test : path.join(assets, name === '/' ? 'index.html' : path.basename(name));
-  if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  let data = fs.readFileSync(file);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' } : dashboardFile(name);
+  if (!served) { res.writeHead(404); res.end(); return; }
+  let data = served.data;
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
-  res.setHeader('content-type', file.endsWith('.html') ? 'text/html' : file.endsWith('.css') ? 'text/css' : 'text/javascript');
+  res.setHeader('content-type', served.type);
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -51,8 +51,8 @@ try {
     }
   });
   await page.evaluate(async () => {
-    const { initRouter, initTabs } = await import('/router.js');
-    const { setDockMode } = await import('/log-tail.js');
+    const { initRouter, initTabs } = await import('/js/router.js');
+    const { setDockMode } = await import('/js/log-tail.js');
     let tab = 'operations';
     let diag = 'runs';
     let operations = 'routines';
@@ -121,8 +121,8 @@ try {
   // dock, and the card fits the dock at its 336px minimum (and the narrower
   // mid-width column) with no horizontal scroll.
   await page.evaluate(async () => {
-    const { setDockMode } = await import('/log-tail.js');
-    const { setActiveTab } = await import('/router.js');
+    const { setDockMode } = await import('/js/log-tail.js');
+    const { setActiveTab } = await import('/js/router.js');
     setDockMode('log');
     setActiveTab('auto-drain');
   });
@@ -222,7 +222,7 @@ try {
   await page.addScriptTag({ type: 'module', url: '/test.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
   await page.evaluate(async () => {
-    const { initRouter, initTabs } = await import('/router.js');
+    const { initRouter, initTabs } = await import('/js/router.js');
     let tab = 'tasks';
     let diag = 'runs';
     let operations = 'routines';

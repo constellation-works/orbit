@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::process::Command;
 
-use crate::{DASHBOARD_CSP, DASHBOARD_FILES, serve_dashboard_file};
+use crate::{DASHBOARD_CSP, DASHBOARD_CSS, DASHBOARD_FILES, serve_dashboard_file};
 
 // The recent-history, aggregate-request, and route-selection assertions
 // addressed by this task have three dispositions:
@@ -17,18 +17,26 @@ use crate::{DASHBOARD_CSP, DASHBOARD_FILES, serve_dashboard_file};
 // * Delete implementation-shape checks (helper names, predicate placement, and
 //   exact call counts) once the observable behavior is covered. Those shapes
 //   are not dashboard contracts and should be free to change during refactors.
+/// Copy every shipped `.js` file under `source` into `destination`, keeping
+/// the directory layout so the modules' relative imports still resolve.
+fn copy_dashboard_javascript(source: &std::path::Path, destination: &std::path::Path) {
+    for entry in fs::read_dir(source).expect("read dashboard asset directory") {
+        let path = entry.expect("read dashboard asset entry").path();
+        let target = destination.join(path.file_name().expect("dashboard asset name"));
+        if path.is_dir() {
+            fs::create_dir_all(&target).expect("create dashboard asset directory copy");
+            copy_dashboard_javascript(&path, &target);
+        } else if path.extension().is_some_and(|extension| extension == "js") {
+            fs::copy(&path, target).expect("copy shipped dashboard JavaScript module");
+        }
+    }
+}
+
 fn run_dashboard_javascript_test(script: &str) {
     let temp_dir =
         tempfile::tempdir().expect("create temporary dashboard JavaScript test directory");
     let assets_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/dashboard");
-    for entry in fs::read_dir(&assets_dir).expect("read dashboard asset directory") {
-        let entry = entry.expect("read dashboard asset entry");
-        let path = entry.path();
-        if path.extension().is_some_and(|extension| extension == "js") {
-            let destination = temp_dir.path().join(entry.file_name());
-            fs::copy(&path, destination).expect("copy shipped dashboard JavaScript module");
-        }
-    }
+    copy_dashboard_javascript(&assets_dir, temp_dir.path());
     fs::write(temp_dir.path().join("package.json"), r#"{"type":"module"}"#)
         .expect("write temporary JavaScript module manifest");
     let harness_path = temp_dir.path().join("dashboard-behavior.mjs");
@@ -131,8 +139,8 @@ async fn dashboard_assets_serve_precompressed_gzip_bodies() {
 async fn dashboard_index_self_hosts_markdown_runtime() {
     let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
 
-    assert!(body.contains(r#"<script src="/static/marked.umd.js"></script>"#));
-    assert!(body.contains(r#"<script src="/static/purify.min.js"></script>"#));
+    assert!(body.contains(r#"<script src="/static/vendor/marked.umd.js"></script>"#));
+    assert!(body.contains(r#"<script src="/static/vendor/purify.min.js"></script>"#));
     assert!(!body.contains("cdn.jsdelivr.net"));
 }
 
@@ -174,8 +182,8 @@ async fn dashboard_self_hosts_fonts_without_google_requests() {
 #[test]
 fn dashboard_omits_retired_duel_surfaces() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
+    let css = DASHBOARD_CSS;
 
     for asset in [index, scoreboard, css] {
         assert!(!asset.to_ascii_lowercase().contains("duel"));
@@ -184,8 +192,8 @@ fn dashboard_omits_retired_duel_surfaces() {
 
 #[test]
 fn dashboard_renders_normalized_managed_token_usage_without_provider_ranking() {
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
+    let css = DASHBOARD_CSS;
 
     assert!(scoreboard.contains("Normalized token usage"));
     assert!(scoreboard.contains("unknown model/input basis (excluded, never guessed)"));
@@ -201,14 +209,14 @@ fn dashboard_renders_normalized_managed_token_usage_without_provider_ranking() {
 
 #[test]
 fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
-    let wrapper = include_str!("../../assets/dashboard/markdown.js");
+    let wrapper = include_str!("../../assets/dashboard/js/markdown.js");
     let app = include_str!("../../assets/dashboard/app.js");
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(wrapper.contains("DOMPurify"));
     assert!(wrapper.contains(".sanitize("));
     assert!(wrapper.contains("marked[methodName]"));
-    let plugins = include_str!("../../assets/dashboard/plugins.js");
+    let plugins = include_str!("../../assets/dashboard/js/plugins.js");
     assert!(!app.contains("marked.parse"));
     assert!(!tasks.contains("marked.parse"));
     assert!(!plugins.contains("marked.parse"));
@@ -231,8 +239,8 @@ fn dashboard_surfaces_workspace_location() {
     // against the embedded asset sources since the dashboard has no JS test
     // runner (see dashboard_markdown_call_sites above).
     let app = include_str!("../../assets/dashboard/app.js");
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
+    let css = DASHBOARD_CSS;
 
     // Selector secondary line must be gone, along with its update helper and style.
     assert!(
@@ -263,8 +271,8 @@ fn dashboard_task_actions_route_to_selected_workspace() {
     // the default workspace (or 400'd) instead of the selected one, so the
     // dashboard never reflected the change. Asserted against the embedded
     // asset sources since the dashboard has no JS test runner.
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
-    let common = include_str!("../../assets/dashboard/common.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
+    let common = include_str!("../../assets/dashboard/js/common.js");
 
     assert!(
         common.contains("export function withWorkspace("),
@@ -286,7 +294,7 @@ fn dashboard_task_actions_route_to_selected_workspace() {
 
 #[test]
 fn dashboard_run_resume_matches_runtime_guard_and_surfaces_lineage_and_errors() {
-    let runs = include_str!("../../assets/dashboard/runs.js");
+    let runs = include_str!("../../assets/dashboard/js/runs.js");
 
     assert!(
         runs.contains(
@@ -340,8 +348,8 @@ globalThis.fetch = async () => ({
   status: responseStatus,
   text: async () => JSON.stringify({ error: "run-events audit rows exceed bounded scan budget" }),
 });
-const { fetchJson } = await import("./common.js");
-const { setActiveRunEvents, setActiveRunEventsError, renderRunEvents } = await import("./run-detail.js");
+const { fetchJson } = await import("./js/common.js");
+const { setActiveRunEvents, setActiveRunEventsError, renderRunEvents } = await import("./js/run-detail.js");
 let scanError;
 try {
   await fetchJson("/api/runs/jrun-1/events?limit=100");
@@ -366,7 +374,7 @@ assert.match(get("run-events-body").textContent, /No v2 envelope events for this
 
 #[test]
 fn dashboard_renders_complexity_as_its_own_dimension() {
-    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
+    let diagnostics = include_str!("../../assets/dashboard/js/diagnostics.js");
     assert!(
         diagnostics.contains("Task completion by complexity"),
         "completion-by-complexity panel must exist"
@@ -440,8 +448,8 @@ globalThis.fetch = async (path) => {
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-const { renderTasks } = await import("./tasks.js");
-const { initRouter, setActiveTab } = await import("./router.js");
+const { renderTasks } = await import("./js/tasks.js");
+const { initRouter, setActiveTab } = await import("./js/router.js");
 const historyTask = { id: "ORB-11196", title: "history", status: "review", history: [
   { event: "status-1", at: "1", by: "a" }, { event: "status-2", at: "2", by: "b" }, { event: "status-3", at: "3", by: "c" }, { event: "status-4", at: "4", by: "d" }, { event: "status-5", at: "5", by: "e" }, { event: "status-6", at: "6", by: "f" }, { event: "commented", at: "7", by: "noise" }, { event: "commented", at: "8", by: "noise" },
 ] };
@@ -471,7 +479,7 @@ if (!requests.some((path) => path.startsWith("/api/tasks/all?status=")) || reque
 
 #[test]
 fn dashboard_task_detail_shows_orchestrator_as_attribution_not_execution_crew() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(
         tasks.contains(r#"["orchestrator", "orchestrator"]"#),
@@ -544,9 +552,9 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
 #[test]
 fn dashboard_operations_are_typed_guarded_and_responsive() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let operations = include_str!("../../assets/dashboard/operations.js");
-    let router = include_str!("../../assets/dashboard/router.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let operations = include_str!("../../assets/dashboard/js/operations.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
+    let css = DASHBOARD_CSS;
 
     for id in [
         "routines-body",
@@ -613,10 +621,10 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
 #[test]
 fn dashboard_config_tab_is_routed_and_renders_provenance() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let config = include_str!("../../assets/dashboard/config.js");
-    let router = include_str!("../../assets/dashboard/router.js");
+    let config = include_str!("../../assets/dashboard/js/config.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
     let app = include_str!("../../assets/dashboard/app.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     for id in [
         "config-subtabs",
@@ -656,7 +664,7 @@ fn dashboard_config_tab_is_routed_and_renders_provenance() {
 /// admits.
 #[test]
 fn dashboard_config_hard_codes_no_key_names_or_enum_options() {
-    let config = include_str!("../../assets/dashboard/config.js");
+    let config = include_str!("../../assets/dashboard/js/config.js");
     let catalog = orbit_core::application::config::key_catalog();
 
     for key in catalog["keys"].as_array().expect("keys") {
@@ -688,9 +696,9 @@ fn dashboard_config_hard_codes_no_key_names_or_enum_options() {
 #[test]
 fn dashboard_operations_rows_share_one_vocabulary_and_jobs_is_projected() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let operations = include_str!("../../assets/dashboard/operations.js");
-    let router = include_str!("../../assets/dashboard/router.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let operations = include_str!("../../assets/dashboard/js/operations.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
+    let css = DASHBOARD_CSS;
 
     assert!(
         index.contains(r#"<nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Automation views">"#),
@@ -777,7 +785,7 @@ fn dashboard_operations_rows_share_one_vocabulary_and_jobs_is_projected() {
 /// tab plus diagnostics subtab stays in the (now horizontal) nav.
 #[test]
 fn dashboard_narrow_shell_collapses_rail_and_task_rows() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
     let index = include_str!("../../assets/dashboard/index.html");
 
     let narrow = css
@@ -896,8 +904,8 @@ globalThis.fetch = async (path) => {
     : {};
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };
-const { setWorkspace } = await import("./common.js");
-const { initOperations, fetchAndRenderOperations } = await import("./operations.js");
+const { setWorkspace } = await import("./js/common.js");
+const { initOperations, fetchAndRenderOperations } = await import("./js/operations.js");
 setWorkspace("one");
 initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime });
 await fetchAndRenderOperations();
@@ -942,10 +950,10 @@ if (!clockText.includes("14:00 PDT") && !clockText.includes("14:05 PDT")) {
 #[test]
 fn dashboard_auto_drain_card_lives_in_the_tasks_dock() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let operations = include_str!("../../assets/dashboard/operations.js");
-    let router = include_str!("../../assets/dashboard/router.js");
+    let operations = include_str!("../../assets/dashboard/js/operations.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
     let app = include_str!("../../assets/dashboard/app.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     assert!(
         !index.contains(r#"data-tab="auto-drain""#) && !index.contains("rail-count-auto-drain"),
@@ -1028,7 +1036,9 @@ fn dashboard_auto_drain_card_lives_in_the_tasks_dock() {
         "the old Auto-drain page styles must be deleted, not left unused"
     );
     assert!(
-        css.contains(".drain-durations {\n        display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));"),
+        css.contains(
+            ".drain-durations {\n  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));"
+        ),
         "the duration segments share the card width equally so they fit a 336px dock"
     );
 }
@@ -1057,7 +1067,7 @@ fn computed_operations_main_display(css: &str, hidden: bool, viewport_width: u16
 
 #[test]
 fn dashboard_operations_subtabs_compute_exactly_one_rendered_main() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     for viewport_width in [1280, 720, 480] {
         for (route, hidden_states) in [("routines", [false, true]), ("auto-tasks", [true, false])] {
@@ -1082,7 +1092,7 @@ fn dashboard_operations_subtabs_compute_exactly_one_rendered_main() {
 #[tokio::test]
 async fn dashboard_scoreboard_is_reachable_under_diagnostics() {
     let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
-    let router = include_str!("../../assets/dashboard/router.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
     let app = include_str!("../../assets/dashboard/app.js");
 
     let diagnostics_at = body
@@ -1137,7 +1147,7 @@ async fn dashboard_scoreboard_is_reachable_under_diagnostics() {
 #[tokio::test]
 async fn dashboard_reliability_is_reachable_under_diagnostics() {
     let body = response_body(serve_dashboard_file("/", &HeaderMap::new())).await;
-    let router = include_str!("../../assets/dashboard/router.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
     let app = include_str!("../../assets/dashboard/app.js");
 
     let diagnostics_at = body
@@ -1184,7 +1194,7 @@ async fn dashboard_reliability_is_reachable_under_diagnostics() {
 /// quietly turn a withheld cell back into a confident percentage.
 #[test]
 fn dashboard_reliability_never_renders_a_rate_without_its_denominator() {
-    let reliability = include_str!("../../assets/dashboard/reliability.js");
+    let reliability = include_str!("../../assets/dashboard/js/reliability.js");
     let index = include_str!("../../assets/dashboard/index.html");
 
     assert!(
@@ -1227,7 +1237,7 @@ fn dashboard_reliability_never_renders_a_rate_without_its_denominator() {
 /// cost-derived input untrustworthy, so the reliability path must not read one.
 #[test]
 fn dashboard_reliability_reads_no_token_or_cost_field() {
-    let reliability = include_str!("../../assets/dashboard/reliability.js");
+    let reliability = include_str!("../../assets/dashboard/js/reliability.js");
     // Field identifiers, not the words: the module's own header explains *why*
     // it avoids these inputs, so a bare "token" match would flag the rationale.
     for banned in [
@@ -1249,7 +1259,7 @@ fn dashboard_reliability_reads_no_token_or_cost_field() {
 
 #[test]
 fn dashboard_scoreboard_keeps_managed_cost_ownership_out_of_executor_rankings() {
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
     let index = include_str!("../../assets/dashboard/index.html");
 
     assert!(index.contains("Managed Execution Cost"));
@@ -1275,8 +1285,8 @@ fn dashboard_scoreboard_keeps_managed_cost_ownership_out_of_executor_rankings() 
 
 #[test]
 fn dashboard_managed_execution_cost_panel_has_responsive_presentation_hooks() {
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
+    let css = DASHBOARD_CSS;
 
     assert!(
         scoreboard.contains("scoreboard-orchestration-context")
@@ -1302,7 +1312,7 @@ fn dashboard_managed_execution_cost_panel_has_responsive_presentation_hooks() {
         );
     }
     assert!(
-        css.contains("#scoreboard-orchestration-panel {\n        align-self: start;")
+        css.contains("#scoreboard-orchestration-panel {\n  align-self: start;")
             && css.contains("grid-template-columns: repeat(2, minmax(0, 1fr));"),
         "the desktop panel must stay content-height and use a compact bucket grid"
     );
@@ -1320,10 +1330,10 @@ fn dashboard_managed_execution_cost_panel_has_responsive_presentation_hooks() {
 #[test]
 fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
     let app = include_str!("../../assets/dashboard/app.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     let sticky_at = css
-        .find("#friction-detail-panel {\n        position: sticky;")
+        .find("#friction-detail-panel {\n  position: sticky;")
         .expect("the friction detail panel must be sticky");
     let sticky_rule = &css[sticky_at
         ..css[sticky_at..]
@@ -1336,7 +1346,7 @@ fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
         "the pane must pin inside the scrolling column and stay inside the viewport"
     );
     assert!(
-        css.contains("#friction-detail-panel > .body {\n        overflow-y: auto;",),
+        css.contains("#friction-detail-panel > .body {\n  overflow-y: auto;",),
         "detail content taller than the pane must scroll inside it, not be clipped"
     );
     assert!(
@@ -1344,7 +1354,7 @@ fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
         "the old fixed min-height fought the bounded sticky pane and must be gone"
     );
     let accordion_at = css
-        .find("          display: none;\n        }\n        .friction-row-toggle")
+        .find("    display: none;\n  }\n  .friction-row-toggle")
         .expect("the narrow breakpoint must hide the separate detail pane");
     assert!(sticky_at < accordion_at);
     assert!(
@@ -1354,7 +1364,7 @@ fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
             && app.contains("frag.appendChild(inlineDetail);")
             && app.contains("frictionAccordionMedia.addEventListener(\"change\"")
             && css.contains(".friction-accordion-detail .knowledge-detail-body")
-            && css.contains("@media (max-width: 1400px) {\n        .knowledge-detail-body"),
+            && css.contains("@media (max-width: 1400px) {\n  .knowledge-detail-body"),
         "narrow friction rows must expose a keyboard-operable inline accordion that tracks viewport changes"
     );
 }
@@ -1363,7 +1373,7 @@ fn dashboard_knowledge_detail_is_sticky_on_desktop_and_inline_when_narrow() {
 fn dashboard_friction_list_defaults_to_active_and_filters_by_status() {
     let index = include_str!("../../assets/dashboard/index.html");
     let app = include_str!("../../assets/dashboard/app.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     assert!(
         index.contains(r#"<label class="friction-filter-control" for="friction-status-filter">"#)
@@ -1406,7 +1416,7 @@ fn dashboard_friction_list_defaults_to_active_and_filters_by_status() {
 /// task's review-thread endpoint rather than patching the task record.
 #[test]
 fn dashboard_task_write_actions_are_configuration_free() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(
         tasks.contains(r#"const SHIP_STATUSES = new Set(["backlog"]);"#),
@@ -1459,7 +1469,7 @@ fn dashboard_task_write_actions_are_configuration_free() {
 /// (`{ items, total, limit, truncated, offset, next_cursor }`) when available.
 #[test]
 fn dashboard_task_count_states_page_range_and_total_explicitly() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(
         tasks.contains("export function formatTaskCount("),
@@ -1482,9 +1492,9 @@ fn dashboard_task_count_states_page_range_and_total_explicitly() {
 #[test]
 fn dashboard_task_pagination_is_accessible_responsive_and_race_safe() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
     let app = include_str!("../../assets/dashboard/app.js");
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(
         index.contains(r#"<nav class="task-pagination" aria-label="Task pages">"#)
@@ -1517,8 +1527,8 @@ fn dashboard_task_pagination_is_accessible_responsive_and_race_safe() {
 /// in words, not just via chip color.
 #[test]
 fn dashboard_task_filters_are_represented_in_the_url_and_summarized() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
-    let router = include_str!("../../assets/dashboard/router.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
     let index = include_str!("../../assets/dashboard/index.html");
 
     assert!(
@@ -1548,7 +1558,7 @@ fn dashboard_task_filters_are_represented_in_the_url_and_summarized() {
 /// deterministic source contract because the dashboard has no JS test runner.
 #[test]
 fn dashboard_task_filter_hash_round_trips_default_all_someday_and_none() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
     let app = include_str!("../../assets/dashboard/app.js");
 
     assert!(
@@ -1643,7 +1653,7 @@ Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText
 globalThis.setTimeout = () => 0;
 
 const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 function find(node, predicate) {
   if (predicate(node)) return node;
@@ -1763,7 +1773,7 @@ const context = {
   replaceTask: (updated) => { task = updated; }, fmtAbsTime: (value) => value,
   refreshDashboard: () => Promise.resolve(),
 };
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 function find(node, predicate) {
   if (predicate(node)) return node;
@@ -1888,7 +1898,7 @@ const context = {
   replaceTask: (updated) => { task = updated; }, fmtAbsTime: (value) => value,
   refreshDashboard: () => Promise.resolve(),
 };
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 function find(node, predicate) {
   if (predicate(node)) return node;
@@ -1976,7 +1986,7 @@ const context = {
   statusUpdateTargets: statuses, fmtAbsTime: (value) => value,
   refreshDashboard: () => Promise.resolve(),
 };
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 function find(node, predicate) {
   if (predicate(node)) return node;
@@ -2152,7 +2162,7 @@ const context = {
   statusUpdateTargets: statuses, fmtAbsTime: (value) => `abs:${value}`,
   refreshDashboard: () => Promise.resolve(),
 };
-const { renderTasks, scrollToComment } = await import("./tasks.js");
+const { renderTasks, scrollToComment } = await import("./js/tasks.js");
 function find(node, predicate) {
   if (predicate(node)) return node;
   for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
@@ -2397,7 +2407,7 @@ if (preview.style.display !== "none") throw new Error("the preview must toggle b
 "###,
     );
 
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
     assert!(
         !css.contains(".row-detail.split-layout > .comments-panel {"),
         "the full-width split-layout comments rule must be dropped"
@@ -2521,7 +2531,7 @@ const context = {
   statusUpdateTargets: statuses, fmtAbsTime: (value) => `abs:${value}`,
   refreshDashboard: () => Promise.resolve(),
 };
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 function find(node, predicate) {
   if (predicate(node)) return node;
   for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
@@ -2592,8 +2602,8 @@ globalThis.document = { getElementById: get, createElement: (tag) => new Node(ta
 globalThis.window = { location: new URL("http://dashboard.test/#audit"), addEventListener: () => {} };
 
 const ctx = { fmtDuration: (value) => String(value) };
-const { renderAuditSummary } = await import("./audit.js");
-const { renderDiagnosticsSideCard } = await import("./diagnostics.js");
+const { renderAuditSummary } = await import("./js/audit.js");
+const { renderDiagnosticsSideCard } = await import("./js/diagnostics.js");
 
 const cardsIn = (container) => new Map(container.children.filter((node) => node.dataset.key).map((node) => [node.dataset.key, node]));
 function expectStable(label, container, before, changedKey) {
@@ -2663,9 +2673,9 @@ fn dashboard_workspace_selection_persists_to_the_url() {
 /// keeps an explicit minimum height so it can never be squeezed toward zero.
 #[test]
 fn dashboard_log_dock_has_two_modes_and_an_always_on_status_bar() {
-    let log_tail = include_str!("../../assets/dashboard/log-tail.js");
+    let log_tail = include_str!("../../assets/dashboard/js/log-tail.js");
     let index = include_str!("../../assets/dashboard/index.html");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     assert!(
         log_tail.contains("orbit.dashboard.logPanel"),
@@ -2725,7 +2735,7 @@ fn dashboard_log_dock_has_two_modes_and_an_always_on_status_bar() {
     );
     assert!(
         css.contains(".main-col > .tab-pane[data-tab=\"tasks\"] .col-tasks")
-            && css.contains(".col-tasks {\n        min-height: 0;"),
+            && css.contains(".col-tasks {\n  min-height: 0;"),
         "the tasks column must be allowed to shrink so #tasks-body can scroll"
     );
     assert!(
@@ -2851,7 +2861,7 @@ globalThis.fetch = async (path) => {
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };
 const tick = () => new Promise((resolve) => nativeSetTimeout(resolve, 0));
-const { initLogTail } = await import("./log-tail.js");
+const { initLogTail } = await import("./js/log-tail.js");
 initLogTail();
 await tick();
 await tick();
@@ -2884,7 +2894,7 @@ if (get("side-dock").classList.contains("disconnected")) throw new Error("dock s
 #[test]
 fn dashboard_nav_rail_preserves_the_router_selector_contract() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
     let app = include_str!("../../assets/dashboard/app.js");
 
     assert!(
@@ -2941,7 +2951,7 @@ fn dashboard_nav_rail_preserves_the_router_selector_contract() {
 /// which made the panel grid read as loud as its contents.
 #[test]
 fn dashboard_separates_panel_edges_from_internal_hairlines() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     let token = |name: &str| {
         let at = css
@@ -2988,7 +2998,7 @@ fn dashboard_separates_panel_edges_from_internal_hairlines() {
 /// value can still be safely restored.
 #[test]
 fn dashboard_inline_task_edits_report_pending_success_failure_and_offer_undo() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(
         tasks.contains(r#"{ kind: "pending", text: "saving…" }"#),
@@ -3076,7 +3086,7 @@ Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText
 globalThis.setTimeout = () => 0;
 
 const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 function find(node, predicate) {
   if (predicate(node)) return node;
@@ -3128,7 +3138,7 @@ for (const status of statuses) {
 /// refused unless that explicit, workspace-qualified target is available.
 #[test]
 fn dashboard_aggregate_view_guards_inline_task_mutations() {
-    let tasks = include_str!("../../assets/dashboard/tasks.js");
+    let tasks = include_str!("../../assets/dashboard/js/tasks.js");
 
     assert!(
         tasks.contains("function canMutateTask(task) {")
@@ -3393,8 +3403,8 @@ const context = {
   replaceTask: (next) => { current = next; },
 };
 
-const { setMultiWorkspace } = await import("./common.js");
-const { renderTasks } = await import("./tasks.js");
+const { setMultiWorkspace } = await import("./js/common.js");
+const { renderTasks } = await import("./js/tasks.js");
 const body = get("tasks-body");
 
 function find(node, predicate) {
@@ -3458,53 +3468,56 @@ fn dashboard_assets_carry_no_project_specific_identifiers() {
             "index.html",
             include_str!("../../assets/dashboard/index.html"),
         ),
-        (
-            "dashboard.css",
-            include_str!("../../assets/dashboard/dashboard.css"),
-        ),
+        ("dashboard.css", DASHBOARD_CSS),
         ("app.js", include_str!("../../assets/dashboard/app.js")),
         (
             "common.js",
-            include_str!("../../assets/dashboard/common.js"),
+            include_str!("../../assets/dashboard/js/common.js"),
         ),
         (
             "markdown.js",
-            include_str!("../../assets/dashboard/markdown.js"),
+            include_str!("../../assets/dashboard/js/markdown.js"),
         ),
-        ("tasks.js", include_str!("../../assets/dashboard/tasks.js")),
+        (
+            "tasks.js",
+            include_str!("../../assets/dashboard/js/tasks.js"),
+        ),
         (
             "field-editor.js",
-            include_str!("../../assets/dashboard/field-editor.js"),
+            include_str!("../../assets/dashboard/js/field-editor.js"),
         ),
-        ("audit.js", include_str!("../../assets/dashboard/audit.js")),
+        (
+            "audit.js",
+            include_str!("../../assets/dashboard/js/audit.js"),
+        ),
         (
             "scoreboard.js",
-            include_str!("../../assets/dashboard/scoreboard.js"),
+            include_str!("../../assets/dashboard/js/scoreboard.js"),
         ),
         (
             "log-tail.js",
-            include_str!("../../assets/dashboard/log-tail.js"),
+            include_str!("../../assets/dashboard/js/log-tail.js"),
         ),
         (
             "diagnostics.js",
-            include_str!("../../assets/dashboard/diagnostics.js"),
+            include_str!("../../assets/dashboard/js/diagnostics.js"),
         ),
         (
             "router.js",
-            include_str!("../../assets/dashboard/router.js"),
+            include_str!("../../assets/dashboard/js/router.js"),
         ),
-        ("runs.js", include_str!("../../assets/dashboard/runs.js")),
+        ("runs.js", include_str!("../../assets/dashboard/js/runs.js")),
         (
             "run-detail.js",
-            include_str!("../../assets/dashboard/run-detail.js"),
+            include_str!("../../assets/dashboard/js/run-detail.js"),
         ),
         (
             "reliability.js",
-            include_str!("../../assets/dashboard/reliability.js"),
+            include_str!("../../assets/dashboard/js/reliability.js"),
         ),
         (
             "operations.js",
-            include_str!("../../assets/dashboard/operations.js"),
+            include_str!("../../assets/dashboard/js/operations.js"),
         ),
     ];
     // Personal names and layout paths of the machine Orbit is developed on, plus
@@ -3552,14 +3565,14 @@ fn dashboard_assets_carry_no_project_specific_identifiers() {
 /// drill-downs expose removable chips; the URL restores the scope.
 #[test]
 fn dashboard_scope_is_shared_labeled_and_url_backed() {
-    let common = include_str!("../../assets/dashboard/common.js");
+    let common = include_str!("../../assets/dashboard/js/common.js");
     let app = include_str!("../../assets/dashboard/app.js");
-    let router = include_str!("../../assets/dashboard/router.js");
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let reliability = include_str!("../../assets/dashboard/reliability.js");
-    let audit = include_str!("../../assets/dashboard/audit.js");
+    let router = include_str!("../../assets/dashboard/js/router.js");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
+    let reliability = include_str!("../../assets/dashboard/js/reliability.js");
+    let audit = include_str!("../../assets/dashboard/js/audit.js");
     let index = include_str!("../../assets/dashboard/index.html");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     assert!(
         common.contains("export function getWindow(")
@@ -3632,11 +3645,11 @@ fn dashboard_scope_is_shared_labeled_and_url_backed() {
 fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
     let index = include_str!("../../assets/dashboard/index.html");
     let app = include_str!("../../assets/dashboard/app.js");
-    let router = include_str!("../../assets/dashboard/router.js");
-    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let audit = include_str!("../../assets/dashboard/audit.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let router = include_str!("../../assets/dashboard/js/router.js");
+    let diagnostics = include_str!("../../assets/dashboard/js/diagnostics.js");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
+    let audit = include_str!("../../assets/dashboard/js/audit.js");
+    let css = DASHBOARD_CSS;
 
     // Routed as a diagnostics subtab, fetched against the shared window.
     assert!(
@@ -3726,14 +3739,16 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
             && css.contains(".incident-evidence"),
         "the incident summary and its expansion need their own presentation hooks"
     );
-    let responsive_at = css
+    let health_css = include_str!("../../assets/dashboard/css/health.css");
+    let responsive_at = health_css
         .rfind("@media (max-width: 720px)")
         .expect("a 720px breakpoint must exist");
     assert!(
-        css[responsive_at..].contains(".incident-facts { grid-template-columns: minmax(0, 1fr);")
-            && css[responsive_at..].contains(".incident-evidence")
-            && css[responsive_at..].contains(".lifecycle-failure-counts")
-            && css[responsive_at..]
+        health_css[responsive_at..]
+            .contains(".incident-facts { grid-template-columns: minmax(0, 1fr);")
+            && health_css[responsive_at..].contains(".incident-evidence")
+            && health_css[responsive_at..].contains(".lifecycle-failure-counts")
+            && health_css[responsive_at..]
                 .contains(".tool-health-grid { grid-template-columns: minmax(0, 1fr); }"),
         "the incident expansion and tool/lifecycle cards must reflow rather than clip below 720px"
     );
@@ -3744,9 +3759,9 @@ fn dashboard_failure_metrics_are_incident_aware_and_state_their_denominators() {
 /// every underlying row's run/task/tool identifiers.
 #[test]
 fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
-    let audit = include_str!("../../assets/dashboard/audit.js");
-    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let audit = include_str!("../../assets/dashboard/js/audit.js");
+    let diagnostics = include_str!("../../assets/dashboard/js/diagnostics.js");
+    let css = DASHBOARD_CSS;
 
     assert!(
         audit.contains("function isNamedTool(")
@@ -3768,9 +3783,7 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
         "incident expansion must expose run/task/tool identifiers for every row"
     );
     assert!(
-        css.contains(".lifecycle-failure-card")
-            && css.contains(".lifecycle-failure-counts")
-            && css.contains(".incident-lifecycle-note"),
+        css.contains(".lifecycle-failure-counts") && css.contains(".incident-lifecycle-note"),
         "lifecycle labels need their own presentation hooks"
     );
 }
@@ -3780,9 +3793,9 @@ fn dashboard_tool_metrics_exclude_unknown_and_label_lifecycle_failures() {
 /// as separately labeled incident populations with exact evidence expansion.
 #[test]
 fn dashboard_reliability_separates_all_four_failure_populations() {
-    let audit = include_str!("../../assets/dashboard/audit.js");
-    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let audit = include_str!("../../assets/dashboard/js/audit.js");
+    let diagnostics = include_str!("../../assets/dashboard/js/diagnostics.js");
+    let css = DASHBOARD_CSS;
 
     for needle in [
         "Unexpected Failures by Callable Tool",
@@ -3839,13 +3852,14 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
             && css.contains(".incident-class.diagnostic"),
         "diagnostic rows need a distinct desktop presentation"
     );
-    let responsive_at = css
+    let health_css = include_str!("../../assets/dashboard/css/health.css");
+    let responsive_at = health_css
         .rfind("@media (max-width: 720px)")
         .expect("720px responsive rules");
     assert!(
-        css[responsive_at..].contains(".incident-class-chip")
-            && css[responsive_at..].contains("white-space: normal")
-            && css[responsive_at..]
+        health_css[responsive_at..].contains(".incident-class-chip")
+            && health_css[responsive_at..].contains("white-space: normal")
+            && health_css[responsive_at..]
                 .contains(".tool-health-grid { grid-template-columns: minmax(0, 1fr); }"),
         "four category labels and rate cards must remain scannable at narrow viewport widths"
     );
@@ -3871,7 +3885,7 @@ const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
 globalThis.document = { getElementById: get, createElement: (tag) => new Node(tag), createTextNode: (text) => Object.assign(new Node(), { textContent: text }) };
 globalThis.window = { location: new URL("http://dashboard.test/#audit"), addEventListener: () => {} };
 
-const { renderAuditSummary } = await import("./audit.js");
+const { renderAuditSummary } = await import("./js/audit.js");
 renderAuditSummary({
   window: "24h",
   tool_call_failure_rate: { failed: 7, total: 18, rate: 7 / 18 },
@@ -3909,9 +3923,9 @@ if (get("audit-summary-title").textContent !== "Audit Summary 24h") {
 #[test]
 fn dashboard_scoreboard_highlights_are_accessible_and_honest() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let scoreboard = include_str!("../../assets/dashboard/scoreboard.js");
-    let common = include_str!("../../assets/dashboard/common.js");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let scoreboard = include_str!("../../assets/dashboard/js/scoreboard.js");
+    let common = include_str!("../../assets/dashboard/js/common.js");
+    let css = DASHBOARD_CSS;
 
     assert!(
         index.contains(r#"id="scoreboard-window-selector" role="tablist" aria-label="Scoreboard time window""#)
@@ -4046,7 +4060,7 @@ globalThis.requestAnimationFrame = (fn) => fn();
 globalThis.setInterval = () => 0;
 globalThis.EventSource = class { constructor() {} close() {} };
 
-const { renderScoreboard } = await import("./scoreboard.js");
+const { renderScoreboard } = await import("./js/scoreboard.js");
 
 // A quiet agent whose failure-incident fields are `null`: the audit query
 // failed for this window, so the source is unavailable, not a measured zero.
@@ -4101,8 +4115,8 @@ if (operationsDivider.textContent.includes("no observed tool calls or friction t
 
 #[test]
 fn dashboard_aggregate_runs_keep_workspace_identity_filters_and_action_scope() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
-    let router = include_str!("../../assets/dashboard/router.js");
+    let css = DASHBOARD_CSS;
+    let router = include_str!("../../assets/dashboard/js/router.js");
     assert!(css.contains(".runs-row.workspace-attributed"));
     assert!(css.contains("@media (max-width: 760px)"));
     assert!(router.contains("function navigateToRunImpl(ctx, runId, workspaceId = null)"));
@@ -4152,7 +4166,7 @@ const runs = [
   { workspace_id: "beta", workspace_name: "Beta", run_id: "jrun-shared", job_id: "ship", state: "failed", created_at: "2026-09-05T03:00:00Z" },
 ];
 let navigated = null;
-const { initRuns, renderRuns, buildReplayRunButton } = await import("./runs.js");
+const { initRuns, renderRuns, buildReplayRunButton } = await import("./js/runs.js");
 initRuns({
   getLastRuns: () => runs,
   getRunsMeta: () => ({ truncated: false }),
@@ -4204,8 +4218,8 @@ if (rows.length !== 1 || !rows[0].textContent.includes("Beta")) throw new Error(
 #[test]
 fn dashboard_failed_runs_filter_before_limit_and_label_distinct_scopes() {
     let app = include_str!("../../assets/dashboard/app.js");
-    let runs = include_str!("../../assets/dashboard/runs.js");
-    let diagnostics = include_str!("../../assets/dashboard/diagnostics.js");
+    let runs = include_str!("../../assets/dashboard/js/runs.js");
+    let diagnostics = include_str!("../../assets/dashboard/js/diagnostics.js");
     let index = include_str!("../../assets/dashboard/index.html");
 
     assert!(
@@ -4266,8 +4280,8 @@ globalThis.window = { location, innerWidth: 1200, confirm: () => true };
 globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
 Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
 
-const { initRuns, renderRuns, formatRunCount } = await import("./runs.js");
-const { renderDiagnostics } = await import("./diagnostics.js");
+const { initRuns, renderRuns, formatRunCount } = await import("./js/runs.js");
+const { renderDiagnostics } = await import("./js/diagnostics.js");
 
 if (formatRunCount(20, 25, { total: 81, limit: 25, truncated: true }) !== "20 shown (of 25 fetched) · 81 total · server limit 25") {
   throw new Error(`formatRunCount missed shown/total/limit language: ${formatRunCount(20, 25, { total: 81, limit: 25, truncated: true })}`);
@@ -4378,7 +4392,7 @@ class Element {
 }
 globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => ({textContent:text})};
 globalThis.window = {location: {search:''}};
-const {renderAutomation} = await import('./automation.js');
+const {renderAutomation} = await import('./js/automation.js');
 const panel = renderAutomation({reason:'fresh_unready',state:{consumer:'host/ws/routine/pilot',members:{
   pending:{}, assessed:{task:{ready:false,resulting_fingerprint:'f'}},withheld:{other:'human_block'},failed:{},
   active:{member:{key:'task'},attempt:2,max_attempts:2,deadline:'2026-09-06T12:00:00Z',action_id:'run'}
@@ -4450,8 +4464,8 @@ globalThis.fetch = async (path) => {
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };
 
-const { setWorkspace } = await import("./common.js");
-const { initOperations, fetchAndRenderOperations } = await import("./operations.js");
+const { setWorkspace } = await import("./js/common.js");
+const { initOperations, fetchAndRenderOperations } = await import("./js/operations.js");
 setWorkspace("one");
 initOperations({ getWorkspaces: () => [{ id: "one", name: "one", status: "active" }], formatAbsoluteTime: (value) => value });
 
@@ -4513,7 +4527,7 @@ class Element {
 }
 globalThis.document = {createElement: tag => new Element(tag), createTextNode: text => ({textContent:text})};
 globalThis.window = {location: {search:''}};
-const {renderAutomation} = await import('./automation.js');
+const {renderAutomation} = await import('./js/automation.js');
 function text(node) { return [node.textContent,...(node.children||[]).map(text)].join(' '); }
 
 const unresolved = text(renderAutomation({reason:'ownership_unresolved',state:null,receipts:[],waivers:[],
@@ -4545,7 +4559,7 @@ assert.doesNotMatch(owned,/Owned by machine/);
 /// SVG still downloads, and that a decode failure degrades to the bytes.
 #[test]
 fn dashboard_task_detail_renders_image_artifacts_at_desktop_and_narrow_widths() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
     // Responsiveness is a stylesheet contract, so it is checked where it lives:
     // the element scales to its column and keeps its aspect ratio, and narrow
     // viewports bound the height so a tall screenshot cannot take over the page.
@@ -4605,7 +4619,7 @@ function respondWith(kind, contentType) {
 let nextResponse = respondWith("png", "image/png");
 globalThis.fetch = async (path) => { requested.push(String(path)); return nextResponse; };
 
-const { buildArtifacts } = await import("./tasks.js");
+const { buildArtifacts } = await import("./js/tasks.js");
 
 async function renderPreview(artifact, response) {
   nextResponse = response;
@@ -4690,7 +4704,7 @@ fn dashboard_global_task_jump_scopes_to_selected_workspace_and_distinguishes_err
     let app = include_str!("../../assets/dashboard/app.js");
     let index = include_str!("../../assets/dashboard/index.html");
     assert!(app.contains(r#"const ID_RE = /^[A-Z]{2,5}-\d+$/i;"#));
-    assert!(index.contains(r#"id="global-task-id""#));
+    assert!(index.contains(r#"id="task-lookup-status""#));
 
     run_dashboard_javascript_test(
         r##"
@@ -4770,10 +4784,10 @@ const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((t
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 const tabsStrip = new Node("tabs");
 tabsStrip.className = "tabs";
-const wrap = get("global-id-wrap");
-wrap.className = "global-id-wrap";
-wrap.appendChild(get("global-task-id"));
-wrap.appendChild(get("global-task-id-error"));
+const wrap = get("task-search-wrap");
+wrap.className = "task-search-wrap";
+wrap.appendChild(get("task-search"));
+wrap.appendChild(get("task-lookup-status"));
 globalThis.document = {
   body: new Node("body"),
   hidden: false,
@@ -4905,13 +4919,13 @@ const tick = () => new Promise((resolve) => originalSetTimeout(resolve, 0));
 await import("./app.js");
 await tick(); await tick(); await tick();
 
-const { getWorkspace, setWorkspace } = await import("./common.js");
+const { getWorkspace, setWorkspace } = await import("./js/common.js");
 if (getWorkspace() !== "ws_polaris") throw new Error(`selected workspace should remain ws_polaris, got ${getWorkspace()}`);
 if (!get("tasks-body").textContent.includes("Polaris cached task")) throw new Error("initial ws_polaris task cache did not render");
 if (get("rail-count-audit").textContent !== "101") throw new Error(`initial rail count was not scoped to ws_polaris: ${get("rail-count-audit").textContent}`);
 
-const input = get("global-task-id");
-const err = get("global-task-id-error");
+const input = get("task-search");
+const err = get("task-lookup-status");
 function jump(id) {
   input.value = id;
   if (input.listeners.keydown) input.listeners.keydown({ key: "Enter", preventDefault() {} });
@@ -5183,7 +5197,7 @@ fn dashboard_renders_claim_provenance_and_sends_exact_owner_decisions() {
 // focused but shows nothing is not usable.
 #[test]
 fn dashboard_css_shows_focus_on_every_operable_row() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     for selector in [
         ".row:focus-visible",
@@ -5204,7 +5218,7 @@ fn dashboard_css_shows_focus_on_every_operable_row() {
 #[test]
 fn dashboard_tasks_dock_and_splitter_assets_match_specification() {
     let index = include_str!("../../assets/dashboard/index.html");
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
 
     // Acceptance criteria 1 & 6: Tasks tab dock column is clamp(336px, 32%, 720px) by default,
     // defined in dashboard.css (inline 336px style removed); no new inline style attributes.
@@ -5322,7 +5336,7 @@ fn dashboard_tasks_dock_and_splitter_assets_match_specification() {
 
 #[test]
 fn dashboard_tasks_layout_grid_items_share_explicit_row_on_desktop() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let css = DASHBOARD_CSS;
     let desktop = css
         .split("@media (min-width: 761px) {")
         .nth(1)
@@ -5381,7 +5395,7 @@ const {
   saveLogWrapPref,
   applyLogWrap,
   getDockMaxWidth,
-} = await import('./log-tail.js');
+} = await import('./js/log-tail.js');
 
 // 1. Clamp logic: derived from Tasks grid available width
 // Viewport 1200px: rail is 216px, padding (40px) + gap (20px) = 60px.
@@ -5511,8 +5525,8 @@ if (btnAttrs['aria-pressed'] !== 'true') throw new Error('expected aria-pressed 
 /// accent link color and are legible on dark and light themes (no browser-default blue).
 #[test]
 fn dashboard_operations_links_use_accent_color() {
-    let css = include_str!("../../assets/dashboard/dashboard.css");
-    let operations = include_str!("../../assets/dashboard/operations.js");
+    let css = DASHBOARD_CSS;
+    let operations = include_str!("../../assets/dashboard/js/operations.js");
 
     // taskLink has the accent link class
     assert!(

@@ -72,8 +72,10 @@ def source_contracts(repo: Path):
     api = set(re.findall(r'\.route\(\s*"([^"]+)"', api_source))
     web_source = (repo / "crates/orbit-web/src/lib.rs").read_text()
     dashboard = set(re.findall(r'\.route\(\s*"([^"]+)"', web_source))
-    # Embedded dashboard files are routed from the `DASHBOARD_FILES` table.
-    dashboard |= set(re.findall(r'\(\s*"(/[^"]*)",\s*\w+,\s*include_bytes!', web_source))
+    # Embedded dashboard files are routed from the `DASHBOARD_FILES` table; a
+    # body is an embedded file or a joined constant such as `DASHBOARD_CSS`.
+    dashboard |= set(re.findall(
+        r'\(\s*"(/[^"]*)",\s*\w+,\s*(?:include_bytes!|[A-Z][A-Z0-9_]*\.as_bytes\(\))', web_source))
     return {"cli": cli, "job": jobs, "activity": activities,
             "mcp": mcp, "api": api, "dashboard": dashboard}
 

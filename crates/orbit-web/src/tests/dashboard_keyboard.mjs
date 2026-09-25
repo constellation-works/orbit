@@ -11,7 +11,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 // --- Task rows: Enter expands, and the pointer path is untouched -------------
 
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks } = await import("./js/tasks.js");
 
 const task = { id: "ORB-1", title: "keyboard operable", status: "review", artifacts: [] };
 const context = {
@@ -94,7 +94,7 @@ globalThis.fetch = async (path) => {
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };
 
-const { fetchAndRenderAudit } = await import("./audit.js");
+const { fetchAndRenderAudit } = await import("./js/audit.js");
 await fetchAndRenderAudit({});
 const auditRow = () => document.getElementById("audit-body").querySelector("table.scoreboard-table").querySelector("tbody").children.find((node) => node.dataset.key === "audit-7");
 
@@ -106,7 +106,7 @@ assert.equal(auditRow().getAttribute("aria-expanded"), "true", "Enter must expan
 assert.equal(auditRow().getAttribute("aria-controls"), "audit-detail-7");
 assert.ok(auditRow().classList.contains("expanded"), "the expanded row must keep its class through the keyed diff");
 
-const { setActiveRunDetail, renderRunSteps } = await import("./run-detail.js");
+const { setActiveRunDetail, renderRunSteps } = await import("./js/run-detail.js");
 
 setActiveRunDetail({ run: {}, steps: [{ step_index: 0, target_type: "task", target_id: "ORB-1", state: "success", duration_ms: 5, exit_code: 0 }] });
 renderRunSteps();
@@ -121,7 +121,7 @@ assert.ok(stepRow().classList.contains("expanded"));
 
 // --- Log filter pills: pressing a pill filters and reports its own state -----
 
-const { initLogTail } = await import("./log-tail.js");
+const { initLogTail } = await import("./js/log-tail.js");
 initLogTail();
 await tick();
 

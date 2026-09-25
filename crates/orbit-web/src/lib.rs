@@ -52,15 +52,35 @@ const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "application/javascript; charset=utf-8";
 const WOFF2: &str = "font/woff2";
 
+/// The dashboard stylesheet, served as one file from per-screen sources.
+/// Order is cascade order: at equal specificity a later file wins, so shared
+/// layers come first and a file that refines another comes after it.
+pub(crate) const DASHBOARD_CSS: &str = concat!(
+    include_str!("../assets/dashboard/css/base.css"),
+    include_str!("../assets/dashboard/css/shell.css"),
+    include_str!("../assets/dashboard/css/components.css"),
+    include_str!("../assets/dashboard/css/tasks.css"),
+    include_str!("../assets/dashboard/css/task-detail.css"),
+    include_str!("../assets/dashboard/css/markdown.css"),
+    include_str!("../assets/dashboard/css/runs.css"),
+    include_str!("../assets/dashboard/css/run-detail.css"),
+    include_str!("../assets/dashboard/css/dock.css"),
+    include_str!("../assets/dashboard/css/log-tail.css"),
+    include_str!("../assets/dashboard/css/audit.css"),
+    include_str!("../assets/dashboard/css/health.css"),
+    include_str!("../assets/dashboard/css/scoreboard.css"),
+    include_str!("../assets/dashboard/css/knowledge.css"),
+    include_str!("../assets/dashboard/css/automation.css"),
+    include_str!("../assets/dashboard/css/drain.css"),
+    include_str!("../assets/dashboard/css/settings.css"),
+    include_str!("../assets/dashboard/css/plugins.css"),
+);
+
 /// Every embedded dashboard file as `(route, content type, body)`.
 // L-0021: Keep embedded dashboard modules in sync with the files they import.
 const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
     ("/", HTML, include_bytes!("../assets/dashboard/index.html")),
-    (
-        "/static/dashboard.css",
-        CSS,
-        include_bytes!("../assets/dashboard/dashboard.css"),
-    ),
+    ("/static/dashboard.css", CSS, DASHBOARD_CSS.as_bytes()),
     (
         "/static/fonts/geist-latin.woff2",
         WOFF2,
@@ -72,14 +92,14 @@ const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/fonts/geist-mono-latin.woff2"),
     ),
     (
-        "/static/marked.umd.js",
+        "/static/vendor/marked.umd.js",
         JS,
-        include_bytes!("../assets/dashboard/marked.umd.js"),
+        include_bytes!("../assets/dashboard/vendor/marked.umd.js"),
     ),
     (
-        "/static/purify.min.js",
+        "/static/vendor/purify.min.js",
         JS,
-        include_bytes!("../assets/dashboard/purify.min.js"),
+        include_bytes!("../assets/dashboard/vendor/purify.min.js"),
     ),
     (
         "/static/app.js",
@@ -87,89 +107,89 @@ const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/app.js"),
     ),
     (
-        "/static/common.js",
+        "/static/js/common.js",
         JS,
-        include_bytes!("../assets/dashboard/common.js"),
+        include_bytes!("../assets/dashboard/js/common.js"),
     ),
     (
-        "/static/config.js",
+        "/static/js/config.js",
         JS,
-        include_bytes!("../assets/dashboard/config.js"),
+        include_bytes!("../assets/dashboard/js/config.js"),
     ),
     (
-        "/static/markdown.js",
+        "/static/js/markdown.js",
         JS,
-        include_bytes!("../assets/dashboard/markdown.js"),
+        include_bytes!("../assets/dashboard/js/markdown.js"),
     ),
     (
-        "/static/tasks.js",
+        "/static/js/tasks.js",
         JS,
-        include_bytes!("../assets/dashboard/tasks.js"),
+        include_bytes!("../assets/dashboard/js/tasks.js"),
     ),
     (
-        "/static/field-editor.js",
+        "/static/js/field-editor.js",
         JS,
-        include_bytes!("../assets/dashboard/field-editor.js"),
+        include_bytes!("../assets/dashboard/js/field-editor.js"),
     ),
     (
-        "/static/audit.js",
+        "/static/js/audit.js",
         JS,
-        include_bytes!("../assets/dashboard/audit.js"),
+        include_bytes!("../assets/dashboard/js/audit.js"),
     ),
     (
-        "/static/scoreboard.js",
+        "/static/js/scoreboard.js",
         JS,
-        include_bytes!("../assets/dashboard/scoreboard.js"),
+        include_bytes!("../assets/dashboard/js/scoreboard.js"),
     ),
     (
-        "/static/reliability.js",
+        "/static/js/reliability.js",
         JS,
-        include_bytes!("../assets/dashboard/reliability.js"),
+        include_bytes!("../assets/dashboard/js/reliability.js"),
     ),
     (
-        "/static/log-tail.js",
+        "/static/js/log-tail.js",
         JS,
-        include_bytes!("../assets/dashboard/log-tail.js"),
+        include_bytes!("../assets/dashboard/js/log-tail.js"),
     ),
     (
-        "/static/diagnostics.js",
+        "/static/js/diagnostics.js",
         JS,
-        include_bytes!("../assets/dashboard/diagnostics.js"),
+        include_bytes!("../assets/dashboard/js/diagnostics.js"),
     ),
     (
-        "/static/router.js",
+        "/static/js/router.js",
         JS,
-        include_bytes!("../assets/dashboard/router.js"),
+        include_bytes!("../assets/dashboard/js/router.js"),
     ),
     (
-        "/static/runs.js",
+        "/static/js/runs.js",
         JS,
-        include_bytes!("../assets/dashboard/runs.js"),
+        include_bytes!("../assets/dashboard/js/runs.js"),
     ),
     (
-        "/static/run-detail.js",
+        "/static/js/run-detail.js",
         JS,
-        include_bytes!("../assets/dashboard/run-detail.js"),
+        include_bytes!("../assets/dashboard/js/run-detail.js"),
     ),
     (
-        "/static/distributed.js",
+        "/static/js/distributed.js",
         JS,
-        include_bytes!("../assets/dashboard/distributed.js"),
+        include_bytes!("../assets/dashboard/js/distributed.js"),
     ),
     (
-        "/static/operations.js",
+        "/static/js/operations.js",
         JS,
-        include_bytes!("../assets/dashboard/operations.js"),
+        include_bytes!("../assets/dashboard/js/operations.js"),
     ),
     (
-        "/static/automation.js",
+        "/static/js/automation.js",
         JS,
-        include_bytes!("../assets/dashboard/automation.js"),
+        include_bytes!("../assets/dashboard/js/automation.js"),
     ),
     (
-        "/static/plugins.js",
+        "/static/js/plugins.js",
         JS,
-        include_bytes!("../assets/dashboard/plugins.js"),
+        include_bytes!("../assets/dashboard/js/plugins.js"),
     ),
 ];
 const DASHBOARD_CSP: &str = concat!(

@@ -1,0 +1,562 @@
+/* App chrome: the nav rail, the top bar and its KPI tiles, the workspace
+   picker and scope chips, the page grid, tab panes, and subtabs. */
+
+/* ORB-10972: the app is a two-column shell — a fixed nav rail and a
+   content column that owns its own scrolling. */
+.shell {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.rail {
+  background: var(--bg-rail);
+  border-right: 1px solid var(--hair);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 14px 12px 10px;
+}
+
+.rail-brand { padding: 2px 6px 14px; }
+.rail-brand svg { height: 22px; width: auto; display: block; }
+
+.rail .tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+/* The router still appends #tab-indicator / #subtab-indicator to .tabs
+   and #diag-subtabs. In the rail the active entry is marked by its own
+   background, so the sliding underline is suppressed here rather than
+   removed from the router. */
+.rail .tab-indicator { display: none !important; }
+
+.rail-group { display: flex; flex-direction: column; gap: 1px; }
+
+.rail-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-mute);
+  padding: 0 8px 6px;
+}
+
+.rail .tab {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #c4c4cc;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.rail .tab:hover { color: var(--fg); background: var(--bg-hover); }
+
+.rail .tab.active {
+  background: var(--bg-selected);
+  color: var(--fg);
+  font-weight: 600;
+}
+.rail .tab.active .rail-ico { color: var(--accent); }
+
+.rail-ico { width: 17px; height: 17px; flex: 0 0 auto; color: var(--fg-dim); }
+.rail-label { flex: 1 1 auto; min-width: 0; }
+
+.rail-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+.rail .tab.active .rail-count { color: var(--fg-dim); }
+.rail-count.alert {
+  color: var(--danger-fg);
+  background: #2a1413;
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
+/* A section's views show only while that section is open, so the rail
+   stays one screen tall and the workspace picker never scrolls away. */
+.rail-subtabs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 4px 17px;
+  padding: 0 0 0 12px;
+  border-left: 1px solid var(--border);
+  border-bottom: none;
+  background: transparent;
+}
+.rail-subtabs.dimmed { display: none; }
+
+.rail-subtabs .subtab {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--fg-dim);
+  text-align: left;
+}
+.rail-subtabs .subtab:hover { color: var(--fg); background: var(--bg-hover); }
+.rail-subtabs .subtab.active { color: var(--fg); background: var(--bg-selected); font-weight: 600; }
+.rail-subtabs .subtab .rail-count { font-size: 12px; }
+
+.rail-foot {
+  margin-top: auto;
+  border-top: 1px solid var(--hair);
+  padding: 10px 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rail-workspace { display: flex; flex-direction: column; gap: 6px; }
+.rail-workspace .workspace-select {
+  max-width: 100%;
+  width: 100%;
+  height: 40px;
+  margin: 0;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  background-color: var(--bg-elev);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.rail-conn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ORB-10972: one bar replaces the old header + tabs + health strip
+   stack (~194px). The four health metrics ride inline in it. */
+.topbar {
+  flex: 0 0 auto;
+  height: 60px;
+  border-bottom: 1px solid var(--hair);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 24px;
+  background: var(--bg);
+}
+
+.topbar .crumb {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  flex: 0 0 auto;
+}
+
+.topbar-spacer { flex: 1 1 auto; }
+
+.kpis { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+.kpi {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: #c4c4cc;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.kpi:hover { border-color: #3a3a44; color: var(--fg); }
+.kpi .k { color: inherit; }
+.kpi .v { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.kpi.tile-alert { background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
+.kpi.tile-alert .v { color: var(--danger-fg); }
+.kpi.tile-alert::before {
+  content: "";
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--state-failed);
+}
+.kpi-window {
+  font-size: 12px;
+  color: var(--fg-dim);
+  padding: 0 4px;
+}
+
+.kpi-spark { width: 48px; height: 16px; flex: 0 0 auto; }
+.kpi-spark path { fill: none; stroke: var(--accent); stroke-width: 1.2px; }
+.kpi-spark .baseline { stroke: var(--hair); stroke-width: 1px; }
+
+.refresh-btn {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+.refresh-btn:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+/* ORB-11559: below ~760px the rail steals the content column. The shell
+   stacks: one scrolling row of destinations, the open section's views
+   on a second row, then the workspace picker. This block follows the
+   base `.topbar` / `.kpi` rules so height and label hiding win the
+   cascade. */
+@media (max-width: 760px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .rail {
+    border-right: none;
+    border-bottom: 1px solid var(--hair);
+    overflow-x: auto;
+    overflow-y: visible;
+    padding: 8px 8px 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .rail-brand { display: none; }
+  .rail-workspace { flex: 0 0 auto; order: -1; }
+  .rail-workspace .workspace-select { height: 34px; width: auto; max-width: 11rem; }
+  .rail .tabs {
+    flex: 1 1 100%;
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-x: auto;
+    min-width: 0;
+    margin-top: 0;
+    padding: 0 0 4px;
+    gap: 2px;
+  }
+  .rail-group { display: contents; }
+  .rail-group-label { display: none; }
+  .rail .tab {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    height: 36px;
+  }
+  .rail-label { flex: 0 1 auto; }
+  .rail-subtabs {
+    flex: 1 1 100%;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin: 0;
+    padding: 2px 0 6px;
+    border-left: none;
+    gap: 2px;
+  }
+  .rail-subtabs .subtab {
+    padding: 0 10px;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .rail-foot { display: none; }
+  .topbar {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 8px 12px;
+  }
+  .kpi-spark { display: none; }
+  .kpi-window { display: none; }
+  .tab-pane[data-tab="operations"] .subtabs,
+  #operations-subtabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+  .subtab { white-space: nowrap; }
+}
+
+/* ORB-00030 multi-workspace: header selector + per-task workspace badge */
+.workspace-select {
+  height: 30px;
+  max-width: 190px;
+  margin: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.workspace-select:hover { border-color: var(--accent); }
+.workspace-select:focus { border-color: var(--accent); outline: none; }
+.workspace-select.scope-ignored {
+  opacity: 0.55;
+  border-style: dashed;
+}
+.workspace-scope-note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-hi);
+  border: 1px solid var(--accent);
+  background: rgba(110, 159, 255, 0.12);
+  border-radius: 2px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.scope-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+.scope-badge.independent {
+  color: var(--accent-hi);
+  border-color: var(--accent);
+  background: rgba(110, 159, 255, 0.12);
+}
+.scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  cursor: pointer;
+  max-width: 100%;
+}
+.scope-chip:hover {
+  border-color: var(--accent);
+}
+.scope-chip-k {
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 9px;
+}
+.scope-chip-v {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14ch;
+}
+.scope-chip-x {
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1;
+}
+.scope-chip.independent {
+  border-color: var(--accent);
+  background: rgba(110, 159, 255, 0.12);
+}
+.ws-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 2.5fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px 20px;
+  max-width: 1800px;
+  margin: 0 auto;
+  min-height: 0;
+}
+
+/* `main` has an author display rule, so make the Operations subview's
+   HTML hidden state win at every breakpoint (including the compact
+   `main { ... !important }` layout below).  The router owns which
+   sibling carries `hidden`; this rule only gives that state its native
+   rendered and interaction semantics. */
+.tab-pane[data-tab="operations"] > main[hidden] { display: none !important; }
+
+/* ORB-10972: the content column scrolls, not the document. The task
+   pane's main fills the column so the dock beside it can be full height. */
+.main-col > .tab-pane { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+@media (max-width: 1000px) {
+  main { grid-template-columns: 1fr !important; }
+}
+
+@media (max-width: 720px) {
+  header .meta {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: min(100%, 420px);
+  }
+  .workspace-select {
+    max-width: 140px;
+  }
+  .workspace-scope-note,
+  .scope-badge {
+    font-size: 9px;
+    padding: 2px 6px;
+  }
+  #audit-events-controls {
+    flex-wrap: wrap;
+  }
+  .scope-chips,
+  #audit-filter {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .scope-chip {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+  .scope-chip-v {
+    max-width: 10ch;
+  }
+}
+
+@media (max-width: 520px) {
+  .workspace-scope-note {
+    white-space: normal;
+  }
+  .scope-chip {
+    max-width: calc(50% - 6px);
+  }
+}
+
+.tab-indicator {
+  position: absolute;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 2px 2px 0 0;
+  pointer-events: none;
+}
+
+.tab-pane { display: none; animation: fadeIn 0.3s ease; }
+.tab-pane.active { display: block; position: relative; z-index: 0; }
+
+.subtabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--hair);
+  background: transparent;
+  position: relative;
+}
+
+.subtab {
+  background: transparent;
+  color: var(--fg-dim);
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.subtab:hover { color: var(--fg); background: rgba(255, 255, 255, 0.05); }
+
+.subtab.active {
+  color: var(--fg);
+  background: #1f1f26;
+}
+
+footer {
+  padding: 24px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-align: right;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+@media (max-width: 520px) {
+  /* On a phone the two counts that need action stay; the rest are one tap
+     away in Audit. */
+  #tile-events, #tile-active { display: none; }
+}

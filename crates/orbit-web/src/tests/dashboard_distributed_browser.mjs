@@ -13,21 +13,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { dashboardFile } from './dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
-const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
 const test = fileURLToPath(new URL('./dashboard_distributed.mjs', import.meta.url));
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const file = name === '/test.mjs' ? test : path.join(assets, name === '/' ? 'index.html' : path.basename(name));
-  if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
-  let data = fs.readFileSync(file);
+  const served = name === '/test.mjs' ? { data: fs.readFileSync(test), type: 'text/javascript' } : dashboardFile(name);
+  if (!served) { res.writeHead(404); res.end(); return; }
+  let data = served.data;
   // The page's own orchestrator would start fetching live endpoints; this
   // fixture drives one module directly.
   if (name === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
-  res.setHeader('content-type', file.endsWith('.html') ? 'text/html' : file.endsWith('.css') ? 'text/css' : 'text/javascript');
+  res.setHeader('content-type', served.type);
   res.end(data);
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -122,7 +122,7 @@ try {
       }
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     };
-    const { buildDistributedBlock, invalidateDistributedConsole } = await import('/distributed.js');
+    const { buildDistributedBlock, invalidateDistributedConsole } = await import('/js/distributed.js');
     invalidateDistributedConsole();
     // The app orchestrator that activates a tab is stripped from this fixture,
     // so select the Tasks pane the way the router would before measuring.
