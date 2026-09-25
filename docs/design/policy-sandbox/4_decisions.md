@@ -268,7 +268,7 @@ Resolve the wrapper only from trusted absolute locations, currently `/usr/bin/sa
 ## Use Bubblewrap for shipped Linux CLI write confinement
 
 **Recorded:** 2026-08-01 23:26:11.357573Z · [ORB-10552]
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `crates/orbit-core/src/runtime/v2_host/sandbox.rs`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `crates/orbit-core/src/runtime/v2_host/sandbox.rs`
 
 ### Context
 Linux CLI agents previously ran with the worker account's ambient filesystem rights. The real alternatives were a Bubblewrap mount-namespace boundary, a Landlock allowlist layer, or continued delegation to provider-native sandboxes; Bubblewrap closes the highest-value write gap at the existing executor wrapper seam without turning Orbit into a container runtime.
@@ -285,7 +285,7 @@ Shipped Linux agent executors use the concrete `linux-bwrap` backend. Orbit reso
 ## Sandbox availability is a host precondition, not a runtime fallback
 
 **Recorded:** 2026-08-08 19:13:44.348233Z
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-core/assets/executors/**`, `docs/runbooks/**`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-core/assets/executors/**`, `docs/runbooks/**`
 
 ### Context
 
@@ -321,7 +321,7 @@ Making a host capable of running the sandbox is an operator responsibility, and 
 ## Derive Linux sandbox write-grant anchors from the effective profile at each spawn
 
 **Recorded:** 2026-08-09 03:42:52.076176Z · [ORB-10602]
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`
 
 ### Context
 
@@ -362,7 +362,7 @@ Creation is confined to the managed worktree: every component that root owns is 
 ## Derive Linux sandbox write-grant anchors from the effective profile at each spawn
 
 **Recorded:** 2026-08-08 20:36:47.656731Z · [ORB-10602], [ORB-10607]
-**Paths:** `crates/orbit-exec/src/linux_sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `docs/design/policy-sandbox/**`
+**Paths:** `crates/orbit-exec/src/linux_sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/**/*.rs`, `docs/design/policy-sandbox/**`
 
 ### Context
 Bubblewrap can only re-bind an exception beneath a read-only parent when the exception anchor exists. The prior hardcoded path/type inventory drifted from effective policy, while preparing every apparent re-allow would materialize paths shadowed by later workspace denies and filename-shape inference could not distinguish dotted directories from extensionless files.

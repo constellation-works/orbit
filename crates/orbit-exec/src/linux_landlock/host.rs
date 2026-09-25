@@ -111,7 +111,7 @@ struct ToolState {
 /// table: this ruleset handles no write access right, so `cargo fetch` can
 /// already populate `$CARGO_HOME/registry` under a scoped spawn. The write
 /// side of that grant is Bubblewrap's
-/// (`crate::linux_sandbox::append_cargo_download_cache_mounts`), which binds
+/// (`crate::linux_sandbox::mounts::append_cargo_download_cache_mounts`), which binds
 /// the same cache paths the macOS profile allows. [ORB-12469]
 const TOOL_STATE: &[ToolState] = &[
     ToolState {
