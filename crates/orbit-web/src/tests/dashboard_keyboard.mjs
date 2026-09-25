@@ -3,8 +3,8 @@
 //
 // These scenarios drive the shipped modules through the DOM adapter, so they
 // observe what the modules actually set on each row. Focus order itself and the
-// browser's native Space-activates-a-button rule are properties of the shipped
-// markup, asserted against index.html in dashboard_assets.rs.
+// browser's native Space-activates-a-button rule belong to the shipped markup;
+// this DOM adapter does not exercise browser focus behavior.
 import assert from "node:assert/strict";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
