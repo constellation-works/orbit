@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 mod argv;
+mod cli_run;
 mod envelope;
 mod inspection;
 mod launcher;
