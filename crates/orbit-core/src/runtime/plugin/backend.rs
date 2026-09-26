@@ -1,7 +1,7 @@
 //! The backend a plugin's tools share, and the registry tools built on it.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -14,6 +14,7 @@ use orbit_types::plugin::{
     InstalledPlugin, PluginBackendType, PluginGrantSet, PluginProvenance, parse_stored_grants,
 };
 
+use super::grants::recorded_program_paths;
 use super::paths::plugin_state_dir;
 
 /// The backend every tool of this plugin shares: the spec for `exec`, or one
@@ -48,6 +49,10 @@ pub(crate) fn plugin_backend(
         global_root,
         grants,
         config,
+        // The paths the enabling command resolved, never this caller's
+        // `PATH`: which process spawns the backend must not change what it
+        // may execute (design §4.3).
+        recorded_program_paths(global_root, &installed.name),
     )
 }
 
@@ -59,6 +64,7 @@ pub(crate) fn build_plugin_backend(
     global_root: &Path,
     grants: PluginGrantSet,
     config: PluginConfigSection,
+    program_paths: BTreeMap<String, PathBuf>,
 ) -> PluginBackend {
     let spec = Arc::new(PluginBackendSpec {
         provenance,
@@ -71,6 +77,7 @@ pub(crate) fn build_plugin_backend(
         sandbox: plugin.manifest.spec.backend.sandbox,
         permissions: plugin.manifest.spec.permissions.clone(),
         programs: plugin.manifest.spec.requires.programs.clone(),
+        program_paths,
         config,
         grants,
     });

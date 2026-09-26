@@ -77,6 +77,7 @@ impl Fixture {
             sandbox: plugin.manifest.spec.backend.sandbox,
             permissions: permissions.unwrap_or_else(|| plugin.manifest.spec.permissions.clone()),
             programs: Vec::new(),
+            program_paths: Default::default(),
             config: super::super::backend::PluginConfigSection::new(
                 json!({ "index_dir": "/srv/graph", "max_nodes": 500 }),
             ),

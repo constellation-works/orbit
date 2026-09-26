@@ -18,12 +18,14 @@ use orbit_types::plugin::{
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin::grants::{record_authorized_grants, verify_install_path};
+use crate::runtime::plugin::grants::{
+    record_authorization, record_authorized_grants, verify_install_path,
+};
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_install_path, plugin_namespace_dir};
 
 use super::inspect::{PluginSummary, summary_for_installed};
-use super::lifecycle::unrequested_grant_warnings;
+use super::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
 use super::seed::PluginSeedOutcome;
 use super::skills::PluginSkillLink;
 
@@ -351,8 +353,14 @@ fn install_plugin_inner(
     // a witness for carried grants: doing so would authorize a set an
     // `orbit.db` writer could have put there. The widening branch above writes
     // only the disabled/empty revocation witness [ORB-12778].
+    //
+    // The same consent resolves `requires.programs` into the paths the
+    // sandbox grants, exactly as `orbit plugin enable` does.
+    let mut program_warnings = Vec::new();
     if options.enable {
-        record_authorized_grants(&global_root, &name, enabled, &record.grants)?;
+        let (programs, warnings) = resolve_consented_programs(&global_root, &plugin);
+        program_warnings = warnings;
+        record_authorization(&global_root, &name, enabled, &record.grants, &programs)?;
     }
 
     // `--enable` is an enable: the plugin's schedules are seeded and its
@@ -375,6 +383,7 @@ fn install_plugin_inner(
                 // silently dropping it into the install summary.
                 enable_warnings = unrequested_grant_warnings(&plugin, &record.grants);
                 enable_warnings.extend(contributions.warnings);
+                enable_warnings.append(&mut program_warnings);
                 seeded_outcomes = contributions.seeded;
                 skill_links = contributions.skills;
                 None
@@ -418,7 +427,7 @@ fn install_plugin_inner(
     // Held until the copy above finished, so a fetched tree is not collected
     // out from under it.
     drop(resolved);
-    let mut summary = summary_for_installed(&stored, Some(&plugin), status);
+    let mut summary = summary_for_installed(&stored, Some(&plugin), status, &global_root);
     summary.diagnostic = if grants_reset {
         Some(permission_widening_message(
             &name,

@@ -87,6 +87,29 @@ impl Execute for PluginShowArgs {
             blocks.push(Block::table(permissions));
         }
 
+        // What each declared program resolved to when the plugin was
+        // enabled: the sandbox grants that path, never the caller's `PATH`.
+        if !plugin.programs.is_empty() {
+            blocks.push(Block::text(bold("Programs:")));
+            let mut programs =
+                crate::output::table::build_table(&["PROGRAM", "RESOLVED PATH", "GRANTED"])
+                    .keep_all_columns();
+            for program in &plugin.programs {
+                programs.add_row(vec![
+                    program.name.clone(),
+                    program.path.as_ref().map_or_else(
+                        || "-".to_string(),
+                        |path| path.to_string_lossy().into_owned(),
+                    ),
+                    match &program.problem {
+                        None => "yes".to_string(),
+                        Some(problem) => format!("no ({problem})"),
+                    },
+                ]);
+            }
+            blocks.push(Block::table(programs));
+        }
+
         if !plugin.panels.is_empty() || !plugin.links.is_empty() {
             blocks.push(Block::text(bold("Dashboard:")));
             let mut dashboard =

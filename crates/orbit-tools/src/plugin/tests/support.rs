@@ -78,6 +78,7 @@ pub(super) fn scoped_spec(
         sandbox: PluginSandbox::Default,
         permissions,
         programs: Vec::new(),
+        program_paths: Default::default(),
         config: Default::default(),
         grants,
     })

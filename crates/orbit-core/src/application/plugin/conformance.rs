@@ -27,7 +27,7 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{
     LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginTool, PluginToolBinding,
     PluginValidationPolicy, load_plugin_dir, manifest_refusal, refuse_covering_fs_write_roots,
-    validate_loaded_plugin,
+    resolve_declared_programs, validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
@@ -174,6 +174,14 @@ pub fn test_plugin_dir(
         &global_root,
         grants,
         plugin_config_section(&plugin, &config.plugins),
+        // No operator has consented yet, so the programs resolve against this
+        // process's `PATH`, exactly as `orbit plugin enable` from here would
+        // record them.
+        resolve_declared_programs(
+            &plugin.manifest.spec.requires.programs,
+            std::env::var_os("PATH").as_deref(),
+        )
+        .0,
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let mut results = Vec::with_capacity(case_locations.len());

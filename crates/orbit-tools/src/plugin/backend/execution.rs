@@ -173,6 +173,28 @@ impl PluginBackendSpec {
             }
         }
         write.extend(host_write_dirs.iter().cloned());
+        // Each declared program at the path the operator consented to, read
+        // and execute, so a backend can run it however narrow the spawning
+        // caller's `PATH` is — Landlock otherwise executes only out of the
+        // caller's `PATH` directories. A path that no longer names that
+        // executable is left off and reported by `orbit plugin doctor`.
+        for program in self.program_statuses() {
+            match (&program.path, &program.problem) {
+                (Some(path), None) => {
+                    if !read.contains(path) {
+                        read.push(path.clone());
+                    }
+                }
+                (_, problem) => tracing::warn!(
+                    target: "orbit.tools.plugin",
+                    plugin = %self.provenance.name,
+                    program = %program.name,
+                    problem = problem.as_deref().unwrap_or_default(),
+                    "plugin declares a program the sandbox will not grant; re-run `orbit plugin \
+                     enable` once it resolves",
+                ),
+            }
+        }
         // The child's own state tree, re-allowed inside the denied
         // `state/plugins/` on every profile: the one directory the standard
         // gives a plugin for durable state stays readable to it and to no
@@ -224,6 +246,17 @@ impl PluginBackendSpec {
         read_denies
             .iter()
             .any(|denied| path.starts_with(physical_with_missing_tail(denied)))
+    }
+
+    /// Every declared program beside the path recorded for it at enable time
+    /// and whether the sandbox will grant it ([`program_statuses`]).
+    pub fn program_statuses(&self) -> Vec<PluginProgramStatus> {
+        program_statuses(
+            &self.programs,
+            &self.program_paths,
+            &self.global_root,
+            &self.state_dir,
+        )
     }
 
     /// The manifest roots the operator's `fs` scope leaves out, for a surface

@@ -41,4 +41,5 @@ fn fs_state_permissions() -> PluginPermissions {
 
 mod confinement;
 mod grants;
+mod programs;
 mod state_isolation;

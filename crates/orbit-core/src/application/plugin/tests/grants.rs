@@ -732,3 +732,131 @@ fn the_ordinary_lifecycle_keeps_the_row_authorized() {
     assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
     assert_eq!(summary.granted, ["fs"]);
 }
+
+fn executable(path: &std::path::Path) {
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("program dir");
+    std::fs::write(path, "#!/bin/sh\nexit 0\n").expect("write program");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+}
+
+/// The read (and execute) roots the backend of `name` would run under.
+fn profile_read(fixture: &PluginFixture, name: &str) -> Vec<std::path::PathBuf> {
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin(name)
+        .expect("read row")
+        .expect("installed");
+    let plugin =
+        orbit_tools::plugin::load_plugin_dir(std::path::Path::new(&installed.install_path))
+            .expect("load plugin");
+    crate::runtime::plugin::backend::plugin_backend(
+        &fixture.global_root,
+        &installed,
+        &plugin,
+        &std::collections::BTreeMap::new(),
+    )
+    .spec()
+    .sandbox_profile(None)
+    .expect("profile")
+    .read
+}
+
+/// `requires.programs` is resolved when the operator consents and the backend
+/// is granted that path, whatever `PATH` spawns it; a program that did not
+/// resolve, or whose recorded path moved, is a doctor finding and is granted
+/// only once `orbit plugin enable` records it again.
+#[cfg(unix)]
+#[test]
+fn declared_programs_are_resolved_at_enable_and_a_moved_one_needs_re_consent() {
+    let fixture = PluginFixture::new();
+    // Deliberately outside any `PATH` directory a caller would carry.
+    let tool = fixture.sources.join("off-path/bin/tool");
+    let replacement = fixture.sources.join("off-path/other/tool");
+    executable(&tool);
+    executable(&replacement);
+    let tool = tool.canonicalize().expect("canonical tool");
+    let replacement = replacement.canonicalize().expect("canonical replacement");
+    let missing = "orbit-fixture-no-such-program";
+    let programs = format!("[\"{}\", {missing}]", tool.display());
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo").requiring_programs(&programs),
+    );
+
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active);
+    let names: Vec<&str> = summary.programs.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, vec![tool.to_str().expect("utf8"), missing]);
+    assert_eq!(summary.programs[0].path.as_deref(), Some(tool.as_path()));
+    assert!(summary.programs[0].granted(), "{:?}", summary.programs[0]);
+    assert_eq!(summary.programs[1].path, None);
+    assert!(!summary.programs[1].granted());
+    assert!(
+        profile_read(&fixture, "demo").contains(&tool),
+        "the recorded path is on the sandbox profile"
+    );
+
+    let findings = plugin_doctor(&runtime).expect("doctor");
+    let program_rows: Vec<&str> = findings
+        .iter()
+        .filter(|row| row.message.contains("in `requires.programs`"))
+        .map(|row| row.message.as_str())
+        .collect();
+    assert_eq!(program_rows.len(), 1, "{findings:?}");
+    assert!(program_rows[0].contains(missing), "{}", program_rows[0]);
+
+    // The recorded path now resolves elsewhere: not followed silently.
+    std::fs::remove_file(&tool).expect("remove tool");
+    std::os::unix::fs::symlink(&replacement, &tool).expect("retarget tool");
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    let problem = summary.programs[0].problem.clone().expect("a problem");
+    assert!(problem.contains("now resolves to"), "{problem}");
+    let read = profile_read(&fixture, "demo");
+    assert!(
+        !read.contains(&tool) && !read.contains(&replacement),
+        "{read:?}"
+    );
+    let findings = plugin_doctor(&runtime).expect("doctor");
+    assert!(
+        findings
+            .iter()
+            .any(|row| row.message.contains("now resolves to")),
+        "{findings:?}"
+    );
+
+    // Re-enabling is the re-consent: it records the new resolution and says so.
+    let result = enable_plugin(&runtime, "demo", &PluginEnableOptions::default()).expect("enable");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("now resolves to")
+                && warning.contains(&replacement.display().to_string())),
+        "{:?}",
+        result.warnings
+    );
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(
+        summary.programs[0].path.as_deref(),
+        Some(replacement.as_path())
+    );
+    assert!(summary.programs[0].granted());
+    assert!(profile_read(&fixture, "demo").contains(&replacement));
+
+    // Disabling keeps what was consented to on record for `show`.
+    disable_plugin(&runtime, "demo").expect("disable");
+    let summary = show_plugin(&fixture.reopen(), "demo").expect("show");
+    assert_eq!(
+        summary.programs[0].path.as_deref(),
+        Some(replacement.as_path())
+    );
+}

@@ -26,6 +26,16 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
             .collect::<Vec<_>>(),
         "granted": summary.granted,
         "unsandboxed": summary.unsandboxed,
+        "programs": summary
+            .programs
+            .iter()
+            .map(|program| json!({
+                "name": program.name,
+                "path": program.path.as_ref().map(|path| path.to_string_lossy()),
+                "granted": program.granted(),
+                "problem": program.problem,
+            }))
+            .collect::<Vec<_>>(),
         "certified_orbit_version": summary.certified_orbit_version,
         "diagnostic": summary.diagnostic,
         "panels": summary

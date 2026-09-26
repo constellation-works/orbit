@@ -106,6 +106,8 @@ pub(super) struct PluginSpecFixture<'a> {
     /// `spec.requires.orbit`, when the fixture pins one.
     pub(super) requires_orbit: Option<&'a str>,
     pub(super) requires_host_api: Option<u32>,
+    /// `spec.requires.programs`, as a YAML flow list.
+    pub(super) requires_programs: Option<&'a str>,
     pub(super) verb: &'a str,
     /// A `spec.permissions:` block, indented for the manifest.
     pub(super) permissions: Option<&'a str>,
@@ -125,6 +127,7 @@ impl<'a> PluginSpecFixture<'a> {
             version: "1.0.0",
             requires_orbit: None,
             requires_host_api: None,
+            requires_programs: None,
             verb: "hello",
             permissions: None,
             sandbox: None,
@@ -158,6 +161,12 @@ impl<'a> PluginSpecFixture<'a> {
         self
     }
 
+    /// Declare `spec.requires.programs` (a YAML flow list, `[git, /opt/x]`).
+    pub(super) fn requiring_programs(mut self, programs: &'a str) -> Self {
+        self.requires_programs = Some(programs);
+        self
+    }
+
     pub(super) fn unsandboxed(mut self) -> Self {
         self.sandbox = Some("none");
         self
@@ -188,6 +197,9 @@ pub(super) fn write_plugin_at(root: &Path, spec: PluginSpecFixture<'_>) -> PathB
     }
     if let Some(host_api) = spec.requires_host_api {
         requires.push_str(&format!("    host_api: {host_api}\n"));
+    }
+    if let Some(programs) = spec.requires_programs {
+        requires.push_str(&format!("    programs: {programs}\n"));
     }
     let requires_block = if requires.is_empty() {
         String::new()
