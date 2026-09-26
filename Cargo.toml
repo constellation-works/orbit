@@ -45,6 +45,8 @@ rust-version = "1.89"
 # Keep this list short — only rules that are mechanically true everywhere.
 [workspace.lints.clippy]
 await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+await_holding_invalid_type = "deny"
 dbg_macro = "deny"
 expect_used = "warn"
 print_stderr = "warn"

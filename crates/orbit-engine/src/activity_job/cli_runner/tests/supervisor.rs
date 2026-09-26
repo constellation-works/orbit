@@ -488,7 +488,7 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
     // cleanup against helper startup. After the supervisor returns, the test
     // signals the helper to write again so post-return emission can be checked.
     let script = format!(
-        "perl -MPOSIX -e '$SIG{{PIPE}}=\"IGNORE\"; $| = 1; select(undef, undef, undef, 0.2); POSIX::setsid(); open(my $pid, \">\", $ARGV[0]); print $pid $$; close $pid; open(my $ready, \">\", $ARGV[1]); print $ready \"ready\"; close $ready; while (!-s $ARGV[2]) {{ select(undef, undef, undef, 0.05); }} print STDOUT \"after-return\\n\"; open(my $wrote, \">\", $ARGV[3]); print $wrote \"wrote\"; close $wrote; sleep 30' {pid} {ready} {write_now} {wrote} & while [ ! -s {ready} ]; do sleep 0.01; done; printf '%s\n' 'done'",
+        "perl -MPOSIX -e '$SIG{{PIPE}}=\"IGNORE\"; $| = 1; select(undef, undef, undef, 0.2); POSIX::setsid(); open(my $pid, \">\", $ARGV[0]); print $pid $$; close $pid; open(my $ready, \">\", $ARGV[1]); print $ready \"ready\"; close $ready; while (!-s $ARGV[2]) {{ select(undef, undef, undef, 0.05); }} print STDOUT \"after-return\\n\"; open(my $wrote, \">\", $ARGV[3]); print $wrote \"wrote\"; close $wrote; sleep 30' {pid} {ready} {write_now} {wrote} & perl -e 'my $deadline = time + 5; while (!-s $ARGV[0]) {{ die \"helper did not become ready\\n\" if time >= $deadline; select(undef, undef, undef, 0.05); }}' {ready} && printf '%s\n' 'done'",
         pid = shell_quote(pid_file.to_string_lossy().as_ref()),
         ready = shell_quote(ready_file.to_string_lossy().as_ref()),
         write_now = shell_quote(write_now_file.to_string_lossy().as_ref()),
