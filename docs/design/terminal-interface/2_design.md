@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-08-02
-last_validated: 2026-09-20
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -76,9 +76,9 @@ A closed stdout is not an error. `output/pipe.rs` installs a panic hook that tur
 
 ## 8. Test Coverage of Output
 
-There are no output snapshots. `crates/orbit-cli/src/snapshots/` holds a single file, `audit_guard_event_json_shapes.json`, covering audit event JSON shape; `crates/orbit-cli/tests/snapshots/` holds one more, `mcp_tools_list.json`, covering the MCP tool listing. Both assert on JSON.
+Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists, plus pinned-width table forms rendered by `src/output/tests/table.rs`; they also cover a plain task detail view. CLI long-help goldens live under `src/command/tests/`. The existing snapshots in `src/snapshots/` and `tests/snapshots/` cover audit event JSON shape and the MCP tool listing, respectively. The list-command integration goldens capture piped output; the table goldens render directly at a pinned width rather than through a terminal.
 
-The first rendering assertions arrived with the borderless migration [ORB-10567] and are written as behavior, not golden files. `crates/orbit-cli/src/output/tests/table.rs` renders at pinned widths — passed as an argument rather than read from `COLUMNS`, so a `--nocapture` run cannot change the geometry — and asserts line count, gutter, truncation, alignment, column suppression, and column dropping. `crates/orbit-cli/tests/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
+The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/src/output/tests/table.rs` renders at pinned widths — passed as an argument rather than read from `COLUMNS`, so a `--nocapture` run cannot change the geometry — and asserts line count, gutter, truncation, alignment, column suppression, and column dropping. `crates/orbit-cli/tests/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit tool list --all` and `orbit task list` are *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.
 
 `crates/orbit-cli/src/output/tests/gating.rs` asserts ANSI emission [ORB-10570]: that a `NO_COLOR` terminal and a redirect render byte-identically on both a table and a log line, that a terminal *without* `NO_COLOR` renders escapes through both backends (so the equality tests cannot pass vacuously), that a zero-width sink truncates nothing, and that progress is refused off a terminal and in `json`/`ndjson`. Sinks are built with `OutputSink::resolve`, never `from_process`, because `make ci` runs without a TTY. The one test that flips `colored`'s process-global override serializes on a module mutex and restores detection on drop.
 

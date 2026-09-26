@@ -265,10 +265,9 @@ fn parse_width(raw: &str) -> Option<u16> {
 
 /// Color precedence, per `specs/color-and-styling.md` §2.
 ///
-/// The non-TTY rung comes first and is absolute: a redirected stream is never
-/// styled, whatever the environment claims. `--no-color` and `--color=always`
-/// are rungs 1 and 3 of that list; they land with the flags themselves, which
-/// this step does not introduce.
+/// A non-TTY sink and `TERM=dumb` disable color before environment overrides
+/// are considered. A non-empty `NO_COLOR` disables color, then a non-empty
+/// `CLICOLOR_FORCE` enables it; otherwise a TTY gets color.
 fn resolve_color(is_tty: bool, env: &SinkEnv) -> bool {
     if !is_tty {
         return false;

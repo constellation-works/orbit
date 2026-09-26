@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Decisions
 owner: claude
-last_updated: 2026-08-11
-last_validated: 2026-09-20
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 status: Accepted
 feature: terminal-interface
 doc_role: decisions
@@ -112,7 +112,7 @@ Color is a semantic token attached to a value's meaning, resolved once at the si
 
 - A single vocabulary maps domain values to a small closed set of roles: `ok`, `warn`, `error`, `active`, `muted`, `neutral`. Commands tag a value with a role; they never name a color or call a styling crate.
 - The renderer resolves role to ANSI, and is the only place either styling backend is touched. Adding a status is one edit.
-- Emission is decided once, at the sink, in this precedence: `--no-color` or `NO_COLOR` (any non-empty value) disables; `--color=always` forces; otherwise color is on only when stdout is a TTY.
+- Emission is decided once, at the sink: a non-TTY sink or `TERM=dumb` disables color, then a non-empty `NO_COLOR` disables it, then a non-empty `CLICOLOR_FORCE` enables it; otherwise a TTY gets color. There are no command-line color override flags.
 - Color is never the sole carrier of meaning. A status cell prints its word, and the word is legible with color stripped — this is what makes the `NO_COLOR` and piped paths correct rather than merely degraded.
 - Roles apply to values, not rows. A failed row is not painted red; its status cell is.
 

@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Color and Styling"
-last_validated: 2026-09-24
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 ---
 
 # Spec: Color and Styling
@@ -70,6 +71,6 @@ There are no command-line color override flags; the sink owns this environment-b
 3. ~~Move emission gating into the sink; delete the local `is_terminal` check in `command/log/tail.rs`.~~ Done [ORB-10570].
 4. ~~Replace the wrappers with role-tagged values at each call site and delete the wrappers.~~ Done [ORB-10570]. A call site now passes either a `Role` it names outright or the `Domain` the value came from; `cell(value, tag)` and `text(value, tag)` are the only two renderings.
 
-**Remaining gap:** §3's "16-color ANSI only" is not met on the table path. `comfy_table` renders a role's color through `crossterm` as a 256-color code (`\e[38;5;10m` for green) while `colored` renders the same role as `\e[32m`. Both honor the sink's decision about *whether* to emit; they disagree about the shade. Closing it means either mapping roles to raw SGR codes and bypassing `comfy_table::Color`, or accepting the 256-color spelling and amending §3.
+**Remaining gap (confirmed 2026-09-26):** §3's "16-color ANSI only" is not met on the table path. A forced-color TTY render of `orbit task list --limit 10` emits `\e[38;5;11m` for yellow and `\e[38;5;14m` for cyan. `comfy_table` renders every named base color through `crossterm` with a `38;5` code, while `colored` uses basic SGR codes for lines. Both honor the sink's decision about *whether* to emit. Changing only the role-to-`comfy_table::Color` mapping cannot close this gap; doing so requires a change to the table rendering path or a revised palette contract.
 
 **Remaining gap:** §3's "never restyle a value the user is filtering on" is unimplemented. `Column::filtered` keeps such a column on screen, but the cell is still painted, in every list command.

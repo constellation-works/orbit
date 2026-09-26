@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_validated: 2026-09-20
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 ---
 
 # Reference: Detail Commands Behind Truncatable List Columns
@@ -23,8 +24,6 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit run events` | `SUMMARY` | `orbit run trace <run_id>`, `orbit run logs <run_id>` |
 | `orbit run show` (step summary) | `TARGET`, `ERROR MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit routine list` | `SOURCE` | `orbit routine show <name>` |
-| `orbit executor list` | `COMMAND` | `orbit executor show <name>` |
-| `orbit policy list` | `DESCRIPTION`, `FSPROFILES` | `orbit policy show <name>` |
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
 | `orbit search` | `ID`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
@@ -35,7 +34,6 @@ These views can truncate a column and have no detail command. Listed rather than
 
 | List view | Truncatable columns | Note |
 |-----------|--------------------|------|
-| `orbit activity list` | `DESCRIPTION` | `orbit activity` has only `list`; there is no `orbit activity show`. |
 | `orbit doctor` | `DETAILS` | Diagnostic output; the message is authored short. No per-check detail command. |
 | `orbit tool doctor` | `DETAILS` | As above. |
 | `orbit skill doctor` | `DETAILS` | As above. |
