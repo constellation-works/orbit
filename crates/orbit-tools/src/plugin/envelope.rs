@@ -28,6 +28,11 @@ pub(crate) const MAX_PLUGIN_ERROR_DETAIL_BYTES: usize = 16 * 1024;
 /// schema — the backend's own view of its configuration, which until now it
 /// could only see through the manifest's `{{config.<key>}}` templates.
 ///
+/// `task_id` and `job_run_id` name the managed activity the call serves. They
+/// come from [`ToolContext::activity_binding`], which only the dispatching
+/// host sets, so a backend can bind a write to the task that authorized it;
+/// they are `null` for an interactive call. Tool input never reaches them.
+///
 /// `tool_name` is `Some` only for `mcp`: the `exec` envelope already names the
 /// tool at its top level, while one `mcp` child serves every tool of its
 /// plugin and has no `ORBIT_TOOL_NAME` in its environment (§4.2).
@@ -44,6 +49,14 @@ pub(crate) fn call_context(
         "agent": ctx.agent_name,
         "model": ctx.model_name,
         "config": spec.config.as_value(),
+        "task_id": ctx
+            .activity_binding
+            .as_ref()
+            .and_then(|binding| binding.task_id.as_deref()),
+        "job_run_id": ctx
+            .activity_binding
+            .as_ref()
+            .map(|binding| binding.job_run_id.as_str()),
     });
     if let Some(tool_name) = tool_name
         && let Some(fields) = context.as_object_mut()

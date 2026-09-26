@@ -2,7 +2,7 @@
 //! a tool call is recorded under.
 
 use orbit_common::OrbitError;
-use orbit_tools::ReservationOwnerContext;
+use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
@@ -97,6 +97,21 @@ pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
             .to_string(),
         ),
         owner_run_id,
+    })
+}
+
+/// The managed activity a nested `orbit tool run` / `orbit mcp serve` call
+/// serves, read from the run envelope the dispatching host stamped into the
+/// agent's environment — never from tool input. `None` outside a managed run.
+pub(super) fn activity_binding_from_env() -> Option<ActivityBinding> {
+    let job_run_id = managed_run_context_run_id_from_env()?;
+    let task_id = std::env::var("ORBIT_TASK_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    Some(ActivityBinding {
+        job_run_id,
+        task_id,
     })
 }
 

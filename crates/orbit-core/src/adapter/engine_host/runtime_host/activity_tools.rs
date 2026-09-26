@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use orbit_engine::{DispatchError, ResolvedActivityTools};
-use orbit_tools::{FsAuditLogger, ReservationOwnerContext, ToolContext};
+use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::tool::{ToolSessionContext, is_exact_canonical_tool_name};
 
@@ -103,6 +103,7 @@ pub(super) fn tool_context_for_activity(
         .map(|programs| programs.to_vec())
         .unwrap_or_default();
     let proc_spawn_environment = Some(runtime.execution_env_policy().agent_subprocess_env(&[]));
+    let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
 
     ToolContext {
         cwd: std::env::current_dir()
@@ -115,25 +116,26 @@ pub(super) fn tool_context_for_activity(
         proc_allowed_programs,
         proc_spawn_environment,
         proc_spawn_activity_scoped,
-        reservation_owner: run_id.map(str::trim).filter(|value| !value.is_empty()).map(
-            |owner_run_id| ReservationOwnerContext {
-                owner_run_id: owner_run_id.to_string(),
-                owner_metadata_json: Some(
-                    serde_json::json!({
-                        "source": "v2_activity",
-                        "fs_profile": fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE),
-                    })
-                    .to_string(),
-                ),
-            },
-        ),
+        reservation_owner: run_id.map(|owner_run_id| ReservationOwnerContext {
+            owner_run_id: owner_run_id.to_string(),
+            owner_metadata_json: Some(
+                serde_json::json!({
+                    "source": "v2_activity",
+                    "fs_profile": fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE),
+                })
+                .to_string(),
+            ),
+        }),
+        // The dispatcher adds the task from the activity's run input; the
+        // run is this context's own, never a tool's.
+        activity_binding: run_id.map(|job_run_id| ActivityBinding {
+            job_run_id: job_run_id.to_string(),
+            task_id: None,
+        }),
         orbit_host: Some(build_orbit_tool_host(
             runtime,
             None,
-            run_id
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
+            run_id.map(ToOwned::to_owned),
             ToolSessionContext::default(),
         )),
         ..Default::default()

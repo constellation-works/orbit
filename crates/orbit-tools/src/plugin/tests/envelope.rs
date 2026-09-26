@@ -13,7 +13,7 @@ use super::super::envelope::{
 };
 use super::super::mcp::tools_call_params;
 use super::support::{context, spec};
-use crate::ToolContext;
+use crate::{ActivityBinding, ToolContext};
 
 /// A backend spec whose plugin is configured: `[plugins.demo]` over the
 /// manifest's defaults, already validated by the host.
@@ -70,8 +70,11 @@ fn the_exec_envelope_carries_the_effective_config_section() {
                 "incremental": true,
                 "api_token": "s3cret",
             },
+            "task_id": null,
+            "job_run_id": null,
         }),
-        "the context is the caller's facts plus the plugin's effective section"
+        "the context is the caller's facts plus the plugin's effective section; \
+         an interactive call serves no task or run"
     );
     // Typed, not stringified: a backend reading `max_nodes` gets a number,
     // which is what `{{config.<key>}}` substitution cannot give it.
@@ -111,6 +114,55 @@ fn both_dispatch_surfaces_send_the_same_config_for_one_plugin_and_workspace() {
     assert_eq!(mcp["_meta"]["orbit"], expected);
     assert_eq!(mcp["name"], "hello");
     assert_eq!(mcp["arguments"]["name"], "world");
+}
+
+/// A backend that authorizes its own writes must match them against who is
+/// calling, and the agent writes the tool input. So the task and run a managed
+/// call serves come from the host's binding on both surfaces, and an input
+/// naming another task or run changes nothing but the input [ORB-13115].
+#[test]
+fn a_managed_call_names_its_host_attested_task_and_run_on_both_surfaces() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let spec = configured_spec(temp.path());
+    let ctx = ToolContext {
+        activity_binding: Some(ActivityBinding {
+            job_run_id: "jrun-host".to_string(),
+            task_id: Some("ORB-7".to_string()),
+        }),
+        ..call_ctx(temp.path(), &workspace)
+    };
+    let forged = json!({
+        "task_id": "ORB-999",
+        "job_run_id": "jrun-forged",
+        "context": { "task_id": "ORB-999" },
+        "_meta": { "orbit": { "task_id": "ORB-999" } },
+    });
+
+    let exec = exec_envelope(&spec, &ctx, "demo.hello", forged.clone());
+    let mcp = tools_call_params(&spec, &ctx, "demo.hello", "hello", forged.clone());
+
+    for (surface, context) in [("exec", &exec["context"]), ("mcp", &mcp["_meta"]["orbit"])] {
+        assert_eq!(context["task_id"], "ORB-7", "{surface}: {context}");
+        assert_eq!(context["job_run_id"], "jrun-host", "{surface}: {context}");
+    }
+    assert_eq!(
+        exec["input"], forged,
+        "the input still reaches the backend as written"
+    );
+    assert_eq!(mcp["arguments"], forged);
+
+    // A run step that serves no task still names its run.
+    let ctx = ToolContext {
+        activity_binding: Some(ActivityBinding {
+            job_run_id: "jrun-host".to_string(),
+            task_id: None,
+        }),
+        ..call_ctx(temp.path(), &workspace)
+    };
+    let context = call_context(&spec, &ctx, None);
+    assert_eq!(context["task_id"], Value::Null);
+    assert_eq!(context["job_run_id"], "jrun-host");
 }
 
 /// A plugin is configured with its credentials like any other key, so the

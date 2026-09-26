@@ -17,7 +17,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::audit_writer::V2AuditWriter;
-use super::cli_runner::run_cli_backend;
+use super::cli_runner::{run_cli_backend, task_id_from_input};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCliExecutor {
@@ -443,6 +443,12 @@ fn run_deterministic(
         .session_context
         .effective_capabilities
         .insert(McpCapability::Runner);
+    // The dispatcher names the task this step serves from the run's own input, the
+    // same value a CLI agent step exports as `ORBIT_TASK_ID`. A plugin reads
+    // it as host-attested context; the tool's `input`/`args` never feed it.
+    if let Some(binding) = tool_context.activity_binding.as_mut() {
+        binding.task_id = task_id_from_input(input).map(ToOwned::to_owned);
+    }
     let output = match DeterministicAction::parse(&spec.action) {
         Some(DeterministicAction::Engine(action)) => {
             let state_context = crate::executor::automation::StateExecutionContext {

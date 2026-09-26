@@ -538,6 +538,8 @@ fn tools_call_carries_this_call_s_context_not_the_session_s() {
             "agent": "claude",
             "model": "opus-5",
             "config": { "index_dir": "/srv/graph", "max_nodes": 500 },
+            "task_id": null,
+            "job_run_id": null,
             "tool": "mcpdemo.echo",
         }),
         "`tools/call` carries the context the exec envelope carries — including \
@@ -550,6 +552,10 @@ fn tools_call_carries_this_call_s_context_not_the_session_s() {
     let mut other = ctx.clone();
     other.agent_name = Some("codex".to_string());
     other.model_name = Some("gpt-5".to_string());
+    other.activity_binding = Some(crate::ActivityBinding {
+        job_run_id: "jrun-host".to_string(),
+        task_id: Some("ORB-7".to_string()),
+    });
     let second = echo.execute(&other, json!({})).expect("second caller");
     assert_eq!(
         second["pid"], first["pid"],
@@ -557,6 +563,10 @@ fn tools_call_carries_this_call_s_context_not_the_session_s() {
     );
     assert_eq!(second["meta"]["orbit"]["agent"], "codex");
     assert_eq!(second["meta"]["orbit"]["model"], "gpt-5");
+    // Nor can it say which task a call serves: a managed caller sharing the
+    // child names its own binding on its own request [ORB-13115].
+    assert_eq!(second["meta"]["orbit"]["task_id"], "ORB-7");
+    assert_eq!(second["meta"]["orbit"]["job_run_id"], "jrun-host");
 }
 
 #[cfg(unix)]
