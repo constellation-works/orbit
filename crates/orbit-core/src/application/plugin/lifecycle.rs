@@ -12,7 +12,7 @@ use orbit_tools::plugin::{
 };
 use orbit_types::plugin::{
     InstalledPlugin, MANIFEST_FILE_NAME, PluginGrantEntry, PluginGrantSet, PluginStatus,
-    parse_grants, parse_stored_grants, resolve_grant_selection,
+    is_valid_namespace, parse_grants, parse_stored_grants, resolve_grant_selection,
 };
 use orbit_types::record::OrbitEvent;
 
@@ -21,7 +21,7 @@ use crate::runtime::plugin::grants::{
     forget_authorized_grants, record_authorization, recorded_program_paths, verify_install_path,
 };
 use crate::runtime::plugin::host::projected_status;
-use crate::runtime::plugin::paths::{plugin_namespace_dir, read_pin_file};
+use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
@@ -386,10 +386,12 @@ pub struct PluginRemoveOptions {
     /// refuses such a row, which would otherwise leave the operator with a
     /// refused plugin and no command that removes it [ORB-12800].
     pub record_only: bool,
+    /// Delete this namespace's Orbit-owned state tree as well as its install.
+    pub purge_state: bool,
 }
 
-/// Remove the host's install. Derived data a plugin wrote elsewhere is
-/// deliberately retained (§3).
+/// Remove the host's install, optionally including its Orbit-owned state.
+/// Derived data a plugin wrote outside that state tree is retained (§3).
 ///
 /// Only this namespace's install family is deleted. The recorded
 /// `install_path` is as writable as the rest of the row, so it is verified
@@ -401,7 +403,17 @@ pub fn remove_plugin(
     name: &str,
     options: &PluginRemoveOptions,
 ) -> Result<(), OrbitError> {
+    if options.record_only && options.purge_state {
+        return Err(OrbitError::InvalidInput(
+            "--purge-state cannot be combined with --record-only".to_string(),
+        ));
+    }
     let installed = installed_plugin(runtime, name)?;
+    if !options.record_only && !is_valid_namespace(name) {
+        return Err(OrbitError::PolicyDenied(format!(
+            "refusing to remove plugin with invalid namespace '{name}'; use --record-only to clear its record"
+        )));
+    }
     // Ordinary removal deletes files, so the recorded path is held to this
     // host's install directory first; `--record-only` is the verb for a row
     // that cannot pass.
@@ -411,6 +423,39 @@ pub fn remove_plugin(
         verified_install_path(runtime, &installed)?;
         true
     };
+    let state_dir = plugin_state_dir(&runtime.global_root(), name);
+    if options.purge_state {
+        // A plugin may write inside its own state tree. Refuse links at any
+        // state-path component before changing the plugin row or install.
+        for path in [
+            runtime.global_root().join("state"),
+            runtime.global_root().join("state/plugins"),
+            state_dir.clone(),
+        ] {
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "refusing to purge plugin state through symlinked path {}",
+                        path.display()
+                    )));
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "refusing to purge plugin state through non-directory path {}",
+                        path.display()
+                    )));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(OrbitError::Io(format!(
+                        "inspect {}: {error}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+    }
 
     // Take the plugin off the surface before the record goes. Besides
     // stopping its tools and seeded definitions from registering, this removes
@@ -419,6 +464,13 @@ pub fn remove_plugin(
     // doctor to inspect.
     set_enabled(runtime, name, false, None, None)?;
     unlink_namespace_skills(runtime, name)?;
+
+    // Keep the row available for a retry if state removal fails. All path
+    // checks above ran before the first lifecycle mutation.
+    if options.purge_state && state_dir.exists() {
+        std::fs::remove_dir_all(&state_dir)
+            .map_err(|error| OrbitError::Io(format!("remove {}: {error}", state_dir.display())))?;
+    }
 
     runtime.with_mutation(|| {
         runtime.stores().plugins().delete_plugin(name)?;
