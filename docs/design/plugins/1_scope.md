@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-09-24
+last_updated: 2026-09-26
 last_validated: 2026-09-22
 ---
 
@@ -237,7 +237,8 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   with nothing granted back, not even a plugin's own file (§4.3); the host reads a value and
   hands it over. It is *not* denied to agent sandboxes: a nested `orbit` inside an agent
   sandbox must still be able to deliver a secret to its backend, so until the host-side broker
-  lands an agent sandbox can read the global root, this tree included [ORB-13038].
+  lands an agent sandbox can read the global root, this tree included. The broker and the
+  agent-side deny are designed in [2_agent_call_broker.md](./2_agent_call_broker.md) [ORB-13038].
 - **Delivery.** Each backend call carries the plugin's declared secrets in the request itself:
   `context.secrets` on the `exec` stdin envelope, `params._meta.orbit.secrets` on an `mcp`
   `tools/call` (§4.2). The object maps each declared name that is set to
@@ -673,7 +674,10 @@ credential a plugin keeps in `{{plugin_state}}` is readable by that plugin alone
 dropped from the profile with a warning; no grant re-allows it. Writing `{{plugin_state}}`
 still needs an `fs.write` root there and the `fs` grant (§4.1 admission is unchanged). This is the inventory the agent sandbox grants a nested Orbit
 (`append_linux_runtime_write_roots` in `orbit-core`); widening it is a security decision
-[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. The witness under `plugins/` stays read-only
+[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes do not yet deny `state/plugins/`
+or `state/plugin-secrets/`: a backend spawned by a nested Orbit inherits the agent's restrictions,
+so the deny waits for the host-side broker in [2_agent_call_broker.md](./2_agent_call_broker.md)
+[ORB-13038]. The witness under `plugins/` stays read-only
 only because both grant paths compose: the inventory omits `plugins/`, and `fs.write`
 admission refuses global-root descendants outside `{{plugin_state}}` [ORB-12778].
 
