@@ -13,6 +13,7 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskListFilter;
 
 use super::input::{action_failed, bounded_usize, requested_workspace_root, string_array};
+use super::persist::no_target_assessment_marker;
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{VALIDATION_TOOL_WARNINGS, requested_base_branch};
@@ -64,6 +65,9 @@ pub(in super::super) fn prepare(
     let explicit_task_ids = string_array(input, "task_ids", action)?;
     let explicit_mode = !explicit_task_ids.is_empty();
     let active_preparations = active_task_pilot_preparations(runtime, action, &workspace_root)?;
+    let eligibility =
+        crate::application::automation::preparation::claim_eligibility(runtime, claim.as_ref())
+            .map_err(|error| action_failed(action, error.to_string()))?;
 
     let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
         let all_tasks = runtime
@@ -127,9 +131,9 @@ pub(in super::super) fn prepare(
             ExcludedEvidence::default(),
         )
     } else {
-        // Envelope-only metadata (no description/plan/comments/history/artifacts)
-        // for every task in the workspace, so routine discovery no longer pays
-        // for full-bundle hydration of terminal history it will only exclude.
+        // Envelopes exclude terminal and already scoped work before any task
+        // hydration. Remaining candidates may need their last applied pilot
+        // marker checked against current material.
         let candidates = runtime
             .task_candidates(&TaskListFilter::default(), usize::MAX)
             .map_err(|error| {
@@ -156,6 +160,19 @@ pub(in super::super) fn prepare(
                     .contains_key(&envelope.id)
                     .then_some("active_pilot_prepared")
             });
+            let reason = if reason.is_none()
+                && envelope.context_files.is_empty()
+                && fresh_no_target_assessment(
+                    runtime,
+                    action,
+                    &envelope.id,
+                    source.as_ref(),
+                    &eligibility,
+                )? {
+                Some("no_target_assessment_fresh")
+            } else {
+                reason
+            };
             match reason {
                 Some(reason) => excluded.record(envelope, reason, &active_preparations),
                 None => selected.push(envelope),
@@ -197,9 +214,6 @@ pub(in super::super) fn prepare(
     // deliberately works from envelopes, which carry no acceptance criteria,
     // and the selection is already bounded by `max_tasks` at this point.
     let lane = ImplementationLane::resolve(runtime);
-    let eligibility =
-        crate::application::automation::preparation::claim_eligibility(runtime, claim.as_ref())
-            .map_err(|error| action_failed(action, error.to_string()))?;
     for (task_id, snapshot) in task_ids.iter().zip(task_snapshots.iter_mut()) {
         let task = runtime
             .get_task(task_id)
@@ -269,6 +283,41 @@ pub(in super::super) fn prepare(
         "excluded_sample_truncated": excluded.total > excluded.sample.len(),
         "excluded_omitted_count": excluded.total.saturating_sub(excluded.sample.len()),
     }))
+}
+
+fn fresh_no_target_assessment(
+    runtime: &OrbitRuntime,
+    action: &str,
+    task_id: &str,
+    source: Option<&SourceSnapshot>,
+    eligibility: &orbit_types::workflow::automation::members::PreparationEligibility,
+) -> Result<bool, DispatchError> {
+    let history = runtime
+        .get_task_history(task_id)
+        .map_err(|error| action_failed(action, format!("read task {task_id} history: {error}")))?;
+    let marker = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == "task_pilot_applied")
+        .and_then(|entry| entry.note.as_deref())
+        .and_then(no_target_assessment_marker);
+    let Some((assessed_status, assessed_fingerprint)) = marker else {
+        return Ok(false);
+    };
+    let task = runtime
+        .get_task(task_id)
+        .map_err(|error| action_failed(action, format!("read task {task_id}: {error}")))?;
+    if task.status != assessed_status {
+        return Ok(false);
+    }
+    let current = crate::application::automation::preparation::pilot_fingerprint(
+        runtime,
+        &task,
+        source.map(|source| source.source_revision.as_str()),
+        eligibility,
+    )
+    .map_err(|error| action_failed(action, format!("fingerprint task {task_id}: {error}")))?;
+    Ok(current == assessed_fingerprint)
 }
 
 /// Bounded evidence for routine (non-explicit) discovery exclusions: every

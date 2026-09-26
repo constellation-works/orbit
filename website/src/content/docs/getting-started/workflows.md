@@ -89,9 +89,12 @@ orbit run task-pilot                        # zero-input discovery
 orbit run task-pilot "$TASK_ID" "$SECOND_TASK_ID" --wait
 ```
 
-Omit task IDs for automatic discovery of tasks with empty `context_files` or
-unassessed complexity; pass explicit IDs to audit exactly those tasks. This is
-the named entrypoint for `task_pilot_pipeline` — see [Prepare proposed
+Omit task IDs for automatic discovery of proposed or backlog tasks with empty
+`context_files` or unassessed complexity. An applied assessment with no
+in-workspace targets is skipped while its task and source fingerprint remain
+fresh. Changing its description, criteria, or status makes it eligible again.
+Pass explicit IDs to audit exactly those tasks. This is the named entrypoint
+for `task_pilot_pipeline` — see [Prepare proposed
 work](../../how-to/continuous-delivery/#1-prepare-proposed-work) for the full
 workflow, and [`orbit run job`](#direct-job-execution) for the equivalent
 generic form.
