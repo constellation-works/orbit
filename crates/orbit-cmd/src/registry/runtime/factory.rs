@@ -263,7 +263,7 @@ impl RegisteredRuntimeFactory {
             &workspace_registry::registry_path_for(&global_root),
             &identity,
         )?;
-        let selected = Self::resolve_selector_in(&registry, &selector)?;
+        let selected = Self::resolve_selector_in(&registry, &selector, identity.id())?;
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let local_root = local_root_for_runtime_open(&selected, &cwd, read_only);
         if read_only {
@@ -302,7 +302,11 @@ impl RegisteredRuntimeFactory {
         selector: &str,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let registry = Self::load_registry_for_selectors(global_root)?;
-        Self::resolve_selector_in(&registry, selector)
+        Self::resolve_selector_in(
+            &registry,
+            selector,
+            inspect_machine_identity(global_root)?.id(),
+        )
     }
 
     /// The registry read [`Self::resolve_workspace_selector`] performs, exposed
@@ -321,8 +325,10 @@ impl RegisteredRuntimeFactory {
     pub(crate) fn resolve_selector_in(
         registry: &WorkspaceRegistry,
         selector: &str,
+        local_machine_id: Option<&str>,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        let (workspace, checkout, local_root) = resolve_cli_workspace_binding(registry, selector)?;
+        let (workspace, checkout, local_root) =
+            resolve_cli_workspace_binding(registry, selector, local_machine_id)?;
         if workspace.status != WorkspaceStatus::Active {
             return Err(inactive_cli_workspace(workspace, checkout));
         }
@@ -542,7 +548,7 @@ impl RegisteredRuntimeFactory {
             &workspace_registry::registry_path_for(&global_root),
             &identity,
         )?;
-        match resolve_cli_workspace_target(&registry, runtime, &selector)? {
+        match resolve_cli_workspace_target(&registry, runtime, &selector, identity.id())? {
             CliWorkspaceTarget::CurrentRuntime => Ok(None),
             CliWorkspaceTarget::Checkout {
                 workspace,

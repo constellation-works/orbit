@@ -17,6 +17,125 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
+fn tool_run_explicit_workspace_resolves_from_home_and_temp_directory() {
+    let temp = tempdir().expect("fixture");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(home.join(".orbit")).expect("global root");
+    fs::create_dir_all(&repo).expect("repo");
+    fs::write(
+        home.join(".orbit/config.toml"),
+        "[machine]\nid = \"hm_cli_tool\"\nname = \"cli-tool\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("machine identity");
+    init_git_repo(&repo);
+    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+
+    let workspaces = run_orbit_json(
+        &repo,
+        &home,
+        &["workspace", "list", "--format", "json"],
+        None,
+    );
+    let workspace_id = workspaces
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["id"].as_str())
+        .expect("registered workspace ID");
+
+    let temp_dir = std::env::temp_dir();
+    for cwd in [home.as_path(), temp_dir.as_path()] {
+        let by_id = serde_json::json!({"workspace": workspace_id, "limit": 1, "model": "codex"});
+        let listed = run_orbit_json(
+            cwd,
+            &home,
+            &[
+                "tool",
+                "run",
+                "orbit.task.list",
+                "--input",
+                &by_id.to_string(),
+            ],
+            None,
+        );
+        assert!(
+            listed["tasks"].is_array(),
+            "list from {}: {listed}",
+            cwd.display()
+        );
+
+        let qualified = serde_json::json!({
+            "workspace": format!("hm_cli_tool/{workspace_id}"),
+            "limit": 1,
+            "model": "codex"
+        });
+        let listed = run_orbit_json(
+            cwd,
+            &home,
+            &[
+                "tool",
+                "run",
+                "orbit.task.list",
+                "--input",
+                &qualified.to_string(),
+            ],
+            None,
+        );
+        assert!(
+            listed["tasks"].is_array(),
+            "qualified list from {}: {listed}",
+            cwd.display()
+        );
+
+        let listed = run_orbit_json(
+            cwd,
+            &home,
+            &[
+                "--workspace",
+                workspace_id,
+                "tool",
+                "run",
+                "orbit.task.list",
+                "--input",
+                r#"{"limit":1,"model":"codex"}"#,
+            ],
+            None,
+        );
+        assert!(
+            listed["tasks"].is_array(),
+            "flagged list from {}: {listed}",
+            cwd.display()
+        );
+    }
+
+    let foreign = serde_json::json!({
+        "workspace": format!("hm_other/{workspace_id}"),
+        "limit": 1,
+        "model": "codex"
+    });
+    let mut command = cargo_bin_cmd!("orbit");
+    command
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--input",
+            &foreign.to_string(),
+        ]);
+    clear_inherited_authority_env(&mut command);
+    set_orbit_root_env(&mut command, None);
+    let failure = command.assert().failure();
+    let stderr = String::from_utf8_lossy(&failure.get_output().stderr);
+    assert!(
+        stderr.contains("hm_other"),
+        "foreign host must be named: {stderr}"
+    );
+}
+
+#[test]
 fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");

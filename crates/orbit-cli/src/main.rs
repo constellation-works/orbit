@@ -422,6 +422,12 @@ fn main() {
             root_override.as_deref(),
             workspace_selector.as_deref(),
         ),
+        RuntimeNeed::SelectedWorkspace { selector } => {
+            RegisteredRuntimeFactory::initialize_with_overrides(
+                root_override.as_deref(),
+                Some(selector),
+            )
+        }
         RuntimeNeed::PipelineWorker => {
             RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
                 root_override.as_deref(),

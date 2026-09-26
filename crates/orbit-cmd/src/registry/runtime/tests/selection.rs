@@ -111,6 +111,36 @@ pub(super) fn cli_tool_run_lists_the_named_workspace_not_the_cwd_runtime() {
 }
 
 #[test]
+pub(super) fn local_host_qualified_selector_binds_and_foreign_host_fails_closed() {
+    let fixture = dual_workspace_fixture();
+    let selected = execute_cli_tool(
+        &fixture.alpha,
+        "orbit.task.list",
+        json!({ "workspace": "hm_cli_bind/ws_beta", "limit": 10 }),
+    )
+    .expect("local federated selector binds beta");
+    assert!(task_ids(&selected).contains(&fixture.beta_task_id));
+
+    let global = fixture.alpha.global_root();
+    let runtime = RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&global),
+        Some("hm_cli_bind/ws_beta"),
+    )
+    .expect("global --workspace accepts the local federated selector");
+    assert_eq!(runtime.paths().repo_root, fixture.beta_repo);
+
+    let error = match RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&global),
+        Some("hm_other/ws_beta"),
+    ) {
+        Ok(_) => panic!("foreign qualified selector must fail closed"),
+        Err(error) => error,
+    };
+    let message = unsupported_workspace_message(error, "hm_other/ws_beta");
+    assert!(message.contains("host 'hm_other'"), "{message}");
+}
+
+#[test]
 pub(super) fn cli_tool_run_fails_closed_on_unresolvable_workspace_for_read_and_write() {
     let fixture = dual_workspace_fixture();
     const BOGUS: &str = "bogus-nonexistent-xyz";

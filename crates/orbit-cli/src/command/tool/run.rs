@@ -54,6 +54,18 @@ pub struct ToolRunArgs {
 }
 
 impl ToolRunArgs {
+    /// Selector supplied by a tool call, available before runtime bootstrap.
+    /// Invalid input is reported by `execute` through `parsed_input`.
+    pub(crate) fn input_workspace_selector(&self) -> Option<String> {
+        self.parsed_input()
+            .ok()?
+            .get("workspace")?
+            .as_str()
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
     /// Read and parse tool input once for all pre-dispatch and execution paths
     /// in this invocation. An unreadable `--input-file` must not be silently
     /// retried by task-owner bootstrap or audit metadata.
