@@ -433,6 +433,63 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 
 #[cfg(unix)]
 #[test]
+fn unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool() {
+    let fixture = Fixture::new();
+    let source = fixture.source("shapes");
+    write_fixture_plugin(&source);
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "enable", "shapes"])
+        .assert()
+        .success();
+
+    for args in [
+        vec!["shapes", "recommend", "cli", "--format", "json"],
+        vec![
+            "tool",
+            "run",
+            "shapes.recommend",
+            "--input",
+            r#"{"query":"cli"}"#,
+            "--format",
+            "json",
+        ],
+    ] {
+        let output = fixture
+            .orbit()
+            .env_remove("AGENT_RUN_ID")
+            .args(&args)
+            .output()
+            .expect("run read-only plugin tool without a declared agent or operator");
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        assert_eq!(stdout_json(&output)["echo"]["input"]["query"], "cli");
+    }
+
+    for args in [
+        vec!["shapes", "maintain"],
+        vec!["tool", "run", "shapes.maintain", "--input", "{}"],
+    ] {
+        let output = fixture
+            .orbit()
+            .env_remove("AGENT_RUN_ID")
+            .args(&args)
+            .output()
+            .expect("run mutating plugin tool without a declared agent or operator");
+        assert!(!output.status.success(), "{args:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("plugin.tool.mutating"), "{stderr}");
+        assert!(stderr.contains("operator or runner"), "{stderr}");
+        assert!(stderr.contains("local-cli` holding [agent]"), "{stderr}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
     let fixture = Fixture::new();
     let cases = [

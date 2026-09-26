@@ -68,7 +68,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
 /// Environment variable that grants [`McpCapability::Operator`] to a caller the
 /// envelope would otherwise leave unprivileged.
@@ -287,7 +287,7 @@ pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
         McpCapability::Operator,
         McpCapability::Runner,
     ],
-    rationale: "a read-only plugin tool observes without changing anything, so every caller this                 process can name may run it",
+    rationale: "a read-only plugin tool observes without changing anything, so every caller this process can name may run it",
 };
 
 /// Generic row for a `mutating` plugin tool.
@@ -535,6 +535,8 @@ pub enum CallerProvenance {
     AgentEnvelope,
     /// Standard input and error are both terminals — a person is present.
     InteractiveTerminal,
+    /// An unmanaged local CLI call with no stronger identity gets agent access.
+    LocalCli,
     /// Nothing identified the caller. Grants nothing.
     Unknown,
 }
@@ -546,6 +548,7 @@ impl Display for CallerProvenance {
             Self::OperatorOverride => "operator-override",
             Self::AgentEnvelope => "agent-envelope",
             Self::InteractiveTerminal => "interactive-terminal",
+            Self::LocalCli => "local-cli",
             Self::Unknown => "unknown",
         })
     }
@@ -586,6 +589,8 @@ pub struct CallerEnvelope {
     pub agent_declared: bool,
     /// Standard input and error are both terminals.
     pub interactive_terminal: bool,
+    /// The trusted local CLI transport, used only as an agent fallback.
+    pub local_cli: bool,
     /// Caller label an SSH-originated MCP session forwarded
     /// (`--remote-caller-machine-id`) [ORB-12564].
     ///
@@ -604,6 +609,7 @@ impl CallerEnvelope {
             operator_override: env_truthy(OPERATOR_OVERRIDE_ENV),
             agent_declared: agent_declared_in_env(),
             interactive_terminal: interactive_terminal(),
+            local_cli: session.transport == Some(McpTransport::Local),
             remote_caller_machine_id: session.remote_caller_machine_id().map(ToOwned::to_owned),
         }
     }
@@ -647,7 +653,9 @@ impl CallerCapabilities {
     ///    nothing more, whether or not it happens to have a terminal.
     /// 4. **Interactive terminal.** A person at a TTY is the one caller Orbit
     ///    can positively identify as an operator without a credential.
-    /// 5. **Nothing.** An unidentified caller gets an empty set, and every
+    /// 5. **Local CLI.** An unmanaged invocation gets agent capability, as
+    ///    other read-only CLI verbs do. This does not grant operator rights.
+    /// 6. **Nothing.** An unidentified caller gets an empty set, and every
     ///    governed operation therefore denies. Ambiguity fails closed.
     pub fn resolve(envelope: &CallerEnvelope) -> Self {
         let (grants, provenance) = Self::resolve_grants(envelope);
@@ -682,6 +690,12 @@ impl CallerCapabilities {
             return (
                 BTreeSet::from([McpCapability::Operator]),
                 CallerProvenance::InteractiveTerminal,
+            );
+        }
+        if envelope.local_cli && envelope.resolution == CapabilityResolution::ProcessEnvelope {
+            return (
+                BTreeSet::from([McpCapability::Agent]),
+                CallerProvenance::LocalCli,
             );
         }
         (BTreeSet::new(), CallerProvenance::Unknown)
@@ -762,6 +776,9 @@ impl AuthorizationDenial {
     /// the argv the caller's federated server composed, so serving the
     /// *calling* side with `--operator` raises it [ORB-12564].
     fn remedy(&self) -> String {
+        if self.operation.id == PLUGIN_TOOL_READ_ONLY.id {
+            return "This read-only tool needs a named caller. Use the local CLI or an MCP session granted the agent capability.".to_string();
+        }
         match self.resolution {
             CapabilityResolution::ProcessEnvelope => format!(
                 "If this is a deliberate operator action, re-run it with {OPERATOR_OVERRIDE_ENV}=1 \

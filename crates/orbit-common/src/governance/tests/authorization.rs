@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::super::authorization::*;
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
 fn envelope() -> CallerEnvelope {
     CallerEnvelope::default()
@@ -76,6 +76,7 @@ fn session_grants_win_over_process_signals() {
         agent_declared: true,
         interactive_terminal: true,
         operator_override: true,
+        local_cli: true,
         ..envelope()
     });
     assert_eq!(caller.provenance(), CallerProvenance::Session);
@@ -87,6 +88,7 @@ fn agent_envelope_outranks_a_terminal() {
     let caller = CallerCapabilities::resolve(&CallerEnvelope {
         agent_declared: true,
         interactive_terminal: true,
+        local_cli: true,
         ..envelope()
     });
     assert_eq!(caller.provenance(), CallerProvenance::AgentEnvelope);
@@ -98,6 +100,7 @@ fn override_outranks_an_agent_envelope_and_is_marked() {
     let caller = CallerCapabilities::resolve(&CallerEnvelope {
         operator_override: true,
         agent_declared: true,
+        local_cli: true,
         ..envelope()
     });
     assert_eq!(caller.provenance(), CallerProvenance::OperatorOverride);
@@ -109,10 +112,52 @@ fn override_outranks_an_agent_envelope_and_is_marked() {
 fn a_terminal_resolves_to_operator() {
     let caller = CallerCapabilities::resolve(&CallerEnvelope {
         interactive_terminal: true,
+        local_cli: true,
         ..envelope()
     });
     assert_eq!(caller.provenance(), CallerProvenance::InteractiveTerminal);
     assert!(authorize(operation("workspace teardown"), &caller).is_ok());
+}
+
+#[test]
+fn an_unmanaged_local_cli_caller_is_an_agent_for_plugin_tools() {
+    let session = ToolSessionContext {
+        transport: Some(McpTransport::Local),
+        ..ToolSessionContext::default()
+    };
+    let mut envelope = CallerEnvelope::mcp_session(&session);
+    assert_eq!(
+        CallerCapabilities::resolve(&envelope).provenance(),
+        CallerProvenance::Unknown,
+        "a local MCP session with no grants must not inherit CLI identity"
+    );
+
+    envelope.resolution = CapabilityResolution::ProcessEnvelope;
+    envelope.local_cli = true;
+    let caller = CallerCapabilities::resolve(&envelope);
+    assert_eq!(caller.provenance(), CallerProvenance::LocalCli);
+    assert_eq!(caller.grants(), &BTreeSet::from([McpCapability::Agent]));
+    assert!(authorize(governed_plugin_tool(false), &caller).is_ok());
+
+    let denial = authorize(governed_plugin_tool(true), &caller)
+        .expect_err("an unmanaged CLI caller may not run a mutating plugin tool");
+    assert_eq!(denial.provenance, CallerProvenance::LocalCli);
+    assert_eq!(denial.granted, "agent");
+    assert!(denial.to_string().contains("operator or runner"));
+}
+
+#[test]
+fn a_read_only_plugin_denial_suggests_agent_identity_without_escalation() {
+    let caller = CallerCapabilities::resolve(&envelope());
+    let denial = authorize(governed_plugin_tool(false), &caller)
+        .expect_err("an unidentified caller must still be refused");
+    let message = denial.to_string();
+    assert!(message.contains("agent or operator or runner"), "{message}");
+    assert!(
+        message.contains("MCP session granted the agent capability"),
+        "{message}"
+    );
+    assert!(!message.contains(OPERATOR_OVERRIDE_ENV), "{message}");
 }
 
 #[test]
