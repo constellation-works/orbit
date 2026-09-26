@@ -535,7 +535,8 @@ pub enum CallerProvenance {
     AgentEnvelope,
     /// Standard input and error are both terminals — a person is present.
     InteractiveTerminal,
-    /// An unmanaged local CLI call with no stronger identity gets agent access.
+    /// An unmanaged local CLI call with no stronger identity. Only plugin tool
+    /// authorization may give this caller agent access.
     LocalCli,
     /// Nothing identified the caller. Grants nothing.
     Unknown,
@@ -589,7 +590,7 @@ pub struct CallerEnvelope {
     pub agent_declared: bool,
     /// Standard input and error are both terminals.
     pub interactive_terminal: bool,
-    /// The trusted local CLI transport, used only as an agent fallback.
+    /// The trusted local CLI transport, used only for plugin tool authorization.
     pub local_cli: bool,
     /// Caller label an SSH-originated MCP session forwarded
     /// (`--remote-caller-machine-id`) [ORB-12564].
@@ -653,8 +654,9 @@ impl CallerCapabilities {
     ///    nothing more, whether or not it happens to have a terminal.
     /// 4. **Interactive terminal.** A person at a TTY is the one caller Orbit
     ///    can positively identify as an operator without a credential.
-    /// 5. **Local CLI.** An unmanaged invocation gets agent capability, as
-    ///    other read-only CLI verbs do. This does not grant operator rights.
+    /// 5. **Local CLI.** An unmanaged invocation is identified but gets no
+    ///    capability here. [`Self::resolve_for_operation`] grants agent only
+    ///    while authorizing plugin tools.
     /// 6. **Nothing.** An unidentified caller gets an empty set, and every
     ///    governed operation therefore denies. Ambiguity fails closed.
     pub fn resolve(envelope: &CallerEnvelope) -> Self {
@@ -665,6 +667,21 @@ impl CallerCapabilities {
             resolution: envelope.resolution,
             remote_caller_machine_id: envelope.remote_caller_machine_id.clone(),
         }
+    }
+
+    /// Resolve a caller for one governed operation.
+    ///
+    /// An unmanaged local CLI caller gains agent identity only at the plugin
+    /// tool chokepoint. Both plugin rows use that identity; the mutating row
+    /// still requires operator or runner and therefore denies this caller.
+    pub fn resolve_for_operation(envelope: &CallerEnvelope, operation: &GovernedOperation) -> Self {
+        let mut caller = Self::resolve(envelope);
+        if caller.provenance == CallerProvenance::LocalCli
+            && (operation.id == PLUGIN_TOOL_READ_ONLY.id || operation.id == PLUGIN_TOOL_MUTATING.id)
+        {
+            caller.grants.insert(McpCapability::Agent);
+        }
+        caller
     }
 
     fn resolve_grants(envelope: &CallerEnvelope) -> (BTreeSet<McpCapability>, CallerProvenance) {
@@ -693,10 +710,7 @@ impl CallerCapabilities {
             );
         }
         if envelope.local_cli && envelope.resolution == CapabilityResolution::ProcessEnvelope {
-            return (
-                BTreeSet::from([McpCapability::Agent]),
-                CallerProvenance::LocalCli,
-            );
+            return (BTreeSet::new(), CallerProvenance::LocalCli);
         }
         (BTreeSet::new(), CallerProvenance::Unknown)
     }

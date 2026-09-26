@@ -134,16 +134,33 @@ fn an_unmanaged_local_cli_caller_is_an_agent_for_plugin_tools() {
 
     envelope.resolution = CapabilityResolution::ProcessEnvelope;
     envelope.local_cli = true;
-    let caller = CallerCapabilities::resolve(&envelope);
+    let caller = CallerCapabilities::resolve_for_operation(&envelope, governed_plugin_tool(false));
     assert_eq!(caller.provenance(), CallerProvenance::LocalCli);
     assert_eq!(caller.grants(), &BTreeSet::from([McpCapability::Agent]));
     assert!(authorize(governed_plugin_tool(false), &caller).is_ok());
 
+    let caller = CallerCapabilities::resolve_for_operation(&envelope, governed_plugin_tool(true));
     let denial = authorize(governed_plugin_tool(true), &caller)
         .expect_err("an unmanaged CLI caller may not run a mutating plugin tool");
     assert_eq!(denial.provenance, CallerProvenance::LocalCli);
     assert_eq!(denial.granted, "agent");
     assert!(denial.to_string().contains("operator or runner"));
+}
+
+#[test]
+fn an_unmanaged_local_cli_caller_gets_no_grant_for_a_non_plugin_operation() {
+    let envelope = CallerEnvelope {
+        local_cli: true,
+        ..envelope()
+    };
+    let operation = operation("orbit.drain.probe");
+    let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);
+    assert_eq!(caller.provenance(), CallerProvenance::LocalCli);
+    assert!(caller.grants().is_empty());
+    let denial = authorize(operation, &caller)
+        .expect_err("an unidentified CLI caller must not read the owner's drain state");
+    assert_eq!(denial.granted, "none");
+    assert!(denial.to_string().contains("requires the `agent"));
 }
 
 #[test]

@@ -331,8 +331,9 @@ Operator | Runner`; `mutating` tools by `Operator | Runner`, and by `Agent` only
 task's `required_tools` or the activity allowlist names them.
 
 An unmanaged local CLI invocation with no declared agent or operator identity
-resolves to `Agent` for plugin tool authorization, as other read-only CLI verbs
-do. This applies to both `orbit <ns> <verb>` and `orbit tool run <ns>.<verb>`:
+gets no capability for ordinary governed operations, including the owner's
+read-only drain tools. Only plugin tool authorization resolves it to `Agent`.
+This applies to both `orbit <ns> <verb>` and `orbit tool run <ns>.<verb>`:
 `read_only` succeeds without `ORBIT_OPERATOR=1`, while `mutating` retains its
 operator, runner, or sanctioned-run requirement. Session grants, an explicit
 operator override, an agent envelope, and an interactive terminal keep their
