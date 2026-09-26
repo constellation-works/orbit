@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::thread::{self, JoinHandle};
 
 use orbit_common::process::output_capture::{BoundedOutputCapture, capture_limit_from_env};
@@ -20,7 +20,7 @@ pub(super) fn spawn_stdout_drain<R>(
     out: R,
     debug: bool,
     limit: usize,
-    limit_tx: Sender<&'static str>,
+    limit_tx: SyncSender<&'static str>,
 ) -> JoinHandle<Vec<u8>>
 where
     R: Read + Send + 'static,
@@ -32,7 +32,7 @@ pub(super) fn spawn_stderr_drain<R>(
     err: R,
     debug: bool,
     limit: usize,
-    limit_tx: Sender<&'static str>,
+    limit_tx: SyncSender<&'static str>,
 ) -> JoinHandle<Vec<u8>>
 where
     R: Read + Send + 'static,
@@ -46,7 +46,7 @@ fn spawn_drain<R>(
     mut reader: R,
     debug: bool,
     limit: usize,
-    limit_tx: Sender<&'static str>,
+    limit_tx: SyncSender<&'static str>,
     stream: &'static str,
 ) -> JoinHandle<Vec<u8>>
 where
@@ -125,7 +125,7 @@ impl<W: Write> RedactingEcho<W> {
 pub(super) fn spawn_stdin_write<W>(
     mut stdin: W,
     bytes: Vec<u8>,
-    result_tx: Sender<std::io::Result<()>>,
+    result_tx: SyncSender<std::io::Result<()>>,
 ) -> JoinHandle<()>
 where
     W: Write + Send + 'static,

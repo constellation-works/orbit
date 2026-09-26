@@ -30,7 +30,10 @@ if [[ "$fast" == false ]]; then
   # `cargo test -p` build that resolves features differently and recompiles
   # the workspace chain a second time. [DANI-10428]
   "$repo_root/scripts/check-ci-macos.sh" --workspace-build
-  cargo clippy --workspace --all-targets -- -D warnings
+  # Production must reject unbounded channels. Existing test-only channels
+  # remain exempt in the all-targets pass.
+  cargo clippy --workspace --lib --bins -- -D warnings -D clippy::disallowed_methods
+  cargo clippy --workspace --all-targets -- -D warnings -A clippy::disallowed_methods
   if cargo nextest --version >/dev/null 2>&1; then
     cargo nextest run --no-fail-fast --workspace --lib --bins --tests
   else

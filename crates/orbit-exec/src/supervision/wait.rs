@@ -59,7 +59,8 @@ pub(super) fn wait_with_timeout_and_output_limit(
     // In debug mode, both stdout and stderr are tee'd through redaction-aware
     // drains so the user sees live output without bypassing capture/redaction.
     let (stdin_result_rx, stdin_thread) = spawn_stdin_thread(&mut child, stdin_payload)?;
-    let (output_limit_tx, output_limit_rx) = mpsc::channel();
+    // Each of the two drain threads reports its capture limit at most once.
+    let (output_limit_tx, output_limit_rx) = mpsc::sync_channel(2);
     let stdout_thread = child
         .stdout
         .take()
@@ -232,7 +233,8 @@ fn spawn_stdin_thread(
             let stdin = child.stdin.take().ok_or_else(|| {
                 OrbitError::Execution("stdin requested but no stdin pipe available".to_string())
             })?;
-            let (tx, rx) = mpsc::channel();
+            // The single stdin writer sends one completion result.
+            let (tx, rx) = mpsc::sync_channel(1);
             let handle = spawn_stdin_write(stdin, bytes, tx);
             Ok((Some(rx), Some(handle)))
         }

@@ -138,8 +138,7 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all -- --check
 
-clippy:
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+clippy: ci-lint
 
 # Supply-chain audit: advisories + license allow-list via cargo-deny (deny.toml).
 # Canonical command; CI runs the same check via scripts/ci-guardrails.sh. [ORB-11983]
@@ -158,10 +157,12 @@ ci:
 ci-fast:
 	./scripts/ci-guardrails.sh --fast
 
-# Compile-time pre-handoff gate for agents. Keep this invocation aligned with
-# the default workspace clippy pass in scripts/ci-guardrails.sh.
+# Compile-time pre-handoff gate for agents. Keep both passes aligned with
+# scripts/ci-guardrails.sh: production enforces bounded channels, then all
+# targets retain the other workspace lints without flagging test-only channels.
 ci-lint:
-	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
+	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
 
 # Focused pre-review golden gate: CLI long-help text, output_goldens, and the
 # MCP tools/list snapshot. Compiles orbit-cli tests only. UPDATE=1 regenerates.

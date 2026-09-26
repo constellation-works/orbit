@@ -1,5 +1,12 @@
 nextest-version = { required = "0.9.48" }
 
+[profile.default]
+# Individual integration fixtures use seconds-long process deadlines. Ten
+# minutes per test leaves headroom while bounding a stuck child/test harness.
+slow-timeout = { period = "5m", terminate-after = 2 }
+# Wait briefly for a test's own child cleanup, then fail on a leaked process.
+leak-timeout = { period = "5s", result = "fail" }
+
 # Tests that cannot share a thread with one another.
 #
 # Nextest already runs every test in its own process, and both crates own a

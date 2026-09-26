@@ -476,7 +476,8 @@ where
         Err(_) => (None, None),
     };
 
-    let (finished_tx, finished) = mpsc::channel();
+    // One reader sends one completion signal; capacity one cannot block it.
+    let (finished_tx, finished) = mpsc::sync_channel(1);
     let join = thread::spawn(move || {
         let _live = LiveReaderGuard::enter(live_readers);
         tracing::dispatcher::with_default(&context.dispatch, || {
@@ -501,7 +502,8 @@ fn spawn_output_reader<R>(
 where
     R: Read + Send + 'static,
 {
-    let (finished_tx, finished) = mpsc::channel();
+    // One reader sends one completion signal; capacity one cannot block it.
+    let (finished_tx, finished) = mpsc::sync_channel(1);
     let join = thread::spawn(move || {
         let _live = LiveReaderGuard::enter(live_readers);
         tracing::dispatcher::with_default(&context.dispatch, || {

@@ -44,6 +44,7 @@ jobs:
   msrv:
     name: MSRV (cargo check on pinned minimum)
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # Observed ~1 minute; allows cold cache and runner variance.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +79,7 @@ jobs:
   coverage:
     name: Coverage (informational)
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # Observed ~15 minutes; allows cold instrumented builds.
     steps:
       # [ORB-10126] Reclaim ~25-30 GB of preinstalled runner bloat before the
       # instrumented build. No maintained free-disk action is pinned in this
@@ -163,6 +165,7 @@ jobs:
   ci:
     name: Check / Clippy / Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # Observed ~12 minutes; allows cold builds and slower test hosts.
     steps:
       # [ORB-10126] Same runner-bloat reclaim as the coverage job; the ci job
       # compiles the whole workspace from the same target/ and sits close to
