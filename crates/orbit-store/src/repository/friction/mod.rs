@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Datelike, TimeZone, Utc};
-use orbit_common::OrbitError;
 use orbit_common::governance::friction::derive_title;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::{
     all_agent_families, infer_agent_family_from_model, normalize_optional_attribution_label,
     validate_friction_id,
@@ -160,10 +160,8 @@ impl FrictionStore {
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 let conn = tx.connection();
-                let mut stored =
-                    queries::show_record(conn, &self.workspace_id, id)?.ok_or_else(|| {
-                        OrbitError::InvalidInput(format!("friction record not found: {id}"))
-                    })?;
+                let mut stored = queries::show_record(conn, &self.workspace_id, id)?
+                    .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))?;
                 if let (Some(tags), Some(taxonomy)) = (params.tags.clone(), taxonomy.as_ref()) {
                     stored.record.tags = normalize_and_validate_tags(tags, taxonomy)?;
                 }
@@ -242,10 +240,8 @@ impl FrictionStore {
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 let conn = tx.connection();
-                let mut source =
-                    queries::show_record(conn, &self.workspace_id, id)?.ok_or_else(|| {
-                        OrbitError::InvalidInput(format!("friction record not found: {id}"))
-                    })?;
+                let mut source = queries::show_record(conn, &self.workspace_id, id)?
+                    .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))?;
                 if source.record.status == FrictionStatus::Resolved {
                     return Err(OrbitError::InvalidInput(format!(
                         "friction {id} is already resolved; there is nothing to re-home"

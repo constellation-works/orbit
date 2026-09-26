@@ -315,6 +315,91 @@ async fn patch_round_trip_updates_status_and_tags() {
 }
 
 #[tokio::test]
+async fn missing_friction_mutations_and_reads_return_404() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let missing_id = "F2099-01-001";
+
+    let get_resp = request(
+        runtime.clone(),
+        Method::GET,
+        format!("/frictions/{missing_id}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
+
+    let patch_resp = request(
+        runtime.clone(),
+        Method::PATCH,
+        format!("/frictions/{missing_id}"),
+        Some("http://localhost:7878"),
+        Some(json!({ "status": "triaged" })),
+    )
+    .await;
+    assert_eq!(patch_resp.status(), StatusCode::NOT_FOUND);
+
+    let resolve_resp = request(
+        runtime,
+        Method::POST,
+        format!("/frictions/{missing_id}/resolve"),
+        Some("http://localhost:7878"),
+        None,
+    )
+    .await;
+    assert_eq!(resolve_resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn malformed_friction_id_or_invalid_fields_return_400() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    // Malformed ID in PATCH
+    let patch_malformed = request(
+        runtime.clone(),
+        Method::PATCH,
+        "/frictions/malformed-id".to_string(),
+        Some("http://localhost:7878"),
+        Some(json!({ "status": "triaged" })),
+    )
+    .await;
+    assert_eq!(patch_malformed.status(), StatusCode::BAD_REQUEST);
+
+    // Malformed ID in POST resolve
+    let resolve_malformed = request(
+        runtime.clone(),
+        Method::POST,
+        "/frictions/malformed-id/resolve".to_string(),
+        Some("http://localhost:7878"),
+        None,
+    )
+    .await;
+    assert_eq!(resolve_malformed.status(), StatusCode::BAD_REQUEST);
+
+    // Invalid body (missing any mutable field)
+    let patch_empty_body = request(
+        runtime.clone(),
+        Method::PATCH,
+        "/frictions/F2099-01-001".to_string(),
+        Some("http://localhost:7878"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(patch_empty_body.status(), StatusCode::BAD_REQUEST);
+
+    // Invalid status field value
+    let patch_invalid_status = request(
+        runtime,
+        Method::PATCH,
+        "/frictions/F2099-01-001".to_string(),
+        Some("http://localhost:7878"),
+        Some(json!({ "status": "bogus-status" })),
+    )
+    .await;
+    assert_eq!(patch_invalid_status.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn stats_shape_exposes_triage_counts() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     seed_friction(&runtime, "# Open one\nDetails.", &["tooling"]);
