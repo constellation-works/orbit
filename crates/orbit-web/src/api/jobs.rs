@@ -49,7 +49,12 @@ pub(super) async fn run_job_action(
                 "job '{id}' requires task input or a delivery window; use Ship or Drain"
             )));
         }
-        runtime.submit_catalog_job_run(&id, json!({}), Some("dashboard"))
+        runtime.submit_catalog_job_run(
+            &id,
+            json!({}),
+            Some("dashboard"),
+            orbit_types::workflow::JobRunTrigger::dashboard(),
+        )
     })
     .await
     {

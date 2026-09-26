@@ -495,3 +495,78 @@ fn run_crew_allowlist_fails_closed_on_a_malformed_or_unknown_entry() {
             .expect_err(&format!("a malformed allowlist must fail closed: {input}"));
     }
 }
+
+fn write_job(root: &std::path::Path, name: &str, step: &str) -> std::path::PathBuf {
+    let path = root.join(format!("{name}.yaml"));
+    std::fs::write(
+        &path,
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  \
+             kind: workflow\n  steps:\n{step}"
+        ),
+    )
+    .expect("write job");
+    path
+}
+
+const DETERMINISTIC_STEP: &str = "    - id: reap\n      spec:\n        type: deterministic\n        \
+                                  action: sleep\n        config: {}\n";
+
+/// The crew model the job at `path` persists for a run of a `beta` task.
+fn crew_recorded_for_job(runtime: &OrbitRuntime, path: &std::path::Path) -> Option<String> {
+    let task_id = add_task_with_crew(runtime, "beta");
+    let input = json!({ "task_ids": [task_id] });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("fixture_job", 1, Utc::now(), Some(input.clone()), None)
+        .expect("insert run");
+    runtime
+        .record_run_crew_for_job(&run.run_id, &input, path)
+        .expect("record crew");
+    runtime
+        .show_job_run(&run.run_id)
+        .expect("show run")
+        .crew_model
+}
+
+/// [ORB-13016] A job made only of deterministic activities records no crew
+/// model; one that can dispatch an agent still does.
+#[test]
+fn run_crew_is_recorded_only_for_a_job_that_can_dispatch_an_agent() {
+    let (root, runtime) = runtime_with_named_crews();
+
+    let deterministic = write_job(root.path(), "gc_only", DETERMINISTIC_STEP);
+    assert_eq!(crew_recorded_for_job(&runtime, &deterministic), None);
+
+    let agent = write_job(
+        root.path(),
+        "with_agent",
+        &format!(
+            "{DETERMINISTIC_STEP}    - id: fan\n      parallel:\n        branches:\n          \
+             - id: think\n            spec:\n              type: agent_loop\n              \
+             instruction: assess\n              tools: []\n"
+        ),
+    );
+    assert_eq!(
+        crew_recorded_for_job(&runtime, &agent).as_deref(),
+        Some("beta-model")
+    );
+}
+
+/// A definition that does not resolve keeps recording the crew: only a job
+/// proven agent-free skips it.
+#[test]
+fn unresolvable_job_definition_still_records_the_run_crew() {
+    let (root, runtime) = runtime_with_named_crews();
+    let unresolved = write_job(
+        root.path(),
+        "unknown_ref",
+        "    - id: mystery\n      target: activity:not_in_catalog\n",
+    );
+
+    assert_eq!(
+        crew_recorded_for_job(&runtime, &unresolved).as_deref(),
+        Some("beta-model")
+    );
+}

@@ -930,6 +930,7 @@ spec:
             &["sol".to_string()],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("an excluded explicit crew must be refused before persistence");
     assert!(error.to_string().contains("primary"), "{error}");
@@ -951,6 +952,7 @@ spec:
             &["unknown".to_string()],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("an unknown configured crew must fail before run creation");
     assert!(unknown.to_string().contains("unknown"), "{unknown}");
@@ -971,6 +973,7 @@ spec:
             &["sol".to_string()],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect("the explicitly permitted singleton is submitted");
     let input = runtime
@@ -1406,6 +1409,7 @@ fn ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run() {
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("a task with a run in flight must not dispatch a second run");
 
@@ -1461,6 +1465,7 @@ fn ship_submission_accepts_a_task_listed_by_non_delivery_runs() {
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect("non-delivery runs must not block explicit Ship");
     let run = runtime
@@ -1498,6 +1503,7 @@ fn ship_submission_refuses_a_task_carried_by_a_drain_child() {
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("a drain child carrying the task must block explicit Ship");
     assert!(matches!(
@@ -1545,6 +1551,7 @@ fn ship_submission_guard_is_scoped_to_the_selected_tasks() {
                 &[],
                 Some("test"),
                 None,
+                orbit_types::workflow::JobRunTrigger::cli(),
             )
             .expect_err("no job asset is deployed in this fixture");
         assert!(
@@ -1575,6 +1582,7 @@ fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("a missing explicit task must be rejected before dispatch");
 
@@ -1626,6 +1634,7 @@ fn ship_submission_admits_a_tagged_root_and_its_child_alike() {
                 &[],
                 Some("test"),
                 None,
+                orbit_types::workflow::JobRunTrigger::cli(),
             )
             .expect_err("fixture intentionally has no deployed job asset");
         assert!(
@@ -1650,6 +1659,7 @@ fn ship_submission_mixed_explicit_selection_identifies_the_missing_task() {
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("mixed selections must refuse their missing task before dispatch");
 
@@ -1737,6 +1747,7 @@ fn submitted_ship_base(runtime: &OrbitRuntime, base: Option<&str>) -> serde_json
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect("submit ship");
     runtime

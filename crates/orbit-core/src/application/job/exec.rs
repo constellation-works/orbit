@@ -177,7 +177,7 @@ impl OrbitRuntime {
                 )));
             }
         }
-        self.record_run_crew_from_input(&run.run_id, &input)?;
+        self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
         self.record_event(OrbitEvent::JobRunStarted {
             job_id: run.job_id.clone(),
             run_id: run.run_id.clone(),

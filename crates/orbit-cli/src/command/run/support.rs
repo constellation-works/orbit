@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
-use orbit_core::{JobRun, JobRunState, JobRunStep, OrbitError, OrbitRuntime, find_workflow};
+use orbit_core::application::job::run_error_step;
+use orbit_core::{OrbitError, OrbitRuntime, find_workflow};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
@@ -77,12 +78,12 @@ pub(crate) fn dispatch_workflow(
             attempt: run.attempt,
             error_code: run_details
                 .as_ref()
-                .and_then(summary_step)
+                .and_then(run_error_step)
                 .and_then(|step| step.error_code.clone()),
             error_message: wait_entry.and_then(|entry| entry.error).or_else(|| {
                 run_details
                     .as_ref()
-                    .and_then(summary_step)
+                    .and_then(run_error_step)
                     .and_then(|step| step.error_message.clone())
             }),
         });
@@ -112,31 +113,6 @@ pub(crate) fn workflow_dispatch_payload(
         .collect::<Vec<_>>()
         .join("\n");
     Ok(Payload::detail(doc, text).into())
-}
-
-fn summary_step(run: &JobRun) -> Option<&JobRunStep> {
-    run.steps
-        .iter()
-        .rev()
-        .find(|step| step.error_code.is_some() || step.error_message.is_some())
-        .or_else(|| {
-            run.steps.iter().rev().find(|step| {
-                matches!(
-                    step.state,
-                    JobRunState::Failed
-                        | JobRunState::Timeout
-                        | JobRunState::Cancelled
-                        | JobRunState::Interrupted
-                )
-            })
-        })
-        .or_else(|| {
-            run.steps
-                .iter()
-                .rev()
-                .find(|step| step.state != JobRunState::Skipped)
-        })
-        .or_else(|| run.steps.last())
 }
 
 pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> Value {

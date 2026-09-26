@@ -448,6 +448,13 @@ fire — the other host's cursor, fires, and pauses are untouched.
 Fires are normal runs: they appear in run history, carry v2 audit envelopes, and are
 debuggable with the existing run tooling — there is no separate "scheduled run" ledger.
 
+Every run records how it was submitted in its `trigger`, which run JSON projects and the
+`run.started` audit names as `<kind>:<name>`. `kind` is `cli`, `mcp` (a call over an MCP
+session), `dashboard` (`orbit web serve`), `child` (dispatched by a parent run), or
+`routine`. A cron fire carries `routine` and `slot`; a run a state-triggered or
+delivery-triggered routine admits carries `routine` and the automation `consumer` that
+admitted it, with no slot [ORB-12255, ORB-13016].
+
 Naming note: `orbit clock tick` is the general scheduler pass and `orbit sweep` is its
 compatibility alias. The seeded `ship_sweep` routine is workspace-local; the legacy
 `orbit run ship-sweep` cross-workspace entrypoint is separate.

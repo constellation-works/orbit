@@ -102,6 +102,7 @@ impl Execute for ShipCommand {
             &self.allow_crew,
             None,
             self.claim_token.as_deref(),
+            orbit_types::workflow::JobRunTrigger::cli(),
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,

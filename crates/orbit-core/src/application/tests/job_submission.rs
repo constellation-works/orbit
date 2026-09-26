@@ -404,6 +404,7 @@ fn auto_complexity_pool_is_captured_at_submission_and_retained_by_real_resume() 
             },
             None,
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect("submit coordinator");
     let parent_run = runtime

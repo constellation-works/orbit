@@ -266,6 +266,7 @@ pub(crate) fn sweep_active_workspace(
         &[],
         Some("ship-sweep"),
         None,
+        orbit_types::workflow::JobRunTrigger::cli(),
     ) {
         Ok(invoke) => invoke,
         Err(OrbitError::WorkspaceClaimHeld(claim)) => {

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::{
@@ -6,7 +7,9 @@ use orbit_types::identity::{
 };
 use orbit_types::record::{CREW_DISCOVERY_SCHEMA_VERSION, CrewDiscoveryEntryV1, CrewDiscoveryV1};
 use orbit_types::task::{Task, is_valid_orb_task_id};
-use orbit_types::workflow::activity_job::ProviderSource;
+use orbit_types::workflow::activity_job::{
+    ActivityV2, ActivityV2Spec, JobV2, JobV2Step, JobV2StepBody, ProviderSource,
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -461,6 +464,41 @@ impl OrbitRuntime {
         Some(value)
     }
 
+    /// Resolve a run's crew at start, persisting it only when the job at
+    /// `yaml_path` can dispatch an agent [ORB-13016].
+    ///
+    /// Every job still resolves, so a crew misconfiguration fails the run at
+    /// start as it always has. A job made only of deterministic activities
+    /// records no crew: no model does its work, and a crew drawn for it would
+    /// read as an LLM that never ran.
+    pub(crate) fn record_run_crew_for_job(
+        &self,
+        run_id: &str,
+        input: &Value,
+        yaml_path: &Path,
+    ) -> Result<(), OrbitError> {
+        if self.job_definition_dispatches_agent(yaml_path) {
+            self.record_run_crew_from_input(run_id, input)?;
+        } else {
+            self.resolve_crew_for_run_input(input)?;
+        }
+        Ok(())
+    }
+
+    /// Whether the job at `yaml_path` can dispatch an agent. A definition that
+    /// does not load or resolve counts as agent-bearing: the run's own load
+    /// reports that failure, and the crew is recorded as before.
+    fn job_definition_dispatches_agent(&self, yaml_path: &Path) -> bool {
+        let resolved = (|| {
+            let yaml = std::fs::read_to_string(yaml_path).ok()?;
+            let mut job = orbit_engine::activity_job::load_job_asset(&yaml).ok()?.spec;
+            let catalog = self.v2_activity_catalog().ok()?;
+            orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog).ok()?;
+            Some(job)
+        })();
+        resolved.is_none_or(|job| job_dispatches_agent(&job))
+    }
+
     pub(crate) fn record_run_crew_from_input(
         &self,
         run_id: &str,
@@ -641,4 +679,41 @@ fn family_from_assignment(assignment: &CrewAssignment) -> Option<String> {
     }
 
     infer_agent_family_from_model(&assignment.model)
+}
+
+/// Whether a resolved job can dispatch an agent-loop activity, as a step at any
+/// nesting depth or as a recovery or failure hook [ORB-13016]. A reference the
+/// catalog has not resolved counts as one, so only a definition proven
+/// agent-free skips the run's crew record.
+pub(crate) fn job_dispatches_agent(job: &JobV2) -> bool {
+    hook_dispatches_agent(
+        job.recovery_activity.as_deref(),
+        job.resolved_recovery_activity.as_ref(),
+    ) || hook_dispatches_agent(
+        job.failure_activity.as_deref(),
+        job.resolved_failure_activity.as_ref(),
+    ) || job.steps.iter().any(step_dispatches_agent)
+}
+
+fn step_dispatches_agent(step: &JobV2Step) -> bool {
+    if hook_dispatches_agent(
+        step.recovery_activity.as_deref(),
+        step.resolved_recovery_activity.as_ref(),
+    ) {
+        return true;
+    }
+    match &step.body {
+        JobV2StepBody::Target(target) => matches!(target.spec, ActivityV2Spec::AgentLoop(_)),
+        JobV2StepBody::TargetRef(_) => true,
+        JobV2StepBody::Parallel { parallel } => parallel.branches.iter().any(step_dispatches_agent),
+        JobV2StepBody::FanOut { fan_out, .. } => step_dispatches_agent(&fan_out.worker),
+        JobV2StepBody::Loop { loop_ } => loop_.steps.iter().any(step_dispatches_agent),
+    }
+}
+
+fn hook_dispatches_agent(name: Option<&str>, resolved: Option<&ActivityV2>) -> bool {
+    match resolved {
+        Some(activity) => matches!(activity.spec, ActivityV2Spec::AgentLoop(_)),
+        None => name.is_some(),
+    }
 }

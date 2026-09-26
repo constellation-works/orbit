@@ -1,6 +1,6 @@
 //! Shared JSON projection for persisted job runs.
 
-use orbit_types::workflow::{JobRun, PipelineState, run_id_role};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, PipelineState, run_id_role};
 use serde_json::{Value, json};
 
 /// Durable provider/model evidence for one completed agent invocation.
@@ -13,6 +13,28 @@ pub struct ActivityInvocationEvidence {
     pub activity_id: String,
     pub provider: String,
     pub model: Option<String>,
+}
+
+/// The step whose error explains a run's outcome [ORB-13016].
+///
+/// A successful run has none. Otherwise the newest step that is not skipped
+/// wins, preferring one that recorded an error: a skipped step's `when:`
+/// reason is why that step did not run, not why the run ended, so it stays on
+/// the step.
+pub fn run_error_step(run: &JobRun) -> Option<&JobRunStep> {
+    if run.state == JobRunState::Success {
+        return None;
+    }
+    let ran = || {
+        run.steps
+            .iter()
+            .rev()
+            .filter(|step| step.state != JobRunState::Skipped)
+    };
+    ran()
+        .find(|step| step.error_code.is_some() || step.error_message.is_some())
+        .or_else(|| ran().next())
+        .or_else(|| run.steps.last())
 }
 
 /// Project a job run and its optional persisted state for operator-facing APIs.
@@ -30,6 +52,7 @@ pub struct ActivityInvocationEvidence {
 /// whom.
 pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let last = run.steps.last();
+    let error_step = run_error_step(run);
     let child_dispatches = serde_json::to_value(
         state
             .map(|state| state.child_dispatches.as_slice())
@@ -91,8 +114,8 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "retry_source_run_id": run.retry_source_run_id,
         "exit_code": last.and_then(|step| step.exit_code),
         "agent_response_json": last.and_then(|step| step.agent_response_json.as_ref()),
-        "error_code": last.and_then(|step| step.error_code.as_deref()),
-        "error_message": last.and_then(|step| step.error_message.as_deref()),
+        "error_code": error_step.and_then(|step| step.error_code.as_deref()),
+        "error_message": error_step.and_then(|step| step.error_message.as_deref()),
         "knowledge_metrics": run.knowledge_metrics,
         "requested_crew": requested_crew,
         "resolved_crew": run.resolved_crew,

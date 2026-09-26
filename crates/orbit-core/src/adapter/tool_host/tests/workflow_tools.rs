@@ -11,7 +11,7 @@ use orbit_types::policy::Role;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
+use orbit_types::workflow::{ChildDispatch, JobRunState, JobRunTriggerKind, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::build_orbit_tool_host;
@@ -320,6 +320,63 @@ fn ship_tool_inherits_the_shared_in_flight_guard() {
         vec![&in_flight.run_id],
         "a refused tool dispatch must not persist a run"
     );
+}
+
+/// Clears the thread's pipeline worker override when the test ends.
+struct IdleWorker;
+
+impl IdleWorker {
+    fn install() -> Self {
+        crate::application::job::pipeline::worker_command_override::set(["sh", "-c", "sleep 1"]);
+        Self
+    }
+}
+
+impl Drop for IdleWorker {
+    fn drop(&mut self) {
+        crate::application::job::pipeline::worker_command_override::clear();
+    }
+}
+
+/// [ORB-13016] A ship submitted over an MCP session records `mcp`; the same
+/// tool reached without one (`orbit tool run`) stays `cli`.
+#[test]
+fn ship_tool_records_mcp_provenance_only_for_an_mcp_session() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    write_ship_job_asset(&runtime);
+    let task_ids = seed_ship_tasks(&runtime, &repo_root);
+    let _worker = IdleWorker::install();
+    let ship = |task_id: &str, origin_session_id: Option<&str>| {
+        let shipped = runtime
+            .run_tool_with_context_and_role(
+                "orbit.workflow.ship",
+                ship_input(&[task_id.to_string()]),
+                Role::Admin,
+                ToolContext {
+                    session_context: ToolSessionContext {
+                        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                        origin_session_id: origin_session_id.map(str::to_string),
+                        ..ToolSessionContext::default()
+                    },
+                    ..ToolContext::default()
+                },
+            )
+            .expect("ship");
+        let run_id = shipped["run_id"].as_str().expect("run id");
+        runtime
+            .read_run_state(run_id)
+            .expect("read run state")
+            .and_then(|state| state.trigger)
+            .expect("trigger recorded")
+            .kind
+    };
+
+    assert_eq!(
+        ship(&task_ids[0], Some("mcp-session-fixture")),
+        JobRunTriggerKind::Mcp
+    );
+    assert_eq!(ship(&task_ids[1], None), JobRunTriggerKind::Cli);
 }
 
 #[test]

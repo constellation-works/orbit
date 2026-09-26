@@ -2,6 +2,7 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, required_string};
 use orbit_tools::ReservationOwnerContext;
 use orbit_types::identity::normalize_optional_attribution_label;
+use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -19,6 +20,7 @@ pub(super) fn invoke(
     agent: Option<String>,
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
+    trigger: JobRunTrigger,
 ) -> Result<Value, OrbitError> {
     let job_name = required_string(&input, &["job_name"], "job_name")?;
     let payload = require_object_field(&input, "input")?.clone();
@@ -42,11 +44,12 @@ pub(super) fn invoke(
             actor.as_deref(),
             &admission,
         )?,
-        None => ChildSubmission::Submitted(runtime.submit_pipeline_run(
+        None => ChildSubmission::Submitted(runtime.submit_pipeline_run_with_trigger(
             &job_name,
             payload,
             priority.as_deref(),
             actor.as_deref(),
+            trigger,
         )?),
     };
     match result {

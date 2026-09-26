@@ -795,6 +795,7 @@ fn a_live_claim_fences_every_retained_entry_point_from_the_same_task() {
             &[],
             None,
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("a claimed task is not shipped beside its claim");
     let message = refused.to_string();

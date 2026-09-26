@@ -443,6 +443,8 @@ pub enum JobRunTriggerKind {
     Cli,
     Mcp,
     Child,
+    /// Submitted from the `orbit web serve` dashboard [ORB-13016].
+    Dashboard,
 }
 
 impl JobRunTriggerKind {
@@ -452,6 +454,7 @@ impl JobRunTriggerKind {
             Self::Cli => "cli",
             Self::Mcp => "mcp",
             Self::Child => "child",
+            Self::Dashboard => "dashboard",
         }
     }
 }
@@ -467,40 +470,57 @@ pub struct JobRunTrigger {
     pub kind: JobRunTriggerKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routine: Option<String>,
+    /// Cron slot of a scheduled routine fire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// Automation consumer that admitted a state-triggered routine run
+    /// [ORB-13016].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer: Option<String>,
 }
 
 impl JobRunTrigger {
-    pub fn cli() -> Self {
+    fn of_kind(kind: JobRunTriggerKind) -> Self {
         Self {
-            kind: JobRunTriggerKind::Cli,
+            kind,
             routine: None,
             slot: None,
+            consumer: None,
         }
+    }
+
+    pub fn cli() -> Self {
+        Self::of_kind(JobRunTriggerKind::Cli)
     }
 
     pub fn mcp() -> Self {
-        Self {
-            kind: JobRunTriggerKind::Mcp,
-            routine: None,
-            slot: None,
-        }
+        Self::of_kind(JobRunTriggerKind::Mcp)
     }
 
     pub fn child() -> Self {
+        Self::of_kind(JobRunTriggerKind::Child)
+    }
+
+    pub fn dashboard() -> Self {
+        Self::of_kind(JobRunTriggerKind::Dashboard)
+    }
+
+    /// A scheduled (cron) routine fire for `slot`.
+    pub fn routine(name: impl Into<String>, slot: impl Into<String>) -> Self {
         Self {
-            kind: JobRunTriggerKind::Child,
-            routine: None,
-            slot: None,
+            routine: Some(name.into()),
+            slot: Some(slot.into()),
+            ..Self::of_kind(JobRunTriggerKind::Routine)
         }
     }
 
-    pub fn routine(name: impl Into<String>, slot: impl Into<String>) -> Self {
+    /// A run admitted by a state-triggered routine's automation `consumer`
+    /// [ORB-13016]. It has no cron slot.
+    pub fn state_routine(name: impl Into<String>, consumer: impl Into<String>) -> Self {
         Self {
-            kind: JobRunTriggerKind::Routine,
             routine: Some(name.into()),
-            slot: Some(slot.into()),
+            consumer: Some(consumer.into()),
+            ..Self::of_kind(JobRunTriggerKind::Routine)
         }
     }
 
@@ -518,6 +538,7 @@ impl JobRunTrigger {
             JobRunTriggerKind::Mcp => format!("mcp:{job_name}"),
             JobRunTriggerKind::Child => format!("child:{job_name}"),
             JobRunTriggerKind::Cli => format!("cli:{job_name}"),
+            JobRunTriggerKind::Dashboard => format!("dashboard:{job_name}"),
         }
     }
 }

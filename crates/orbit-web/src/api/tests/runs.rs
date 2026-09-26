@@ -12,6 +12,7 @@ use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{JobRun, JobRunState, OrbitRuntime, TaskStatus, V2AuditEventInsertParams};
+use orbit_types::workflow::JobRunTriggerKind;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -1152,6 +1153,46 @@ async fn ship_endpoint_launches_the_substitute_worker_not_the_test_binary() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// [ORB-13016] A dashboard launch records its own provenance, so the run and
+/// its `run.started` audit do not read as a CLI submission.
+#[tokio::test]
+async fn ship_endpoint_records_a_dashboard_trigger() {
+    substitute_pipeline_worker();
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "task_auto_pipeline");
+    let task_id = runtime
+        .add_task(TaskAddParams {
+            title: "dashboard provenance fixture".to_string(),
+            description: "submitted through the dashboard ship handler".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed ship fixture task")
+        .id;
+
+    let response = request_ship(
+        runtime.clone(),
+        Some(json!({ "task_ids": [task_id], "mode": "local" })),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let run_id = body_json(response).await["run_id"]
+        .as_str()
+        .expect("run_id")
+        .to_string();
+    let trigger = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .and_then(|state| state.trigger)
+        .expect("trigger recorded");
+    assert_eq!(trigger.kind, JobRunTriggerKind::Dashboard);
+    assert_eq!(
+        trigger.audit_job_name("task_auto_pipeline"),
+        "dashboard:task_auto_pipeline"
+    );
 }
 
 async fn request_job_run(state: crate::state::DashboardState, job_id: &str) -> Response {

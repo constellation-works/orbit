@@ -28,6 +28,6 @@ pub use run::{
     ActivityInvocationEvidence, DrainAdmissionsStopChange, DrainAdmissionsStopRequest,
     DrainAdmissionsStopResult, DrainWorkerLimitChange, DrainWorkerLimitRequest, JobRunCancelResult,
     JobRunListParams, JobRunOrder, RemainingDrainChild, job_run_to_json,
-    job_run_to_json_with_activity_provenance,
+    job_run_to_json_with_activity_provenance, run_error_step,
 };
 pub(crate) use run::{RunOwnerLiveness, run_owner_liveness};
