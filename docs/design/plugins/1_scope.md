@@ -148,6 +148,11 @@ spec:
         url: "http://127.0.0.1:{{config.explorer_port}}"
 
   tests: [tests/conformance/*.yaml]                  # request/response goldens run by `orbit plugin test`
+
+  secrets:                                           # names only; values are set by the operator (§3)
+    - name: refresh_token
+      description: OAuth refresh token for the graph service.
+      rotatable: true                                # the backend may replace it (not yet delivered)
 ```
 
 Rules:
@@ -172,7 +177,9 @@ orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspa
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
 orbit plugin remove <ns> --yes                →  gone        (prints retained ~/.orbit/state/plugins/<ns> path)
 orbit plugin remove <ns> --yes --purge-state  →  gone        (also deletes this plugin's Orbit-owned state)
-orbit plugin remove <ns> --yes --record-only  →  gone        (record only; every installed file is left in place)
+orbit plugin remove <ns> --yes --record-only  →  gone        (record only; every installed file and secret is left in place)
+orbit plugin secret set <ns> <name>           →  secret set  (value from stdin or a no-echo prompt, never argv)
+orbit plugin secret list <ns> | rm <ns> <name>
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
 
@@ -203,6 +210,41 @@ by an older Orbit.
 that namespace's state tree after verifying the install path and refusing symlinks in
 the state path; it cannot be combined with `--record-only`. Data the plugin wrote
 outside `{{plugin_state}}` (such as `.orbit-graph/`) is retained in either mode.
+
+**Plugin secrets.** A plugin that calls an authenticated service declares the credentials it
+needs in `spec.secrets` (`name`, `description`, `rotatable`) instead of keeping them in
+`{{plugin_state}}`. Only names live in the manifest. A name starts with a lowercase letter, then
+uses lowercase letters, digits, `_` or `-` (at most 64 characters); it is declared once and
+namespaced to the plugin. The
+operator supplies values; a value never enters argv, the environment, logs, audit rows,
+`plugin show`, `/api/plugins`, the dashboard or an MCP response.
+
+- **CLI (operator only).** `orbit plugin secret set <ns> <name>` reads the value from stdin or,
+  on a terminal, a prompt with echo off; one trailing newline is dropped. Anything after the
+  name is refused without being echoed, and a name the installed manifest does not declare is
+  refused. `list <ns>` prints each declared name as `set`/`unset` with its last-updated time,
+  plus any stored name the manifest no longer declares (`undeclared`); `rm <ns> <name>` deletes
+  one. No `secret` verb is a callback entry point, so a plugin backend running any of them is
+  refused `policy_denied` before stdin or the store is touched (§4.3).
+- **Storage.** One JSON file per plugin at `<global_root>/state/plugin-secrets/<ns>.json`, mode
+  `0600` in a `0700` directory, replaced by rename and written under a per-plugin lock file. Each
+  write stamps a fresh random `version`; the store offers a versioned get and a compare-and-swap
+  put (applied only against the expected version, or only when unset) for per-call delivery
+  and backend rotation, which are not wired yet. There is no OS keychain backend: one file
+  format keeps the semantics identical on every host and lets compare-and-swap sit under a
+  single lock.
+- **Unreadable to plugins.** `state/plugin-secrets/` is on the plugin sandbox's unreadable list
+  with nothing granted back, not even a plugin's own file (§4.3); the host reads a value and
+  hands it over. It is *not* denied to agent sandboxes: a nested `orbit` inside an agent
+  sandbox must still be able to deliver a secret to its backend, so until the host-side broker
+  lands an agent sandbox can read the global root, this tree included [ORB-13038].
+- **Lifecycle.** `enable` (and `add --enable`) warns once per declared secret that has no value.
+  `upgrade` (and any reinstall) keeps each secret the new manifest still declares, value and
+  version intact, and deletes the rest. `remove` deletes the plugin's secrets unless
+  `--record-only` is passed. `doctor` reports every declared-but-unset secret.
+
+Secrets are never shared across plugins and cannot appear in `{{config.*}}` templates or panel
+links.
 
 **Every verb that touches the recorded tree checks it first.** `enable`, `disable` and
 `remove` apply the loader's install-path check (below) before seeding from, unlinking by or
@@ -483,10 +525,11 @@ become **readable**. Writable is a named inventory, never the roots:
 `mcp-callers.toml`, `clock.toml`, and the workspace's `plugins.yaml`, `routines/` and
 `auto_tasks/` stay read-only.
 
-**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/` and `state/plugins/` are
-**unreadable** to every plugin child, whatever it was granted. Each child gets back exactly its
-own session record and own grant witness (single files), and its own `state/plugins/<ns>`
-(`{{plugin_state}}`, a whole tree). So another plugin's token, witness or state is
+**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/`, `state/plugins/` and
+`state/plugin-secrets/` are **unreadable** to every plugin child, whatever it was granted. Each
+child gets back exactly its own session record and own grant witness (single files), and its
+own `state/plugins/<ns>` (`{{plugin_state}}`, a whole tree); nothing in the secret store is
+granted back (§3). So another plugin's token, witness or state is
 unreachable: a confined child loading another plugin's row registers it inactive, and a
 credential a plugin keeps in `{{plugin_state}}` is readable by that plugin alone. A manifest
 `fs.read` root that resolves inside one of these trees, outside the plugin's own state, is

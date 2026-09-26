@@ -11,6 +11,7 @@ use super::list::PluginListArgs;
 use super::migrate::PluginMigrateArgs;
 use super::remove::PluginRemoveArgs;
 use super::scaffold::PluginScaffoldArgs;
+use super::secret::PluginSecretCommand;
 use super::show::PluginShowArgs;
 use super::sync::PluginSyncArgs;
 use super::test::PluginTestArgs;
@@ -24,6 +25,7 @@ Examples:
   orbit plugin test ./demo --case status_reports_ready
   orbit plugin test ./demo --update-goldens
   orbit plugin add ./demo --enable
+  orbit plugin secret set demo api_token < token.txt
   orbit plugin list
 
 Plugins install once per machine under the Orbit global root; a repository
@@ -66,6 +68,8 @@ pub enum PluginSubcommand {
     Show(PluginShowArgs),
     /// Report what each plugin needs before it can serve its tools
     Doctor,
+    /// Set, list or remove the secrets a plugin declares in `spec.secrets`
+    Secret(PluginSecretCommand),
     /// Check a plugin directory without installing it
     Validate(PluginValidateArgs),
     /// Run a plugin's conformance goldens against this Orbit
@@ -89,6 +93,7 @@ impl Execute for PluginSubcommand {
             PluginSubcommand::List(args) => args.execute(runtime),
             PluginSubcommand::Show(args) => args.execute(runtime),
             PluginSubcommand::Doctor => execute_doctor(runtime),
+            PluginSubcommand::Secret(command) => command.execute(runtime),
             PluginSubcommand::Validate(args) => args.execute(runtime),
             PluginSubcommand::Test(args) => args.execute(runtime),
             PluginSubcommand::Scaffold(args) => args.execute(runtime),

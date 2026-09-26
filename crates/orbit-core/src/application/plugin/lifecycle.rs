@@ -24,6 +24,7 @@ use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
+use super::secrets::{delete_plugin_secrets, unset_secret_warnings};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
 use super::skills::{PluginSkillLink, link_plugin_skills, unlink_plugin_skills};
 use crate::runtime::plugin::definitions::load_plugin_definitions;
@@ -50,7 +51,7 @@ pub struct PluginEnableOptions {
 /// their first mutation: a refused row is the one an operator most needs to be
 /// able to act on, so the refusal must leave the record, and the recovery the
 /// diagnostic names, intact [ORB-12800].
-fn verified_install_path(
+pub(super) fn verified_install_path(
     runtime: &OrbitRuntime,
     installed: &InstalledPlugin,
 ) -> Result<PathBuf, OrbitError> {
@@ -59,7 +60,10 @@ fn verified_install_path(
 }
 
 /// The recorded row for `name`, or the diagnostic naming what to do instead.
-fn installed_plugin(runtime: &OrbitRuntime, name: &str) -> Result<InstalledPlugin, OrbitError> {
+pub(super) fn installed_plugin(
+    runtime: &OrbitRuntime,
+    name: &str,
+) -> Result<InstalledPlugin, OrbitError> {
     runtime
         .stores()
         .plugins()
@@ -107,6 +111,7 @@ pub fn enable_plugin(
     // operator records a program that moved or was installed since.
     let (programs, program_warnings) = resolve_consented_programs(&runtime.global_root(), &plugin);
     warnings.extend(program_warnings);
+    warnings.extend(unset_secret_warnings(&runtime.global_root(), &plugin));
     let summary = set_enabled(
         runtime,
         name,
@@ -470,6 +475,12 @@ pub fn remove_plugin(
     if options.purge_state && state_dir.exists() {
         std::fs::remove_dir_all(&state_dir)
             .map_err(|error| OrbitError::Io(format!("remove {}: {error}", state_dir.display())))?;
+    }
+    // The plugin's secrets go with its install, before the row, so a failure
+    // leaves the row for a retry. `--record-only` removes nothing but the
+    // record, so the secrets stay for a reinstall or `orbit plugin secret rm`.
+    if !options.record_only {
+        delete_plugin_secrets(&runtime.global_root(), name)?;
     }
 
     runtime.with_mutation(|| {

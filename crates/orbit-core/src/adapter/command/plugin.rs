@@ -17,11 +17,13 @@ pub use crate::application::plugin::skills::PluginSkillLink;
 pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionChange,
-    PluginPermissionSummary, PluginRemoveOptions, PluginSeedAction, PluginSeedOutcome,
-    PluginSummary, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport,
-    PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
+    PluginPermissionSummary, PluginRemoveOptions, PluginSecretStatus, PluginSeedAction,
+    PluginSeedOutcome, PluginSummary, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome,
+    PluginTestReport, PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult,
+    PluginValidationReport,
 };
 pub use crate::runtime::plugin::discovery::{PluginCliGroup, PluginCliVerb};
+pub use crate::runtime::plugin::secrets::{MAX_PLUGIN_SECRET_BYTES, PluginSecretValue};
 
 /// What `orbit plugin add --enable` produced, kept alongside the install
 /// summary rather than collapsed into it, so the CLI can render seeded
@@ -78,6 +80,27 @@ impl OrbitRuntime {
         options: &PluginRemoveOptions,
     ) -> Result<(), OrbitError> {
         plugin::remove_plugin(self, name, options)
+    }
+
+    /// Store an operator-supplied value for one of the plugin's declared
+    /// `spec.secrets`. The returned status carries no value.
+    pub fn set_plugin_secret(
+        &self,
+        name: &str,
+        secret: &str,
+        value: &PluginSecretValue,
+    ) -> Result<PluginSecretStatus, OrbitError> {
+        plugin::set_plugin_secret(self, name, secret, value)
+    }
+
+    /// The plugin's secrets by name and set state, never their values.
+    pub fn list_plugin_secrets(&self, name: &str) -> Result<Vec<PluginSecretStatus>, OrbitError> {
+        plugin::list_plugin_secrets(self, name)
+    }
+
+    /// Delete one of the plugin's secrets; `Ok(false)` when it was not set.
+    pub fn remove_plugin_secret(&self, name: &str, secret: &str) -> Result<bool, OrbitError> {
+        plugin::remove_plugin_secret(self, name, secret)
     }
 
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>, OrbitError> {

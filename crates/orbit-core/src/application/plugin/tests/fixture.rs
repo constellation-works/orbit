@@ -128,6 +128,8 @@ pub(super) struct PluginSpecFixture<'a> {
     pub(super) backend: Option<&'a str>,
     /// The tool's `output_schema` body, indented for the manifest.
     pub(super) output_schema: Option<&'a str>,
+    /// `spec.secrets` entries, indented for the manifest.
+    pub(super) secrets: Option<&'a str>,
 }
 
 impl<'a> PluginSpecFixture<'a> {
@@ -144,7 +146,14 @@ impl<'a> PluginSpecFixture<'a> {
             sandbox: None,
             backend: None,
             output_schema: None,
+            secrets: None,
         }
+    }
+
+    /// Declare `spec.secrets` (list entries indented four spaces).
+    pub(super) fn declaring_secrets(mut self, entries: &'a str) -> Self {
+        self.secrets = Some(entries);
+        self
     }
 
     pub(super) fn with_backend(mut self, script: &'a str) -> Self {
@@ -230,6 +239,10 @@ pub(super) fn write_plugin_at(root: &Path, spec: PluginSpecFixture<'_>) -> PathB
     );
     let manifest = match spec.output_schema {
         Some(schema) => format!("{manifest}      output_schema:\n{schema}"),
+        None => manifest,
+    };
+    let manifest = match spec.secrets {
+        Some(entries) => format!("{manifest}  secrets:\n{entries}"),
         None => manifest,
     };
     std::fs::write(root.join("plugin.yaml"), manifest).expect("write manifest");

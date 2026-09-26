@@ -215,6 +215,43 @@ pub struct PluginSpec {
     pub web: Option<PluginWebSection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<String>,
+    /// Named credentials the operator sets with `orbit plugin secret set`.
+    /// Only names are declared here; values live in the host's secret store.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<PluginSecretSpec>,
+}
+
+/// One `spec.secrets` entry. The name is namespaced to the plugin: two
+/// plugins declaring `api_token` hold two unrelated secrets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginSecretSpec {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Whether the backend may replace the value itself (an OAuth refresh
+    /// token that the provider rotates on every refresh).
+    #[serde(default)]
+    pub rotatable: bool,
+}
+
+/// Longest `spec.secrets[].name` a manifest may declare.
+pub const MAX_SECRET_NAME_LEN: usize = 64;
+
+/// Whether `name` is an acceptable `spec.secrets[].name`: a lowercase letter,
+/// then lowercase letters, digits, `_` or `-`, at most
+/// [`MAX_SECRET_NAME_LEN`] bytes. The name becomes a key in the host's secret
+/// store and a CLI argument, so it is kept to a spelling that needs no
+/// quoting anywhere.
+pub fn is_valid_secret_name(name: &str) -> bool {
+    name.len() <= MAX_SECRET_NAME_LEN
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+        })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -700,7 +737,39 @@ impl PluginManifest {
         }
         self.validate_definition_paths()?;
         self.validate_web()?;
+        self.validate_secrets()?;
         Ok(())
+    }
+
+    /// `spec.secrets`: each name well formed and declared once.
+    fn validate_secrets(&self) -> Result<(), PluginManifestError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, secret) in self.spec.secrets.iter().enumerate() {
+            let field = format!("spec.secrets[{index}].name");
+            if !is_valid_secret_name(&secret.name) {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!(
+                        "'{}' is not a valid secret name: start with a lowercase letter, then use \
+                         lowercase letters, digits, '_' or '-', at most {MAX_SECRET_NAME_LEN} \
+                         characters",
+                        secret.name
+                    ),
+                ));
+            }
+            if !seen.insert(secret.name.as_str()) {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!("secret '{}' is declared more than once", secret.name),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `name` is one of this plugin's `spec.secrets`.
+    pub fn declares_secret(&self, name: &str) -> bool {
+        self.spec.secrets.iter().any(|secret| secret.name == name)
     }
 
     /// `spec.web` (§4.7): a panel reads exactly one declared `read_only`

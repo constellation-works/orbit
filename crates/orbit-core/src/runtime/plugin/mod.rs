@@ -10,6 +10,7 @@ pub mod grants;
 pub mod host;
 pub mod paths;
 pub mod requirements;
+pub mod secrets;
 
 #[cfg(test)]
 mod tests;

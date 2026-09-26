@@ -394,3 +394,46 @@ impl PluginTestFixture {
         }
     }
 }
+
+/// A value typed after the secret name must reach the command's own refusal,
+/// never clap's "unexpected argument '<value>'" error, which would print it.
+#[test]
+fn a_secret_value_in_argv_is_captured_for_refusal_rather_than_echoed() {
+    use super::super::PluginSecretSubcommand;
+
+    for argv in [
+        &[
+            "orbit", "plugin", "secret", "set", "demo", "token", "hunter2",
+        ][..],
+        &[
+            "orbit",
+            "plugin",
+            "secret",
+            "set",
+            "demo",
+            "token",
+            "--value=hunter2",
+        ][..],
+        &[
+            "orbit", "plugin", "secret", "set", "demo", "token", "-v", "hunter2",
+        ][..],
+    ] {
+        let cli = Cli::try_parse_from(argv).unwrap_or_else(|error| {
+            panic!("{argv:?} must parse so the command can refuse it: {error}")
+        });
+        let Commands::Plugin(command) = cli.command else {
+            panic!("expected the plugin command");
+        };
+        let PluginSubcommand::Secret(secret) = command.command else {
+            panic!("expected plugin secret");
+        };
+        let PluginSecretSubcommand::Set(args) = secret.command else {
+            panic!("expected plugin secret set");
+        };
+        assert_eq!(
+            (args.plugin.as_str(), args.name.as_str()),
+            ("demo", "token")
+        );
+        assert!(!args.rejected.is_empty(), "{argv:?}");
+    }
+}

@@ -7,5 +7,6 @@ mod install;
 mod lifecycle;
 mod panels;
 mod plugin_config;
+mod secrets;
 mod seed;
 mod skills;

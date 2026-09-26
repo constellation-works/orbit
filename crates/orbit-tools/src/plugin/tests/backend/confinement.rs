@@ -714,6 +714,82 @@ fn the_landlock_ruleset_hides_callback_sessions_and_grant_witnesses() {
     );
 }
 
+/// The host-owned secret store is unreadable to every plugin child: not
+/// granted back to its own plugin, not reachable through the global-root read
+/// `orbit_tools` opens, and not bought back by a manifest read root naming it.
+/// The host reads a value and hands it over; the child never needs the store.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_landlock_ruleset_hides_the_plugin_secret_store() {
+    use orbit_exec::{EnvironmentMode, ExecRequest, LandlockBoundary, StdinMode};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let plugin_root = temp.path().join("plugin");
+    let secrets = global_root.join(crate::plugin::PLUGIN_SECRET_STORE_DIR);
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    std::fs::create_dir_all(&secrets).expect("secret store");
+    std::fs::write(secrets.join("demo.json"), "{}").expect("own secrets");
+    std::fs::write(secrets.join("other.json"), "{}").expect("other secrets");
+    std::fs::write(global_root.join("config.toml"), "").expect("host config");
+
+    let mut permissions = PluginPermissions::default();
+    permissions.fs.read = vec![secrets.to_string_lossy().into_owned()];
+    let mut spec = (*spec(
+        plugin_root.join("bin"),
+        &plugin_root,
+        permissions,
+        &[PluginGrant::OrbitTools, PluginGrant::Fs],
+    ))
+    .clone();
+    spec.global_root.clone_from(&global_root);
+    let profile = spec.sandbox_profile(None).expect("profile");
+    assert!(
+        profile.read_denies.contains(&secrets),
+        "the secret store is a host-owned tree: {:?}",
+        profile.read_denies
+    );
+    assert!(
+        !profile.read.iter().any(|path| path.starts_with(&secrets)),
+        "a manifest read root cannot buy the secret store back: {:?}",
+        profile.read
+    );
+
+    let request = ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "true".to_string()],
+        current_dir: None,
+        timeout_ms: Some(1_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(vec![(
+            "PATH".to_string(),
+            "/usr/bin:/bin".to_string(),
+        )]),
+        debug: false,
+    };
+    let boundary = LandlockBoundary {
+        read: profile.read.clone(),
+        read_denies: profile.read_denies.clone(),
+        write: profile.write.clone(),
+        write_files: profile.write_files.clone(),
+        deny_tcp: true,
+    };
+    let grants =
+        orbit_exec::linux_landlock_boundary_grants(&request, &boundary).expect("compile grants");
+    let reads = |path: &Path| orbit_exec::grants_read(&grants, path);
+
+    assert!(
+        !reads(&secrets.join("demo.json")),
+        "a plugin cannot read even its own stored secrets"
+    );
+    assert!(!reads(&secrets.join("other.json")));
+    assert!(!reads(&secrets), "the secret store must not be listable");
+    assert!(
+        reads(&global_root.join("config.toml")),
+        "the rest of the global root stays readable under `orbit_tools`"
+    );
+}
+
 /// The same carve-out on macOS, where reads are broadly allowed and the
 /// boundary is a deny appended after them. Compiled on any host so the two
 /// platforms cannot drift.

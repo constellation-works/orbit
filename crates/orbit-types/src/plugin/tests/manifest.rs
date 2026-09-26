@@ -1,8 +1,8 @@
 use super::super::manifest::{
     PluginBackend, PluginBackendType, PluginCliShape, PluginDefinitions, PluginExecutionKind,
     PluginManifest, PluginMcpScope, PluginMetadata, PluginPanelGroup, PluginPanelRender,
-    PluginPermissions, PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink,
-    PluginWebPanel, PluginWebSection, validate_plugin_relative_path,
+    PluginPermissions, PluginRequires, PluginSandbox, PluginSecretSpec, PluginSpec, PluginToolSpec,
+    PluginWebLink, PluginWebPanel, PluginWebSection, validate_plugin_relative_path,
 };
 
 fn minimal() -> PluginManifest {
@@ -41,6 +41,7 @@ fn minimal() -> PluginManifest {
             config: None,
             web: None,
             tests: vec![],
+            secrets: vec![],
         },
     }
 }
@@ -486,4 +487,87 @@ fn a_link_url_must_be_http_or_https() {
     manifest
         .validate_structure()
         .expect("the scheme check is case-insensitive");
+}
+
+fn secret(name: &str) -> PluginSecretSpec {
+    PluginSecretSpec {
+        name: name.into(),
+        description: String::new(),
+        rotatable: false,
+    }
+}
+
+#[test]
+fn declared_secrets_parse_and_validate() {
+    let manifest: PluginManifest = serde_yaml::from_str(
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: demo\n  version: 0.1.0\nspec:\n  \
+         backend: { type: exec, command: bin/demo }\n  tools:\n    - { name: hello, \
+         execution_kind: read_only }\n  secrets:\n    - name: x_refresh_token\n      \
+         description: OAuth refresh token.\n      rotatable: true\n    - name: api-key\n",
+    )
+    .expect("parse a manifest declaring secrets");
+    manifest
+        .validate_structure()
+        .expect("well-formed secrets validate");
+    assert_eq!(
+        manifest.spec.secrets,
+        vec![
+            PluginSecretSpec {
+                name: "x_refresh_token".into(),
+                description: "OAuth refresh token.".into(),
+                rotatable: true,
+            },
+            secret("api-key"),
+        ]
+    );
+    assert!(manifest.declares_secret("api-key"));
+    assert!(!manifest.declares_secret("other"));
+}
+
+#[test]
+fn a_secret_entry_refuses_unknown_keys() {
+    let parsed: Result<PluginManifest, _> = serde_yaml::from_str(
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: demo\n  version: 0.1.0\nspec:\n  \
+         backend: { type: exec, command: bin/demo }\n  tools:\n    - { name: hello, \
+         execution_kind: read_only }\n  secrets:\n    - { name: token, value: inline }\n",
+    );
+    assert!(
+        parsed.is_err(),
+        "a manifest must never carry a secret value inline"
+    );
+}
+
+#[test]
+fn malformed_or_duplicate_secret_names_are_refused() {
+    for name in [
+        "",
+        "Token",
+        "1token",
+        "_token",
+        "to ken",
+        "to.ken",
+        "tök",
+        &"a".repeat(65),
+    ] {
+        let mut manifest = minimal();
+        manifest.spec.secrets = vec![secret(name)];
+        let error = manifest
+            .validate_structure()
+            .expect_err("malformed secret name");
+        assert_eq!(error.field, "spec.secrets[0].name", "{name:?}: {error}");
+    }
+
+    let mut manifest = minimal();
+    manifest.spec.secrets = vec![secret("token"), secret("other"), secret("token")];
+    let error = manifest
+        .validate_structure()
+        .expect_err("duplicate secret name");
+    assert_eq!(error.field, "spec.secrets[2].name");
+    assert!(error.message.contains("more than once"), "{error}");
+
+    let mut manifest = minimal();
+    manifest.spec.secrets = vec![secret(&"a".repeat(64)), secret("a-1_b")];
+    manifest
+        .validate_structure()
+        .expect("the longest allowed name and every allowed character validate");
 }

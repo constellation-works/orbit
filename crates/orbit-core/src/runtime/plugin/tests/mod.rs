@@ -3,3 +3,4 @@ mod discovery;
 mod grants;
 mod host;
 mod paths;
+mod secrets;

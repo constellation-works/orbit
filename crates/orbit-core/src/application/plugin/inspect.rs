@@ -213,6 +213,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let scoped_out = scoped_out_fs_root_rows(runtime)?;
     let ungranted_programs = ungranted_program_rows(&summaries);
     let host_api_deprecated = host_api_deprecation_rows(runtime);
+    let unset_secrets = super::secrets::unset_secret_rows(runtime, &summaries)?;
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).
@@ -279,6 +280,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     rows.extend(scoped_out);
     rows.extend(ungranted_programs);
     rows.extend(host_api_deprecated);
+    rows.extend(unset_secrets);
     if let Some(finding) = invalid_pin_file {
         rows.push(finding);
     }
