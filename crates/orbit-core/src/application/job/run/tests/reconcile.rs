@@ -6,7 +6,11 @@ use super::super::JobRunListParams;
 use crate::application::job::TERMINAL_OUTCOME_CONFLICT_CODE;
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::V2AuditEventInsertParams;
+#[cfg(unix)]
+use orbit_store::contracts::{ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams};
 use orbit_types::workflow::JobRunState;
+#[cfg(unix)]
+use orbit_types::workflow::PipelineState;
 
 #[test]
 fn show_job_run_reconciles_stale_running_owner() {
@@ -31,6 +35,88 @@ fn show_job_run_reconciles_stale_running_owner() {
                 message.contains("recorded worker process is no longer alive")
             })
     }));
+}
+
+/// A newly started ship parent can have admitted a live detached child by the
+/// time a sweep sees its owner PID as missing. The first sweep must leave both
+/// runs nonterminal while the worker's recorded identity settles.
+#[cfg(unix)]
+#[test]
+fn sweep_spares_fresh_parent_with_live_dispatched_child() {
+    let (_root, runtime) = test_runtime();
+    let parent = insert_pending_run(&runtime, "workspace_ship_pipeline");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&parent.run_id, Utc::now(), 999_999)
+        .expect("start parent with owner absent from this process table");
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(
+            &parent.run_id,
+            &PipelineState::new(
+                parent.run_id.clone(),
+                parent.job_id.clone(),
+                serde_json::json!({}),
+            ),
+        )
+        .expect("write parent pipeline state");
+    let child = match runtime
+        .stores()
+        .jobs()
+        .admit_child_job_run(&ChildJobRunAdmissionParams {
+            parent_run_id: parent.run_id.clone(),
+            parent_step_id: None,
+            job_id: "workspace_auto_pipeline".to_string(),
+            action: "invoke_detached".to_string(),
+            blocking: false,
+            attempt: 1,
+            scheduled_at: Utc::now(),
+            input: None,
+        })
+        .expect("admit detached child")
+    {
+        ChildJobRunAdmissionOutcome::Admitted(child) => *child,
+        ChildJobRunAdmissionOutcome::AdmissionsStopped => panic!("child admission stopped"),
+    };
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&child.run_id, Utc::now(), std::process::id())
+        .expect("start live child");
+
+    assert_eq!(runtime.reconcile_stale_job_runs(None).expect("sweep"), 0);
+    let parent = runtime.show_job_run(&parent.run_id).expect("show parent");
+    let child = runtime.show_job_run(&child.run_id).expect("show child");
+    assert_eq!(parent.state, JobRunState::Running);
+    assert!(parent.finished_at.is_none());
+    assert!(parent.steps.is_empty());
+    assert_eq!(child.state, JobRunState::Running);
+    assert!(child.finished_at.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn sweep_interrupts_dead_running_owner_after_startup_grace_without_children() {
+    let (_root, runtime) = test_runtime();
+    let parent = insert_pending_run(&runtime, "workspace_ship_pipeline");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&parent.run_id, Utc::now() - Duration::seconds(3), 999_999)
+        .expect("start parent with dead owner");
+
+    assert_eq!(runtime.reconcile_stale_job_runs(None).expect("sweep"), 1);
+    let parent = runtime.show_job_run(&parent.run_id).expect("show parent");
+    assert_eq!(parent.state, JobRunState::Interrupted);
+    assert!(parent.finished_at.is_some());
+    assert!(
+        parent
+            .steps
+            .iter()
+            .any(|step| step.error_code.as_deref() == Some("process_not_found"))
+    );
 }
 
 #[cfg(unix)]
@@ -614,10 +700,10 @@ fn list_and_history_repair_terminal_run_missing_timing() {
     assert_eq!(history_run.duration_ms, Some(5_000));
 }
 
-/// [ORB-11603] Unchanged healthy pending/running owners are classified once
-/// per list/history call. A later call classifies again (pass-local reuse
-/// does not cross calls). Stale finalization may probe again after rereading
-/// and is covered separately by the race fixtures.
+/// [ORB-11603] Unchanged healthy pending and post-startup running owners are
+/// classified once per list/history call. A later call classifies again
+/// (pass-local reuse does not cross calls). Stale finalization may probe again
+/// after rereading and is covered separately by the race fixtures.
 #[cfg(unix)]
 #[test]
 fn list_and_history_classify_unchanged_healthy_owners_once() {
@@ -642,7 +728,7 @@ fn list_and_history_classify_unchanged_healthy_owners_once() {
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&running.run_id, Utc::now(), pid)
+        .mark_job_run_running(&running.run_id, Utc::now() - Duration::seconds(3), pid)
         .expect("mark running");
 
     reset_classify_owner_snapshots();

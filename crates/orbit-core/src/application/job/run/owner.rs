@@ -216,6 +216,12 @@ pub(super) fn running_run_owner_is_stale(run: &JobRun) -> bool {
 /// its owner liveness is probed exactly like a running run's.
 pub(super) const PENDING_RUN_UNCLAIMED_GRACE_MINUTES: i64 = 30;
 
+/// A worker can dispatch a child before another process can reliably probe
+/// its newly recorded PID. Give that running owner a short window to settle
+/// before an orphan sweep is allowed to finalize it.
+#[cfg(unix)]
+pub(super) const RUNNING_RUN_STARTUP_GRACE_SECONDS: i64 = 2;
+
 /// Why a `pending` run is conclusively orphaned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PendingStaleReason {
@@ -307,6 +313,12 @@ pub(super) fn running_run_owner_is_stale(_run: &JobRun) -> bool {
 #[cfg(unix)]
 pub(super) fn running_run_owner_stale_reason(run: &JobRun) -> Option<OwnerIdentity> {
     if run.state != JobRunState::Running {
+        return None;
+    }
+    if run.started_at.is_some_and(|started_at| {
+        chrono::Utc::now().signed_duration_since(started_at)
+            < chrono::Duration::seconds(RUNNING_RUN_STARTUP_GRACE_SECONDS)
+    }) {
         return None;
     }
     match classify_run_owner(run) {
