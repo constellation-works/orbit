@@ -359,13 +359,24 @@ pub(super) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response
     }
 }
 
-pub(super) async fn cancel_run_action(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+#[derive(serde::Deserialize, Default)]
+pub(super) struct CancelRunBody {
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+pub(super) async fn cancel_run_action(
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    body: Option<Json<CancelRunBody>>,
+) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    let Json(body) = body.unwrap_or_default();
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_context(&id, "dashboard", "web"))
+        Ok(runtime.cancel_job_run_with_reason(&id, "dashboard", "web", body.reason.as_deref()))
     })
     .await
     {

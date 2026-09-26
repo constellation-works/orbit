@@ -8,10 +8,14 @@ use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::TaskReservationReleaseReason;
+use orbit_store::contracts::V2AuditEventInsertParams;
 #[cfg(unix)]
 use orbit_store::contracts::{AuditEventFilter, AuditEventStoreBackend};
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::activity_job::{
+    AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
+};
 use orbit_types::workflow::{
     ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState,
 };
@@ -43,11 +47,24 @@ impl OrbitRuntime {
         actor: &str,
         source: &str,
     ) -> Result<JobRunCancelResult, OrbitError> {
-        self.cancel_job_run_with_signaller(run_id, actor, source, signal_run_owner_process)
+        self.cancel_job_run_with_reason(run_id, actor, source, None)
+    }
+
+    /// Cancel a run and preserve the requesting surface and optional reason in
+    /// its v2 audit trail and any coupled task's blocked history note.
+    pub fn cancel_job_run_with_reason(
+        &self,
+        run_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+    ) -> Result<JobRunCancelResult, OrbitError> {
+        self.cancel_job_run_cascading(run_id, actor, source, reason, signal_run_owner_process, 0)
     }
 
     /// Internal cancellation seam so tests can model a failed post-signal
     /// liveness check without signalling a process they do not own.
+    #[cfg(test)]
     pub(super) fn cancel_job_run_with_signaller<F>(
         &self,
         run_id: &str,
@@ -58,7 +75,7 @@ impl OrbitRuntime {
     where
         F: FnOnce(&JobRun) -> Result<String, OrbitError>,
     {
-        self.cancel_job_run_cascading(run_id, actor, source, signal, 0)
+        self.cancel_job_run_cascading(run_id, actor, source, None, signal, 0)
     }
 
     fn cancel_job_run_cascading<F>(
@@ -66,6 +83,7 @@ impl OrbitRuntime {
         run_id: &str,
         actor: &str,
         source: &str,
+        reason: Option<&str>,
         signal: F,
         depth: usize,
     ) -> Result<JobRunCancelResult, OrbitError>
@@ -148,12 +166,18 @@ impl OrbitRuntime {
         let duration_ms = run
             .started_at
             .map(|s| now.signed_duration_since(s).num_milliseconds().max(0) as u64);
-        self.finalize_job_run_with_reservation_cleanup(
+        let reason = reason.map(str::trim).filter(|reason| !reason.is_empty());
+        let diagnostic = match reason {
+            Some(reason) => format!("run cancelled by {actor}: {reason}"),
+            None => format!("run cancelled by {actor}"),
+        };
+        self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             run_id,
             JobRunState::Cancelled,
             now,
             duration_ms,
             TaskReservationReleaseReason::RunTerminal,
+            Some(("RUN_CANCELLED", &diagnostic)),
         )?;
         let cancelled_run = self
             .get_job_run_backend(run_id)?
@@ -192,6 +216,14 @@ impl OrbitRuntime {
                 run_id, detail
             )));
         }
+        self.record_run_cancelled_audit(
+            &cancelled_run,
+            &request_id,
+            actor,
+            source,
+            reason,
+            run.state,
+        )?;
         self.mark_cancelled_pipeline_state(&cancelled_run)?;
         self.settle_child_dispatches_on_cancel(&cancelled_run, actor, depth)?;
         self.record_event(OrbitEvent::JobRunCancelled {
@@ -220,6 +252,53 @@ impl OrbitRuntime {
             actor,
             source,
         ))
+    }
+
+    fn record_run_cancelled_audit(
+        &self,
+        run: &JobRun,
+        request_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        previous_state: JobRunState,
+    ) -> Result<(), OrbitError> {
+        let workspace_path = Some(self.paths().repo_root.display().to_string());
+        let kind = V2AuditEventKind::RunCancelled {
+            actor: actor.to_string(),
+            source: source.to_string(),
+            reason: reason.map(str::to_string),
+            previous_state: previous_state.to_string(),
+            final_state: run.state.to_string(),
+        };
+        let event = V2AuditEvent {
+            envelope: V2AuditEnvelope {
+                schema_version: AUDIT_ENVELOPE_SCHEMA_VERSION,
+                event_type: kind.event_type().to_string(),
+                event_id: format!("evt-{request_id}"),
+                ts: Utc::now(),
+                run_id: run.run_id.clone(),
+                agent_identity: actor.to_string(),
+                parent_event_id: None,
+                workspace_path: workspace_path.clone(),
+            },
+            kind,
+        };
+        self.insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: self.workspace_id()?,
+            event_id: event.envelope.event_id.clone(),
+            source: "v2_envelope".to_string(),
+            schema_version: event.envelope.schema_version,
+            event_type: event.envelope.event_type.clone(),
+            ts: event.envelope.ts,
+            run_id: event.envelope.run_id.clone(),
+            agent_identity: event.envelope.agent_identity.clone(),
+            parent_event_id: None,
+            workspace_path,
+            payload_json: serde_json::to_string(&event).map_err(|error| {
+                OrbitError::Store(format!("serialize cancellation audit: {error}"))
+            })?,
+        })
     }
 
     fn record_cancellation_request(
@@ -461,6 +540,7 @@ impl OrbitRuntime {
             child_run_id,
             actor,
             CHILD_CASCADE_SOURCE,
+            None,
             signal_run_owner_process,
             depth + 1,
         ) {

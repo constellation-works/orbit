@@ -153,6 +153,8 @@ function runIdentity(run) {
 async function cancelRun(run, btn, host) {
   const runId = run && run.run_id;
   if (!runId) return;
+  const reason = window.prompt(`Cancel ${runId}? Add a reason (optional):`, "");
+  if (reason === null) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>cancel`;
@@ -160,7 +162,8 @@ async function cancelRun(run, btn, host) {
     for (const node of host.querySelectorAll(".action-error")) node.remove();
   }
   try {
-    await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run));
+    await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run),
+      { reason: reason.trim() || null });
     const refreshActiveDetail = !run.workspace_id && getActiveRunId() === runId;
     await Promise.all([
       doFetchAndRenderRuns(),

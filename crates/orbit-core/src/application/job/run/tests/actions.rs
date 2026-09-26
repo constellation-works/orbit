@@ -77,6 +77,15 @@ fn cancel_job_run_marks_pending_cancelled_without_signal() {
     assert_eq!(payload["actor"], "tester");
     assert_eq!(payload["source"], "unit");
     assert_eq!(payload["signal_attempted"], false);
+    let events = runtime
+        .collect_run_audit_events(&run.run_id)
+        .expect("run events");
+    let cancelled = events
+        .iter()
+        .find(|event| event.event_type.as_deref() == Some("run.cancelled"))
+        .expect("v2 cancellation event");
+    assert_eq!(cancelled.raw["actor"], "tester");
+    assert!(cancelled.raw["reason"].is_null());
 }
 
 #[test]

@@ -135,11 +135,14 @@ names each child it dispatched, to establish their lineage.
 After verifying that the owner is gone or that the run should no longer continue:
 
 ```sh
-orbit run cancel <run_id> --confirm
+orbit run cancel <run_id> --confirm --reason "operator stopped this delivery"
 ```
 
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
 been `running` longer than expected.
+
+`--reason` is optional. The CLI and dashboard record a `run.cancelled` event with the
+actor and any reason; inspect it with `orbit run events <run_id> --type run.cancelled`.
 
 Cancellation is truthful about the race with completion: a run that reached a terminal
 state before the signal landed reports `already_terminal` and keeps its real outcome

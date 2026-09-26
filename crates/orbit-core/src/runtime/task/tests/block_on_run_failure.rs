@@ -306,6 +306,40 @@ fn cancelled_pipeline_run_blocks_coupled_task() {
     );
 }
 
+#[test]
+fn cancellation_blocks_coupled_task_with_actor_and_reason() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task_id = create_backlog_task(&runtime, &repo_root, "cancelled by operator");
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(PIPELINE_JOB, 1, Utc::now(), None, None)
+        .expect("insert pending pipeline run");
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+
+    runtime
+        .cancel_job_run_with_reason(
+            &run.run_id,
+            "cli",
+            "run_cancel",
+            Some("operator stopped it"),
+        )
+        .expect("cancel pipeline run");
+
+    let entries = failure_history_entries(&runtime, &task_id);
+    assert_eq!(entries.len(), 1);
+    let note = entries[0].note.as_deref().expect("blocked note");
+    assert!(note.contains("RUN_CANCELLED"), "cancellation code: {note}");
+    assert!(
+        note.contains("run cancelled by cli"),
+        "cancellation actor: {note}"
+    );
+    assert!(
+        note.contains("operator stopped it"),
+        "cancellation reason: {note}"
+    );
+}
+
 fn finalize_interrupted(runtime: &OrbitRuntime, run_id: &str, diagnostic: Option<(&str, &str)>) {
     runtime
         .finalize_job_run_with_reservation_cleanup_and_diagnostic(

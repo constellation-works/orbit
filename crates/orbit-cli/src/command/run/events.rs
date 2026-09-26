@@ -109,6 +109,10 @@ pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {
     match event.event_type.as_deref() {
         Some("run.started") => field_summary(raw, "job_name"),
         Some("run.finished") => field_summary(raw, "outcome"),
+        Some("run.cancelled") => join_present(&[
+            ("actor", raw_str(raw, "actor")),
+            ("reason", raw_str(raw, "reason")),
+        ]),
         Some("step.started") => field_summary(raw, "step_id"),
         Some("step.finished") => join_present(&[
             ("step", raw_str(raw, "step_id")),

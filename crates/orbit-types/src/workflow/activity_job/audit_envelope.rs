@@ -62,6 +62,14 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_message: Option<String>,
     },
+    RunCancelled {
+        actor: String,
+        source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        previous_state: String,
+        final_state: String,
+    },
     StepStarted {
         step_id: String,
     },
@@ -282,6 +290,7 @@ impl V2AuditEventKind {
         match self {
             V2AuditEventKind::RunStarted { .. } => "run.started",
             V2AuditEventKind::RunFinished { .. } => "run.finished",
+            V2AuditEventKind::RunCancelled { .. } => "run.cancelled",
             V2AuditEventKind::StepStarted { .. } => "step.started",
             V2AuditEventKind::StepFinished { .. } => "step.finished",
             V2AuditEventKind::StepSkipped { .. } => "step.skipped",
