@@ -397,6 +397,16 @@ Per pass:
    accept no caller-supplied parameters, and every step in such a job must declare its own
    `default_input` rather than inheriting the job base input (which would expose the
    reserved field to the activity).
+   A due `workspace_ship_pipeline` slot is consumed as `skipped` when a
+   `workspace_auto_pipeline` is already running or retrying in its source
+   workspace. The tick reports `workspace_drain_live: <run id>` even without
+   `--verbose`; `orbit routine show` retains that detail in recent fires. It
+   does not queue a sweep behind a manual drain: the later sweep would use its
+   own review completion policy after a manual `--complete` window expires.
+   Readiness names the running `workspace_auto_pipeline` and its live worker
+   ceiling in `capacity.drain_run_id` and `capacity.max_active_leaf_runs`.
+   Pending coordinators appear separately in `capacity.queued_drains` with
+   their run id, submitted ceiling, and completion policy.
 7. The detached worker clears `ORBIT_ROOT` unconditionally. With no explicit `--root`, its
    cwd is therefore the workspace selector; when a parent explicitly forwarded `--root`,
    that argument is the selector. Before any step executes, the worker compares the
@@ -452,7 +462,9 @@ and never synced:
 
 - **routine_cursors** — per routine: first-observation baseline + last slot consumed.
 - **routine_fires** — one row per fire attempt: `(name, slot, attempt)` idempotency key,
-  state (`intent → dispatched → succeeded/failed/timed_out/error`), dispatched run id.
+  state (`intent → dispatched → succeeded/failed/timed_out/error`, or
+  `intent → skipped` for a ship slot blocked by a live drain), dispatched run id
+  when one exists. A skipped row retains the blocking drain run id in `detail`.
 - **routine_pauses** — host-local suppressions written by `orbit routine pause <name>` /
   cleared by `resume`. Durable across reboots; invisible to git.
 - **sweep lock** — a `flock(2)` file lock (`~/.orbit/state/routine-sweep.lock`) rather

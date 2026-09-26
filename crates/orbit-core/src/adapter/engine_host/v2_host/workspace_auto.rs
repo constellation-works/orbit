@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_store::contracts::DrainLeafOccupancy;
+use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
 use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
 use serde_json::{Value, json};
@@ -266,7 +266,7 @@ pub fn explain_workspace_auto_readiness(
     // drain is admitting under — including an operator adjustment — rather than
     // the static default, so readiness and the drain cannot disagree about the
     // ceiling that decides `capacity_saturated`.
-    let active_drain = active_drain(runtime)?;
+    let (active_drain, queued_drains) = workspace_drains(runtime)?;
     let (max_active_leaf_runs, limit_source) = match (max_active_leaf_runs, &active_drain) {
         (Some(requested), _) => (u64::from(requested), "requested"),
         (None, Some(drain)) => (
@@ -534,6 +534,7 @@ pub fn explain_workspace_auto_readiness(
             "candidate_pool_truncated": candidate_pool_truncated,
             "limit_source": limit_source,
             "drain_run_id": active_drain.as_ref().map(|drain| &drain.run_id),
+            "queued_drains": queued_drains,
             "worker_limit": active_drain.as_ref().and_then(|drain| drain.limit.clone()),
             "admissions_stopped": admissions_stopped,
             "admissions_stop": active_drain
@@ -611,40 +612,74 @@ impl ActiveDrain {
     }
 }
 
-/// The workspace's live drain, if one is running. `workspace_auto_pipeline`
-/// declares `max_active_runs: 1`, so there is at most one to report.
-fn active_drain(runtime: &OrbitRuntime) -> Result<Option<ActiveDrain>, OrbitError> {
-    let Some(run) = runtime
+/// Report the running coordinator separately from runs waiting for its slot.
+/// The job's active-run limit permits one running drain and pending successors.
+fn workspace_drains(
+    runtime: &OrbitRuntime,
+) -> Result<(Option<ActiveDrain>, Vec<Value>), OrbitError> {
+    let mut runs = runtime
         .stores()
         .jobs()
-        .list_pending_or_running_job_runs(DRAIN_JOB_NAME)?
-        .into_iter()
-        .next()
-    else {
-        return Ok(None);
-    };
-    let input = run.input.unwrap_or_else(|| json!({}));
-    let submitted = input
-        .get("max_active_leaf_runs")
-        .and_then(json_u32)
-        .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32);
-    let state = runtime
-        .stores()
-        .jobs()
-        .read_run_state(&run.run_id)
-        .ok()
-        .flatten();
-    let limit = state
-        .as_ref()
-        .and_then(|state| state.drain_worker_limit.clone());
-    let stop = state.and_then(|state| state.drain_admissions_stop);
-    Ok(Some(ActiveDrain {
-        run_id: run.run_id,
-        input,
-        submitted,
-        limit,
-        stop,
-    }))
+        .list_pending_or_running_job_runs(DRAIN_JOB_NAME)?;
+    runs.extend(
+        runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(DRAIN_JOB_NAME.to_string()),
+                state: Some(orbit_types::workflow::JobRunState::Retrying),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?,
+    );
+    let mut queued = Vec::new();
+    let mut active = None;
+    for run in runs {
+        if run.state == orbit_types::workflow::JobRunState::Pending {
+            let input = run.input.as_ref();
+            queued.push(json!({
+                "run_id": run.run_id,
+                "completion": input.and_then(|input| input.get("completion"))
+                    .and_then(Value::as_str).unwrap_or("review"),
+                "max_active_leaf_runs": input.and_then(|input| input.get("max_active_leaf_runs"))
+                    .and_then(json_u32).unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32),
+            }));
+            continue;
+        }
+        if !matches!(
+            run.state,
+            orbit_types::workflow::JobRunState::Running
+                | orbit_types::workflow::JobRunState::Retrying
+        ) {
+            continue;
+        }
+        if active.is_some() {
+            continue;
+        }
+        let input = run.input.unwrap_or_else(|| json!({}));
+        let submitted = input
+            .get("max_active_leaf_runs")
+            .and_then(json_u32)
+            .unwrap_or(DEFAULT_MAX_ACTIVE_LEAF_RUNS as u32);
+        let state = runtime
+            .stores()
+            .jobs()
+            .read_run_state(&run.run_id)
+            .ok()
+            .flatten();
+        let limit = state
+            .as_ref()
+            .and_then(|state| state.drain_worker_limit.clone());
+        let stop = state.and_then(|state| state.drain_admissions_stop);
+        active = Some(ActiveDrain {
+            run_id: run.run_id,
+            input,
+            submitted,
+            limit,
+            stop,
+        });
+    }
+    Ok((active, queued))
 }
 
 fn read_drain_worker_limit(runtime: &OrbitRuntime, run_id: &str) -> Option<DrainWorkerLimit> {

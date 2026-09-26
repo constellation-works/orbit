@@ -654,6 +654,7 @@ pub(super) fn fire_json(fire: &RoutineFireRecord) -> Value {
 pub(super) fn fire_ok(state: RoutineFireState) -> Option<bool> {
     match state {
         RoutineFireState::Succeeded => Some(true),
+        RoutineFireState::Skipped => None,
         RoutineFireState::Failed | RoutineFireState::TimedOut | RoutineFireState::Error => {
             Some(false)
         }

@@ -15,6 +15,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::{RoutineFireIntentParams, RoutineFireState, Store};
+use orbit_types::workflow::RoutineTarget;
 use orbit_types::workflow::{JobRunState, RoutineDefinition};
 
 use crate::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
@@ -77,6 +78,7 @@ fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
 /// run ids, and answers `run_state` from a table the test primes.
 #[derive(Default)]
 struct FakeDispatch {
+    live_drain: RefCell<Option<String>>,
     fail_submit: Cell<bool>,
     counter: Cell<u32>,
     submits: RefCell<Vec<(PathBuf, String)>>,
@@ -108,6 +110,10 @@ impl FakeDispatch {
 }
 
 impl RoutineDispatch for FakeDispatch {
+    fn live_workspace_drain(&self, _dir: &Path) -> Result<Option<String>, OrbitError> {
+        Ok(self.live_drain.borrow().clone())
+    }
+
     fn submit(
         &self,
         dir: &Path,
@@ -179,6 +185,56 @@ fn first_sweep_baselines_and_fires_nothing_then_next_slot_fires() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, RoutineFireState::Dispatched);
     assert_eq!(dispatch.submit_count(), 1);
+}
+
+#[test]
+fn ship_sweep_consumes_a_slot_while_a_workspace_drain_is_live() {
+    let store = store();
+    let dispatch = FakeDispatch::default();
+    let mut ship = routine("ship", "* * * * *", true, "forbid", 1);
+    ship.definition.target = RoutineTarget::Job("workspace_ship_pipeline".to_string());
+    let coll = collection(vec![ship]);
+    let first = ts(2026, 1, 1, 0, 0, 30);
+    run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), first).expect("baseline");
+
+    *dispatch.live_drain.borrow_mut() = Some("jrun-manual".to_string());
+    let skipped = run_sweep_core(
+        &store,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        first + Duration::minutes(1),
+    )
+    .expect("due slot");
+    assert_eq!(skipped[0].action, "skipped");
+    assert_eq!(
+        skipped[0].reason.as_deref(),
+        Some("workspace_drain_live: jrun-manual")
+    );
+    assert_eq!(dispatch.submit_count(), 0);
+    let rows = fires(&store, "ship");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state, RoutineFireState::Skipped);
+    assert_eq!(
+        rows[0].detail.as_deref(),
+        Some("workspace_drain_live: jrun-manual")
+    );
+
+    *dispatch.live_drain.borrow_mut() = None;
+    let same_slot = run_sweep_core(
+        &store,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        first + Duration::minutes(1) + Duration::seconds(10),
+    )
+    .expect("same slot");
+    assert_eq!(same_slot[0].action, "skipped");
+    assert_eq!(
+        dispatch.submit_count(),
+        0,
+        "a skipped slot must never queue later"
+    );
 }
 
 #[test]

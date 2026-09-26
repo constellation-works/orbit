@@ -1673,6 +1673,35 @@ fn readiness_reports_the_live_ceiling_and_who_moved_it() {
     assert_eq!(previewed["capacity"]["limit_source"], "requested");
 }
 
+#[test]
+fn readiness_separates_a_queued_drain_from_the_running_coordinator() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let running = seed_running_drain_input(
+        &runtime,
+        json!({ "max_active_leaf_runs": 3, "completion": "done" }),
+    );
+    let queued = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "max_active_leaf_runs": 5, "completion": "review" })),
+            None,
+        )
+        .expect("queue drain");
+
+    let output = readiness(&runtime, &[], None);
+    assert_eq!(output["capacity"]["drain_run_id"], running);
+    assert_eq!(output["capacity"]["max_active_leaf_runs"], 3);
+    assert_eq!(output["capacity"]["limit_source"], "run_input");
+    assert_eq!(
+        output["capacity"]["queued_drains"],
+        json!([{ "run_id": queued.run_id, "max_active_leaf_runs": 5, "completion": "review" }])
+    );
+}
+
 /// [ORB-11273] `orbit run job ... --input max_active_leaf_runs=7` persists the
 /// ceiling as a JSON string. Readiness must report that live drain ceiling
 /// (and the same source the classifier uses), not the numeric-only fallback of 5.

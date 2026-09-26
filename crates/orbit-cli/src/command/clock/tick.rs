@@ -153,7 +153,13 @@ impl ClockTickArgs {
         let show_all = self.verbose || self.dry_run;
         let mut lines = Vec::new();
         for report in &outcome.reports {
-            if show_all || report_is_noteworthy(report.action) {
+            if show_all
+                || report_is_noteworthy(report.action)
+                || report
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.starts_with("workspace_drain_live:"))
+            {
                 lines.push(format_routine_report_line(report));
             }
         }

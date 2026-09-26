@@ -55,6 +55,7 @@ fn fire(state: RoutineFireState, created_at: &str, updated_at: &str) -> RoutineF
 #[test]
 fn fire_ok_classifies_terminal_and_in_flight_states() {
     assert_eq!(fire_ok(RoutineFireState::Succeeded), Some(true));
+    assert_eq!(fire_ok(RoutineFireState::Skipped), None);
     assert_eq!(fire_ok(RoutineFireState::Failed), Some(false));
     assert_eq!(fire_ok(RoutineFireState::TimedOut), Some(false));
     assert_eq!(fire_ok(RoutineFireState::Error), Some(false));
