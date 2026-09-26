@@ -1,3 +1,7 @@
+use std::collections::BTreeSet;
+
+use orbit_core::application::health::artifact::ArtifactCondition;
+
 use super::*;
 
 /// `running`/`pending` job runs with no live worker process — dead recorded
@@ -352,6 +356,46 @@ pub(super) fn doctor_check_definition_artifacts(
                 .map(|finding| format!("{}: {}", finding.condition.as_str(), finding.detail))
                 .collect::<Vec<_>>()
                 .join("; ");
+            let attention_count = health
+                .findings
+                .iter()
+                .map(|finding| finding.name.as_str())
+                .collect::<BTreeSet<_>>()
+                .len();
+            let missing_count = health
+                .findings
+                .iter()
+                .filter(|finding| finding.condition == ArtifactCondition::Missing)
+                .map(|finding| finding.name.as_str())
+                .collect::<BTreeSet<_>>()
+                .len();
+            // Missing shipped defaults are absent from `scanned`; include
+            // them in the population. Keep the ratio bounded if a catalog
+            // probe reports multiple findings for one scanned entry.
+            let population = health
+                .scanned
+                .saturating_add(missing_count)
+                .max(attention_count);
+            let breakdown = [
+                ArtifactCondition::Missing,
+                ArtifactCondition::Stale,
+                ArtifactCondition::Faulty,
+                ArtifactCondition::Residual,
+                ArtifactCondition::Deprecated,
+            ]
+            .into_iter()
+            .filter_map(|condition| {
+                let count = health
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.condition == condition)
+                    .map(|finding| finding.name.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .len();
+                (count > 0).then(|| format!("{count} {}", condition.as_str()))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
             // Every finding carries its own exact repair command; dedupe so a
             // kind with five stale copies names one command, not five.
             let mut remediations: Vec<&str> = Vec::new();
@@ -365,10 +409,9 @@ pub(super) fn doctor_check_definition_artifacts(
                 &check_name,
                 status,
                 format!(
-                    "{} of {} {} need attention — {detail}",
-                    health.findings.len(),
-                    health.scanned,
-                    health.kind.as_str()
+                    "{attention_count} of {population} {} need attention ({breakdown}) — \
+                     {detail}",
+                    health.kind.as_str(),
                 ),
                 remediations.join(" "),
             )

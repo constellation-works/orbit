@@ -99,7 +99,22 @@ pub(crate) fn discover_registered_workspaces(
 }
 
 pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, OrbitError> {
-    let environment = RegistryRoutineEnvironment::load(global_root, None)?;
+    routine_statuses_with_workspace_filter(global_root, None)
+}
+
+/// Read host routine status from one registered workspace.
+pub fn routine_statuses_for_workspace(
+    global_root: &Path,
+    workspace_selector: &str,
+) -> Result<RoutineStatusReport, OrbitError> {
+    routine_statuses_with_workspace_filter(global_root, Some(workspace_selector))
+}
+
+fn routine_statuses_with_workspace_filter(
+    global_root: &Path,
+    workspace_selector: Option<&str>,
+) -> Result<RoutineStatusReport, OrbitError> {
+    let environment = RegistryRoutineEnvironment::load(global_root, workspace_selector)?;
     orbit_core::application::routines::routine_statuses_with_providers(
         global_root,
         environment.local_machine(),

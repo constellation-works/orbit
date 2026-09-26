@@ -2,7 +2,7 @@ use std::path::Path;
 
 use clap::Args;
 use comfy_table::Cell;
-use orbit_cmd::registry_routines::routine_statuses;
+use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
@@ -16,8 +16,15 @@ pub struct RoutineListArgs {
 }
 
 impl RoutineListArgs {
-    pub fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
-        let report = routine_statuses(global_root)?;
+    pub fn execute_without_runtime(
+        self,
+        global_root: &Path,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
+        let report = match workspace_selector {
+            Some(selector) => routine_statuses_for_workspace(global_root, selector)?,
+            None => routine_statuses(global_root)?,
+        };
 
         let statuses: Vec<_> = report
             .statuses
@@ -71,11 +78,14 @@ impl RoutineListArgs {
             Column::new("NEXT DUE").fixed(),
             Column::new("LAST FIRE").fixed(),
         ])
-        .empty_message(format!(
-            "no routines found (host {}); register an owner checkout that defines \
-             .orbit/routines/*.yaml",
-            report.machine_name
-        ));
+        .empty_message(match workspace_selector {
+            Some(selector) => format!("no routines found in workspace '{selector}'"),
+            None => format!(
+                "no routines found (host {}); register an owner checkout that defines \
+                 .orbit/routines/*.yaml",
+                report.machine_name
+            ),
+        });
         for status in &report.statuses {
             let last_fire = status
                 .last_fire

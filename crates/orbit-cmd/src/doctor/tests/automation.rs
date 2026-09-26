@@ -271,6 +271,74 @@ fn automation_consumer_check_passes_without_any_stalled_consumer() {
 }
 
 #[test]
+fn auto_task_artifact_summary_counts_missing_and_stale_defaults_in_one_population() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let global_root = temp.path().join("global");
+    let workspace_root = temp.path().join("repo/.orbit");
+    let runtime = OrbitRuntime::initialize_from_resolved_roots(
+        OrbitRuntimeRoots {
+            global_root: global_root.clone(),
+            shared_root: workspace_root.clone(),
+            local_root: workspace_root.clone(),
+        },
+        None,
+    )
+    .expect("initialize runtime with shipped auto-tasks");
+    orbit_core::reconcile_workspace_managed_artifacts(
+        &global_root,
+        &workspace_root,
+        None,
+        "main",
+        false,
+    )
+    .expect("seed workspace auto-tasks");
+    let auto_tasks_dir = workspace_root.join("auto_tasks");
+
+    for name in ["backlog-hygiene", "doc-duties", "run-failure-patterns"] {
+        fs::remove_file(auto_tasks_dir.join(format!("{name}.yaml")))
+            .expect("remove shipped default");
+    }
+
+    let mut manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(auto_tasks_dir.join(".orbit-managed-assets.json"))
+            .expect("read auto-task managed manifest"),
+    )
+    .expect("parse auto-task managed manifest");
+    for name in [
+        "delivery-code-review",
+        "delivery-qa",
+        "code-review",
+        "friction-curation",
+        "qa-sweep",
+        "security-review",
+    ] {
+        let path = auto_tasks_dir.join(format!("{name}.yaml"));
+        let current = fs::read_to_string(&path).expect("read shipped auto-task");
+        let stale = format!("{current}\n# stale test fixture\n");
+        fs::write(&path, &stale).expect("write stale shipped auto-task");
+        manifest["assets"][name] =
+            serde_json::Value::String(format!("{:x}", Sha256::digest(stale.as_bytes())));
+    }
+    fs::write(
+        auto_tasks_dir.join(".orbit-managed-assets.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("serialize managed manifest")
+        ),
+    )
+    .expect("record stale copies as managed");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "artifacts-auto-tasks");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Error, "{row:?}");
+    assert!(
+        row.message
+            .contains("9 of 9 auto-tasks need attention (3 missing, 6 stale)"),
+        "{row:?}"
+    );
+}
+
+#[test]
 fn tracked_orbit_files_skips_without_git() {
     let temp = tempfile::tempdir().expect("temp dir");
     let runtime = workspace_runtime(&temp);
