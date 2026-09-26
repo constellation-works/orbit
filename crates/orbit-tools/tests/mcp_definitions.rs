@@ -69,6 +69,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.drain.receipt.lookup",
             "orbit.friction.add",
             "orbit.friction.list",
+            "orbit.friction.rehome",
             "orbit.friction.update",
             "orbit.search",
             "orbit.task.add",

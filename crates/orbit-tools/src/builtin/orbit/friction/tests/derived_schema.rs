@@ -158,7 +158,10 @@ fn update_schema_keeps_its_spelled_out_id_description() {
         .iter()
         .map(|param| param.name.as_str())
         .collect();
-    assert_eq!(params, vec!["id", "status", "tags", "body", "title"]);
+    assert_eq!(
+        params,
+        vec!["id", "status", "tags", "body", "rehome_to", "title"]
+    );
     assert_eq!(
         schema.parameters[0].description,
         "Friction record ID, e.g. FYYYY-MM-NNN"
@@ -195,6 +198,7 @@ fn registration_reproduces_the_shipped_mcp_surface() {
         vec![
             "orbit.friction.add",
             "orbit.friction.list",
+            "orbit.friction.rehome",
             "orbit.friction.update",
         ],
         "show, tags, stats, and resolve stay off the MCP surface"
