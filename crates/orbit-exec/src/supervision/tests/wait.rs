@@ -114,6 +114,43 @@ fn concurrent_supervised_sleeps_overlap() {
     );
 }
 
+/// A backend that exits before reading its stdin (missing interpreter, empty
+/// shim, launcher error) closes the pipe out from under the writer thread,
+/// which observes EPIPE. That must be reported like any other non-zero exit
+/// — exit status plus stderr tail — not surfaced as a bare "Broken pipe" I/O
+/// error (ORB-13029: hit twice in the pulsar packaging spike).
+#[cfg(unix)]
+#[test]
+fn stdin_broken_pipe_reports_exit_status_and_stderr() {
+    // Larger than a pipe's kernel buffer (typically 64 KiB on Linux) so
+    // `write_all` is still blocked on buffer space when the child exits,
+    // reliably observing EPIPE instead of racing a write that already fully
+    // buffered before the child closed its end.
+    let payload = vec![b'x'; 4 * 1024 * 1024];
+    let req = ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec![
+            "-c".to_string(),
+            "echo boom-stderr-tail >&2; exit 3".to_string(),
+        ],
+        current_dir: None,
+        timeout_ms: Some(5_000),
+        stdin_mode: StdinMode::Bytes(payload.clone()),
+        environment_mode: EnvironmentMode::Inherit,
+        debug: false,
+    };
+    let child = crate::process::spawn(&req).expect("spawn child");
+
+    let result =
+        wait_with_timeout_and_output_limit(child, Some(5_000), false, Some(payload), 64 * 1024)
+            .expect("wait");
+
+    assert!(!result.exit_success);
+    assert_eq!(result.exit_code, Some(3));
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("boom-stderr-tail"), "stderr was {stderr:?}");
+}
+
 #[cfg(unix)]
 fn supervise_sleep(seconds: &str) -> Result<WaitResult, orbit_common::OrbitError> {
     let req = ExecRequest {

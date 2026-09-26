@@ -15,7 +15,7 @@ use super::tee::{output_capture_limit, spawn_stderr_drain, spawn_stdin_write, sp
 
 pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-type StdinResultReceiver = Receiver<Result<(), String>>;
+type StdinResultReceiver = Receiver<std::io::Result<()>>;
 type StdinWorker = (Option<StdinResultReceiver>, Option<JoinHandle<()>>);
 
 /// Output collected from a spawned process.
@@ -87,9 +87,19 @@ pub(super) fn wait_with_timeout_and_output_limit(
         if let Some(rx) = stdin_result_rx.as_ref() {
             match rx.try_recv() {
                 Ok(Ok(())) => {}
-                Ok(Err(message)) => {
+                // A backend that exits before consuming the request envelope
+                // (missing interpreter, empty shim, launcher error) closes its
+                // stdin pipe; the writer then observes EPIPE. That is not a
+                // supervisor-side failure, so fall through instead of
+                // terminating: the wait loop below reaps the child's real
+                // exit status and stderr tail, matching the non-zero-exit
+                // diagnostic instead of a bare "Broken pipe" error.
+                Ok(Err(err)) if err.kind() == std::io::ErrorKind::BrokenPipe => {}
+                Ok(Err(err)) => {
                     terminate_process_group(&mut child, termination_signal(), WAIT_POLL_INTERVAL)?;
-                    stdin_write_error = Some(OrbitError::Execution(message));
+                    stdin_write_error = Some(OrbitError::Execution(format!(
+                        "failed to write process stdin: {err}"
+                    )));
                     break (false, None, false, None);
                 }
                 Err(TryRecvError::Empty) => {}
@@ -164,9 +174,16 @@ pub(super) fn wait_with_timeout_and_output_limit(
     }
     if !timed_out
         && interrupted_signal.is_none()
-        && let Some(result) = receive_stdin_result(stdin_result_rx)
+        && let Some(Err(err)) = receive_stdin_result(stdin_result_rx)
+        && err.kind() != std::io::ErrorKind::BrokenPipe
     {
-        result.map_err(OrbitError::Execution)?;
+        // A BrokenPipe here means the write raced the child's own exit and
+        // observed EPIPE only after `wait_timeout` above already reaped the
+        // real exit status; treat it the same as the in-loop EPIPE case and
+        // let the already-captured exit status and stderr tail stand.
+        return Err(OrbitError::Execution(format!(
+            "failed to write process stdin: {err}"
+        )));
     }
 
     if timed_out {
@@ -225,6 +242,6 @@ fn spawn_stdin_thread(
 
 fn receive_stdin_result(
     stdin_result_rx: Option<StdinResultReceiver>,
-) -> Option<Result<(), String>> {
+) -> Option<std::io::Result<()>> {
     stdin_result_rx.and_then(|rx| rx.recv().ok())
 }
