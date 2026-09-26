@@ -56,6 +56,9 @@ pub struct TaskActivityUpdate {
     pub note: Option<String>,
     pub agent: Option<String>,
     pub model: Option<String>,
+    /// Trusted completion activity's owning run, exempted while that run
+    /// performs its own final transition. Its recorded children are not exempt.
+    pub calling_run_id: Option<String>,
 }
 
 /// Task requirements and the resulting activity allowlist fixed at admission.

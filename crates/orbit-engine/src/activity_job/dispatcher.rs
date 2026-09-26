@@ -142,6 +142,12 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// Completion cannot overtake a task's verified-live implementation run.
+    #[error(
+        "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
+    )]
+    TaskCompletionLiveRun { task_id: String, run_id: String },
+
     #[error("agent_loop run failed: {0}")]
     AgentLoopFailed(String),
 
@@ -240,6 +246,7 @@ impl DispatchError {
                 | DispatchError::CliInvocationPermanent(_)
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict { .. }
+                | DispatchError::TaskCompletionLiveRun { .. }
         )
     }
 
@@ -263,8 +270,9 @@ impl DispatchError {
 /// Validation failures keep their dedicated [`OrbitError::JobValidation`]
 /// variant — including [`DispatchError::DeterministicActionUnavailable`],
 /// which is raised by the same pre-execution validation pass [ORB-10385].
-/// Everything else collapses into [`OrbitError::InvalidInput`] with the
-/// dispatch error's rendered message. Callers translate with
+/// The live-completion refusal also retains its typed code and run identity.
+/// Other errors collapse into [`OrbitError::InvalidInput`] with the dispatch
+/// error's rendered message. Callers translate with
 /// `.map_err(dispatch_error_to_orbit)?` per
 /// `docs/design-patterns/error_translation.md` [ORB-10013].
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
@@ -286,6 +294,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
             conflicting_paths,
             diagnostic,
         })),
+        DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
+            OrbitError::TaskCompletionLiveRun { task_id, run_id }
+        }
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
@@ -460,6 +471,9 @@ fn run_deterministic(
                         conflicting_paths: conflict.conflicting_paths,
                         diagnostic: conflict.diagnostic,
                     }
+                }
+                OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
+                    DispatchError::TaskCompletionLiveRun { task_id, run_id }
                 }
                 error => DispatchError::DeterministicActionFailed {
                     action: spec.action.clone(),

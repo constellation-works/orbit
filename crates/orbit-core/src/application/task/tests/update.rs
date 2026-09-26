@@ -165,6 +165,7 @@ fn stale_activity_status_write_cannot_overwrite_operator_reclassification() {
                 note: Some("late completion".to_string()),
                 agent: Some("codex".to_string()),
                 model: None,
+                calling_run_id: None,
             },
         )
         .expect_err("stale activity must lose to the operator");

@@ -91,6 +91,7 @@ fn error_code(error: &OrbitError) -> &str {
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => "capability_refused",
         OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
         OrbitError::JobValidation(_) => "job_validation_failed",

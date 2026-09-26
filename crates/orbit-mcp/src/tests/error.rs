@@ -159,6 +159,30 @@ fn ship_run_in_flight_has_a_stable_code_and_names_both_ids() {
     );
 }
 
+#[test]
+fn live_completion_run_has_a_stable_code_and_names_the_owner() {
+    let error = OrbitError::TaskCompletionLiveRun {
+        task_id: "TST-00001".to_string(),
+        run_id: "jrun-still-running".to_string(),
+    };
+    let payload = error_payload(&error);
+
+    assert_eq!(payload["code"], "task_completion_live_run");
+    assert_eq!(payload["task_id"], "TST-00001");
+    assert_eq!(payload["run_id"], "jrun-still-running");
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("jrun-still-running"))
+    );
+    assert_eq!(
+        tool_error_result(&error)
+            .structured_content
+            .expect("structured error payload")["code"],
+        "task_completion_live_run"
+    );
+}
+
 /// The MCP projection of a duplicate resume names the live run under the same
 /// `resume_run_in_flight` code and `run_id` field the dashboard's 409 carries.
 #[test]

@@ -14,7 +14,9 @@ use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
     crew_assigned_history, describe_optional_field_value,
 };
-use super::lifecycle::{FORCED_STATUS_EVENT, ensure_status_change_allowed};
+use super::lifecycle::{
+    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_status_change_allowed,
+};
 use super::params::TaskUpdateParams;
 use super::paths::{
     canonicalize_context_files_for_read, context_workspace_root, normalize_context_files_for_write,
@@ -47,6 +49,7 @@ struct TaskUpdateContext {
     artifact_owner: Option<String>,
     expected_status: Option<TaskStatus>,
     status_authority: StatusAuthority,
+    calling_run_id: Option<String>,
 }
 
 pub(super) struct ValidatedTaskFieldEdits {
@@ -176,6 +179,7 @@ impl OrbitRuntime {
             note,
             agent,
             model,
+            calling_run_id,
         } = update;
         self.update_task_with_context(
             id,
@@ -191,6 +195,7 @@ impl OrbitRuntime {
                 agent,
                 model,
                 expected_status: Some(expected_status),
+                calling_run_id,
                 ..Default::default()
             },
         )
@@ -250,6 +255,7 @@ impl OrbitRuntime {
             artifact_owner,
             expected_status,
             status_authority,
+            calling_run_id,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
             Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
@@ -265,6 +271,16 @@ impl OrbitRuntime {
             )));
         }
         let requested_status = params.status.filter(|status| *status != task.status);
+        if requested_status == Some(TaskStatus::Done)
+            && status_authority != StatusAuthority::Lifecycle
+        {
+            ensure_completion_run_stopped(
+                self,
+                &task,
+                params.job_run_id.as_ref().and_then(|id| id.as_deref()),
+                calling_run_id.as_deref(),
+            )?;
+        }
         let status_note = status_note
             .as_deref()
             .map(str::trim)

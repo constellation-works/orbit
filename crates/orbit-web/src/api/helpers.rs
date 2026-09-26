@@ -208,6 +208,16 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
     match e {
         orbit_core::OrbitError::InvalidInput(msg) => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
+        orbit_core::OrbitError::TaskCompletionLiveRun { task_id, run_id } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!("task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"),
+                "code": "task_completion_live_run",
+                "task_id": task_id,
+                "run_id": run_id,
+            })),
+        )
+            .into_response(),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Task,
             id,

@@ -8,7 +8,7 @@ use std::fs;
 use std::process::Command;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskStatus};
+use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -18,6 +18,7 @@ use super::test_support::{
     PR_MERGE_CAPABILITIES_OPERATION, PR_MERGE_OPERATION, PR_STATUS_OPERATION, PUSH_OPERATION,
     PrOpenTestHost, git, rebase_conflict_pr_workspace, review_batch_task,
 };
+use crate::context::{RuntimeHost, TaskActivityUpdate};
 
 fn host(tasks: Vec<orbit_types::task::Task>) -> (tempfile::TempDir, PrOpenTestHost) {
     let root = tempdir().expect("create tempdir");
@@ -669,6 +670,7 @@ fn completion_records_authorization_provenance_and_keeps_ship_attribution() {
     let (task_id, update) = updates.last().expect("a completion update was applied");
     assert_eq!(task_id, "T1");
     assert_eq!(update.status, TaskStatus::Done);
+    assert_eq!(update.calling_run_id.as_deref(), Some("batch-1"));
     let note = update.note.as_deref().expect("provenance note");
     assert!(note.contains("operator-jane"), "note: {note}");
     assert!(note.contains("batch-1"), "note must name the run: {note}");
@@ -706,6 +708,41 @@ fn completion_refuses_any_task_that_is_not_in_review() {
         );
         assert_eq!(host.task_status("T1"), status);
     }
+}
+
+#[test]
+fn automation_completion_preserves_the_live_implementation_run_error() {
+    struct LiveRunHost(Task);
+
+    impl RuntimeHost for LiveRunHost {
+        fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+            assert_eq!(task_id, self.0.id);
+            Ok(self.0.clone())
+        }
+
+        fn update_task_from_activity(
+            &self,
+            task_id: &str,
+            update: TaskActivityUpdate,
+        ) -> Result<Task, OrbitError> {
+            assert_eq!(task_id, self.0.id);
+            assert_eq!(update.calling_run_id.as_deref(), Some("batch-1"));
+            Err(OrbitError::TaskCompletionLiveRun {
+                task_id: task_id.to_string(),
+                run_id: "jrun-implementation".to_string(),
+            })
+        }
+    }
+
+    let host = LiveRunHost(review_batch_task("T1", None, None));
+    let error = task_complete(&host, &json!({"job_run_id": "batch-1", "task_id": "T1"}))
+        .expect_err("automation completion must preserve the live run refusal");
+    assert!(matches!(
+        error,
+        OrbitError::TaskCompletionLiveRun { task_id, run_id }
+            if task_id == "T1" && run_id == "jrun-implementation"
+    ));
+    assert_eq!(host.0.status, TaskStatus::Review);
 }
 
 /// Completion is idempotent, so a resumed run does not fail on work it already

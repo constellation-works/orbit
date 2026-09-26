@@ -74,6 +74,7 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
                 note: Some(authorization.to_string()),
                 agent: None,
                 model: super::super::vcs::ship_done_attribution(&task),
+                calling_run_id: Some(run_id.to_string()),
             },
         )?;
         completed_task_ids.push(task_id.clone());

@@ -221,6 +221,15 @@ impl RuntimeHost for OrbitRuntime {
         update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
         if self.worker_invocation().is_some() {
+            if update.status == TaskStatus::Done {
+                let task = self.get_task(task_id)?;
+                crate::application::task::ensure_completion_run_stopped(
+                    self,
+                    &task,
+                    None,
+                    update.calling_run_id.as_deref(),
+                )?;
+            }
             self.route_worker_tool("orbit.task.update", serde_json::json!({
                 "id": task_id,
                 "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {

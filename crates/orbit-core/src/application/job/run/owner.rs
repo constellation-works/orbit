@@ -383,6 +383,19 @@ pub(super) fn classify_run_owner(run: &JobRun) -> OwnerIdentity {
     )
 }
 
+/// Completion only blocks on a running run whose recorded PID and start-time
+/// token identify the process still executing it. An unknown or unverified owner
+/// is not proof that this particular implementation is alive.
+#[cfg(unix)]
+pub(crate) fn running_run_has_verified_owner(run: &JobRun) -> bool {
+    run.state == JobRunState::Running && classify_run_owner(run) == OwnerIdentity::Verified
+}
+
+#[cfg(not(unix))]
+pub(crate) fn running_run_has_verified_owner(_run: &JobRun) -> bool {
+    false
+}
+
 #[cfg(all(not(test), unix))]
 fn start_identity_probe(pid: u32) -> ProbeOutcome {
     probe_process_start_identity(pid)
@@ -608,7 +621,7 @@ thread_local! {
 /// fixtures only need a verified owner so the signalling path they assert on
 /// is reached, and the macOS agent-executor sandbox denies `ps` outright.
 #[cfg(all(test, unix))]
-pub(super) fn override_start_identity_probe(
+pub(crate) fn override_start_identity_probe(
     probe: impl Fn(u32) -> ProbeOutcome + 'static,
 ) -> StartIdentityProbeOverride {
     START_IDENTITY_PROBE_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(Rc::new(probe)));
@@ -617,7 +630,7 @@ pub(super) fn override_start_identity_probe(
 
 /// Guard returned by [`override_start_identity_probe`]; restores the real probe.
 #[cfg(all(test, unix))]
-pub(super) struct StartIdentityProbeOverride;
+pub(crate) struct StartIdentityProbeOverride;
 
 #[cfg(all(test, unix))]
 impl Drop for StartIdentityProbeOverride {

@@ -514,6 +514,7 @@ fn activity_update_comment_records_comment_as_system() {
                 note: Some("automation start".to_string()),
                 agent: None,
                 model: None,
+                calling_run_id: None,
             },
         )
         .expect("activity update");

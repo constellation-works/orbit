@@ -41,6 +41,9 @@ pub use admissions_stop::{
 };
 #[cfg(test)]
 pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
+#[cfg(all(test, unix))]
+pub(crate) use owner::override_start_identity_probe;
+pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
     ActivityInvocationEvidence, job_run_to_json, job_run_to_json_with_activity_provenance,
