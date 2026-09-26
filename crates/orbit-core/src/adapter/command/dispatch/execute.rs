@@ -177,9 +177,9 @@ fn authorize_plugin_tool(
         ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
         ToolEntryPoint::Cli => CallerEnvelope::from_process_env(session_context),
     };
-    let caller = CallerCapabilities::resolve(&envelope);
-    authorize(governed_plugin_tool(mutating), &caller)
-        .map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))
+    let operation = governed_plugin_tool(mutating);
+    let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);
+    authorize(operation, &caller).map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))
 }
 
 /// Mark that the runtime has already persisted an audit row for the current

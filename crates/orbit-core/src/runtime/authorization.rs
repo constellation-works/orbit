@@ -157,7 +157,7 @@ impl OrbitRuntime {
         operation: &'static GovernedOperation,
         envelope: CallerEnvelope,
     ) -> Result<(), OrbitError> {
-        let caller = CallerCapabilities::resolve(&envelope);
+        let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);
 
         match authorize(operation, &caller) {
             Ok(()) => {
