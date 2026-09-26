@@ -17,7 +17,7 @@
 //! atomic-write, and YAML mechanics live in narrowly named filesystem modules.
 //!
 //! # Role
-//! Depends only on `orbit-common`. Consumed by `orbit-core`, `orbit-engine`,
+//! Depends on `orbit-common` and `orbit-types`. Consumed by `orbit-core`, `orbit-engine`,
 //! and `orbit-cmd`.
 //!
 //! # Key exports
@@ -33,7 +33,7 @@
 //! - [`validate_instance_against_schema`] — JSON Schema validation for activity I/O
 //!
 //! # Dependency direction
-//! `orbit-common` ← `orbit-store` ← consumers such as orbit-core and orbit-engine
+//! `orbit-common` / `orbit-types` ← `orbit-store` ← consumers such as orbit-core and orbit-engine
 
 pub mod compose;
 pub mod contracts;

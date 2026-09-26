@@ -72,9 +72,8 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
 The live translator additionally preserves `DispatchError::RecoverableVcsConflict`
 as `OrbitError::RecoverableVcsConflict`.
 
-Other live translators in the same shape are `selector_error_to_orbit`
-(`orbit-common::fs::selector`) and `rpc_error_to_orbit`
-(`orbit-search::rpc`).
+For the current set of boundary translators and their owning crates, see the
+registry in [`scripts/check-error-translation.sh`](../../scripts/check-error-translation.sh).
 
 Patterns to copy:
 

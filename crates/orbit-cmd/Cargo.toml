@@ -37,4 +37,4 @@ libc.workspace = true
 [dev-dependencies]
 rsa.workspace = true
 sha2.workspace = true
-tempfile = "3"
+tempfile.workspace = true

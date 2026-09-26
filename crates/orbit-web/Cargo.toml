@@ -37,6 +37,6 @@ libc.workspace = true
 # Substitute pipeline worker for tests that submit runs [ORB-12902].
 orbit-core = { path = "../orbit-core", features = ["test-support"] }
 serde_yaml.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber.workspace = true
