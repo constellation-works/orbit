@@ -2289,42 +2289,11 @@ fn worktree_backed_activity_routes_task_and_search_by_advertised_workspace_argum
 
     // A task authored through the checkout-local CLI surface. Before the fix,
     // MCP looked for it under the logical ID and found an empty partition.
-    let add_input = json!({
-        "title": "Worktree routing regression",
-        "description": "Authored via the CLI fallback",
-        "workspace": workspace.work.to_str().expect("utf8 checkout path"),
-        "complexity": "low",
-        "model": "codex",
-    })
-    .to_string();
-    let output = orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
-            "tool",
-            "run",
-            "orbit.task.add",
-            "--input",
-            &add_input,
-        ]),
-    );
-    assert!(output.status.success());
-    let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
-    let task_id = created["id"].as_str().expect("task id").to_string();
-
-    let worktree = add_linked_worktree(&workspace.work);
+    let (task_id, worktree) = worktree_task_fixture(&workspace, "Worktree routing regression");
 
     // The executor's client: no `_meta.orbit.workspace`, cwd inside the linked
     // worktree.
-    let child = McpWorkspace::orbit_command(&worktree, &workspace.home)
-        .args(["mcp", "serve"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn worktree-backed MCP server");
-    let (mut client, _) = McpClient::initialized(
-        child,
-        McpClient::initialize_params("managed-executor", None),
-    );
+    let mut client = spawn_unbound_worktree_server(&workspace, &worktree, None);
 
     // Every workspace-scoped tool must advertise the selector it requires.
     let listed = client.request("tools/list", Value::Null);
@@ -2857,11 +2826,10 @@ fn managed_mcp_config_routes_a_linked_worktree_by_its_logical_workspace_id() {
 #[test]
 fn managed_mcp_env_binding_updates_without_a_workspace_argument() {
     let workspace = McpWorkspace::init();
-    let task_id = author_task(&workspace, "Managed envelope MCP routing");
-    let worktree = add_linked_worktree(&workspace.work);
+    let (task_id, worktree) = worktree_task_fixture(&workspace, "Managed envelope MCP routing");
     write_shadow_worktree_identity(&worktree);
 
-    let mut client = spawn_managed_env_server(&workspace, &worktree, "ws_mcp-roundtrip");
+    let mut client = spawn_unbound_worktree_server(&workspace, &worktree, Some("ws_mcp-roundtrip"));
 
     let listed = client.request("tools/list", Value::Null);
     let description = tool_workspace_description(&listed, "orbit_task_update");
@@ -3143,6 +3111,14 @@ fn author_task(workspace: &McpWorkspace, title: &str) -> String {
     created["id"].as_str().expect("task id").to_string()
 }
 
+/// The two binding modes share a task authored in the checkout and a linked
+/// worktree, but configure their registry and runtime identity independently.
+fn worktree_task_fixture(workspace: &McpWorkspace, title: &str) -> (String, PathBuf) {
+    let task_id = author_task(workspace, title);
+    let worktree = add_linked_worktree(&workspace.work);
+    (task_id, worktree)
+}
+
 /// Run the operator-facing bootstrap (`orbit workspace init --mcp`) and return
 /// the exact argv the integration it generated launches Orbit with.
 fn generate_managed_mcp_config(workspace: &McpWorkspace) -> Vec<String> {
@@ -3223,17 +3199,28 @@ fn cli_task_execution_summary(workspace: &McpWorkspace, cwd: &Path, task_id: &st
         .to_string()
 }
 
-fn spawn_managed_env_server(workspace: &McpWorkspace, cwd: &Path, selector: &str) -> McpClient {
-    let child = McpWorkspace::orbit_command(cwd, &workspace.home)
-        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
-        .env("ORBIT_RUN_ID", "jrun-managed-mcp")
-        .env("ORBIT_WORKSPACE", selector)
+/// Launch from a linked worktree with a client that sends no initialize
+/// workspace metadata. `managed_selector` supplies the trusted run envelope
+/// only for the managed-binding case.
+fn spawn_unbound_worktree_server(
+    workspace: &McpWorkspace,
+    cwd: &Path,
+    managed_selector: Option<&str>,
+) -> McpClient {
+    let mut command = McpWorkspace::orbit_command(cwd, &workspace.home);
+    if let Some(selector) = managed_selector {
+        command
+            .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+            .env("ORBIT_RUN_ID", "jrun-managed-mcp")
+            .env("ORBIT_WORKSPACE", selector);
+    }
+    let child = command
         .args(["mcp", "serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn managed-envelope MCP server");
+        .expect("spawn worktree-backed MCP server");
     let (client, _) = McpClient::initialized(
         child,
         McpClient::initialize_params("managed-executor", None),
