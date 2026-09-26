@@ -1,34 +1,27 @@
-//! The host-signal probe reads logind's schedule file [ORB-12968]. Every case
-//! here points the probe at a fixture file, never at the real `/run`.
+//! The host-signal probe reads logind's schedule file [ORB-12968]. These
+//! tests supply read results directly, never accessing the real `/run`.
+
+use std::io;
 
 use chrono::{TimeZone, Utc};
 
 use crate::runtime::host_signal::{
-    FixedHostSignals, HostSignalProbe, SystemdScheduledShutdownProbe, default_host_signal_probe,
-    parse_systemd_schedule,
+    FixedHostSignals, HostSignalProbe, SYSTEMD_SCHEDULED_SHUTDOWN_PATH, default_host_signal_probe,
+    parse_systemd_schedule, scheduled_shutdown_from_read,
 };
 
 /// 2026-09-25T04:00:00Z in microseconds since the epoch, as `shutdown -r
 /// 04:00` records it.
 const REBOOT_AT_USEC: &str = "1790308800000000";
 
-fn probe_over(contents: Option<&str>) -> (tempfile::TempDir, SystemdScheduledShutdownProbe) {
-    let root = tempfile::tempdir().expect("root");
-    let path = root.path().join("scheduled");
-    if let Some(contents) = contents {
-        std::fs::write(&path, contents).expect("schedule fixture");
-    }
-    let probe = SystemdScheduledShutdownProbe::at_path(&path);
-    (root, probe)
-}
-
 #[test]
 fn a_logind_schedule_file_reports_its_mode_and_time() {
-    let (_root, probe) = probe_over(Some(&format!(
+    let shutdown = scheduled_shutdown_from_read(Ok(format!(
         "USEC={REBOOT_AT_USEC}\nWARN_WALL=1\nMODE=reboot\nUID=0\n"
-    )));
-    let shutdown = probe.scheduled_shutdown().expect("a scheduled reboot");
+    )))
+    .expect("a scheduled reboot");
     assert_eq!(shutdown.mode, "reboot");
+    assert_eq!(shutdown.source, SYSTEMD_SCHEDULED_SHUTDOWN_PATH);
     assert_eq!(
         shutdown.scheduled_at,
         Utc.with_ymd_and_hms(2026, 9, 25, 4, 0, 0)
@@ -43,8 +36,12 @@ fn a_logind_schedule_file_reports_its_mode_and_time() {
 
 #[test]
 fn no_schedule_file_means_nothing_is_scheduled() {
-    let (_root, probe) = probe_over(None);
-    assert!(probe.scheduled_shutdown().is_none());
+    assert!(scheduled_shutdown_from_read(Err(io::ErrorKind::NotFound.into())).is_none());
+}
+
+#[test]
+fn unreadable_schedule_file_holds_nothing() {
+    assert!(scheduled_shutdown_from_read(Err(io::ErrorKind::PermissionDenied.into())).is_none());
 }
 
 #[test]
@@ -56,10 +53,7 @@ fn a_dry_run_or_malformed_schedule_holds_nothing() {
         format!("USEC={REBOOT_AT_USEC}\n"),
         String::new(),
     ] {
-        assert!(
-            parse_systemd_schedule(&contents, "fixture").is_none(),
-            "{contents:?} is not a pending shutdown"
-        );
+        assert!(scheduled_shutdown_from_read(Ok(contents)).is_none());
     }
 }
 
