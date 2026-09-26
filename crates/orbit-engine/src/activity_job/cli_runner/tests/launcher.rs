@@ -3,8 +3,8 @@
 use tempfile::tempdir;
 
 use super::super::launcher::{
-    SUPPORTED_SYSTEM_BIN_DIRS, locate_provider_launcher, orbit_tool_env_with,
-    resolve_provider_launcher_with, resolve_provider_launcher_with_extra_dirs,
+    MissingLauncher, SUPPORTED_SYSTEM_BIN_DIRS, locate_provider_launcher, missing_launcher_in,
+    orbit_tool_env_with, resolve_provider_launcher_with, resolve_provider_launcher_with_extra_dirs,
 };
 use super::test_support::write_executable;
 
@@ -470,4 +470,46 @@ fn non_executable_homebrew_style_file_is_skipped_and_absent_launcher_stays_perma
         "error should stay a missing-launcher diagnostic: {}",
         error.message
     );
+}
+
+/// A task blocked by a missing launcher is re-checked from the text its
+/// history recorded, which wraps the resolver's error in the dispatch and
+/// workflow-note prefixes. The parser must recover the program from that real
+/// error, and must not claim an unrelated failure.
+#[test]
+fn missing_launcher_is_recovered_from_the_recorded_dispatch_error() {
+    let temp = tempdir().expect("tempdir");
+    let fake_path = temp.path().join("system-bin");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&fake_path).expect("create fake PATH");
+    std::fs::create_dir_all(&home).expect("create fake HOME");
+    let error = resolve_provider_launcher_with(
+        "codex",
+        "codex",
+        Some(fake_path.as_os_str()),
+        Some(&home),
+        None,
+    )
+    .expect_err("missing launcher must fail");
+    let recorded = format!(
+        "workflow run failed: job=task_pr_pipeline, run_id=jrun-1, error_code=-, \
+         error=execution failed: v2 job dispatch: cli invocation failed (permanent): {}",
+        error.message
+    );
+
+    assert_eq!(
+        missing_launcher_in(&recorded),
+        Some(MissingLauncher {
+            program: "codex".to_string(),
+            provider: "codex".to_string(),
+        })
+    );
+    for unrelated in [
+        "workflow run failed: job=task_pr_pipeline, run_id=jrun-1, error_code=STEP_FAILED, \
+         error=step `implement_one` completed with success=false",
+        "provider launcher `codex` for provider `codex` was found",
+        "provider launcher `` for provider `codex` was not found",
+    ] {
+        assert_eq!(missing_launcher_in(unrelated), None, "{unrelated}");
+    }
 }

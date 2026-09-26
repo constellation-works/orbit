@@ -335,6 +335,7 @@ impl Commands {
                             ("publication-restore", Some("workspace"), None)
                         }
                     },
+                    TaskSubcommand::RecheckBlocked(_) => ("recheck-blocked", None, None),
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };
                 let task_owner_id = match &command.command {
@@ -356,6 +357,7 @@ impl Commands {
                     },
                     TaskSubcommand::List(_) | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
                     TaskSubcommand::Lint(args) if !args.restore_pruned => RuntimeNeed::ReadOnly,
+                    TaskSubcommand::RecheckBlocked(args) if !args.confirm => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its
                     // binding: only a read addressed by a globally unique ID can
                     // be routed from the ID alone.

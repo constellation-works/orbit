@@ -21,5 +21,5 @@ mod tests;
 #[cfg(test)]
 pub(super) use envelope::cli_agent_envelope_json;
 pub(super) use envelope::task_id_from_input;
-pub use launcher::locate_provider_launcher;
+pub use launcher::{MissingLauncher, locate_provider_launcher, missing_launcher_in};
 pub use orchestrator::run_cli_backend;

@@ -638,3 +638,105 @@ fn an_explicitly_restarted_blocked_task_is_admissible_again() {
         .expect("an explicitly restarted task is admissible");
     assert_eq!(admitted.status, TaskStatus::InProgress);
 }
+
+/// The error a dispatch records when the provider launcher is missing, in the
+/// shape the incident's blocked tasks carry: the dispatch prefix, then the
+/// resolver's own message (whose format the engine's launcher tests pin).
+fn missing_launcher_error(program: &str) -> String {
+    format!(
+        "execution failed: v2 job dispatch: cli invocation failed (permanent): provider \
+         launcher `{program}` for provider `codex` was not found; searched: /usr/bin/codex"
+    )
+}
+
+/// Block `task_id` through real run terminalization, with `message` as the
+/// failing step's error.
+fn block_by_failed_run(runtime: &OrbitRuntime, task_id: &str, message: &str) -> String {
+    let run = insert_running_pipeline_run(runtime);
+    couple_task(runtime, task_id, &run.run_id, TaskStatus::InProgress);
+    record_failing_step_with_message(runtime, &run.run_id, message);
+    assert!(finalize_failed(runtime, &run.run_id));
+    run.run_id
+}
+
+/// A run that failed because the provider launcher was missing leaves a task
+/// the operator can find as infra-blocked; a task-level failure beside it does
+/// not qualify, so re-checks can never requeue it.
+#[test]
+fn a_missing_launcher_block_is_classified_as_infra_and_a_task_failure_is_not() {
+    let (root, runtime, repo_root) = test_runtime();
+    let missing = root.path().join("not-installed/codex");
+    let infra_id = create_backlog_task(&runtime, &repo_root, "launcher");
+    let task_failure_id = create_backlog_task(&runtime, &repo_root, "task failure");
+    let run_id = block_by_failed_run(
+        &runtime,
+        &infra_id,
+        &missing_launcher_error(&missing.display().to_string()),
+    );
+    block_by_failed_run(&runtime, &task_failure_id, FAILING_STEP_MESSAGE);
+
+    let infra = runtime.infra_blocked_tasks().expect("classify blocks");
+
+    assert_eq!(infra.len(), 1, "{infra:?}");
+    let blocked = &infra[0];
+    assert_eq!(blocked.task_id, infra_id);
+    assert_eq!(blocked.program, missing.display().to_string());
+    assert_eq!(blocked.provider, "codex");
+    assert_eq!(blocked.run_id.as_deref(), Some(run_id.as_str()));
+    assert_eq!(
+        blocked.launcher, None,
+        "the launcher is still missing, so the condition still reproduces"
+    );
+}
+
+/// Once the launcher is installed the same block reports where dispatch would
+/// now find it — the "condition no longer reproduces" signal.
+#[cfg(unix)]
+#[test]
+fn an_infra_block_reports_where_the_launcher_resolves_once_installed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, runtime, repo_root) = test_runtime();
+    let launcher = root.path().join("bin/codex");
+    let task_id = create_backlog_task(&runtime, &repo_root, "launcher");
+    block_by_failed_run(
+        &runtime,
+        &task_id,
+        &missing_launcher_error(&launcher.display().to_string()),
+    );
+
+    std::fs::create_dir_all(launcher.parent().expect("bin dir")).expect("create bin dir");
+    std::fs::write(&launcher, "#!/bin/sh\nexit 0\n").expect("install launcher");
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+        .expect("make launcher executable");
+
+    let infra = runtime.infra_blocked_tasks().expect("classify blocks");
+    assert_eq!(infra.len(), 1, "{infra:?}");
+    assert_eq!(infra[0].launcher.as_deref(), Some(launcher.as_path()));
+}
+
+/// Only the block the task is in now counts: once an operator re-blocks it for
+/// their own reason, the old launcher failure must not make it requeueable.
+#[test]
+fn a_newer_block_of_another_kind_supersedes_the_launcher_block() {
+    let (root, runtime, repo_root) = test_runtime();
+    let missing = root.path().join("not-installed/codex");
+    let task_id = create_backlog_task(&runtime, &repo_root, "re-blocked");
+    let run_id = block_by_failed_run(
+        &runtime,
+        &task_id,
+        &missing_launcher_error(&missing.display().to_string()),
+    );
+    assert_eq!(runtime.infra_blocked_tasks().expect("classify").len(), 1);
+
+    couple_task(&runtime, &task_id, &run_id, TaskStatus::Backlog);
+    couple_task(&runtime, &task_id, &run_id, TaskStatus::Blocked);
+
+    assert!(
+        runtime
+            .infra_blocked_tasks()
+            .expect("classify after re-block")
+            .is_empty(),
+        "an operator's block is not an infra block"
+    );
+}

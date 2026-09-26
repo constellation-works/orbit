@@ -25,15 +25,47 @@
 //! `in-progress` — a status workflow admission does accept — or moving it back
 //! to backlog with `orbit task update <id> --status backlog`), or resuming the
 //! run that blocked it.
+//!
+//! Some failures are the host's, not the task's: dispatch could not find the
+//! provider launcher. That error is permanent for its run, but installing the
+//! launcher clears it, and nothing else would ever re-evaluate the block.
+//! [`OrbitRuntime::infra_blocked_tasks`] classifies those blocks from the
+//! failure note and re-resolves the launcher now, so `orbit doctor` can report
+//! cleared ones and `orbit task recheck-blocked --confirm` can return them to
+//! backlog. Every other block keeps the human decision described above.
 
+use std::path::PathBuf;
+
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_engine::activity_job::cli_runner::missing_launcher_in;
 use orbit_engine::{
-    RuntimeHost, blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    RuntimeHost, WORKFLOW_RUN_FAILED_EVENT, blocked_workflow_failure_update,
+    blocked_workflow_interruption_update,
 };
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
+
+/// A blocked task whose block was caused by host configuration — its run
+/// failed because dispatch could not find the provider launcher — rather than
+/// by the task's own work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfraBlockedTask {
+    pub task_id: String,
+    pub title: String,
+    /// When the blocking history entry was recorded; identifies the block, so
+    /// a requeue can confirm it is still the one it classified.
+    pub blocked_at: DateTime<Utc>,
+    pub run_id: Option<String>,
+    /// Launcher program named by the failure, as the executor configured it.
+    pub program: String,
+    pub provider: String,
+    /// Where dispatch from this workspace would launch `program` now, or
+    /// `None` while the condition still reproduces.
+    pub launcher: Option<PathBuf>,
+}
 
 /// Terminal run states that strand a coupled task and therefore trigger the
 /// block transition. `Interrupted` is included [ORB-12969]: the run is
@@ -88,7 +120,61 @@ pub(crate) fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<
         .unwrap_or((None, None))
 }
 
+/// The entry that put the task in its current block, when that entry is a
+/// workflow failure naming a missing provider launcher. A later block of any
+/// other kind (an operator's, another run's failure) supersedes it.
+fn launcher_block(history: &[TaskHistoryEntry]) -> Option<(&TaskHistoryEntry, String, String)> {
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))?;
+    if entry.event != WORKFLOW_RUN_FAILED_EVENT {
+        return None;
+    }
+    let missing = missing_launcher_in(entry.note.as_deref()?)?;
+    Some((entry, missing.program, missing.provider))
+}
+
 impl OrbitRuntime {
+    /// Blocked tasks in this workspace whose block is a missing provider
+    /// launcher, each with where that launcher resolves now. Resolution uses
+    /// dispatch's own lookup, from this process's `PATH` and `HOME`.
+    pub fn infra_blocked_tasks(&self) -> Result<Vec<InfraBlockedTask>, OrbitError> {
+        let blocked =
+            self.list_tasks_filtered(Some(TaskStatus::Blocked), None, None, None, None, None)?;
+        let mut infra_blocked = Vec::new();
+        for task in blocked {
+            if let Some(entry) = self.infra_block_of(&task)? {
+                infra_blocked.push(entry);
+            }
+        }
+        Ok(infra_blocked)
+    }
+
+    /// Classify one task's current block; `None` unless it is blocked by a
+    /// missing provider launcher.
+    pub(crate) fn infra_block_of(
+        &self,
+        task: &Task,
+    ) -> Result<Option<InfraBlockedTask>, OrbitError> {
+        if task.status != TaskStatus::Blocked {
+            return Ok(None);
+        }
+        let history = self.get_task_history(&task.id)?;
+        let Some((entry, program, provider)) = launcher_block(&history) else {
+            return Ok(None);
+        };
+        Ok(Some(InfraBlockedTask {
+            task_id: task.id.clone(),
+            title: task.title.clone(),
+            blocked_at: entry.at,
+            run_id: task.job_run_id.clone(),
+            launcher: self.locate_provider_launcher(&program),
+            program,
+            provider,
+        }))
+    }
+
     /// Best-effort variant used from run terminalization: a status-write
     /// failure is logged and swallowed so the run still reaches its terminal
     /// state and releases its reservations/file locks.

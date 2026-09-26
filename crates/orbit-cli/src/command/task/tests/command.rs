@@ -3,11 +3,21 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 use crate::command::task::TaskSubcommand;
 use crate::command::{Cli, Commands};
 
-/// The trimmed `orbit task` surface has 11 subcommands. ORB-10428 returns lock
+/// The trimmed `orbit task` surface has 12 subcommands. ORB-10428 returns lock
 /// administration here.
-const EXPECTED_TASK_SUBCOMMANDS: [&str; 11] = [
-    "add", "artifact", "locks", "list", "show", "lint", "update", "archive", "export", "import",
+const EXPECTED_TASK_SUBCOMMANDS: [&str; 12] = [
+    "add",
+    "artifact",
+    "locks",
+    "list",
+    "show",
+    "lint",
+    "update",
+    "archive",
+    "export",
+    "import",
     "reindex",
+    "recheck-blocked",
 ];
 
 const REMOVED_TASK_SUBCOMMANDS: [&str; 8] = [
@@ -218,4 +228,21 @@ fn task_lint_accepts_sweep_and_restore_forms() {
             Err(err) => err,
         };
     assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn task_recheck_blocked_reports_by_default_and_requeues_only_with_confirm() {
+    for (argv, confirm) in [
+        (vec!["orbit", "task", "recheck-blocked"], false),
+        (vec!["orbit", "task", "recheck-blocked", "--confirm"], true),
+    ] {
+        let cli = Cli::try_parse_from(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+        let Commands::Task(task) = cli.command else {
+            panic!("expected task command");
+        };
+        let TaskSubcommand::RecheckBlocked(args) = task.command else {
+            panic!("expected task recheck-blocked command");
+        };
+        assert_eq!(args.confirm, confirm, "{argv:?}");
+    }
 }

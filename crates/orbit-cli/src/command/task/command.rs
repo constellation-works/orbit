@@ -13,6 +13,7 @@ use super::import::TaskImportArgs;
 use super::lint::TaskLintArgs;
 use super::list::TaskListArgs;
 use super::publication::TaskPublicationCommand;
+use super::recheck_blocked::TaskRecheckBlockedArgs;
 use super::reindex::TaskReindexArgs;
 use super::show::TaskShowArgs;
 use super::update::TaskUpdateArgs;
@@ -40,6 +41,8 @@ Health:
   lint         Lint tasks for context-file and acceptance-criteria problems
   flow         Show filed-vs-closed rates over time — is the backlog draining?
   locks        Inspect, reserve, and release the file locks that gate dispatch
+  recheck-blocked
+               Requeue tasks blocked by a provider launcher that now resolves
 
 Bundles:
   export       Export task bundles to a portable tar.zst archive
@@ -99,6 +102,9 @@ pub enum TaskSubcommand {
     Flow(TaskFlowArgs),
     /// Inspect, reserve, and release task file locks
     Locks(LocksCommand),
+    /// Re-check tasks blocked by a missing provider launcher; `--confirm` returns
+    /// the ones whose launcher now resolves to backlog
+    RecheckBlocked(TaskRecheckBlockedArgs),
     /// Export task bundles to a portable tar.zst archive
     Export(TaskExportArgs),
     /// Import task bundles from a tar.zst archive
@@ -121,6 +127,7 @@ impl Execute for TaskSubcommand {
             TaskSubcommand::Lint(args) => args.execute(runtime),
             TaskSubcommand::Flow(args) => args.execute(runtime),
             TaskSubcommand::Locks(cmd) => cmd.execute(runtime),
+            TaskSubcommand::RecheckBlocked(args) => args.execute(runtime),
             TaskSubcommand::Export(args) => args.execute(runtime),
             TaskSubcommand::Import(args) => args.execute(runtime),
             TaskSubcommand::Publication(command) => command.execute(runtime),

@@ -125,6 +125,85 @@ pub(super) fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> Workspa
     )
 }
 
+/// Blocked tasks whose run failed because dispatch could not find the provider
+/// launcher. Nothing re-evaluates such a block on its own, so a launcher
+/// installed since leaves the task stranded; this row says which blocks no
+/// longer reproduce and names the command that requeues them. Blocks caused
+/// by the task's own work are not listed.
+pub(super) fn doctor_check_infra_blocked_tasks(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let infra_blocked = match runtime.infra_blocked_tasks() {
+        Ok(infra_blocked) => infra_blocked,
+        Err(error) => {
+            return check(
+                "infra-blocked-tasks",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot classify blocked tasks: {error}"),
+            );
+        }
+    };
+    if infra_blocked.is_empty() {
+        return check(
+            "infra-blocked-tasks",
+            WorkspaceDoctorStatus::Ok,
+            "no task is blocked by a missing provider launcher".to_string(),
+        );
+    }
+
+    let (cleared, reproducing): (Vec<_>, Vec<_>) = infra_blocked
+        .iter()
+        .partition(|blocked| blocked.launcher.is_some());
+    let mut clauses = Vec::new();
+    let mut steps = Vec::new();
+    if !cleared.is_empty() {
+        clauses.push(format!(
+            "{} task(s) blocked by a missing provider launcher that now resolves: {}",
+            cleared.len(),
+            cleared
+                .iter()
+                .map(|blocked| format!(
+                    "{} (`{}` at {})",
+                    blocked.task_id,
+                    blocked.program,
+                    blocked
+                        .launcher
+                        .as_deref()
+                        .map_or_else(String::new, |path| path.display().to_string())
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        steps.push(
+            "Run `orbit task recheck-blocked --confirm` to return the cleared tasks to backlog."
+                .to_string(),
+        );
+    }
+    if !reproducing.is_empty() {
+        clauses.push(format!(
+            "{} task(s) blocked by a provider launcher that is still missing: {}",
+            reproducing.len(),
+            reproducing
+                .iter()
+                .map(|blocked| format!(
+                    "{} (`{}` for provider `{}`)",
+                    blocked.task_id, blocked.program, blocked.provider
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        steps.push(
+            "Install the missing launcher where dispatch looks (`orbit doctor providers`), then \
+             run `orbit task recheck-blocked --confirm`."
+                .to_string(),
+        );
+    }
+    actionable_check(
+        "infra-blocked-tasks",
+        WorkspaceDoctorStatus::Warning,
+        clauses.join("; "),
+        steps.join(" "),
+    )
+}
+
 /// Render partitions whose checkout could not be resolved, adding the
 /// filesystem failure that stopped the answer to the usual description.
 pub(super) fn describe_unreachable_partitions(
