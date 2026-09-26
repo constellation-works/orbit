@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Filesystem Profile Resolution"
 tags: ["policy-sandbox"]
-last_validated: 2026-09-05
+last_validated: 2026-09-26
 ---
 
 # Spec: Filesystem Profile Resolution
@@ -16,7 +16,7 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 ## Resolution Invariants
 
 - **Schema acceptance.** Only `schemaVersion: 2` policies are accepted. v1 is rejected at load time with an explicit migration message that names `spec.denyRead`, `spec.denyModify`, and `spec.fsProfiles`.
-- **Profile lookup.** `effective_profile(profile_name)` returns the named profile if present. If absent and `profile_name == "unrestricted"`, it synthesizes `FsProfile { read: ["./**"], modify: ["./**"] }`. Any other absent name returns `OrbitError::InvalidInput`.
+- **Profile lookup.** `effective_profile(profile_name)` returns the named profile if present. If absent and `profile_name == "unrestricted"`, it synthesizes `FsProfile { read: ["./**"], modify: ["./**"] }`. Any other absent name returns `PolicyError::Invalid` from the type layer; application boundaries may map that to `OrbitError::InvalidInput`.
 - **Rule normalization.** Every rule is trimmed, has backslashes converted to forward slashes, has leading `./` stripped, and is rejected if it is `~`/`~/…`, contains parent traversals, or is absolute. The normalizer also compiles the rule to its glob-equivalent regex; a rule that fails to compile is rejected at load.
 - **Deny injection.** Every entry of `denyRead` is appended to the resolved profile's `read` list as `!<rule>`. Ordinary `denyModify` entries append to `modify` as `!<rule>`. A `denyModify` entry already beginning with `!` is an explicit host-policy exception: it is resolved after its enclosing deny, but only through the selected profile's existing positive coverage, with nested profile rules replayed in order so profile negatives still narrow it. Injection happens after profile lookup so the implicit `unrestricted` profile is also subject to global boundaries.
 - **Validation invariants.**
@@ -35,19 +35,19 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 - **Rule walk.** The evaluator walks the rule list in order and tracks the most recent match. The decision uses the *last* match's negation flag: positive match → allow, negated match → deny.
 - **Empty positive set.** If the rule list contains no positive rules (only negated rules), the decision is `allowed = false` with `matched_rule = "[]"`.
 - **No matching rule.** If positive rules exist but none match, the decision is `allowed = false` with `matched_rule = "<no matching rule>"`.
-- **Matched-rule reporting.** A positive match reports the original rule string in `matched_rule`. A negated match reports the inner pattern (without the leading `!`) and surfaces as `allowed = false`. There is no separately persisted negation flag on `FsCheckResult`, `FsPolicyEvaluation`, or `FsCallEvent` — the only structural signal that a match was a deny is the `allowed = false` value. Audit consumers that need to distinguish "denied by an explicit deny rule" from "denied because no rule matched" must inspect `matched_rule` against the policy's deny lists themselves.
+- **Matched-rule reporting.** A positive or negated match reports the normalized pattern in `matched_rule` (slash separators, with leading `./` removed); negation is not included in the reported pattern. A negated match surfaces as `allowed = false`. There is no separately persisted negation flag on `FsCheckResult`, `FsPolicyEvaluation`, or `FsCallEvent` — the only structural signal that a match was a deny is the `allowed = false` value. Audit consumers that need to distinguish "denied by an explicit deny rule" from "denied because no rule matched" must inspect `matched_rule` against the policy's deny lists themselves.
 
 ## Glob Translator
 
 - **Supported syntax:** `*` (single-segment wildcard, anchored to `[^/]*`), `**` (cross-segment wildcard, anchored to `.*`), `**/` segment (anchored to `(?:.*/)?`), `?` (single character within a segment, anchored to `[^/]`), `<prefix>/**` directory-subtree match (anchored to `^<prefix>(?:/.*)?$`).
-- **Unsupported syntax:** character classes (`[abc]`), brace expansion (`{a,b}`), POSIX bracket expressions, and escape sequences are not interpreted as glob operators; they are matched literally. `**` may still be combined with other supported operators, including a `**/` segment followed by another `**`.
+- **Unsupported syntax:** character classes (`[abc]`), brace expansion (`{a,b}`), and POSIX bracket expressions are matched literally. Backslash is normalized as a path separator, not a glob escape. `**` may still be combined with other supported operators, including a `**/` segment followed by another `**`.
 - **Anchoring.** Compiled regexes are anchored at both ends (`^…$`). Partial matches do not satisfy a rule.
 
 ## Failure Modes
 
-- **Profile missing.** `effective_profile("unknown")` (where the policy does not define `unknown` and the name is not `unrestricted`) returns `OrbitError::InvalidInput`. Callers must treat this as a configuration error, not a deny.
-- **Rule normalization failure.** A rule that escapes the workspace, is empty, or fails to compile to a regex returns `OrbitError::InvalidInput` at validation or resolution time. Loaders must surface this to the user; runtimes must treat it as a stop-the-world error rather than falling back to deny-all.
-- **Invalid modify exception.** A non-subtree exception, an exception without an earlier strict enclosing deny, or a workspace exception outside the host surface returns `OrbitError::InvalidInput`; callers must not drop the exception and continue with a broader policy.
+- **Profile missing.** `effective_profile("unknown")` (where the policy does not define `unknown` and the name is not `unrestricted`) returns `PolicyError::Invalid`. Callers must treat this as a configuration error, not a deny.
+- **Rule normalization failure.** A rule that escapes the workspace, is empty, or fails to compile to a regex returns `PolicyError::Invalid` at validation or resolution time. Loaders map and surface this to the user; runtimes must treat it as a stop-the-world error rather than falling back to deny-all.
+- **Invalid modify exception.** A non-subtree exception, an exception without an earlier strict enclosing deny, or a workspace exception outside the host surface returns `PolicyError::Invalid`; callers must not drop the exception and continue with a broader policy.
 - **Workspace canonicalization failure.** `PolicyEngine::check_resolved` falls back to the supplied workspace root when root canonicalization fails. A path that cannot be expressed workspace-relative is returned as an outside-workspace denial, which is conservative but does not distinguish "workspace deleted" from "path actually outside."
 - **Empty `read` rule list.** A profile authored without read rules denies every read with `matched_rule = "[]"`. This is almost always a misconfiguration but is treated as a valid (if useless) profile.
 
