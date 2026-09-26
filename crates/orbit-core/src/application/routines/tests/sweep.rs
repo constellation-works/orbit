@@ -14,6 +14,7 @@ use chrono::{Duration, TimeZone, Utc};
 use orbit_automation::routines::loader::RoutineLoadError;
 use orbit_common::OrbitError;
 use orbit_store::InvocationInsertParams;
+use orbit_store::RoutineFireState;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
@@ -836,5 +837,90 @@ fn a_scheduled_host_shutdown_holds_every_fire_until_it_clears() {
             .auto_task_reports
             .iter()
             .any(|row| row.action == "minted")
+    );
+}
+
+#[test]
+fn scheduled_ship_slot_records_the_running_drain_instead_of_dispatching() {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    let orbit_dir = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(orbit_dir.join("routines")).expect("routines dir");
+    std::fs::create_dir_all(global.join("resources/jobs")).expect("jobs dir");
+    std::fs::write(
+        global.join("resources/jobs/workspace_ship_pipeline.yaml"),
+        NOOP_JOB.replace("name: noop", "name: workspace_ship_pipeline"),
+    )
+    .expect("ship job");
+    std::fs::write(
+        orbit_dir.join("routines/ship.yaml"),
+        "schemaVersion: 1\nname: ship\nenabled: true\ntrigger:\n  cron: '* * * * *'\ntarget: job:workspace_ship_pipeline\n",
+    )
+    .expect("ship routine");
+    let runtime = crate::OrbitRuntime::from_roots(&global, &orbit_dir).expect("runtime");
+    let drain = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("drain");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&drain.run_id, Utc::now(), std::process::id())
+        .expect("running drain");
+    let provider = FixedWorkspaces {
+        entries: vec![(workspace("ws-one", "one"), runtime.clone())],
+    };
+    let first = Utc
+        .with_ymd_and_hms(2026, 9, 25, 2, 30, 0)
+        .single()
+        .expect("time");
+    let quiet = FixedHostSignals::none();
+    run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &quiet,
+        first,
+    )
+    .expect("baseline");
+    let outcome = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        &quiet,
+        first + Duration::minutes(1),
+    )
+    .expect("due slot");
+    let row = outcome
+        .reports
+        .iter()
+        .find(|row| row.routine == "ship")
+        .unwrap_or_else(|| {
+            panic!(
+                "ship row: reports={:?}, load_errors={:?}",
+                outcome.reports, outcome.load_errors
+            )
+        });
+    assert_eq!(row.action, "skipped");
+    assert_eq!(
+        row.reason.as_deref(),
+        Some(format!("workspace_drain_live: {}", drain.run_id).as_str())
+    );
+    let fires = crate::application::routines::recent_fires(&global, "ship", 10)
+        .expect("routine show fire history");
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0].state, RoutineFireState::Skipped);
+    assert_eq!(fires[0].detail, row.reason);
+    assert_eq!(
+        runtime
+            .stores()
+            .jobs()
+            .list_job_runs("workspace_ship_pipeline")
+            .expect("runs")
+            .len(),
+        0
     );
 }

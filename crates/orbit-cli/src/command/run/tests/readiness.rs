@@ -27,6 +27,26 @@ fn readiness_payload_names_snapshot_limit_and_reason() {
 }
 
 #[test]
+fn readiness_payload_names_queued_drain_and_its_completion_policy() {
+    let text = readiness_lines(&json!({
+        "capacity": {
+            "active_leaf_runs": 0,
+            "max_active_leaf_runs": 3,
+            "free_slots": 3,
+            "drain_run_id": "jrun-running",
+            "queued_drains": [{ "run_id": "jrun-queued", "completion": "review" }],
+        },
+        "tasks": [],
+    }))
+    .join("\n");
+    assert!(text.contains("Running drain: jrun-running."), "{text}");
+    assert!(
+        text.contains("Queued drain: jrun-queued (completion: review)."),
+        "{text}"
+    );
+}
+
+#[test]
 fn readiness_payload_separates_lock_waiting_slots_from_working_ones() {
     let text = readiness_lines(&json!({
         "capacity": {

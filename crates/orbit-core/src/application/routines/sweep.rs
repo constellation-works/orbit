@@ -25,6 +25,7 @@ pub use orbit_automation::routines::sweep::{
 };
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::Workspace;
 use serde_json::json;
@@ -53,6 +54,36 @@ pub(crate) fn refresh_discovered_token_scoreboards(workspaces: &[(Workspace, Orb
 }
 
 impl RoutineDispatch for RuntimeDispatch<'_> {
+    fn live_workspace_drain(&self, source_orbit_dir: &Path) -> Result<Option<String>, OrbitError> {
+        let runtime = self.runtimes.get(source_orbit_dir).ok_or_else(|| {
+            OrbitError::WorkspaceError(format!(
+                "no runtime for source workspace '{}'",
+                source_orbit_dir.display()
+            ))
+        })?;
+        let running = runtime
+            .stores()
+            .jobs()
+            .list_pending_or_running_job_runs("workspace_auto_pipeline")?
+            .into_iter()
+            .find(|run| run.state == JobRunState::Running);
+        if let Some(run) = running {
+            return Ok(Some(run.run_id));
+        }
+        Ok(runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some("workspace_auto_pipeline".to_string()),
+                state: Some(JobRunState::Retrying),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?
+            .into_iter()
+            .next()
+            .map(|run| run.run_id))
+    }
+
     fn evaluate_delivery(
         &self,
         routine: &super::loader::LoadedRoutine,

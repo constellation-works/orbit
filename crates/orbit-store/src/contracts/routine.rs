@@ -15,6 +15,9 @@ pub enum RoutineFireState {
     Dispatched,
     /// The dispatched run finished successfully.
     Succeeded,
+    /// The scheduled slot was consumed without dispatch because a workspace
+    /// drain already owned the coordinator slot.
+    Skipped,
     /// The dispatched run finished in failure.
     Failed,
     /// The fire exceeded the routine's `policy.timeout_minutes` without a
@@ -31,6 +34,7 @@ impl RoutineFireState {
             Self::Intent => "intent",
             Self::Dispatched => "dispatched",
             Self::Succeeded => "succeeded",
+            Self::Skipped => "skipped",
             Self::Failed => "failed",
             Self::TimedOut => "timed_out",
             Self::Error => "error",
@@ -43,6 +47,7 @@ impl RoutineFireState {
             "intent" => Some(Self::Intent),
             "dispatched" => Some(Self::Dispatched),
             "succeeded" => Some(Self::Succeeded),
+            "skipped" => Some(Self::Skipped),
             "failed" => Some(Self::Failed),
             "timed_out" => Some(Self::TimedOut),
             "error" => Some(Self::Error),

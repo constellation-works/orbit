@@ -76,6 +76,18 @@ pub(super) fn readiness_lines(payload: &Value) -> Vec<String> {
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    if let Some(run_id) = capacity["drain_run_id"].as_str() {
+        lines.push(format!("Running drain: {run_id}."));
+    }
+    if let Some(queued) = capacity["queued_drains"].as_array() {
+        for drain in queued {
+            let run_id = drain["run_id"].as_str().unwrap_or("-");
+            let completion = drain["completion"].as_str().unwrap_or("review");
+            lines.push(format!(
+                "Queued drain: {run_id} (completion: {completion})."
+            ));
+        }
+    }
     if let Some(hold) = host_shutdown_hold(&capacity["host_shutdown"]) {
         lines.push(hold);
     }
