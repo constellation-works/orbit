@@ -133,7 +133,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::ShipLocal(command) => command.execute(runtime),
             // Normally dispatched before runtime init (see main.rs); the
             // registry-driven sweep never uses the cwd-derived runtime.
-            RunSubcommand::ShipSweep(command) => command.execute_without_runtime(),
+            RunSubcommand::ShipSweep(command) => command.execute_without_runtime(None),
             RunSubcommand::TaskPilot(command) => command.execute(runtime),
             RunSubcommand::Readiness(command) => command.execute(runtime),
             RunSubcommand::History(command) => command.execute(runtime),

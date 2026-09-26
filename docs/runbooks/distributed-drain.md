@@ -420,6 +420,11 @@ orbit routine list
 orbit run ship-sweep --dry-run
 ```
 
+The CLI sweep reads the registry selected by `--root <dir>`, then `ORBIT_ROOT`,
+then `~/.orbit`. Use `orbit --root <dir> run ship-sweep --dry-run --json` to
+inspect an alternate registry before allowing dispatch. It does not create a
+workspace in the directory from which the scheduler invokes it.
+
 A replica sweep reports destination-authority refusal before it reads a
 backlog. Scheduled invocation still confers no completion authority. Do not
 enable a dark routine to "turn on" distributed drain.
