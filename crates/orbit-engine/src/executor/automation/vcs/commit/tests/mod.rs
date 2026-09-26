@@ -7,6 +7,7 @@ mod candidate_paths;
 mod delivery_gate;
 mod git_ops;
 mod message;
+mod no_diff;
 mod scope;
 mod summary;
 pub(in crate::executor::automation::vcs::commit) mod test_support;
