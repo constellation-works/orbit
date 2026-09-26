@@ -585,6 +585,9 @@ pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAcc
 /// a confined backend keeps its *own* state tree whole, and a read grant on
 /// its own callback session record and grant witness — the single files
 /// inside a denied directory it is entitled to — and nothing else there.
+/// Their ancestors inside a denied tree receive only literal metadata reads,
+/// so path resolution can traverse them without listing the tree or reading
+/// sibling content.
 /// Resolve each path physically before emitting it: Seatbelt matches the
 /// kernel's `/private/var` path even when a caller supplied `/var`.
 pub fn append_macos_read_boundary(
@@ -593,34 +596,53 @@ pub fn append_macos_read_boundary(
     readable_subpaths: &[PathBuf],
     readable_files: &[PathBuf],
 ) {
-    for path in denied_subpaths {
+    let denied: Vec<PathBuf> = denied_subpaths
+        .iter()
+        .map(|path| crate::physical_with_missing_tail(path))
+        .collect();
+    for path in &denied {
         profile.push_str(&format!(
             "(deny file-read* (subpath \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(
-                &crate::physical_with_missing_tail(path)
-                    .display()
-                    .to_string()
-            )
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
         ));
     }
-    for path in readable_subpaths {
+    let readable_trees: Vec<PathBuf> = readable_subpaths
+        .iter()
+        .map(|path| crate::physical_with_missing_tail(path))
+        .collect();
+    let readable_leaves: Vec<PathBuf> = readable_files
+        .iter()
+        .map(|path| crate::physical_with_missing_tail(path))
+        .collect();
+    let mut metadata_ancestors = std::collections::BTreeSet::new();
+    for path in readable_trees.iter().chain(&readable_leaves) {
+        for denied_root in &denied {
+            if path.starts_with(denied_root) {
+                for ancestor in path.ancestors().skip(1) {
+                    if !ancestor.starts_with(denied_root) {
+                        break;
+                    }
+                    metadata_ancestors.insert(ancestor.to_path_buf());
+                }
+            }
+        }
+    }
+    for path in metadata_ancestors {
+        profile.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+        ));
+    }
+    for path in &readable_trees {
         profile.push_str(&format!(
             "(allow file-read* (subpath \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(
-                &crate::physical_with_missing_tail(path)
-                    .display()
-                    .to_string()
-            )
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
         ));
     }
-    for path in readable_files {
+    for path in &readable_leaves {
         profile.push_str(&format!(
             "(allow file-read* (literal \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(
-                &crate::physical_with_missing_tail(path)
-                    .display()
-                    .to_string()
-            )
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
         ));
     }
 }

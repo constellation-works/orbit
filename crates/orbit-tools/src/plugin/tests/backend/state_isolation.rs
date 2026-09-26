@@ -157,6 +157,22 @@ fn seatbelt_state_rules_use_the_physical_path_of_an_aliased_root() {
         )),
         "Seatbelt must re-allow only the physical own state"
     );
+    let denied_parent = real.join("global/state/plugins");
+    let metadata = format!(
+        "(allow file-read-metadata (literal \"{}\"))",
+        denied_parent.display()
+    );
+    assert!(
+        text.contains(&metadata),
+        "Seatbelt must allow only metadata on the physical denied parent for state path traversal: {text}"
+    );
+    assert!(
+        !text.contains(&format!(
+            "(allow file-read-metadata (subpath \"{}\"))",
+            denied_parent.display()
+        )),
+        "the parent metadata grant must not reach another plugin's state: {text}"
+    );
     assert!(
         !text.contains(&alias.display().to_string()),
         "Seatbelt must not name a symlink alias for plugin state"

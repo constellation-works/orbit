@@ -572,7 +572,7 @@ reliability view.
 
 | Manifest | Grant | Linux (`spawn_under_linux_landlock_boundary`) | macOS (`compile_macos_sandbox_profile` + `append_macos_network_access`) |
 |---|---|---|---|
-| (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the same table as activity-scoped `proc.spawn`; the unreadable trees below get no grant | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then the child's own state re-allowed as a `subpath` and its own record and witness as `literal`s (last match wins) |
+| (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the same table as activity-scoped `proc.spawn`; the unreadable trees below get no grant | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
 | `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
@@ -619,8 +619,10 @@ become **readable**. Writable is a named inventory, never the roots:
 `auto_tasks/` stay read-only.
 
 **Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/`, `state/plugins/` and
-`state/plugin-secrets/` are **unreadable** to every plugin child, whatever it was granted. Each
-child gets back exactly its own session record and own grant witness (single files), and its
+`state/plugin-secrets/` have a broad read deny for every plugin child, regardless of manifest
+grants. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
+for path traversal, but no directory listing or content reads. Each child gets back exactly its
+own session record and own grant witness (single files), and its
 own `state/plugins/<ns>` (`{{plugin_state}}`, a whole tree); nothing in the secret store is
 granted back (§3). So another plugin's token, witness or state is
 unreachable: a confined child loading another plugin's row registers it inactive, and a
@@ -647,9 +649,11 @@ The third row *is* the `orbit_tools` inventory, so one list decides both what is
 what may be created [ORB-12872]; `<global_root>/state` itself is not a prefix.
 Orbit creates the plugin's state tree even when the manifest has no `fs.write` grant; creation
 does not grant writes. The macOS profile uses the physical path of each grant and read carve-out,
-including `/private/var` when a temporary root is spelled through `/var`. A backend creating a
-child under `{{plugin_state}}` need only create that child, since a recursive `mkdir -p` can probe
-the denied `state/plugins/` parent on macOS.
+including `/private/var` when a temporary root is spelled through `/var`. Metadata-only ancestor
+rules permit `realpath` to traverse a denied parent such as `state/plugins/`; they do not permit
+listing it, reading sibling files such as `orbit.db`, or entering another plugin's state. A backend
+creating a child under `{{plugin_state}}` need only create that child, since a recursive `mkdir -p`
+can probe the denied `state/plugins/` parent on macOS.
 
 - Creation never follows links: an escaping `..` root stays absent, a symlinked prefix is
   refused, and a missing tail is created one component at a time, refusing a link or identity
