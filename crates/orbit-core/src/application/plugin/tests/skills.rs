@@ -63,6 +63,13 @@ fn lifecycle_links_beside_the_runtime_global_root() {
                 .is_symlink()
         );
     }
+    for provider in [".agents", ".claude"] {
+        let home = std::env::var_os("HOME").expect("isolated HOME");
+        assert!(
+            !PathBuf::from(&home).join(provider).exists(),
+            "enabling a plugin under a fixture root must not write under HOME"
+        );
+    }
 
     std::fs::remove_dir_all(PathBuf::from(&result.summary.install_path).join("skills"))
         .expect("remove installed skill tree");
@@ -78,6 +85,17 @@ fn lifecycle_links_beside_the_runtime_global_root() {
             doctor
         );
     }
+    let skill_findings = runtime
+        .doctor_file_skills()
+        .expect("inspect selected-root skill discovery");
+    assert_eq!(
+        skill_findings
+            .iter()
+            .filter(|finding| finding.skill_name == "graph-graph")
+            .count(),
+        2,
+        "skill doctor must inspect both selected-root discovery directories"
+    );
 
     disable_plugin(&runtime, "graph").expect("disable plugin");
     for root in &expected_roots {

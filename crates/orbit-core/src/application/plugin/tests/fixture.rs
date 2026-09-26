@@ -10,6 +10,9 @@ use tempfile::TempDir;
 use crate::OrbitRuntime;
 
 pub(super) struct PluginFixture {
+    // Keep HOME inside the fixture while in-process add/enable/sync tests run.
+    // The guard drops before the temporary tree so HOME is restored first.
+    _home_env: orbit_common::test_env::ScopedEnv,
     pub(super) _root: TempDir,
     pub(super) global_root: PathBuf,
     pub(super) workspace_root: PathBuf,
@@ -22,6 +25,13 @@ pub(super) struct PluginFixture {
 impl PluginFixture {
     pub(super) fn new() -> Self {
         let root = tempfile::tempdir().expect("tempdir");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).expect("create fixture HOME");
+        let home_str = home.to_str().expect("utf8 fixture HOME");
+        let home_env = orbit_common::test_env::scoped([
+            ("HOME", Some(home_str)),
+            ("USERPROFILE", Some(home_str)),
+        ]);
         let global_root = root.path().join("global");
         let repo_root = root.path().join("repo");
         let workspace_root = repo_root.join(".orbit");
@@ -32,6 +42,7 @@ impl PluginFixture {
         let runtime =
             OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
         Self {
+            _home_env: home_env,
             _root: root,
             global_root,
             workspace_root,

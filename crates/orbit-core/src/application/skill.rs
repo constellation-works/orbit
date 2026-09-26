@@ -258,9 +258,10 @@ impl OrbitRuntime {
                 message: row.message,
             })
             .collect();
-        if let Some(home) = crate::paths::home_dir() {
+        let global_root = self.global_root();
+        if let Some(discovery_base) = global_root.parent() {
             results.extend(doctor_client_skill_links(
-                &crate::bootstrap::init::skill_link_roots(&home),
+                &crate::bootstrap::init::skill_link_roots(discovery_base),
             )?);
         }
         Ok(results)
@@ -268,7 +269,7 @@ impl OrbitRuntime {
 }
 
 /// Report dangling/orphaned client skill symlinks under the agent
-/// discovery directories (`~/.claude/skills`, `~/.agents/skills`).
+/// discovery directories beside the selected global root.
 ///
 /// Catalog doctor only walks seeded skill trees. Client CLIs discover
 /// skills through these link dirs, so a leftover after a default-set

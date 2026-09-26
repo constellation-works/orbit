@@ -15,7 +15,7 @@ use crate::application::skill::seed_default_skills;
 
 use super::super::init::{
     InitOptions, ensure_orbit_root_initialized, ensure_skill_links, global_skills_dir, init_global,
-    init_workspace_at_root, orbit_layout_paths,
+    init_workspace_at_root, link_skills, orbit_layout_paths, unlink_skills,
 };
 
 /// Make global-init routing entirely fixture-owned even when the test
@@ -410,6 +410,55 @@ fn global_init_seeds_skills_and_home_level_links() {
     );
     assert_skill_link_exists(home.path().join(".agents").join("skills").join("orbit"));
     assert_skill_link_exists(home.path().join(".claude").join("skills").join("orbit"));
+}
+
+#[test]
+fn explicit_global_roots_link_skills_beside_the_root_without_touching_home() {
+    for relative_root in [
+        "isolated/orbit-root",
+        "job/.orbit/tmp/jrun-test/orbit-root2",
+    ] {
+        let temp = tempdir().expect("fixture tempdir");
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).expect("create separate home");
+        let _env = global_init_env(&home);
+        let selected_root = temp.path().join(relative_root);
+        let discovery_base = selected_root.parent().expect("global root parent");
+
+        let result = init_global(
+            Some(&selected_root),
+            InitOptions {
+                refresh_defaults: true,
+                config_seed: Some(ConfigSeed::default()),
+                ..Default::default()
+            },
+        )
+        .expect("initialize selected global root");
+        assert!(result.created_skills_symlink);
+        for provider in [".agents", ".claude"] {
+            let link = discovery_base.join(provider).join("skills/orbit");
+            assert_skill_link_exists(link.clone());
+            assert_eq!(
+                fs::read_link(&link).expect("read selected-root link"),
+                selected_root.join("skills/orbit")
+            );
+            assert!(!home.join(provider).exists(), "HOME must remain untouched");
+        }
+
+        let linked = link_skills(&selected_root).expect("reconcile selected-root links");
+        assert_eq!(linked.roots.len(), 2);
+        assert!(
+            linked
+                .roots
+                .iter()
+                .all(|root| root.starts_with(discovery_base))
+        );
+        unlink_skills(&selected_root).expect("unlink selected-root skills");
+        for provider in [".agents", ".claude"] {
+            assert!(!discovery_base.join(provider).join("skills/orbit").exists());
+            assert!(!home.join(provider).exists(), "HOME must remain untouched");
+        }
+    }
 }
 
 #[test]

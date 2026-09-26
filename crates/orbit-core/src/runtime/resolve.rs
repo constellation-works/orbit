@@ -324,12 +324,10 @@ fn home_dir_boundary() -> Option<PathBuf> {
     paths::home_dir()
 }
 
-/// Whether `candidate` resolves to the global Orbit root (`$HOME/.orbit`,
-/// or `%USERPROFILE%\.orbit`). This is the single source of truth for
-/// "is this root the global one" — anything that needs to make a decision
-/// contingent on that (whether to touch home-scoped skill link
-/// directories, what path to report to the user) should call this rather
-/// than re-deriving the comparison.
+/// Whether `candidate` resolves to the default global Orbit root
+/// (`$HOME/.orbit`, or `%USERPROFILE%\.orbit`). Root resolution and path
+/// reporting use this distinction; skill discovery paths derive from the
+/// selected global root's parent.
 pub fn is_global_orbit_root(candidate: &Path) -> bool {
     let Some(global) = paths::home_dir().map(|home| home.join(".orbit")) else {
         return false;
