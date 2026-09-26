@@ -136,6 +136,7 @@ impl FailureFixture {
             self_reported_actor: None,
             plugin: None,
             plugin_secrets: Vec::new(),
+            plugin_secret_updates: Default::default(),
         }
     }
 }

@@ -9,8 +9,8 @@ use serde_json::Value;
 
 use orbit_tools::plugin::{
     DeliveredPluginSecret, LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend,
-    PluginBackendSpec, PluginConfigSection, PluginSecretDelivery, PluginSecretSource, PluginTool,
-    PluginToolBinding,
+    PluginBackendSpec, PluginConfigSection, PluginSecretDelivery, PluginSecretRotation,
+    PluginSecretSource, PluginTool, PluginToolBinding,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginBackendType, PluginGrantSet, PluginProvenance, parse_stored_grants,
@@ -18,10 +18,11 @@ use orbit_types::plugin::{
 
 use super::grants::recorded_program_paths;
 use super::paths::plugin_state_dir;
-use super::secrets::PluginSecretStore;
+use super::secrets::{PluginSecretStore, PluginSecretSwap, PluginSecretValue};
 
 /// The host's secret store as one installed plugin's secret source: the
-/// plugin's own file under the store and nothing else, read on every call.
+/// plugin's own file under the store and nothing else, read on every call and
+/// written back only through the store's compare-and-swap.
 struct HostPluginSecrets {
     store: PluginSecretStore,
     plugin: String,
@@ -45,6 +46,26 @@ impl PluginSecretSource for HostPluginSecrets {
             }
         }
         Ok(delivered)
+    }
+
+    fn compare_and_swap(
+        &self,
+        name: &str,
+        value: &str,
+        expected_version: Option<&str>,
+    ) -> Result<PluginSecretRotation, OrbitError> {
+        // The operator's limits apply to a backend's value too; the refusal
+        // never quotes it.
+        let value = PluginSecretValue::new(value.to_string())?;
+        Ok(
+            match self
+                .store
+                .compare_and_swap(&self.plugin, name, &value, expected_version)?
+            {
+                PluginSecretSwap::Applied { version } => PluginSecretRotation::Applied { version },
+                PluginSecretSwap::Stale { .. } => PluginSecretRotation::Stale,
+            },
+        )
     }
 }
 
@@ -117,6 +138,14 @@ pub(crate) fn build_plugin_backend(
         .iter()
         .map(|secret| secret.name.clone())
         .collect();
+    let rotatable = plugin
+        .manifest
+        .spec
+        .secrets
+        .iter()
+        .filter(|secret| secret.rotatable)
+        .map(|secret| secret.name.clone())
+        .collect();
     let spec = Arc::new(PluginBackendSpec {
         provenance,
         plugin_root: plugin.root.clone(),
@@ -132,7 +161,7 @@ pub(crate) fn build_plugin_backend(
         config,
         grants,
         secrets: secrets
-            .map(|source| PluginSecretDelivery::new(declared, source))
+            .map(|source| PluginSecretDelivery::new(declared, source).with_rotatable(rotatable))
             .unwrap_or_default(),
     });
     match plugin.manifest.spec.backend.backend_type {

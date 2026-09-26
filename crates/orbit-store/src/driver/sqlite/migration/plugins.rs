@@ -57,6 +57,20 @@ pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitE
     )
 }
 
+/// v31 `audit_plugin_secret_updates` migration: each secret a plugin-backed
+/// tool call's backend asked to rotate through `secret_updates`, as a JSON
+/// object of name to `applied` or `refused` (design
+/// `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names and outcomes
+/// only; a value never reaches the table. Additive: an older binary ignores
+/// the column.
+pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema(conn)?;
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE audit_events ADD COLUMN plugin_secret_updates TEXT",
+    )
+}
+
 /// v27 `plugin_certified_orbit_version` migration: the Orbit version a
 /// plugin's `spec.tests` goldens last passed on, written by `orbit plugin
 /// test` and printed by `orbit plugin show` (design

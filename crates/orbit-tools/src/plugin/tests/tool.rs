@@ -1,13 +1,17 @@
-use orbit_types::plugin::{PluginGrant, PluginPermissions};
+use orbit_types::plugin::{PluginGrant, PluginPermissions, PluginSecretUpdateStatus};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::super::backend::{
-    DeliveredPluginSecret, PluginConfigSection, PluginSecretDelivery, PluginSecretSource,
+    DeliveredPluginSecret, PluginConfigSection, PluginSecretDelivery, PluginSecretRotation,
+    PluginSecretSource,
 };
-use super::support::{context, require_sandbox, spec, stub_backend, tool};
+use super::super::envelope::take_plugin_secret_updates;
+use super::super::tool::PluginTool;
+use super::support::{CasSource, context, require_sandbox, spec, stub_backend, tool};
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
 const ECHO_BACKEND: &str = "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"arg\":\"%s\",\"plugin\":\"%s\",\"allowed\":\"%s\",\"programs\":\"%s\",\"envelope\":%s}}\\n' \"$1\" \"$ORBIT_PLUGIN\" \"$ORBIT_ALLOWED_TOOLS\" \"$ORBIT_PROC_ALLOWED_PROGRAMS\" \"$input\"\n";
@@ -254,4 +258,158 @@ impl PluginSecretSource for FixedSource {
             })
             .collect())
     }
+}
+
+/// An `exec` backend that rotates `refresh_token` from the version it was
+/// delivered, to a value unique to its process. Input `{"fail": true}` makes
+/// it report a failure after rotating — the refresh that succeeded before
+/// the call it was for did not.
+const ROTATING_BACKEND: &str = r##"#!/bin/sh
+input=$(cat)
+version=$(printf '%s' "$input" | sed -n 's/.*"refresh_token":{"value":"[^"]*","version":"\([^"]*\)".*/\1/p')
+updates="{\"refresh_token\":{\"value\":\"rotated-token-$$\",\"expected_version\":\"$version\"}}"
+case "$input" in
+  *'"fail":true'*) printf '{"ok":false,"error":{"code":"upstream","message":"post failed"},"secret_updates":%s}\n' "$updates" ;;
+  *) printf '{"ok":true,"output":{"delivered":"%s"},"secret_updates":%s}\n' "$version" "$updates" ;;
+esac
+"##;
+
+fn rotating_tool(temp: &Path, source: Arc<dyn PluginSecretSource>) -> PluginTool {
+    let command = stub_backend(temp, ROTATING_BACKEND);
+    let mut backend = (*spec(command, temp, PluginPermissions::default(), &[])).clone();
+    backend.secrets = PluginSecretDelivery::new(vec!["refresh_token".to_string()], source)
+        .with_rotatable(vec!["refresh_token".to_string()]);
+    tool(Arc::new(backend), None)
+}
+
+/// A rotation an `exec` backend returns beside `ok`/`output` is stored, the
+/// call's output is returned as-is, and the next call is delivered the new
+/// value at its new version. A rotation beside a reported failure is stored
+/// too, and the failure is still the call's result.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn an_exec_backend_rotates_a_secret_beside_its_answer() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = CasSource::holding(&[("refresh_token", "first-token-a1", "v1")]);
+    let tool = rotating_tool(
+        temp.path(),
+        Arc::clone(&source) as Arc<dyn PluginSecretSource>,
+    );
+    let ctx = context(temp.path());
+
+    let _ = take_plugin_secret_updates();
+    let output = tool.execute(&ctx, json!({})).expect("call succeeds");
+    assert_eq!(
+        output,
+        json!({ "delivered": "v1" }),
+        "the output is unchanged"
+    );
+    assert_eq!(
+        take_plugin_secret_updates(),
+        BTreeMap::from([(
+            "refresh_token".to_string(),
+            PluginSecretUpdateStatus::Applied
+        )])
+    );
+    let (value, version) = source.stored("refresh_token").expect("stored");
+    assert!(value.starts_with("rotated-token-"), "{value}");
+
+    let next = tool.execute(&ctx, json!({})).expect("next call");
+    assert_eq!(
+        next,
+        json!({ "delivered": version }),
+        "the next call sees it"
+    );
+
+    let (before, _) = source.stored("refresh_token").expect("stored");
+    let error = tool
+        .execute(&ctx, json!({ "fail": true }))
+        .expect_err("the backend reported a failure");
+    assert!(error.to_string().contains("post failed"), "{error}");
+    assert_eq!(
+        take_plugin_secret_updates()["refresh_token"],
+        PluginSecretUpdateStatus::Applied
+    );
+    assert_ne!(
+        source.stored("refresh_token").expect("stored").0,
+        before,
+        "a token refreshed before the failure is not lost with it"
+    );
+}
+
+/// Holds every read until both racing calls have one, so both are delivered
+/// the same version before either backend answers.
+struct Gate {
+    inner: Arc<CasSource>,
+    barrier: std::sync::Barrier,
+}
+
+impl PluginSecretSource for Gate {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, orbit_common::OrbitError> {
+        let delivered = self.inner.read(names);
+        self.barrier.wait();
+        delivered
+    }
+
+    fn compare_and_swap(
+        &self,
+        name: &str,
+        value: &str,
+        expected_version: Option<&str>,
+    ) -> Result<PluginSecretRotation, orbit_common::OrbitError> {
+        self.inner.compare_and_swap(name, value, expected_version)
+    }
+}
+
+/// Two concurrent calls rotating from the same version: exactly one update
+/// is applied, the other is refused, and both calls still return their
+/// output.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn concurrent_exec_rotations_from_one_version_apply_exactly_one() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = CasSource::holding(&[("refresh_token", "first-token-a1", "v1")]);
+    let gate = Arc::new(Gate {
+        inner: Arc::clone(&store),
+        barrier: std::sync::Barrier::new(2),
+    });
+    let tool = Arc::new(rotating_tool(temp.path(), gate));
+
+    let racers: Vec<_> = (0..2)
+        .map(|_| {
+            let tool = Arc::clone(&tool);
+            let ctx = context(temp.path());
+            std::thread::spawn(move || {
+                let output = tool.execute(&ctx, json!({}));
+                (output, take_plugin_secret_updates())
+            })
+        })
+        .collect();
+    let results: Vec<_> = racers
+        .into_iter()
+        .map(|racer| racer.join().expect("racer"))
+        .collect();
+
+    let mut statuses = Vec::new();
+    for (output, updates) in &results {
+        let output = output.as_ref().expect("both calls return their output");
+        assert_eq!(output, &json!({ "delivered": "v1" }));
+        statuses.push(updates["refresh_token"]);
+    }
+    statuses.sort_by_key(|status| *status == PluginSecretUpdateStatus::Refused);
+    assert_eq!(
+        statuses,
+        vec![
+            PluginSecretUpdateStatus::Applied,
+            PluginSecretUpdateStatus::Refused
+        ]
+    );
+    assert_ne!(store.stored("refresh_token").expect("stored").1, "v1");
 }

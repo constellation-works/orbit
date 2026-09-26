@@ -7,15 +7,18 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
-use orbit_types::plugin::{PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions};
+use orbit_types::plugin::{
+    PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions, PluginSecretUpdateStatus,
+};
 use serde_json::{Value, json};
 
 use super::super::backend::{DeliveredPluginSecret, PluginSecretDelivery, PluginSecretSource};
+use super::super::envelope::take_plugin_secret_updates;
 use super::super::loader::load_plugin_dir;
 use super::super::mcp::{McpBackend, McpExpectedTool, tool_result};
 use super::super::schema::CompiledSchema;
 use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
-use super::support::{context, provenance, require_sandbox};
+use super::support::{CasSource, context, provenance, require_sandbox};
 use crate::{Tool, ToolContext};
 
 #[test]
@@ -659,6 +662,69 @@ fn tools_call_carries_the_declared_secrets_per_call_and_never_in_env() {
         "{after}"
     );
     assert!(!after.to_string().contains(value));
+}
+
+/// An `mcp` backend rotates a secret through its result's
+/// `_meta.orbit.secret_updates`: an update at the delivered version is stored
+/// and the next `tools/call` carries it; one from a version that has since
+/// moved on is refused, and that call still returns its output. No value
+/// reaches a response.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn an_mcp_backend_rotates_a_secret_through_its_result_meta() {
+    require_sandbox();
+    require_python3();
+    let first = "mcp-first-token-51c";
+    let rotated = "mcp-first-token-51c-rotated";
+    let source = CasSource::holding(&[("refresh_token", first, "v1")]);
+    let fixture = Fixture::with_secrets(
+        PluginSecretDelivery::new(
+            vec!["refresh_token".to_string()],
+            Arc::clone(&source) as Arc<dyn PluginSecretSource>,
+        )
+        .with_rotatable(vec!["refresh_token".to_string()]),
+    );
+    let echo = fixture.tool("echo", None);
+    let ctx = fixture.context(&[]);
+    let rotate_from =
+        |expected: &str| json!({ "message": "hi", "rotate": { "refresh_token": expected } });
+
+    let _ = take_plugin_secret_updates();
+    let applied = echo
+        .execute(&ctx, rotate_from("v1"))
+        .expect("rotating call");
+    assert_eq!(applied["echo"], json!({ "message": "hi" }));
+    assert_eq!(
+        take_plugin_secret_updates()["refresh_token"],
+        PluginSecretUpdateStatus::Applied
+    );
+    let (stored, version) = source.stored("refresh_token").expect("stored");
+    assert_eq!(stored, rotated);
+
+    // Still rotating from `v1`: the update already applied wins, and this
+    // call's output comes back all the same.
+    let refused = echo
+        .execute(&ctx, rotate_from("v1"))
+        .expect("a refused rotation is not a failed call");
+    assert_eq!(refused["echo"], json!({ "message": "hi" }));
+    assert_eq!(
+        take_plugin_secret_updates()["refresh_token"],
+        PluginSecretUpdateStatus::Refused
+    );
+    assert_eq!(
+        refused["meta"]["orbit"]["secrets"]["refresh_token"],
+        json!({
+            "sha256": sha256_hex(rotated),
+            "version": version,
+            "in_env_or_argv": false,
+        }),
+        "the call after the rotation is delivered the new value: {refused}"
+    );
+    assert_eq!(source.stored("refresh_token").expect("kept").0, rotated);
+    for response in [&applied, &refused] {
+        assert!(!response.to_string().contains(first), "{response}");
+    }
 }
 
 #[cfg(unix)]

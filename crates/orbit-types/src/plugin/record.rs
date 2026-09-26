@@ -75,3 +75,16 @@ pub struct PluginProvenance {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grants: Vec<String>,
 }
+
+/// What the host did with one entry of a backend's `secret_updates`
+/// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"): the whole
+/// record an audit row keeps about a rotation, beside the secret's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSecretUpdateStatus {
+    /// The compare-and-swap held and the new value is stored.
+    Applied,
+    /// Nothing was stored: the name is undeclared or not `rotatable`, the
+    /// entry is malformed, or its `expected_version` was stale.
+    Refused,
+}

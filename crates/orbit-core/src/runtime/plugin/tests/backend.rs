@@ -201,3 +201,87 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         ]
     );
 }
+
+/// The host's secret source for an installed plugin writes a backend's
+/// rotation through the store's compare-and-swap: of two updates expecting
+/// the stored version, exactly one is applied and the loser stores nothing.
+#[test]
+fn host_rotation_applies_exactly_one_of_two_updates_from_one_version() {
+    use orbit_tools::plugin::PluginSecretRotation;
+
+    use super::super::secrets::{PluginSecretStore, PluginSecretValue};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let plugin_root = temp.path().join("plugin");
+    std::fs::create_dir_all(plugin_root.join("bin")).expect("create bin dir");
+    std::fs::write(plugin_root.join("bin/backend.sh"), "#!/bin/sh\n").expect("write backend");
+    std::fs::write(
+        plugin_root.join("plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: rotor\n  version: 1.0.0\nspec:\n  \
+         backend:\n    type: exec\n    command: bin/backend.sh\n  secrets:\n    - name: \
+         refresh_token\n      rotatable: true\n  tools:\n    - name: hello\n      \
+         execution_kind: read_only\n      mcp_scope: workspace\n",
+    )
+    .expect("write manifest");
+    let installed = InstalledPlugin {
+        install_path: plugin_root.to_string_lossy().into_owned(),
+        ..super::host::record(&global_root, "rotor")
+    };
+    let plugin = load_plugin_dir(&plugin_root).expect("load manifest");
+    let store = PluginSecretStore::new(&global_root);
+    let first = store
+        .put(
+            "rotor",
+            "refresh_token",
+            &PluginSecretValue::new("first-token".to_string()).expect("value"),
+        )
+        .expect("set");
+    let backend = plugin_backend(&global_root, &installed, &plugin, &BTreeMap::new());
+    let secrets = backend.spec().secrets.clone();
+    assert!(secrets.is_rotatable("refresh_token"));
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let racers: Vec<_> = ["token-from-a", "token-from-b"]
+        .into_iter()
+        .map(|value| {
+            let secrets = secrets.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            let first = first.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                (
+                    value,
+                    secrets
+                        .compare_and_swap("refresh_token", value, Some(&first))
+                        .expect("swap"),
+                )
+            })
+        })
+        .collect();
+    let results: Vec<_> = racers
+        .into_iter()
+        .map(|racer| racer.join().expect("racer"))
+        .collect();
+
+    let winners: Vec<_> = results
+        .iter()
+        .filter_map(|(value, outcome)| match outcome {
+            PluginSecretRotation::Applied { version } => Some((*value, version.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(winners.len(), 1, "{results:?}");
+    assert!(
+        results
+            .iter()
+            .any(|(_, outcome)| *outcome == PluginSecretRotation::Stale),
+        "{results:?}"
+    );
+    let stored = store
+        .get("rotor", "refresh_token")
+        .expect("read")
+        .expect("set");
+    assert_eq!(stored.value.expose(), winners[0].0);
+    assert_eq!(stored.version, winners[0].1);
+}

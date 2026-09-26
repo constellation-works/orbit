@@ -284,3 +284,122 @@ fn a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them() {
         );
     }
 }
+
+/// A backend that reports which stored `refresh_token` it was delivered and
+/// at what version, and rotates three secrets: `refresh_token` (declared
+/// `rotatable`) from that version, `api_key` (declared, not rotatable) and
+/// `ghost` (undeclared).
+#[cfg(unix)]
+const ROTATING_BACKEND: &str = r##"#!/bin/sh
+input=$(cat)
+version=$(printf '%s' "$input" | sed -n 's/.*"refresh_token":{"value":"[^"]*","version":"\([^"]*\)".*/\1/p')
+case "$input" in
+  *'"value":"rotated-token-7d1"'*) seen=rotated ;;
+  *'"value":"first-token-2a9"'*) seen=first ;;
+  *) seen=none ;;
+esac
+printf '{"ok":true,"output":{"seen":"%s","version":"%s"},"secret_updates":{"refresh_token":{"value":"rotated-token-7d1","expected_version":"%s"},"api_key":{"value":"key-override-5c3","expected_version":null},"ghost":{"value":"ghost-value-0b4","expected_version":null}}}\n' "$seen" "$version" "$version"
+"##;
+
+/// Backend rotation through the host store (design §3, "Plugin secrets"):
+/// an update at the delivered version is stored and the next call carries
+/// the new value and version; an update to a declared but non-`rotatable`
+/// secret, or to an undeclared name, is refused and the call's output still
+/// comes back. The audit row records each name as applied or refused and no
+/// value; the call's response holds none either.
+#[cfg(unix)]
+#[test]
+fn a_backend_rotation_is_stored_and_audited_by_name_and_outcome_only() {
+    use orbit_types::plugin::PluginSecretUpdateStatus;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo")
+            .declaring_secrets(TWO_SECRETS)
+            .with_backend(ROTATING_BACKEND),
+    );
+    enable_plugin(&fixture.runtime, "demo", &PluginEnableOptions::default()).expect("enable");
+    set_plugin_secret(
+        &fixture.runtime,
+        "demo",
+        "refresh_token",
+        &value("first-token-2a9"),
+    )
+    .expect("set refresh token");
+    set_plugin_secret(
+        &fixture.runtime,
+        "demo",
+        "api_key",
+        &value("api-key-value-e44"),
+    )
+    .expect("set api key");
+    let store = PluginSecretStore::new(&fixture.global_root);
+    let stored = |name: &str| store.get("demo", name).expect("read").expect("set");
+    let first_version = stored("refresh_token").version;
+
+    let runtime = fixture.reopen();
+    let first = fixture.call(&runtime, "demo.hello").expect("first call");
+    assert_eq!(
+        first,
+        json!({ "seen": "first", "version": first_version }),
+        "the rotating call's output is returned unchanged"
+    );
+    let rotated = stored("refresh_token");
+    assert_eq!(rotated.value.expose(), "rotated-token-7d1");
+    assert_ne!(rotated.version, first_version);
+    assert_eq!(
+        stored("api_key").value.expose(),
+        "api-key-value-e44",
+        "a secret not declared rotatable is not replaced"
+    );
+    assert!(
+        store.get("demo", "ghost").expect("read").is_none(),
+        "an undeclared name is not stored"
+    );
+
+    let second = fixture.call(&runtime, "demo.hello").expect("second call");
+    assert_eq!(
+        second,
+        json!({ "seen": "rotated", "version": rotated.version }),
+        "the next call is delivered the new value at its new version"
+    );
+
+    let rows = runtime
+        .list_audit_events(None, Some("demo.hello".to_string()), None, None, 10)
+        .expect("audit events");
+    assert_eq!(rows.len(), 2);
+    let refused = PluginSecretUpdateStatus::Refused;
+    for row in &rows {
+        assert_eq!(
+            row.plugin_secret_updates,
+            BTreeMap::from([
+                ("api_key".to_string(), refused),
+                ("ghost".to_string(), refused),
+                (
+                    "refresh_token".to_string(),
+                    PluginSecretUpdateStatus::Applied
+                ),
+            ])
+        );
+        let text = serde_json::to_string(row).expect("serialize audit row");
+        for value in [
+            "first-token-2a9",
+            "rotated-token-7d1",
+            "api-key-value-e44",
+            "key-override-5c3",
+            "ghost-value-0b4",
+        ] {
+            assert!(!text.contains(value), "an audit row holds no value: {text}");
+        }
+    }
+    for response in [&first, &second] {
+        let text = response.to_string();
+        assert!(
+            !text.contains("token-") && !text.contains("value-"),
+            "{text}"
+        );
+    }
+}

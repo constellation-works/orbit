@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
-use super::envelope::{CallSecrets, call_context, plugin_error};
+use super::envelope::{CallSecrets, apply_secret_updates, call_context, plugin_error};
 use crate::ToolContext;
 
 /// Lines the reader may queue ahead of the consumer before it blocks.
@@ -209,7 +209,17 @@ impl McpBackend {
                 session.request("tools/call", params.clone(), Instant::now() + timeout)
             };
             return match outcome {
-                Ok(response) => tool_result(tool_name, &response),
+                Ok(response) => {
+                    // A rotation rides the result's `_meta.orbit`, the reply
+                    // to the request's `_meta.orbit.secrets`, and is applied
+                    // whether or not the call itself succeeded.
+                    apply_secret_updates(
+                        &self.spec,
+                        tool_name,
+                        response.pointer("/result/_meta/orbit/secret_updates"),
+                    );
+                    tool_result(tool_name, &response)
+                }
                 Err(error) => {
                     // Whatever happened, the wire is no longer in a known
                     // state: an unanswered request would otherwise be matched

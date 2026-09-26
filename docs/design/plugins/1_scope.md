@@ -152,7 +152,7 @@ spec:
   secrets:                                           # names only; values are set by the operator (§3)
     - name: refresh_token
       description: OAuth refresh token for the graph service.
-      rotatable: true                                # the backend may replace it (not yet delivered)
+      rotatable: true                                # the backend may replace it (`secret_updates`)
 ```
 
 Rules:
@@ -230,7 +230,7 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   `0600` in a `0700` directory, replaced by rename and written under a per-plugin lock file. Each
   write stamps a fresh random `version`; the store offers a versioned get for per-call delivery
   and a compare-and-swap put (applied only against the expected version, or only when unset)
-  for backend rotation, which is not wired yet. There is no OS keychain backend: one file
+  for backend rotation. There is no OS keychain backend: one file
   format keeps the semantics identical on every host and lets compare-and-swap sit under a
   single lock.
 - **Unreadable to plugins.** `state/plugin-secrets/` is on the plugin sandbox's unreadable list
@@ -249,6 +249,28 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   receives another plugin's secrets or a stored name its manifest no longer declares. The
   call's audit row records the delivered names (§4.4), never a value. `orbit plugin test`
   never opens the store; goldens supply fixture values instead (§5).
+- **Rotation.** A backend may replace a secret it declares `rotatable: true` by answering with
+  `secret_updates: {"<name>": {"value": …, "expected_version": …}}` — beside `ok`/`output` on
+  the `exec` stdout, as `result._meta.orbit.secret_updates` on an `mcp` `tools/call` result.
+  `expected_version` is the version the call was delivered, or `null` to write only while the
+  secret is unset; it must be present. The host applies each entry with the store's
+  compare-and-swap, so of two calls rotating from the same version exactly one is applied and
+  the other stores nothing. An entry for an undeclared or non-`rotatable` name, a malformed
+  entry, a stale `expected_version`, or a run with no store (`orbit plugin test`) is refused.
+  A refusal is never fatal: it is a warning-level diagnostic naming the plugin, tool, secret
+  and cause — never a value — and the call returns exactly what it would have (its output, or
+  the error it reported). Updates are applied whether `ok` is `true` or `false`, and before
+  `output_schema` is checked, so a token refreshed ahead of a call that then failed is kept.
+  A process that answered cannot be sent a message afterwards, so a backend learns the
+  outcome from the next call's `secrets`, which carries whatever the store now holds. The
+  call's audit row records each name as `applied` or `refused` (§4.4). An entry whose name is
+  not a valid secret name is refused without being logged or audited by name.
+
+  OAuth refresh with X, which invalidates the old refresh token on every refresh: the backend
+  reads `refresh_token` from `context.secrets`, exchanges it for an access token and a new
+  refresh token, and answers `{"ok": true, "output": {…}, "secret_updates": {"refresh_token":
+  {"value": "<new>", "expected_version": "<version it was delivered>"}}}`. If another call
+  refreshed first, this update is refused and the stored token is the other call's.
 - **Lifecycle.** `enable` (and `add --enable`) warns once per declared secret that has no value.
   `upgrade` (and any reinstall) keeps each secret the new manifest still declares, value and
   version intact, and deletes the rest. `remove` deletes the plugin's secrets unless
@@ -431,7 +453,9 @@ stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"
 
 `context.secrets` is present only for a plugin that declares `spec.secrets` and holds the ones
 that are set (§3, "Plugin secrets").
-stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false,"detail":{…}}}`
+stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false,"detail":{…}}}`,
+either optionally with `"secret_updates":{"<name>":{"value":…,"expected_version":…}}` to rotate
+a `rotatable` secret (§3, "Plugin secrets").
 
 **Call identity.** `context.task_id` and `context.job_run_id` (the same keys in an `mcp`
 call's `_meta.orbit`) name the managed activity the call serves, so a backend that authorizes
@@ -503,7 +527,8 @@ the only client; the plugin never listens on a socket.
   ```
 
   The plugin's declared secrets ride here too, read for each call and never placed in the
-  child's environment (§3, "Plugin secrets").
+  child's environment (§3, "Plugin secrets"). A server rotates one by answering with
+  `result._meta.orbit.secret_updates` (same shape as the `exec` field).
 
 - **Orbit answers server-initiated requests**: `ping` with `{}`, anything else with JSON-RPC
   `-32601` (Orbit declares no client capabilities). A server waiting on an unanswered request
@@ -705,6 +730,9 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   `plugin.yaml` bytes loaded for that call.
 - A call whose request carried declared secrets records their names in `plugin_secrets` (a
   JSON array); no value is ever written to the row (§3, "Plugin secrets").
+- A call whose backend returned `secret_updates` records each name and outcome in
+  `plugin_secret_updates` (a JSON object of name to `applied` or `refused`), again without a
+  value.
 - Tasks minted by a plugin auto-task carry `plugin:<ns>` beside `auto-task:<name>`; seeded
   definitions carry the provenance header. Removing a plugin never rewrites task history.
 
@@ -827,7 +855,7 @@ schema self-consistency, definition cross-references, and the `spec.web` rules o
 - `secrets: {<name>: <value>}` supplies fixture values for declared secrets, delivered exactly
   as stored ones are, each at version `fixture`; a declared secret the case omits is unset for
   that case. A fixture for an undeclared name refuses the directory. The run never reads the
-  host's secret store.
+  host's secret store, and refuses every `secret_updates` entry a backend returns.
 - A temp directory stands in for the global root and workspace. Template paths,
   `network: loopback` and `orbit_tools` run under the requested profile. `sandbox: none`, an
   absolute non-template `fs.write` root, `network: any`, or any `env_pass` is refused (printing

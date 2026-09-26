@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
-use orbit_types::plugin::PluginProvenance;
+use orbit_types::plugin::{PluginProvenance, PluginSecretUpdateStatus};
 use orbit_types::telemetry::{AuditAttribution, AuditEventStatus};
 use orbit_types::tool::{McpCapability, McpTransport};
 
@@ -163,6 +163,11 @@ pub struct AuditInvocationFields<'a> {
     /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
     /// only: no value reaches an audit row. Empty for every other call.
     pub plugin_secrets: &'a [String],
+    /// Each secret the plugin's backend asked to rotate, by name, and whether
+    /// the update was applied or refused (design
+    /// `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). `None`, or an
+    /// empty map, for every call that rotated nothing.
+    pub plugin_secret_updates: Option<&'a BTreeMap<String, PluginSecretUpdateStatus>>,
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

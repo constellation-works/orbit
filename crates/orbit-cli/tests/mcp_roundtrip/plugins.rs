@@ -988,6 +988,139 @@ fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it(
     assert_eq!(leaked, 0, "no audit row holds the value");
 }
 
+/// The value the rotation test sets; the fixture rotates it to this plus
+/// `-rotated`, so neither value ever travels in tool arguments.
+const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
+
+/// An `mcp`-backend plugin rotates a declared `rotatable` secret through its
+/// result's `_meta.orbit.secret_updates`: the update at the delivered version
+/// is stored and the next call carries it, a second update from the same
+/// version is refused while that call still answers, and the audit rows
+/// record each outcome by name. Neither value reaches an MCP response or an
+/// audit row.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::print_stderr)]
+fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value() {
+    if !python3_available() {
+        eprintln!("skipping: python3 is not available");
+        return;
+    }
+    let rotated = format!("{MCP_ROTATION_SECRET}-rotated");
+    let workspace = McpWorkspace::init();
+    let source = workspace.home.join("plugin-sources/mcpdemo");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
+        &source,
+    );
+    let manifest = source.join("plugin.yaml");
+    let declared = std::fs::read_to_string(&manifest).expect("read fixture manifest")
+        + "  secrets:\n    - name: refresh_token\n      rotatable: true\n";
+    std::fs::write(&manifest, declared).expect("declare secrets");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("utf8 source"),
+            "--enable",
+        ],
+    );
+    let mut set = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["plugin", "secret", "set", "mcpdemo", "refresh_token"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn secret set");
+    set.stdin
+        .take()
+        .expect("stdin")
+        .write_all(MCP_ROTATION_SECRET.as_bytes())
+        .expect("pipe the value");
+    let set = set.wait_with_output().expect("secret set");
+    assert!(set.status.success(), "{set:?}");
+
+    let mut client = workspace.serve();
+    let delivered_version = |result: &Value| {
+        result["structuredContent"]["meta"]["orbit"]["secrets"]["refresh_token"]["version"]
+            .as_str()
+            .expect("a delivered version")
+            .to_string()
+    };
+    let first = client.call_tool(
+        "mcpdemo_echo",
+        json!({ "message": "hi", "rotate": { "refresh_token": Value::Null } }),
+    );
+    assert_eq!(first["isError"], false, "{first}");
+    let first_version = delivered_version(&first);
+    let rotate_from =
+        |version: &str| json!({ "message": "hi", "rotate": { "refresh_token": version } });
+
+    let applied = client.call_tool("mcpdemo_echo", rotate_from(&first_version));
+    assert_eq!(applied["isError"], false, "{applied}");
+    let refused = client.call_tool("mcpdemo_echo", rotate_from(&first_version));
+    assert_eq!(
+        refused["isError"], false,
+        "a refused rotation still returns the call's output: {refused}"
+    );
+    let rotated_version = delivered_version(&refused);
+    assert_ne!(rotated_version, first_version);
+    let digest =
+        &refused["structuredContent"]["meta"]["orbit"]["secrets"]["refresh_token"]["sha256"];
+    assert_ne!(
+        *digest, first["structuredContent"]["meta"]["orbit"]["secrets"]["refresh_token"]["sha256"],
+        "the call after the rotation carries the rotated value"
+    );
+    drop(client);
+
+    for (surface, text) in [
+        ("first response", first.to_string()),
+        ("applied response", applied.to_string()),
+        ("refused response", refused.to_string()),
+    ] {
+        assert!(
+            !text.contains(MCP_ROTATION_SECRET),
+            "{surface} holds a secret value: {text}"
+        );
+    }
+
+    let conn = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open audit db");
+    let outcomes: Vec<Option<String>> = conn
+        .prepare(
+            "SELECT plugin_secret_updates FROM audit_events WHERE tool_name = 'mcpdemo.echo' \
+             ORDER BY id",
+        )
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        outcomes,
+        vec![
+            // Rotating from "unset" while the secret is set is stale too.
+            Some("{\"refresh_token\":\"refused\"}".to_string()),
+            Some("{\"refresh_token\":\"applied\"}".to_string()),
+            Some("{\"refresh_token\":\"refused\"}".to_string()),
+        ]
+    );
+    for value in [MCP_ROTATION_SECRET, rotated.as_str()] {
+        let leaked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE instr(COALESCE(arguments_json, '') || \
+                 COALESCE(stdout_truncated, '') || COALESCE(stderr_truncated, '') || \
+                 COALESCE(error_message, '') || COALESCE(plugin_secrets, '') || \
+                 COALESCE(plugin_secret_updates, ''), ?1) > 0",
+                [value],
+                |row| row.get(0),
+            )
+            .expect("scan audit rows");
+        assert_eq!(leaked, 0, "no audit row holds a value");
+    }
+}
+
 fn python3_available() -> bool {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .any(|dir| dir.join("python3").is_file())

@@ -17,7 +17,10 @@ use serde_json::Value;
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
-use super::envelope::{CallSecrets, exec_envelope, parse_response, validate_output};
+use super::envelope::{
+    CallSecrets, apply_secret_updates, exec_envelope, parse_response_json, response_output,
+    validate_output,
+};
 use super::mcp::McpBackend;
 use super::schema::CompiledSchema;
 use crate::{Tool, ToolContext, ToolExecutionKind};
@@ -175,6 +178,11 @@ impl PluginTool {
                 output.stderr.trim()
             )));
         }
-        parse_response(&self.name, &output.stdout)
+        let response = parse_response_json(&self.name, &output.stdout)?;
+        // Applied before the answer is judged: a backend that refreshed an
+        // OAuth token and then failed the call it refreshed for still holds
+        // the only valid token, and it must not be lost with the error.
+        apply_secret_updates(spec, &self.name, response.get("secret_updates"));
+        response_output(&self.name, &response)
     }
 }

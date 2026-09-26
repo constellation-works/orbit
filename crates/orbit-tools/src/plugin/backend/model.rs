@@ -191,7 +191,8 @@ impl fmt::Debug for DeliveredPluginSecret {
     }
 }
 
-/// Where the values behind a plugin's declared secrets are read from.
+/// Where the values behind a plugin's declared secrets are read from, and
+/// where a backend's rotation is written back.
 ///
 /// The host implements it over its own secret store, and `orbit plugin test`
 /// over the fixture secrets a golden supplies, so a conformance run never
@@ -202,31 +203,94 @@ pub trait PluginSecretSource: Send + Sync {
     /// absent from the map, not an error.
     fn read(&self, names: &[String])
     -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError>;
+
+    /// Store `value` as `name` only if it is still at `expected_version`
+    /// (`None`: only while it is unset) — a backend's `secret_updates`
+    /// entry. The check and the write must be one step, so of two updates
+    /// expecting the same version exactly one is applied.
+    ///
+    /// The default stores nothing: a source that is not the host's store,
+    /// such as a conformance run's fixtures, refuses every update.
+    fn compare_and_swap(
+        &self,
+        name: &str,
+        value: &str,
+        expected_version: Option<&str>,
+    ) -> Result<PluginSecretRotation, OrbitError> {
+        let _ = (name, value, expected_version);
+        Ok(PluginSecretRotation::Unsupported)
+    }
+}
+
+/// The outcome of [`PluginSecretSource::compare_and_swap`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginSecretRotation {
+    /// The expectation held and the new value is stored at `version`.
+    Applied { version: String },
+    /// The stored version is not the expected one; nothing was stored.
+    Stale,
+    /// This source does not store updates; nothing was stored.
+    Unsupported,
 }
 
 /// The plugin's declared secret names and the source their values come from.
 ///
 /// Delivery is bounded here rather than trusted to the source: whatever a
 /// source returns, a call carries only names the plugin's own manifest
-/// declares. `Debug` names the declared secrets and never a value.
+/// declares, and a backend may rotate only the ones it declares `rotatable`.
+/// `Debug` names the declared secrets and never a value.
 #[derive(Clone, Default)]
 pub struct PluginSecretDelivery {
     declared: Vec<String>,
+    rotatable: Vec<String>,
     source: Option<Arc<dyn PluginSecretSource>>,
 }
 
 impl PluginSecretDelivery {
-    /// Deliver `declared` from `source`.
+    /// Deliver `declared` from `source`. None is rotatable until
+    /// [`Self::with_rotatable`] names them.
     pub fn new(declared: Vec<String>, source: Arc<dyn PluginSecretSource>) -> Self {
         Self {
             declared,
+            rotatable: Vec::new(),
             source: Some(source),
         }
+    }
+
+    /// The declared names the manifest marks `rotatable: true`: the only ones
+    /// a backend's `secret_updates` may replace.
+    pub fn with_rotatable(mut self, rotatable: Vec<String>) -> Self {
+        self.rotatable = rotatable;
+        self
     }
 
     /// The manifest's `spec.secrets` names.
     pub fn declared(&self) -> &[String] {
         &self.declared
+    }
+
+    /// Whether the manifest declares `name`.
+    pub fn declares(&self, name: &str) -> bool {
+        self.declared.iter().any(|declared| declared == name)
+    }
+
+    /// Whether the manifest declares `name` and marks it `rotatable`.
+    pub fn is_rotatable(&self, name: &str) -> bool {
+        self.declares(name) && self.rotatable.iter().any(|rotatable| rotatable == name)
+    }
+
+    /// Apply one backend update through the source's compare-and-swap. The
+    /// caller has already checked that `name` is rotatable.
+    pub fn compare_and_swap(
+        &self,
+        name: &str,
+        value: &str,
+        expected_version: Option<&str>,
+    ) -> Result<PluginSecretRotation, OrbitError> {
+        match &self.source {
+            Some(source) => source.compare_and_swap(name, value, expected_version),
+            None => Ok(PluginSecretRotation::Unsupported),
+        }
     }
 
     /// What one call carries: each declared secret that is set, by name.
@@ -248,6 +312,7 @@ impl PluginSecretDelivery {
 impl PartialEq for PluginSecretDelivery {
     fn eq(&self, other: &Self) -> bool {
         self.declared == other.declared
+            && self.rotatable == other.rotatable
             && match (&self.source, &other.source) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
@@ -260,6 +325,7 @@ impl fmt::Debug for PluginSecretDelivery {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PluginSecretDelivery")
             .field("declared", &self.declared)
+            .field("rotatable", &self.rotatable)
             .finish_non_exhaustive()
     }
 }

@@ -24,8 +24,9 @@ mod tests;
 pub use backend::{
     DeliveredPluginSecret, DroppedFsRoot, PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR,
     PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginConfigSection, PluginProgramStatus,
-    PluginSandboxProfile, PluginSecretDelivery, PluginSecretSource, RenderedFsRoots,
-    plugin_grant_witness_relative, program_statuses, render_fs_roots, resolve_declared_programs,
+    PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation, PluginSecretSource,
+    RenderedFsRoots, plugin_grant_witness_relative, program_statuses, render_fs_roots,
+    resolve_declared_programs,
 };
 pub use callback::{
     CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV,
@@ -35,7 +36,7 @@ pub use callback::{
 };
 pub use envelope::{
     PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, take_delivered_plugin_secret_names,
-    validate_output,
+    take_plugin_secret_updates, validate_output,
 };
 pub use loader::{
     FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginTestFile, PluginDefinitionFiles,
