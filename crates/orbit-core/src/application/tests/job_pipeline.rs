@@ -21,9 +21,9 @@ use crate::application::job::pipeline::pipeline_worker_log_test_hook::{self, Pha
 use crate::application::job::pipeline::{
     ROUTINE_DISPATCH_ORBIT_DIR_FIELD, ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE,
     configure_pipeline_worker_command, configure_pipeline_worker_stdio, orbit_worker_command,
-    pipeline_worker_log_path, pipeline_worker_profile_file, pipeline_worker_root_override,
-    refuse_test_harness_worker, resolve_pipeline_worker_executable, run_definition_snapshot_path,
-    worker_command_override, worker_observer_read_counter,
+    orbit_worker_command_with_permission, pipeline_worker_log_path, pipeline_worker_profile_file,
+    pipeline_worker_root_override, resolve_pipeline_worker_executable,
+    run_definition_snapshot_path, worker_command_override, worker_observer_read_counter,
 };
 use crate::application::task::TaskAddParams;
 use crate::application::workflow::{CompletionPolicy, ShipMode};
@@ -1312,49 +1312,45 @@ fn deleted_current_executable_resolves_to_replaced_installed_path() {
     );
 }
 
-/// [ORB-12902] The production worker command re-execs `current_exe`. From a
-/// test binary that is the libtest harness, which reads the worker argv as
-/// test filters and can select the spawning test again — the 2026-09-23
-/// fork bomb. The guard must refuse before a `Command` exists, so nothing can
-/// be spawned, whichever crate's harness is running.
+/// The production worker command re-execs `current_exe`. An unmarked libtest
+/// process must be refused before a `Command` exists, no matter what path its
+/// harness has. This prevents the 2026-09-23 recursive worker fork bomb.
 #[test]
-fn worker_command_refuses_a_cargo_test_harness_executable() {
+fn worker_command_refuses_an_unmarked_process_at_any_path() {
     let harness = std::env::current_exe().expect("running test harness path");
-    let error = orbit_worker_command(
-        harness.clone(),
-        Path::new("/registered/workspace"),
-        "jrun-harness-guard",
-        None,
-    )
-    .expect_err("the running test harness must never be launched as a worker");
-    assert!(
-        matches!(&error, OrbitError::Execution(message)
-            if message.contains("cargo test harness")
-                && message.contains(&harness.display().to_string())),
-        "refusal must name the harness explicitly: {error}"
-    );
-
-    for downstream_harness in [
-        "/checkout/target/debug/deps/orbit_web-106f5a9f2d26e2cf",
-        "/checkout/target/debug/deps/orbit-0123456789abcdef",
-        "/checkout/target/llvm-cov-target/debug/deps/orbit_cli-fedcba9876543210",
+    for path in [
+        harness,
+        PathBuf::from("/opt/orbit/bin/orbit"),
+        PathBuf::from("/custom/build/output/harness-with-no-hash"),
+        PathBuf::from("/checkout/target/debug/deps/orbit_web-106f5a9f2d26e2cf"),
     ] {
+        let error = orbit_worker_command(
+            path.clone(),
+            Path::new("/registered/workspace"),
+            "jrun-harness-guard",
+            None,
+        )
+        .expect_err("an unmarked process must not construct a worker command");
         assert!(
-            refuse_test_harness_worker(Path::new(downstream_harness)).is_err(),
-            "{downstream_harness} is a cargo test harness"
+            matches!(&error, OrbitError::Execution(message)
+                if message.contains("no production Orbit entry point")
+                    && message.contains("test-support")),
+            "{path:?} should be refused with the override remedy: {error}"
         );
     }
 }
 
 #[test]
-fn worker_command_admits_installed_and_built_orbit_binaries() {
+fn marked_worker_command_admits_any_executable_path() {
     for orbit in [
         "/home/operator/.orbit/bin/orbit",
         "/checkout/target/debug/orbit",
         "/checkout/target/llvm-cov-target/debug/orbit",
         "/opt/deps/orbit",
+        "/checkout/target/debug/deps/orbit_web-106f5a9f2d26e2cf",
     ] {
-        let command = orbit_worker_command(
+        let command = orbit_worker_command_with_permission(
+            true,
             PathBuf::from(orbit),
             Path::new("/registered/workspace"),
             "jrun-installed",
@@ -1364,11 +1360,12 @@ fn worker_command_admits_installed_and_built_orbit_binaries() {
         assert_eq!(command.get_program(), OsStr::new(orbit));
     }
 
-    // An atomic upgrade's deleted-inode path resolves before the guard reads it.
+    // An atomic upgrade's deleted-inode path resolves after the marker check.
     let dir = TempDir::new().expect("tempdir");
     let installed = dir.path().join("orbit");
     std::fs::write(&installed, "replacement").expect("write replacement executable");
-    let command = orbit_worker_command(
+    let command = orbit_worker_command_with_permission(
+        true,
         installed.with_file_name("orbit (deleted)"),
         Path::new("/registered/workspace"),
         "jrun-replaced",

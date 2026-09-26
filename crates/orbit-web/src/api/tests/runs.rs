@@ -1107,7 +1107,7 @@ async fn ship_endpoint_rejects_duplicate_task_ids() {
 
 /// [ORB-12902] Regression for the 2026-09-23 fork bomb: a submission through
 /// the real ship handler reaches `spawn_pipeline_worker` from this crate's
-/// test binary, where orbit-core's `cfg(test)` guard does not apply. With the
+/// test binary, which has no production entry-point marker. With the
 /// `test-support` substitute installed the stub, not this libtest harness, is
 /// what runs as the worker.
 #[tokio::test]

@@ -1,6 +1,25 @@
+//! Worker command construction and the process-local re-exec permission.
+//!
+//! The production `orbit` binary marks itself from `main`; the CLI, MCP,
+//! sweep clock, and dashboard all enter there. An unmarked library consumer
+//! or test harness cannot build a self-reexec worker command, whatever its
+//! executable path. Tests that dispatch runs substitute the worker program
+//! through the `test-support` override. The old Cargo path heuristic was
+//! removed because filename layout does not prove which entry point ran.
+
 use super::log::pipeline_worker_file_name;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set only by a production Orbit binary's `main` before it can submit runs.
+/// A library consumer or libtest harness starts with this unset, regardless of
+/// its executable name or where it was built.
+static WORKER_REEXEC_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mark_process_as_pipeline_worker_binary() {
+    WORKER_REEXEC_ENABLED.store(true, Ordering::Relaxed);
+}
 
 /// Return a stable path suitable for launching a fresh worker process.
 ///
@@ -252,44 +271,50 @@ pub(crate) fn worker_substituted_process_wide() -> bool {
     }
 }
 
-/// Refuse a worker executable that is a cargo test harness [ORB-12902].
+/// Refuse re-exec unless the process entered through Orbit's production binary.
 ///
-/// Cargo builds every libtest binary as `target/<profile>/deps/<crate>-<hash>`
-/// with a 16-hex-digit metadata hash; an installed or `cargo run` `orbit` is
-/// never named that way. Re-executing a harness at the worker argv makes
-/// libtest treat `job run-pipeline-worker <run_id>` as test filters, so a
-/// spawning test can select itself and fork without bound (2026-09-23
-/// outage). This holds regardless of how the calling crate was compiled.
-pub(crate) fn refuse_test_harness_worker(executable: &Path) -> Result<(), OrbitError> {
-    let in_deps_dir = executable
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|name| name == "deps");
-    let hashed_stem = executable
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .and_then(|stem| stem.rsplit_once('-'))
-        .is_some_and(|(_, hash)| hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()));
-    if in_deps_dir && hashed_stem {
-        return Err(OrbitError::Execution(format!(
-            "refusing to launch pipeline worker from cargo test harness '{}': a test must \
-             substitute the worker program (orbit-core `test-support` feature)",
-            executable.display()
-        )));
+/// Re-executing a libtest harness at the worker argv can select the spawning
+/// test again and fork without bound (2026-09-23 outage). Its `main` never sets
+/// the marker. A test that submits runs must use the `test-support` override.
+fn require_pipeline_worker_entry_point(enabled: bool) -> Result<(), OrbitError> {
+    if enabled {
+        Ok(())
+    } else {
+        Err(OrbitError::Execution(
+            "refusing to re-exec this process as a pipeline worker: no production Orbit entry \
+             point marked it worker-capable; tests must substitute the worker program with the \
+             orbit-core `test-support` override"
+                .to_string(),
+        ))
     }
-    Ok(())
 }
 
 /// The production worker command: `current_exe` resolved to its launchable
-/// path, refused if it is a test harness, at the hidden worker subcommand.
+/// path, after the production entry-point check, at the hidden worker subcommand.
 pub(crate) fn orbit_worker_command(
     current_exe: PathBuf,
     workspace: &Path,
     run_id: &str,
     root_override: Option<&Path>,
 ) -> Result<Command, OrbitError> {
+    orbit_worker_command_with_permission(
+        WORKER_REEXEC_ENABLED.load(Ordering::Relaxed),
+        current_exe,
+        workspace,
+        run_id,
+        root_override,
+    )
+}
+
+pub(crate) fn orbit_worker_command_with_permission(
+    enabled: bool,
+    current_exe: PathBuf,
+    workspace: &Path,
+    run_id: &str,
+    root_override: Option<&Path>,
+) -> Result<Command, OrbitError> {
+    require_pipeline_worker_entry_point(enabled)?;
     let executable = resolve_pipeline_worker_executable(current_exe);
-    refuse_test_harness_worker(&executable)?;
     let mut command = Command::new(executable);
     configure_pipeline_worker_command(&mut command, workspace, run_id, root_override);
     Ok(command)

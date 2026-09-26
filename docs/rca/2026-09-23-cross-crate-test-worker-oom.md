@@ -2,7 +2,7 @@
 type: context
 summary: Root cause analysis of the cross-crate recursive test-worker fork bomb that exhausted memory and forced a hard reset of the Linux execution host.
 incident_date: 2026-09-23
-last_validated: 2026-09-23
+last_validated: 2026-09-26
 tags: [incident, rca, pipeline, testing, operations]
 paths: ["crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-web/src/api/**", "crates/orbit-core/src/application/routines/clock.rs"]
 related_artifacts: [ORB-12887, ORB-12902, ORB-12903, F2026-09-210, ORB-11418, ORB-11415, F2026-09-042]
@@ -249,6 +249,19 @@ libtest harness is re-executing itself.
 | ORB-12903 | Proposed | Launch each pipeline worker in its own bounded transient unit (memory and task limits), with a distinct failure reason when a run hits a limit. |
 | ORB-12887 | Blocked on ORB-12902 | The originating feature. Its test must use the supported override before it is re-dispatched. |
 | ORB-11415 | Someday (from the 2026-09-06 RCA) | Host saturation visibility for orchestrators. This recurrence argues for reprioritizing it. |
+
+### Worker re-exec guard update (2026-09-26)
+
+ORB-12902 first refused a worker executable when its path looked like Cargo's
+`target/<profile>/deps/<crate>-<hash>` harness layout. ORB-13242 replaces that
+path heuristic with a process-local marker. The installed `orbit` CLI's `main`
+sets it at startup, covering the CLI, MCP server, sweep clock, and `orbit web
+serve` dashboard. A downstream libtest harness does not run that `main`, so
+the shared worker-command builder refuses to re-execute it before spawning,
+regardless of its executable path. Tests that dispatch runs use the
+`orbit-core` `test-support` worker override. The path check was removed: a
+marked installed binary is admitted even if its filename resembles a Cargo
+harness, and an unmarked binary is refused even if it is named `orbit`.
 
 Until ORB-12903 ships, an operator can bound the existing services with
 user-level drop-ins (`MemoryHigh`, `MemoryMax`, `TasksMax` on

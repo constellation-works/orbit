@@ -314,6 +314,9 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
 }
 
 fn main() {
+    // This is the production entry point for CLI, MCP, sweep clock, and the
+    // dashboard (`orbit web serve`). Test harnesses never execute this main.
+    orbit_core::mark_process_as_pipeline_worker_binary();
     orbit_common::observability::logging::init_default_subscriber("warn");
     output::pipe::install_handler();
 
