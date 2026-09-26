@@ -317,6 +317,89 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
         &resolved.fs_profile.name,
     );
 
+    // ORBIT_ROOT is a documented workspace selection escape hatch for nested
+    // tool calls. The host pinned the registry, not this workspace `.orbit`,
+    // so no workspace generation record is present for a read-only sandboxed
+    // child to open. The child must join the host pin instead. [ORB-13025]
+    let mut env_with_workspace_root = env.clone();
+    env_with_workspace_root.push((
+        "ORBIT_ROOT".to_string(),
+        workspace_orbit.display().to_string(),
+    ));
+    assert!(
+        !workspace_orbit.join(".generation.lock").exists(),
+        "fixture must reproduce an unpinned workspace root"
+    );
+    let friction = run_sandboxed_orbit(
+        &orbit_bin,
+        &profile_text,
+        &env_with_workspace_root,
+        &worktree,
+        &["tool", "run", "orbit.friction.list"],
+    );
+    assert!(
+        friction.status.success(),
+        "sandboxed orbit.friction.list with ORBIT_ROOT failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&friction.stdout),
+        String::from_utf8_lossy(&friction.stderr)
+    );
+    let frictions: Value = serde_json::from_slice(&friction.stdout).expect("friction list JSON");
+    assert!(
+        frictions.is_array(),
+        "friction list must return records: {frictions}"
+    );
+    assert!(
+        !workspace_orbit.join(".generation.lock").exists(),
+        "a managed nested command must not create a second generation authority"
+    );
+    assert_eq!(
+        std::fs::read_to_string(global.join(".generation.lock")).expect("generation record"),
+        format!("1:{host_generation}\n"),
+        "a sandboxed child must leave the host generation record intact"
+    );
+
+    // `orbit update --preflight` uses the same admission authorities as an
+    // update, without downloading or replacing an executable. With the default
+    // root, the live host pin is the direct reason for refusal.
+    let update_against_host = run_sandboxed_orbit(
+        &orbit_bin,
+        &profile_text,
+        &env,
+        &worktree,
+        &["update", "--preflight", "--json"],
+    );
+    let update_against_host_output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&update_against_host.stdout),
+        String::from_utf8_lossy(&update_against_host.stderr)
+    );
+    assert!(
+        !update_against_host.status.success()
+            && update_against_host_output.contains("Orbit clients or commands are still running"),
+        "live managed pin must refuse orbit update admission: {update_against_host_output}"
+    );
+
+    // With ORBIT_ROOT, update admission still includes the workspace authority
+    // as well as the host root. A missing sandbox-denied workspace record must
+    // refuse the update; the child process pin never creates that record.
+    let update = run_sandboxed_orbit(
+        &orbit_bin,
+        &profile_text,
+        &env_with_workspace_root,
+        &worktree,
+        &["update", "--preflight", "--json"],
+    );
+    let update_output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&update.stdout),
+        String::from_utf8_lossy(&update.stderr)
+    );
+    assert!(
+        !update.status.success() && update_output.contains("upgrade admission refused"),
+        "sandboxed orbit update with ORBIT_ROOT must refuse admission: {update_output}"
+    );
+    assert!(!workspace_orbit.join(".generation.lock").exists());
+
     let output = run_sandboxed_orbit(
         &orbit_bin,
         &profile_text,

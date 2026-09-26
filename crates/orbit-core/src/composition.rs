@@ -14,6 +14,8 @@ use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
+#[cfg(target_os = "macos")]
+use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
     HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
@@ -403,6 +405,19 @@ fn roots_from_resolved(
 }
 
 fn has_explicit_root_override(root_override: Option<&Path>) -> bool {
-    root_override.is_some()
-        || std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty())
+    if root_override.is_some() {
+        return true;
+    }
+    let env_override = std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty());
+    #[cfg(target_os = "macos")]
+    if env_override
+        && managed_dispatch_context_from_env()
+        && std::env::var("ORBIT_REGISTRY_ROOT").is_ok_and(|value| !value.trim().is_empty())
+    {
+        // The sandbox may not create a generation record under the selected
+        // workspace `.orbit`. Keep global stores and their generation pin on
+        // the host registry while ORBIT_ROOT selects shared/local state.
+        return false;
+    }
+    env_override
 }

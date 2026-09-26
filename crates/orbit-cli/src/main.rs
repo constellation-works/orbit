@@ -323,8 +323,9 @@ fn main() {
     // record when store schema matches. Everything else pins the exact running
     // inode before any bootstrap. This also covers all MCP transports, managed
     // workers and automatic migrations. `--root` / `ORBIT_ROOT` isolate that
-    // pin so a read-only unpinned `~/.orbit` cannot block scratch init; without
-    // those, the host-global root remains the authority.
+    // pin so a read-only unpinned `~/.orbit` cannot block scratch init. A
+    // managed macOS child joins its parent's host registry pin even when
+    // ORBIT_ROOT selects workspace data; update still checks both roots.
     let inspection =
         matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
     let root_override = cli.root.clone();
@@ -357,13 +358,14 @@ fn main() {
     let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
         None
     } else {
-        let root = match orbit_core::runtime::resolve_generation_root(root_override.as_deref()) {
-            Ok(root) => root,
-            Err(error) => {
-                print_error(&error, &sink, None);
-                std::process::exit(1);
-            }
-        };
+        let root =
+            match orbit_core::runtime::resolve_process_generation_root(root_override.as_deref()) {
+                Ok(root) => root,
+                Err(error) => {
+                    print_error(&error, &sink, None);
+                    std::process::exit(1);
+                }
+            };
         match pin_executable_generation(&root, matches!(runtime_need, RuntimeNeed::ReadOnly)) {
             Ok(guard) => {
                 if clock_tick

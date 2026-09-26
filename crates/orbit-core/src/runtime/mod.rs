@@ -58,7 +58,7 @@ pub use resolve::{
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{
     is_global_orbit_root, resolve_generation_root, resolve_global_root,
-    try_resolve_initialized_roots,
+    resolve_process_generation_root, try_resolve_initialized_roots,
 };
 // `pub` for host task-store maintenance in `orbit-cmd`, which must recognize
 // the one partition id no registry claims [ORB-12119].
