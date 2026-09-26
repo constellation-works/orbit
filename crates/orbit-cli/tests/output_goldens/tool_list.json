@@ -245,6 +245,34 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Delete an auto-task definition with its scheduler cursor and delivery consumer state. Deleting a shipped default records an opt-out, so reseeding does not re-create it; `orbit auto-task restore` reinstates it.",
+    "enabled": true,
+    "name": "orbit.auto_task.delete",
+    "parameters": [
+      {
+        "description": "Definition name. Required.",
+        "name": "name",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Why the definition is deleted, kept in the audit record.",
+        "name": "reason",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Delete even while a task minted from the definition is open or a delivery action is executing. Defaults to false.",
+        "name": "force",
+        "param_type": "boolean",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "List every auto-task definition in this workspace.",
     "enabled": true,
     "name": "orbit.auto_task.list",

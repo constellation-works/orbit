@@ -6,7 +6,8 @@
 //! are routed to the owner host before reaching this surface, so its
 //! `local_orbit_dir` is the registered checkout the host clock reads.
 //! Direct CLI calls from a linked worktree still use that worktree's root.
-//! Disabling is a `toggle`, never a delete.
+//! Disabling is a `toggle`; removal is the separate audited delete in
+//! [`super::delete`].
 //!
 //! `mint` (CLI-only by design — see `docs/design/mcp-bridge/2_design.md`)
 //! rides here too: it mints a task from a definition on demand by reusing the
@@ -193,8 +194,8 @@ impl OrbitRuntime {
         self.stamp_and_write(definition)
     }
 
-    /// Enable or disable a definition (the kill-switch). Disabling is how an
-    /// auto-task is retired — the definition and its history are preserved.
+    /// Enable or disable a definition (the kill-switch). Disabling pauses an
+    /// auto-task and preserves the definition; `auto_task_delete` removes it.
     pub fn auto_task_toggle(
         &self,
         name: &str,
@@ -231,7 +232,10 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))
     }
 
-    fn require_validated_auto_task(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
+    pub(super) fn require_validated_auto_task(
+        &self,
+        name: &str,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
         let loaded = self
             .validated_auto_tasks(name)?
             .definitions
@@ -246,7 +250,10 @@ impl OrbitRuntime {
         Ok(loaded.definition)
     }
 
-    fn validated_auto_tasks(&self, name: &str) -> Result<AutoTaskCollection, OrbitError> {
+    pub(super) fn validated_auto_tasks(
+        &self,
+        name: &str,
+    ) -> Result<AutoTaskCollection, OrbitError> {
         let collection = collect_auto_tasks(&self.paths().local_dir);
         if !collection.errors.is_empty() {
             return Err(OrbitError::InvalidInput(format!(

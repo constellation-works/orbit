@@ -56,6 +56,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_auto_task_add"
         | "orbit_auto_task_update"
         | "orbit_auto_task_toggle"
+        | "orbit_auto_task_delete"
         | "orbit_search"
         // The distributed drain's read-only surface answers for the owner's
         // coordination store — receipts, claims, and the ship contract

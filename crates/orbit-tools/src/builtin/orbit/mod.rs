@@ -51,6 +51,10 @@ pub fn register(registry: &mut ToolRegistry) {
         auto_task::toggle::OrbitAutoTaskToggleTool,
         McpToolScope::WorkspaceRequired,
     );
+    registry.register_mcp(
+        auto_task::delete::OrbitAutoTaskDeleteTool,
+        McpToolScope::WorkspaceRequired,
+    );
     // The distributed drain's read-only half. The probe and receipt lookup are
     // advertised because a follower must reach them over federated MCP before
     // it can enable pull at all. Claim inspection is registered active but

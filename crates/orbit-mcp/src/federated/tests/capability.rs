@@ -14,6 +14,7 @@ use super::super::capability::{
 /// whole advertised surface [ORB-11012].
 const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.auto_task.add", McpToolClass::ControlPlane),
+    ("orbit.auto_task.delete", McpToolClass::ControlPlane),
     ("orbit.auto_task.list", McpToolClass::ControlPlane),
     ("orbit.auto_task.mint", McpToolClass::ControlPlane),
     ("orbit.auto_task.toggle", McpToolClass::ControlPlane),

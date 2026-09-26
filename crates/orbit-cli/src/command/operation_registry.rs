@@ -495,6 +495,8 @@ impl Commands {
                     AutoTaskSubcommand::Mint(args) => ("mint", Some(args.name.as_str())),
                     AutoTaskSubcommand::Recover(args) => ("recover", Some(args.name.as_str())),
                     AutoTaskSubcommand::Reset(args) => ("reset", Some(args.name.as_str())),
+                    AutoTaskSubcommand::Delete(args) => ("delete", Some(args.name.as_str())),
+                    AutoTaskSubcommand::Restore(args) => ("restore", Some(args.name.as_str())),
                 };
                 CommandOperation::new(
                     runtime_need,

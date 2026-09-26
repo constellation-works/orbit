@@ -29,7 +29,8 @@ pub use inspect::{
     inspect_routine, unadmittable_delivery_definitions, unresolvable_delivery_branches,
 };
 pub use recovery::recover_auto_task;
-pub use reset::reset_auto_task;
+pub use reset::{ConsumerTeardown, reset_auto_task};
+pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
 pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
 
 pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";

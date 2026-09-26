@@ -357,6 +357,7 @@ fn auto_task_surface_exposes_host_brokered_definition_writes() {
         auto_task,
         BTreeSet::from([
             "orbit.auto_task.add",
+            "orbit.auto_task.delete",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
             "orbit.auto_task.toggle",

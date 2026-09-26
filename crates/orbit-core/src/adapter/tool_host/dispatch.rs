@@ -65,6 +65,7 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskShow => super::auto_task_tools::show(runtime, input),
         OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
         OrbitBuiltinAction::AutoTaskToggle => super::auto_task_tools::toggle(runtime, input),
+        OrbitBuiltinAction::AutoTaskDelete => super::auto_task_tools::delete(runtime, input),
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
         OrbitBuiltinAction::DrainProbe => {

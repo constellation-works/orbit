@@ -87,6 +87,11 @@ pub(super) struct ManagedAssetManifest {
     pub(super) assets: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) routine_provenance: BTreeMap<String, RoutineAssetProvenance>,
+    /// Shipped defaults an operator deleted. Reconciliation leaves them
+    /// absent instead of re-creating them, and doctor does not report them
+    /// missing. A name drops out once the binary stops shipping it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(super) opted_out: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +171,17 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
     let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
     let current_names: BTreeSet<&str> = files.iter().map(|(name, _)| *name).collect();
+    let opted_out: BTreeSet<String> = previous
+        .as_ref()
+        .map(|manifest| {
+            manifest
+                .opted_out
+                .iter()
+                .filter(|name| current_names.contains(name.as_str()))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
     let mut result = ManagedAssetReconciliation::default();
 
     if let Some(previous) = &previous {
@@ -237,6 +253,17 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     let mut next_assets = BTreeMap::new();
     for (name, embedded) in files {
         let path = dir.join(layout.relative_path(name));
+        if opted_out.contains(*name) {
+            result.actions.push(ManagedAssetAction {
+                name: (*name).to_string(),
+                path,
+                outcome: ManagedAssetOutcome::Unchanged,
+                detail: Some(format!(
+                    "shipped {asset_kind} `{name}` was deleted by an operator and stays opted out"
+                )),
+            });
+            continue;
+        }
         let rendered = render(name, embedded)?;
         let rendered_digest = sha256_hex(rendered.as_bytes());
 
@@ -383,6 +410,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         asset_kind: asset_kind.to_string(),
         assets: next_assets,
         routine_provenance: BTreeMap::new(),
+        opted_out,
     };
     if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&manifest) {
         let encoded = encode_managed_asset_manifest(&manifest)?;
@@ -404,6 +432,62 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     }
 
     Ok(result)
+}
+
+/// Record that an operator deleted the shipped default `name`, so later
+/// reconciliation leaves it absent. Any provenance for it is dropped: the file
+/// is gone, and a hand-written replacement is user-authored.
+///
+/// A directory that was never reconciled gains a manifest here; without one
+/// the next seed would treat the directory as legacy and re-create the file.
+pub(crate) fn record_managed_asset_opt_out(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+) -> Result<(), OrbitError> {
+    validate_managed_asset_name(name, layout, "opted-out asset")?;
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let previous = load_managed_asset_manifest(&manifest_path, asset_kind, layout)?;
+    let mut next = previous.clone().unwrap_or_else(|| ManagedAssetManifest {
+        schema_version: MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
+        asset_kind: asset_kind.to_string(),
+        assets: BTreeMap::new(),
+        routine_provenance: BTreeMap::new(),
+        opted_out: BTreeSet::new(),
+    });
+    next.assets.remove(name);
+    next.opted_out.insert(name.to_string());
+    if previous.as_ref() == Some(&next) {
+        return Ok(());
+    }
+    write_managed_asset_manifest(&manifest_path, &next)
+}
+
+/// Clear an operator opt-out and record `digest` as the provenance of the
+/// shipped content just written back for `name`.
+pub(crate) fn restore_managed_asset(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+    digest: String,
+) -> Result<(), OrbitError> {
+    validate_managed_asset_name(name, layout, "restored asset")?;
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let mut next =
+        load_managed_asset_manifest(&manifest_path, asset_kind, layout)?.unwrap_or_else(|| {
+            ManagedAssetManifest {
+                schema_version: MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
+                asset_kind: asset_kind.to_string(),
+                assets: BTreeMap::new(),
+                routine_provenance: BTreeMap::new(),
+                opted_out: BTreeSet::new(),
+            }
+        });
+    next.opted_out.remove(name);
+    next.assets.insert(name.to_string(), digest);
+    write_managed_asset_manifest(&manifest_path, &next)
 }
 
 pub(crate) fn retired_preservation_path(

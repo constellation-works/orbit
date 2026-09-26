@@ -13,6 +13,7 @@ use orbit_automation::delivery::reset;
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::recovery::{ResetPreview, ResetRequest};
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
+use serde::Serialize;
 
 use super::{ownership, source::Source};
 
@@ -102,4 +103,108 @@ pub fn reset_auto_task(
     }
 
     Ok(applied)
+}
+
+/// What deleting a delivery definition did to its consumer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ConsumerTeardown {
+    pub consumer: String,
+    /// The consumer had recorded state, and an audited reset destroyed it.
+    pub reset: bool,
+    /// Every pinned `refs/orbit/automation/*` ref the consumer held; all of
+    /// them are deleted.
+    pub released_refs: Vec<String>,
+}
+
+/// Why deleting `definition` must not tear its delivery consumer down yet.
+///
+/// Delete reuses the audited reset rather than a second state writer, so it
+/// inherits exactly the refusals a reset preview reports. A definition with
+/// no recorded consumer state has nothing to refuse.
+pub(crate) fn consumer_teardown_refusals(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<Vec<String>, OrbitError> {
+    let Some(consumer) = delivery_consumer(runtime, definition)? else {
+        return Ok(vec![]);
+    };
+    if runtime
+        .automation_store()?
+        .automation_state(&consumer)?
+        .is_none()
+    {
+        return Ok(vec![]);
+    }
+    let request = ResetRequest {
+        reason: String::new(),
+        force,
+    };
+    Ok(reset_auto_task(runtime, definition, &request, now)?.refusals)
+}
+
+/// Destroy a deleted delivery definition's consumer state through the audited
+/// reset, then drop every pinned `refs/orbit/automation/*` ref it still holds,
+/// so nothing is left for a consumer that can never evaluate again.
+///
+/// Returns `None` for a definition without a delivery trigger.
+pub(crate) fn tear_down_auto_task_consumer(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+    reason: &str,
+    force: bool,
+    now: DateTime<Utc>,
+) -> Result<Option<ConsumerTeardown>, OrbitError> {
+    let Some(consumer) = delivery_consumer(runtime, definition)? else {
+        return Ok(None);
+    };
+    let source = Source::new(&runtime.paths().repo_root);
+    let pinned = source
+        .retained_refs(&consumer)
+        .map_err(automation_error_to_orbit)?;
+    let reset = runtime
+        .automation_store()?
+        .automation_state(&consumer)?
+        .is_some();
+    if reset {
+        let request = ResetRequest {
+            reason: reason.to_string(),
+            force,
+        };
+        reset_auto_task(runtime, definition, &request, now)?;
+    }
+
+    // Reset releases the pins it knows about; this catches the ones a consumer
+    // without state, or a reset that could not delete them, left behind.
+    let retained = source
+        .retained_refs(&consumer)
+        .map_err(automation_error_to_orbit)?;
+    let kept = source.release_refs(&retained);
+    if !kept.is_empty() {
+        return Err(OrbitError::Io(format!(
+            "could not delete pinned automation refs for '{consumer}': {}",
+            kept.join(", ")
+        )));
+    }
+
+    Ok(Some(ConsumerTeardown {
+        consumer,
+        reset,
+        released_refs: pinned,
+    }))
+}
+
+/// The consumer key of a delivery definition. A host without a registered
+/// machine identity can never have evaluated one, so it has none.
+fn delivery_consumer(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<Option<String>, OrbitError> {
+    if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. })
+        || runtime.automation_machine_identity().is_none()
+    {
+        return Ok(None);
+    }
+    super::consumer_key(runtime, "auto-task", &definition.name).map(Some)
 }

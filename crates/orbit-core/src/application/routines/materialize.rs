@@ -542,6 +542,7 @@ pub(crate) fn reconcile_default_routines(
         asset_kind: "routine".to_string(),
         assets: next_assets,
         routine_provenance: next_provenance,
+        opted_out: Default::default(),
     };
     if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&next) {
         let encoded = encode_managed_asset_manifest(&next)?;
