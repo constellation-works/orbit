@@ -14,7 +14,7 @@
 //! too: admission resumes on its own either way. Other platforms have no probe
 //! and report no schedule.
 
-use std::path::{Path, PathBuf};
+use std::io;
 use std::sync::Arc;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -73,7 +73,7 @@ pub trait HostSignalProbe: Send + Sync {
 #[must_use]
 pub fn default_host_signal_probe() -> Arc<dyn HostSignalProbe> {
     if cfg!(all(target_os = "linux", not(test))) {
-        Arc::new(SystemdScheduledShutdownProbe::default())
+        Arc::new(SystemdScheduledShutdownProbe)
     } else {
         Arc::new(FixedHostSignals::none())
     }
@@ -83,52 +83,43 @@ pub fn default_host_signal_probe() -> Arc<dyn HostSignalProbe> {
 /// an unreadable or malformed one is logged and treated the same way, because
 /// the hold is a courtesy to the next boot and must not wedge admission on a
 /// file Orbit does not own.
-#[derive(Debug, Clone)]
-pub struct SystemdScheduledShutdownProbe {
-    path: PathBuf,
-}
-
-impl Default for SystemdScheduledShutdownProbe {
-    fn default() -> Self {
-        Self::at_path(SYSTEMD_SCHEDULED_SHUTDOWN_PATH)
-    }
-}
-
-impl SystemdScheduledShutdownProbe {
-    /// A probe over an explicit schedule file, for fixtures.
-    #[must_use]
-    pub fn at_path(path: impl AsRef<Path>) -> Self {
-        Self {
-            path: path.as_ref().to_path_buf(),
-        }
-    }
-}
+#[derive(Debug, Clone, Default)]
+pub struct SystemdScheduledShutdownProbe;
 
 impl HostSignalProbe for SystemdScheduledShutdownProbe {
     fn scheduled_shutdown(&self) -> Option<ScheduledShutdown> {
-        let contents = match std::fs::read_to_string(&self.path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-            Err(error) => {
-                tracing::warn!(
-                    target: "orbit.core.host_signal",
-                    path = %self.path.display(),
-                    error = %error,
-                    "unreadable scheduled-shutdown file; admission is not held",
-                );
-                return None;
-            }
-        };
-        let parsed = parse_systemd_schedule(&contents, &self.path.to_string_lossy());
-        if parsed.is_none() && !is_dry_run(&contents) {
+        scheduled_shutdown_from_read(std::fs::read_to_string(SYSTEMD_SCHEDULED_SHUTDOWN_PATH))
+    }
+}
+
+/// Interpret the fixed logind path's read result. Keeping this separate lets
+/// tests exercise file errors without granting the production probe an
+/// arbitrary path.
+pub(crate) fn scheduled_shutdown_from_read(
+    contents: io::Result<String>,
+) -> Option<ScheduledShutdown> {
+    let contents = match contents {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) => {
             tracing::warn!(
                 target: "orbit.core.host_signal",
-                path = %self.path.display(),
-                "malformed scheduled-shutdown file; admission is not held",
+                path = SYSTEMD_SCHEDULED_SHUTDOWN_PATH,
+                error = %error,
+                "unreadable scheduled-shutdown file; admission is not held",
             );
+            return None;
         }
-        parsed
+    };
+    let parsed = parse_systemd_schedule(&contents, SYSTEMD_SCHEDULED_SHUTDOWN_PATH);
+    if parsed.is_none() && !is_dry_run(&contents) {
+        tracing::warn!(
+            target: "orbit.core.host_signal",
+            path = SYSTEMD_SCHEDULED_SHUTDOWN_PATH,
+            "malformed scheduled-shutdown file; admission is not held",
+        );
     }
+    parsed
 }
 
 /// A probe with a fixed answer: no host signals, or an injected schedule.
