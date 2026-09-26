@@ -6,6 +6,7 @@
 //! a redirect captured escape sequences from half the CLI. Each test here pins
 //! one half against the other.
 
+use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 
 use serde_json::json;
@@ -16,6 +17,30 @@ use crate::output::table::{Column, Table};
 
 /// The escape byte every ANSI sequence starts with.
 const ESC: char = '\u{1b}';
+
+/// crossterm caches the process environment, so table color tests run in an
+/// isolated child with the forced-color environment from the terminal spec.
+pub(super) fn run_in_forced_color_child(test_name: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_TABLE_BASIC_COLOR_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    let output = Command::new(std::env::current_exe().expect("test binary path"))
+        .args(["--exact", test_name, "--nocapture"])
+        .env_remove("NO_COLOR")
+        .env("TERM", "xterm")
+        .env("CLICOLOR_FORCE", "1")
+        .env(CHILD, "1")
+        .output()
+        .expect("run forced-color test child");
+    assert!(
+        output.status.success(),
+        "forced-color child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
 
 /// `colored`'s override is process-global, so tests that flip it run one at a
 /// time. Tests that only compare two renderings against each other do not need

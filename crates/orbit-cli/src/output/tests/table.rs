@@ -3,27 +3,14 @@
 //! Every case pins the width explicitly rather than reading `COLUMNS`, so the
 //! geometry is the same under `cargo test` and under `--nocapture`.
 //!
-//! ## Why the "table" form's golden coverage lives here (ORB-10571)
-//!
-//! `Table::print` decides whether to truncate and style by calling
-//! `std::io::stdout().is_terminal()` itself, and comfy-table's own
-//! `should_style` performs the same check independently — so a subprocess
-//! test, whose stdout is always a pipe, can never observe genuine "table"
-//! rendering (truncated, at a real width) no matter what `--format` or
-//! `COLUMNS` it passes. [`Table::render`] is called directly here instead,
-//! at an explicit width, which is the only way to exercise that path at all.
-//! The plain and `json` forms *are* reachable end-to-end and are golden-
-//! tested against the real binary in `tests/output_goldens.rs`.
-//!
-//! A corollary, also worth recording: `styled: true` cannot be observed to
-//! differ from `styled: false` in this binary either, for the same reason —
-//! comfy-table's `should_style` will not emit ANSI outside a real terminal
-//! regardless of the flag this crate passes it. Every fixture below renders
-//! with `styled: false`, matching what the flag can actually be shown to do
-//! here.
+//! Table geometry is pinned directly here, independently of the runner's TTY.
+//! `render_at` forces or suppresses styling from its `styled` argument. Plain
+//! and JSON forms also have end-to-end goldens in `tests/output_goldens.rs`.
 
 use std::path::{Path, PathBuf};
 
+use crate::output::color::{Domain, cell};
+use crate::output::sink::{OutputSink, SinkEnv};
 use crate::output::table::{Column, Table, build_table};
 
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼', '+'];
@@ -53,6 +40,84 @@ fn tool_list() -> Table {
 
 fn lines(rendered: &str) -> Vec<&str> {
     rendered.lines().collect()
+}
+
+#[test]
+fn forced_color_task_cells_use_basic_sgr_without_changing_layout() {
+    // crossterm caches NO_COLOR process-wide. Run the color assertion in an
+    // isolated process so the parent runner's environment and other tests
+    // cannot turn its foreground sequences into empty ESC[m resets.
+    if super::gating::run_in_forced_color_child(
+        "output::tests::table::forced_color_task_cells_use_basic_sgr_without_changing_layout",
+    ) {
+        return;
+    }
+
+    let env = SinkEnv {
+        term: Some("xterm".to_string()),
+        clicolor_force: Some("1".to_string()),
+        ..SinkEnv::default()
+    };
+    let sink = OutputSink::resolve(true, &env, Some(80), None, false);
+    assert!(sink.color_allowed(), "forced-color TTY must allow styling");
+
+    let mut table = Table::new(vec![
+        Column::new("TITLE"),
+        Column::new("STATUS").fixed(),
+        Column::new("PRIORITY").fixed(),
+    ]);
+    for (title, status, priority) in [
+        ("A long task title that needs truncation", "done", "medium"),
+        ("Second task", "blocked", "high"),
+        ("Third task", "in-progress", "low"),
+    ] {
+        table.add_row(vec![
+            comfy_table::Cell::new(title),
+            cell(status, Domain::TaskStatus),
+            cell(priority, Domain::Priority),
+        ]);
+    }
+
+    for width in [None, Some(58), Some(35)] {
+        let styled = table.render_at(width, sink.color_allowed(), false).body;
+        let plain = table.render_at(width, false, false).body;
+        let mut visible = String::new();
+        let mut remainder = styled.as_str();
+        while let Some(start) = remainder.find('\x1b') {
+            visible.push_str(&remainder[..start]);
+            let sequence = &remainder[start..];
+            assert!(
+                sequence.starts_with("\x1b["),
+                "unexpected escape: {sequence:?}"
+            );
+            let end = sequence.find('m').expect("SGR terminator");
+            let parameters = &sequence[2..end];
+            for code in parameters.split(';') {
+                // An empty parameter is SGR 0 (reset), which crossterm emits
+                // as ESC[m after some styled cells.
+                let code = if code.is_empty() {
+                    0
+                } else {
+                    code.parse::<u8>().expect("numeric SGR parameter")
+                };
+                assert!(
+                    matches!(code, 0 | 2 | 22 | 39 | 30..=37 | 90..=97),
+                    "table emitted non-basic SGR color in {sequence:?}"
+                );
+            }
+            remainder = &sequence[end + 1..];
+        }
+        visible.push_str(remainder);
+        assert_eq!(visible, plain, "color changed table layout at {width:?}");
+        for color in ["\x1b[91m", "\x1b[92m", "\x1b[93m", "\x1b[96m", "\x1b[39m"] {
+            assert!(
+                styled.contains(color),
+                "missing {color:?} at {width:?}: {styled:?}"
+            );
+        }
+        assert!(!styled.contains("\x1b[38;5;"));
+        assert!(!styled.contains("\x1b[38;2;"));
+    }
 }
 
 #[test]

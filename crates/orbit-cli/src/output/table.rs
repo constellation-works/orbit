@@ -295,9 +295,17 @@ impl Table {
 
         let body = grid
             .lines()
-            .map(|line| line.trim_end().to_string())
+            .map(|line| trim_line_padding(&line))
             .collect::<Vec<_>>()
             .join("\n");
+        // comfy-table routes its named base colors through crossterm's 256-color
+        // SGR form. Convert only the four foreground colors our role vocabulary
+        // attaches to cells, after layout so escape length cannot affect widths.
+        let body = if styled {
+            basic_role_colors(body)
+        } else {
+            body
+        };
         let notices = if dropped.is_empty() {
             Vec::new()
         } else {
@@ -446,6 +454,37 @@ fn total_width(layout: &[(usize, usize)]) -> usize {
 
 fn clamp_u16(value: usize) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
+}
+
+fn basic_role_colors(mut body: String) -> String {
+    for (extended, basic) in [
+        ("\x1b[38;5;9m", "\x1b[91m"),  // red
+        ("\x1b[38;5;10m", "\x1b[92m"), // green
+        ("\x1b[38;5;11m", "\x1b[93m"), // yellow
+        ("\x1b[38;5;14m", "\x1b[96m"), // cyan
+    ] {
+        body = body.replace(extended, basic);
+    }
+    body
+}
+
+/// A styled final cell can place its reset after its right padding. Keep the
+/// reset, but discard that padding just as the unstyled line's `trim_end` does.
+fn trim_line_padding(line: &str) -> String {
+    let mut end = line.len();
+    while line[..end].ends_with('m') {
+        let Some(start) = line[..end].rfind("\x1b[") else {
+            break;
+        };
+        if !line[start + 2..end - 1]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b';')
+        {
+            break;
+        }
+        end = start;
+    }
+    format!("{}{}", line[..end].trim_end(), &line[end..])
 }
 
 /// Keep the head and the identifying tail: `crates/orbit-cli/…/table.rs`.
