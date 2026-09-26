@@ -202,6 +202,38 @@ fn friction_not_local_has_a_stable_code_and_names_owners() {
 }
 
 #[test]
+fn friction_not_found_and_invalid_input_have_stable_mcp_codes() {
+    let not_found_err = OrbitError::not_found(NotFoundKind::Friction, "F2099-01-001");
+    let payload = error_payload(&not_found_err);
+    assert_eq!(payload["code"], "not_found");
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("F2099-01-001"))
+    );
+
+    let result = tool_error_result(&not_found_err);
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(
+        result.structured_content.expect("structured error payload")["code"],
+        "not_found"
+    );
+
+    let invalid_err = OrbitError::InvalidInput("malformed friction id: invalid-id".to_string());
+    let invalid_payload = error_payload(&invalid_err);
+    assert_eq!(invalid_payload["code"], "invalid_input");
+
+    let invalid_result = tool_error_result(&invalid_err);
+    assert_eq!(invalid_result.is_error, Some(true));
+    assert_eq!(
+        invalid_result
+            .structured_content
+            .expect("structured error payload")["code"],
+        "invalid_input"
+    );
+}
+
+#[test]
 fn control_conflict_has_stable_conflict_code_and_names_object() {
     for (error, expected_object, expected_hint) in [
         (

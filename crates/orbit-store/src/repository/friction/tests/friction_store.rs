@@ -2,6 +2,7 @@
 
 use chrono::{TimeZone, Utc};
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::record::FrictionStatus;
 use serde_json::json;
 
@@ -363,6 +364,56 @@ fn update_sets_and_clears_the_stored_title() {
         )
         .expect("clear title");
     assert_eq!(cleared.record.title, None);
+}
+
+#[test]
+fn update_on_a_missing_record_is_not_found_and_malformed_id_is_invalid_input() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frictions = friction_store(temp.path(), "ws_one");
+
+    let missing = frictions
+        .update(
+            "F2099-01-001",
+            FrictionUpdateParams {
+                status: Some(FrictionStatus::Triaged),
+                tags: None,
+                title: None,
+                body: None,
+                resolved_by_task: None,
+                rehome_to: None,
+                updated_at: at(2, 0),
+            },
+        )
+        .expect_err("missing record");
+    assert!(
+        matches!(
+            missing,
+            OrbitError::NotFound {
+                kind: NotFoundKind::Friction,
+                ref id,
+            } if id == "F2099-01-001"
+        ),
+        "{missing:?}"
+    );
+
+    let malformed = frictions
+        .update(
+            "invalid-id",
+            FrictionUpdateParams {
+                status: Some(FrictionStatus::Triaged),
+                tags: None,
+                title: None,
+                body: None,
+                resolved_by_task: None,
+                rehome_to: None,
+                updated_at: at(2, 0),
+            },
+        )
+        .expect_err("malformed id");
+    assert!(
+        matches!(malformed, OrbitError::InvalidInput(_)),
+        "{malformed:?}"
+    );
 }
 
 #[test]

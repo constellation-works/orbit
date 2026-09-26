@@ -52,6 +52,27 @@ impl Fixture {
         fixture
     }
 
+    /// Two initialized workspaces sharing one HOME so re-homing can resolve
+    /// the target workspace.
+    fn two_workspaces() -> Self {
+        let fixture = Self::workspace();
+        let other_work = fixture.home.join("other_work");
+        std::fs::create_dir_all(other_work.join(".git")).expect("create other work repo");
+        let output = run_orbit(
+            &other_work,
+            &fixture.home,
+            &["workspace", "init", "--name", "target-ws"],
+            &[],
+        );
+        assert!(
+            output.status.success(),
+            "target workspace init failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fixture
+    }
+
     fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         run_orbit(&self.work, &self.home, args, env)
     }
@@ -171,6 +192,87 @@ fn a_command_failure_outside_json_mode_is_a_plain_message_on_stderr() {
     let fixture = Fixture::workspace();
     let args = ["friction", "show", MISSING_FRICTION];
     plain_failure(&args, &fixture.run(&args, &[]), 1);
+}
+
+#[test]
+fn friction_mutations_on_a_missing_record_are_not_found_and_exit_1() {
+    let fixture = Fixture::two_workspaces();
+
+    for args in [
+        vec![
+            "friction",
+            "update",
+            MISSING_FRICTION,
+            "--status",
+            "triaged",
+            "--json",
+        ],
+        vec![
+            "friction",
+            "update",
+            MISSING_FRICTION,
+            "--status",
+            "triaged",
+            "--format=json",
+        ],
+        vec!["friction", "resolve", MISSING_FRICTION, "--json"],
+        vec!["friction", "resolve", MISSING_FRICTION, "--format=json"],
+        vec![
+            "friction",
+            "rehome",
+            MISSING_FRICTION,
+            "--to-workspace",
+            "target-ws",
+            "--json",
+        ],
+        vec![
+            "friction",
+            "rehome",
+            MISSING_FRICTION,
+            "--to-workspace",
+            "target-ws",
+            "--format=json",
+        ],
+    ] {
+        let error = json_failure(&args, &fixture.run(&args, &[]), 1);
+        assert_eq!(error["code"], "friction_not_found", "{args:?}: {error}");
+    }
+}
+
+#[test]
+fn friction_mutations_with_malformed_id_or_invalid_field_return_invalid_input_and_exit_1() {
+    let fixture = Fixture::two_workspaces();
+
+    for args in [
+        vec![
+            "friction",
+            "update",
+            "malformed-id",
+            "--status",
+            "triaged",
+            "--json",
+        ],
+        vec![
+            "friction",
+            "update",
+            MISSING_FRICTION,
+            "--status",
+            "bogus-status",
+            "--json",
+        ],
+        vec!["friction", "resolve", "malformed-id", "--json"],
+        vec![
+            "friction",
+            "rehome",
+            "malformed-id",
+            "--to-workspace",
+            "target-ws",
+            "--json",
+        ],
+    ] {
+        let error = json_failure(&args, &fixture.run(&args, &[]), 1);
+        assert_eq!(error["code"], "invalid_input", "{args:?}: {error}");
+    }
 }
 
 /// An argv clap rejects, and the environment it runs under.

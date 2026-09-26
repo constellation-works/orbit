@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::record::FrictionStatus;
 
 use super::super::{FrictionListFilter, FrictionRehomeParams, FrictionStore, FrictionUpdateParams};
@@ -184,9 +184,9 @@ fn rehome_refuses_what_it_cannot_move_and_writes_nothing() {
             "the workspace that already owns it",
         ),
         (
-            "F2026-05-099",
+            "not-a-friction-id",
             "ws_platform",
-            "a record that does not exist",
+            "a malformed friction id",
         ),
     ];
     for (id, target, case) in cases {
@@ -198,6 +198,23 @@ fn rehome_refuses_what_it_cannot_move_and_writes_nothing() {
             "{case}: {error:?}"
         );
     }
+
+    let missing_error = source
+        .rehome(
+            "F2026-05-099",
+            rehome_params(temp.path(), "ws_platform", at(20, 0)),
+        )
+        .expect_err("a record that does not exist");
+    assert!(
+        matches!(
+            missing_error,
+            OrbitError::NotFound {
+                kind: NotFoundKind::Friction,
+                ref id,
+            } if id == "F2026-05-099"
+        ),
+        "{missing_error:?}"
+    );
 
     assert!(
         owner

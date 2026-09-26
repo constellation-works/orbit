@@ -566,3 +566,104 @@ fn show_of_a_missing_record_is_not_found() {
         "{error:?}"
     );
 }
+
+#[test]
+fn update_of_a_missing_record_is_not_found_and_invalid_input_is_preserved() {
+    let (_temp, runtime, _repo) = test_runtime();
+
+    let missing = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.update",
+        json!({ "id": "F2099-01-001", "status": "triaged" }),
+    )
+    .expect_err("no such record");
+    assert!(
+        matches!(
+            &missing,
+            OrbitError::NotFound { kind: orbit_common::NotFoundKind::Friction, id } if id == "F2099-01-001"
+        ),
+        "{missing:?}"
+    );
+
+    let malformed_id = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.update",
+        json!({ "id": "malformed-id", "status": "triaged" }),
+    )
+    .expect_err("malformed id");
+    assert!(
+        matches!(malformed_id, OrbitError::InvalidInput(_)),
+        "{malformed_id:?}"
+    );
+
+    let invalid_field = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.update",
+        json!({ "id": "F2099-01-001", "status": "bogus-status" }),
+    )
+    .expect_err("invalid field value");
+    assert!(
+        matches!(invalid_field, OrbitError::InvalidInput(_)),
+        "{invalid_field:?}"
+    );
+}
+
+#[test]
+fn resolve_of_a_missing_record_is_not_found_and_malformed_id_is_invalid_input() {
+    let (_temp, runtime, _repo) = test_runtime();
+
+    let missing = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.resolve",
+        json!({ "id": "F2099-01-001" }),
+    )
+    .expect_err("no such record");
+    assert!(
+        matches!(
+            &missing,
+            OrbitError::NotFound { kind: orbit_common::NotFoundKind::Friction, id } if id == "F2099-01-001"
+        ),
+        "{missing:?}"
+    );
+
+    let malformed = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.resolve",
+        json!({ "id": "malformed-id" }),
+    )
+    .expect_err("malformed id");
+    assert!(
+        matches!(malformed, OrbitError::InvalidInput(_)),
+        "{malformed:?}"
+    );
+}
+
+#[test]
+fn rehome_of_a_missing_record_is_not_found_and_malformed_id_is_invalid_input() {
+    let (_temp, product, _owner) = product_and_owner();
+
+    let missing = run_tool_as_operator(
+        &product,
+        "orbit.friction.rehome",
+        json!({ "id": "F2099-01-001", "to_workspace": "platform" }),
+    )
+    .expect_err("no such record");
+    assert!(
+        matches!(
+            &missing,
+            OrbitError::NotFound { kind: orbit_common::NotFoundKind::Friction, id } if id == "F2099-01-001"
+        ),
+        "{missing:?}"
+    );
+
+    let malformed = run_tool_as_operator(
+        &product,
+        "orbit.friction.rehome",
+        json!({ "id": "malformed-id", "to_workspace": "platform" }),
+    )
+    .expect_err("malformed id");
+    assert!(
+        matches!(malformed, OrbitError::InvalidInput(_)),
+        "{malformed:?}"
+    );
+}
