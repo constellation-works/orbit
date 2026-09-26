@@ -148,6 +148,23 @@ fn already_landed_retry_completes_without_new_commit_or_pr_and_is_idempotent() {
 }
 
 #[test]
+fn stale_no_diff_evidence_does_not_shadow_verified_already_landed() {
+    let (temp, task, input, report, log) = fixture();
+    let stale = json!({
+        "schema_version": 1, "task_id": "T1", "run_id": "earlier-run",
+        "tested_head": input["base_sha"], "reason": "earlier attempt",
+        "validation": [{"command": "test behavior", "exit_code": 0,
+            "log_artifact": "validation.json"}],
+    });
+    let mut stored = artifacts(&report, &log);
+    stored.push(TaskArtifact::from_text("no-diff.json", stale.to_string()));
+    let host = CommitTestHost::new(vec![task], temp.path().to_path_buf()).with_artifacts(stored);
+    let checkpoint = git_commit(&host, &input).expect("already-landed evidence still verifies");
+    assert_eq!(checkpoint["decision"], "verified_already_landed");
+    assert_git_unmutated(temp.path(), &input["base_sha"]);
+}
+
+#[test]
 fn already_landed_sibling_coverage_completes_without_new_commit() {
     let (temp, task, input, report, log) = sibling_fixture();
     let host = CommitTestHost::new(vec![task], temp.path().to_path_buf())

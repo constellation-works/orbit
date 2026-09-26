@@ -6,7 +6,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::input::{input_string_field, required_input_string};
 use super::super::base_obsolescence::ensure_base_can_still_land;
-use super::super::commit::already_landed::verify_handoff;
+use super::super::commit::{verified_clean_tree_checkpoint, verify_clean_tree_handoff};
 use super::super::freshness::commit_sha;
 use super::super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, record_failed_handoff,
@@ -23,10 +23,8 @@ pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let pr_number = if no_diff_expected {
-        if let Some(checkpoint) = input.get("already_landed_checkpoint").filter(|value| {
-            value.get("decision").and_then(Value::as_str) == Some("verified_already_landed")
-        }) {
-            verify_handoff(
+        if let Some(checkpoint) = verified_clean_tree_checkpoint(input) {
+            verify_clean_tree_handoff(
                 host,
                 &context.tasks,
                 &context.workspace_path,

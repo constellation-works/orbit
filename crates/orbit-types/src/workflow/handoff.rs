@@ -201,6 +201,30 @@ pub struct AlreadyLandedCheck {
     pub log_artifact: String,
 }
 
+/// A run's claim that its implementation correctly changed nothing. Bound to
+/// the task, the run, and the pinned HEAD it validated; unlike
+/// [`AlreadyLandedEvidence`] it names no covering commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoDiffEvidence {
+    pub schema_version: u32,
+    pub task_id: String,
+    pub run_id: String,
+    pub tested_head: String,
+    pub reason: String,
+    pub validation: Vec<NoDiffCheck>,
+}
+
+/// One validation command the no-diff run executed, with its exit status and
+/// the task artifact holding the captured log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoDiffCheck {
+    pub command: String,
+    pub exit_code: i32,
+    pub log_artifact: String,
+}
+
 pub fn already_landed_scope(
     task: &crate::task::Task,
     comments: &[crate::task::TaskComment],

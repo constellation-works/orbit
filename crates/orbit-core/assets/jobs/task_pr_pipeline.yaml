@@ -238,8 +238,8 @@ spec:
         base_sync: "{{ input.base_sync }}"
 
     # A no-diff bundle delivered nothing to merge; its validation is the
-    # delivery, so completion needs no PR. Verified already-landed retries
-    # take this route with their full evidence checkpoint; they create no
+    # delivery, so completion needs no PR. Verified no-diff and already-landed
+    # runs take this route with their full evidence checkpoint; they create no
     # new code delivery and do not acquire the side-effect-only task tag.
     - id: complete_no_diff
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"

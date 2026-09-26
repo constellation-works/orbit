@@ -1,7 +1,8 @@
-pub(super) mod already_landed;
+mod already_landed;
 mod author;
 mod git_ops;
 mod message;
+mod no_diff;
 mod scope;
 mod summary;
 
@@ -274,7 +275,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            return already_landed::verify(
+            return verify_clean_tree(
                 host,
                 &task,
                 &workspace_path,
@@ -317,6 +318,59 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         result["base_sha"] = json!(base_sha);
     }
     Ok(result)
+}
+
+/// Accept a clean tree at the pinned HEAD only with structured evidence: a
+/// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
+/// covering delivery. A stale artifact of one kind never shadows valid
+/// evidence of the other; when both fail, both refusals are reported.
+fn verify_clean_tree<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    workspace_path: &Path,
+    run_id: &str,
+    base_sha: &str,
+) -> Result<Value, OrbitError> {
+    let artifacts = host.get_task_artifacts(&task.id)?;
+    let has = |path: &str| artifacts.iter().any(|artifact| artifact.path == path);
+    if !has(no_diff::ARTIFACT) {
+        return already_landed::verify(host, task, workspace_path, run_id, base_sha);
+    }
+    let no_diff_error = match no_diff::verify(host, task, workspace_path, run_id, base_sha) {
+        Ok(checkpoint) => return Ok(checkpoint),
+        Err(error) => error,
+    };
+    if !has(already_landed::ARTIFACT) {
+        return Err(no_diff_error);
+    }
+    already_landed::verify(host, task, workspace_path, run_id, base_sha)
+        .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}")))
+}
+
+/// The commit checkpoint a no-diff promotion or completion must recheck, when
+/// the commit step accepted evidence rather than the side-effect-only tag.
+pub(super) fn verified_clean_tree_checkpoint(input: &Value) -> Option<&Value> {
+    input.get("already_landed_checkpoint").filter(|checkpoint| {
+        matches!(
+            checkpoint.get("decision").and_then(Value::as_str),
+            Some(already_landed::DECISION | no_diff::DECISION)
+        )
+    })
+}
+
+/// Recheck a [`verified_clean_tree_checkpoint`] against live task and Git state.
+pub(super) fn verify_clean_tree_handoff<H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &[orbit_types::task::Task],
+    workspace_path: &Path,
+    run_id: &str,
+    checkpoint: &Value,
+) -> Result<(), OrbitError> {
+    if checkpoint.get("decision").and_then(Value::as_str) == Some(no_diff::DECISION) {
+        no_diff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
+    } else {
+        already_landed::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
+    }
 }
 
 /// Stage every worktree change for a reviewer repair commit [ORB-11333].

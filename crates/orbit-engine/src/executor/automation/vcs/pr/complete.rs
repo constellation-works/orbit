@@ -69,8 +69,9 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
 
     // A `no-diff-expected` bundle delivered nothing to merge, so there is no PR
     // to verify. Its validation *is* the delivery, and completion authority
-    // covers it. Untagged already-landed work must instead recheck the exact
-    // accepted evidence, mirroring the same guard `pr_promote` applies.
+    // covers it. Untagged already-landed or verified no-diff work must instead
+    // recheck the exact accepted evidence, mirroring the guard `pr_promote`
+    // applies.
     let no_diff_expected = input
         .get("no_diff_expected")
         .and_then(Value::as_bool)
@@ -82,10 +83,8 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         .collect::<Vec<_>>();
     let mut delivery_fragment = None;
     let merge_outcome = if no_diff_expected {
-        if let Some(checkpoint) = input.get("already_landed_checkpoint").filter(|value| {
-            value.get("decision").and_then(Value::as_str) == Some("verified_already_landed")
-        }) {
-            super::super::commit::already_landed::verify_handoff(
+        if let Some(checkpoint) = super::super::commit::verified_clean_tree_checkpoint(input) {
+            super::super::commit::verify_clean_tree_handoff(
                 host,
                 &context.tasks,
                 &context.workspace_path,
@@ -94,7 +93,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
                     .unwrap_or(&context.batch_id),
                 checkpoint,
             )?;
-            json!({ "merged": false, "reason": "verified_already_landed", "evidence": checkpoint })
+            json!({ "merged": false, "reason": checkpoint["decision"], "evidence": checkpoint })
         } else {
             ensure_all_tasks_no_diff_expected(&context.tasks)?;
             json!({ "merged": false, "reason": "no_diff_expected" })
