@@ -99,6 +99,9 @@ fn representative_activity_prompts_fit_budget_and_preserve_contracts() {
         "EPERM",
         "orbit.friction.add",
         "execution_summary",
+        "for a genuine no-op, attach `no-diff.json`",
+        "using the schema in",
+        "the Orbit task-execution reference",
     ] {
         assert!(
             implement_text.contains(contract),

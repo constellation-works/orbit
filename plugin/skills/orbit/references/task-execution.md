@@ -89,6 +89,38 @@ blocker when the task owns that outcome. A real authority refusal, unavailable
 prerequisite or unresolved product decision is: record the specific evidence and
 what is needed to proceed. A clean baseline check is not feature validation.
 
+### Verified no-change implementation
+
+When the implementation correctly needs no file changes, and all required
+validation passes, attach `no-diff.json` and one captured validation log per
+check with `orbit.task.artifact.put`. This is only for a genuine validated
+no-op; never use it to bypass failed validation or pending worktree changes.
+The evidence must match the pinned task, current run (or its recorded retry
+lineage), and tested HEAD:
+
+```json
+{
+  "schema_version": 1,
+  "task_id": "<current-task-id>",
+  "run_id": "<current-run-id>",
+  "tested_head": "<pinned-head-sha>",
+  "reason": "The requested behavior already holds; no change is required.",
+  "validation": [
+    {
+      "command": "<required validation command>",
+      "exit_code": 0,
+      "log_artifact": "validation.json"
+    }
+  ]
+}
+```
+
+Each referenced validation log is JSON with `run_id`, `tested_head`,
+`command`, `exit_code` set to `0`, and captured `output`. Commands must be
+non-empty and unique. The commit verifier also requires a clean worktree and
+the current HEAD to equal `tested_head`; otherwise reconcile the changes and
+rerun validation before attaching the evidence.
+
 **Keep `context_files` current.** Declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
 rules. A declaration does not acquire a lock or expand an already frozen claim
