@@ -149,7 +149,7 @@ fn execute_tool_command_searches_tasks_for_agents_via_orbit_search() {
 }
 
 #[test]
-fn task_add_tool_creates_proposed_tasks_for_agents() {
+fn task_add_tool_creates_proposed_tasks_with_normalized_tags_for_agents() {
     let (_root, runtime, _repo_root) = test_runtime();
 
     let output = call(
@@ -160,6 +160,7 @@ fn task_add_tool_creates_proposed_tasks_for_agents() {
             "description": "Exercise the agent-facing task creation path.",
             "complexity": "low",
             "workspace": ".",
+            "tags": ["  Perf ", "BENCH"],
         }),
     )
     .expect("task add tool succeeds");
@@ -168,6 +169,7 @@ fn task_add_tool_creates_proposed_tasks_for_agents() {
         output.get("status").and_then(Value::as_str),
         Some("proposed")
     );
+    assert_eq!(output.get("tags"), Some(&json!(["perf", "bench"])));
 }
 
 #[test]
@@ -2414,26 +2416,6 @@ fn mcp_task_show_and_update_resolve_cross_workspace_references_from_status_index
         json!([format!("{} [done]", target.id)])
     );
     assert!(shown["relations"][0]["verification"].is_null());
-}
-
-#[test]
-fn task_add_tool_normalizes_tags_at_write_time() {
-    let (_root, runtime, _repo_root) = test_runtime();
-
-    let output = call(
-        &runtime,
-        "orbit.task.add",
-        json!({
-            "title": "Normalized tags",
-            "description": "Exercise tag normalization.",
-            "complexity": "low",
-            "workspace": ".",
-            "tags": ["  Perf ", "BENCH"],
-        }),
-    )
-    .expect("task add tool succeeds");
-
-    assert_eq!(output.get("tags"), Some(&json!(["perf", "bench"])));
 }
 
 #[test]
