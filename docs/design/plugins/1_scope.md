@@ -170,7 +170,8 @@ orbit plugin upgrade <ns> [source] [--grant …]
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
-orbit plugin remove <ns> --yes                →  gone        (derived data such as .orbit-graph/ is retained)
+orbit plugin remove <ns> --yes                →  gone        (prints retained ~/.orbit/state/plugins/<ns> path)
+orbit plugin remove <ns> --yes --purge-state  →  gone        (also deletes this plugin's Orbit-owned state)
 orbit plugin remove <ns> --yes --record-only  →  gone        (record only; every installed file is left in place)
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
@@ -196,6 +197,12 @@ by an older Orbit.
   replaced version, a stale `current`, crash scratch) is pruned: old trees are readable to
   every backend (§4.3). `remove` deletes the whole namespace directory after the same
   install-path check; `--record-only` leaves every file.
+
+**Plugin state.** By default, `remove` leaves `{{plugin_state}}` under
+`<global_root>/state/plugins/<ns>/` and prints its path. `--purge-state` deletes only
+that namespace's state tree after verifying the install path and refusing symlinks in
+the state path; it cannot be combined with `--record-only`. Data the plugin wrote
+outside `{{plugin_state}}` (such as `.orbit-graph/`) is retained in either mode.
 
 **Every verb that touches the recorded tree checks it first.** `enable`, `disable` and
 `remove` apply the loader's install-path check (below) before seeding from, unlinking by or

@@ -744,6 +744,9 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
     assert!(added.status.success(), "{added:?}");
     let added = stdout_json(&added);
     let install_path = Path::new(added["install_path"].as_str().expect("install_path string"));
+    let state_dir = fixture.home.join(".orbit/state/plugins/demo");
+    std::fs::create_dir_all(&state_dir).expect("plugin state");
+    std::fs::write(state_dir.join("keep.txt"), "retained").expect("plugin state sentinel");
     let link_roots = [".agents", ".claude"].map(|dir| fixture.home.join(dir).join("skills"));
     for root in &link_roots {
         assert!(
@@ -773,6 +776,15 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
     assert_eq!(removed["name"], "demo");
     assert_eq!(removed["removed"], true);
     assert_eq!(removed["plugin_data_retained"], true);
+    assert_eq!(removed["plugin_state_removed"], false);
+    assert_eq!(
+        removed["plugin_state_path"],
+        state_dir.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_dir.join("keep.txt")).expect("state retained"),
+        "retained"
+    );
     for root in &link_roots {
         assert!(
             std::fs::symlink_metadata(root.join("demo-demo")).is_err(),
@@ -816,6 +828,59 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
         .args(["plugin", "remove", "demo", "--yes"])
         .assert()
         .success();
+}
+
+#[test]
+fn remove_prints_retained_state_path_and_purge_removes_only_that_state() {
+    for purge_state in [false, true] {
+        let fixture = Fixture::new();
+        let source = fixture.source("demo");
+        let source_arg = source.to_str().expect("utf8 source");
+        fixture
+            .orbit()
+            .args(["plugin", "scaffold", "demo", "--dir", source_arg])
+            .assert()
+            .success();
+        fixture
+            .orbit()
+            .args(["plugin", "add", source_arg])
+            .assert()
+            .success();
+        let state_dir = fixture.home.join(".orbit/state/plugins/demo");
+        let other_state = fixture.home.join(".orbit/state/plugins/other");
+        let outside = fixture.home.join("notes");
+        for dir in [&state_dir, &other_state, &outside] {
+            std::fs::create_dir_all(dir).expect("create sentinel tree");
+            std::fs::write(dir.join("keep.txt"), "keep").expect("sentinel");
+        }
+
+        let mut args = vec!["plugin", "remove", "demo", "--yes"];
+        if purge_state {
+            args.push("--purge-state");
+        }
+        let output = fixture.orbit().args(args).output().expect("remove plugin");
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).expect("utf8 output");
+        assert!(
+            stdout.contains(&state_dir.display().to_string()),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(if purge_state {
+                "was removed"
+            } else {
+                "retained at"
+            }),
+            "{stdout}"
+        );
+        assert_eq!(state_dir.exists(), !purge_state);
+        for dir in [&other_state, &outside] {
+            assert_eq!(
+                std::fs::read_to_string(dir.join("keep.txt")).expect("sentinel survives"),
+                "keep"
+            );
+        }
+    }
 }
 
 #[test]

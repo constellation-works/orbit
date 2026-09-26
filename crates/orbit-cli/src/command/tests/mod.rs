@@ -108,6 +108,11 @@ fn plugin_help_matches_the_shipped_surface() {
             include_str!("plugin_help/upgrade.txt"),
         ),
         (
+            &["orbit", "plugin", "remove"],
+            "plugin_help/remove.txt",
+            include_str!("plugin_help/remove.txt"),
+        ),
+        (
             &["orbit", "plugin", "validate"],
             "plugin_help/validate.txt",
             include_str!("plugin_help/validate.txt"),
