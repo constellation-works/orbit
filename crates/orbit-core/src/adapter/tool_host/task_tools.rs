@@ -21,12 +21,19 @@ use super::json::{
     serialize_task_write_response, task_fields_to_json, task_to_json,
 };
 
+/// The persisted identity travels beside the caller's response projection so
+/// redaction audit attribution does not depend on which fields were requested.
+pub(super) struct TaskWriteOutput {
+    pub response: Value,
+    pub persisted_id: String,
+}
+
 pub(super) fn add(
     runtime: &OrbitRuntime,
     input: Value,
     agent: Option<String>,
     model: Option<String>,
-) -> Result<Value, OrbitError> {
+) -> Result<TaskWriteOutput, OrbitError> {
     let title = required_string(&input, &["title"], "title")?;
     let description = required_string(&input, &["description"], "description")?;
     let response_fields = write_response_fields(&input)?;
@@ -97,7 +104,10 @@ pub(super) fn add(
     {
         obj.insert("warnings".to_string(), json!(warnings));
     }
-    Ok(response)
+    Ok(TaskWriteOutput {
+        response,
+        persisted_id: task.id,
+    })
 }
 
 pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -164,7 +174,7 @@ pub(super) fn reject(
     input: Value,
     agent: Option<String>,
     model: Option<String>,
-) -> Result<Value, OrbitError> {
+) -> Result<TaskWriteOutput, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let note = required_string(&input, &["note"], "note")?;
     let response_fields = write_response_fields(&input)?;
@@ -175,7 +185,10 @@ pub(super) fn reject(
         agent,
         model,
     )?;
-    serialize_task_write_response(runtime, &task, response_fields.as_deref())
+    Ok(TaskWriteOutput {
+        response: serialize_task_write_response(runtime, &task, response_fields.as_deref())?,
+        persisted_id: task.id,
+    })
 }
 
 pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -227,7 +240,7 @@ pub(super) fn update(
     model: Option<String>,
     owner: Option<orbit_tools::ReservationOwnerContext>,
     origin: Option<orbit_types::task::ExecutionLocation>,
-) -> Result<Value, OrbitError> {
+) -> Result<TaskWriteOutput, OrbitError> {
     if ["required_tools", "requiredTools", "required-tool"]
         .iter()
         .any(|field| input.get(*field).is_some())
@@ -328,14 +341,17 @@ fn write_response_with_unverified_context(
     task: &orbit_types::task::Task,
     fields: Option<&[String]>,
     unverified: Vec<String>,
-) -> Result<Value, OrbitError> {
+) -> Result<TaskWriteOutput, OrbitError> {
     let mut response = serialize_task_write_response(runtime, task, fields)?;
     if !unverified.is_empty()
         && let Some(obj) = response.as_object_mut()
     {
         obj.insert(CONTEXT_FILES_UNVERIFIED_KEY.to_string(), json!(unverified));
     }
-    Ok(response)
+    Ok(TaskWriteOutput {
+        response,
+        persisted_id: task.id.clone(),
+    })
 }
 
 enum GuardedLifecycleWrite {

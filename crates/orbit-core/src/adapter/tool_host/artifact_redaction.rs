@@ -119,6 +119,7 @@ pub(super) fn finish_tool_response(
     action: OrbitBuiltinAction,
     response: &mut Value,
     report: &ArtifactRedactionReport,
+    persisted_task_id: Option<&str>,
     agent: Option<&str>,
     model: Option<&str>,
 ) -> Result<(), OrbitError> {
@@ -133,7 +134,15 @@ pub(super) fn finish_tool_response(
         object.insert("redactions".to_string(), report.response_details());
     }
     if report.redactions_applied() {
-        emit_audit_events(runtime, action, response, report, agent, model)?;
+        emit_audit_events(
+            runtime,
+            action,
+            response,
+            report,
+            persisted_task_id,
+            agent,
+            model,
+        )?;
     }
     Ok(())
 }
@@ -548,11 +557,12 @@ fn emit_audit_events(
     action: OrbitBuiltinAction,
     response: &Value,
     report: &ArtifactRedactionReport,
+    persisted_task_id: Option<&str>,
     agent: Option<&str>,
     model: Option<&str>,
 ) -> Result<(), OrbitError> {
     let tool_name = tool_name(action);
-    let artifact = artifact_target(action, response)?;
+    let artifact = artifact_target(action, response, persisted_task_id)?;
     let actor = normalize_optional_attribution_label(model.or(agent), model)
         .unwrap_or_else(|| runtime.actor_label().to_string());
 
@@ -613,16 +623,18 @@ fn emit_audit_events(
     Ok(())
 }
 
-struct ArtifactTarget<'a> {
+#[derive(Debug)]
+pub(super) struct ArtifactTarget<'a> {
     artifact_type: &'static str,
     artifact_id: &'a str,
     task_id: Option<&'a str>,
 }
 
-fn artifact_target(
+pub(super) fn artifact_target<'a>(
     action: OrbitBuiltinAction,
-    response: &Value,
-) -> Result<ArtifactTarget<'_>, OrbitError> {
+    response: &'a Value,
+    persisted_task_id: Option<&'a str>,
+) -> Result<ArtifactTarget<'a>, OrbitError> {
     match action {
         OrbitBuiltinAction::AdrAdd
         | OrbitBuiltinAction::AdrRestore
@@ -635,7 +647,9 @@ fn artifact_target(
         OrbitBuiltinAction::TaskAdd
         | OrbitBuiltinAction::TaskUpdate
         | OrbitBuiltinAction::TaskReject => {
-            let id = response_string(response, "id")?;
+            let id = persisted_task_id.ok_or_else(|| {
+                OrbitError::Execution("redaction audit missing persisted task id".to_string())
+            })?;
             Ok(ArtifactTarget {
                 artifact_type: "task",
                 artifact_id: id,

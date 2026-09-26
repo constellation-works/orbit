@@ -5,7 +5,7 @@ use orbit_common::governance::friction::FrictionVerb;
 use orbit_tools::OrbitBuiltinAction;
 use serde_json::json;
 
-use super::super::artifact_redaction::sanitize_tool_input;
+use super::super::artifact_redaction::{artifact_target, sanitize_tool_input};
 use super::super::test_support::test_runtime;
 
 /// Set one variable under the process-wide env guard shared by every
@@ -210,6 +210,172 @@ fn dispatch_redacts_live_github_token_before_task_persistence_and_audits() {
     assert!(arguments.contains("\"field_path\":\"title\""));
     assert!(arguments.contains("\"env\""));
     assert!(!arguments.contains(token));
+}
+
+#[test]
+fn projected_task_add_id_redacts_once_and_audits_persisted_id_without_secret_payload() {
+    let token = "orbit-projected-add-secret-value";
+    let _env = env_var("GITHUB_TOKEN", token);
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let output = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Projected add",
+                "description": format!("contains {token}"),
+                "complexity": "low",
+                "workspace": ".",
+                "fields": ["id"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("projected task add succeeds after redaction");
+    let id = output.as_str().expect("single id projection is a string");
+    let tasks = runtime.list_tasks().expect("list persisted tasks");
+    assert_eq!(tasks.len(), 1, "a retry would create a duplicate task");
+    assert_eq!(tasks[0].id, id);
+    assert_eq!(tasks[0].description, "contains [REDACTED_ENV]");
+
+    let events = runtime
+        .list_audit_events(None, Some("orbit.task.add".to_string()), None, None, 16)
+        .expect("audit query");
+    let audit = events
+        .iter()
+        .find(|event| event.command == "artifact_redaction")
+        .expect("redaction audit event");
+    assert_eq!(audit.target_id.as_deref(), Some(id));
+    assert_eq!(audit.task_id.as_deref(), Some(id));
+    let payload = audit.arguments_json.as_deref().expect("audit payload");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(payload).expect("json")["artifact_id"],
+        id
+    );
+    assert!(
+        !payload.contains(token),
+        "audit payload must not contain secret material"
+    );
+}
+
+#[test]
+fn projected_task_update_without_id_redacts_stored_summary_and_audits_id() {
+    let token = "orbit-projected-update-secret-value";
+    let _env = env_var("GITHUB_TOKEN", token);
+    let (_root, runtime, _repo_root) = test_runtime();
+    let created = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({"title": "Projected update", "description": "body", "complexity": "low", "workspace": "."}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("create task");
+    let id = created["id"].as_str().expect("task id");
+
+    let output = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({"id": id, "execution_summary": format!("summary {token}"), "fields": ["execution_summary", "status"]}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("projected task update succeeds after redaction");
+    assert!(output.get("id").is_none());
+    assert_eq!(output["execution_summary"], "summary [REDACTED_ENV]");
+    assert_eq!(output["redactions_applied"], true);
+    assert_eq!(
+        runtime
+            .get_task(id)
+            .expect("persisted task")
+            .execution_summary,
+        "summary [REDACTED_ENV]"
+    );
+
+    let events = runtime
+        .list_audit_events(None, Some("orbit.task.update".to_string()), None, None, 16)
+        .expect("audit query");
+    let audit = events
+        .iter()
+        .find(|event| event.command == "artifact_redaction")
+        .expect("redaction audit event");
+    assert_eq!(audit.target_id.as_deref(), Some(id));
+    assert_eq!(audit.task_id.as_deref(), Some(id));
+    assert!(
+        !audit
+            .arguments_json
+            .as_deref()
+            .expect("audit payload")
+            .contains(token)
+    );
+}
+
+#[test]
+fn redacted_task_add_validation_failure_creates_no_record() {
+    let token = "orbit-invalid-add-secret-value";
+    let _env = env_var("GITHUB_TOKEN", token);
+    let (_root, runtime, _repo_root) = test_runtime();
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({"title": "Invalid", "description": format!("contains {token}"), "complexity": "not-a-complexity", "workspace": ".", "fields": ["id"]}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("invalid complexity must fail before persistence");
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error:?}");
+    assert!(runtime.list_tasks().expect("list tasks").is_empty());
+}
+
+#[test]
+fn redacted_task_update_missing_record_fails_without_creating_one() {
+    let token = "orbit-missing-update-secret-value";
+    let _env = env_var("GITHUB_TOKEN", token);
+    let (_root, runtime, _repo_root) = test_runtime();
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({"id": "ORB-99999999", "execution_summary": format!("contains {token}"), "fields": ["execution_summary", "status"]}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("missing task must fail before audit");
+    assert!(matches!(error, OrbitError::NotFound { .. }), "{error:?}");
+    assert!(runtime.list_tasks().expect("list tasks").is_empty());
+}
+
+#[test]
+fn whole_token_task_add_refuses_before_persistence() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({"title": "Whole token", "description": "sk-abcdefghijklmnopqrstuvwxyz", "complexity": "low", "workspace": ".", "fields": ["id"]}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("whole-token credential must be refused");
+    assert!(
+        matches!(error, OrbitError::SensitiveInput { .. }),
+        "{error:?}"
+    );
+    assert!(runtime.list_tasks().expect("list tasks").is_empty());
+}
+
+#[test]
+fn unsupported_redaction_audit_action_still_fails() {
+    let response = json!({"id": "ORB-12345"});
+    let error = artifact_target(OrbitBuiltinAction::TaskDelete, &response, None)
+        .expect_err("unsupported audit action must fail");
+    assert!(matches!(error, OrbitError::Execution(_)), "{error:?}");
+}
+
+#[test]
+fn redaction_audit_missing_persisted_task_attribution_still_fails() {
+    let response = json!({"status": "proposed"});
+    let error = artifact_target(OrbitBuiltinAction::TaskAdd, &response, None)
+        .expect_err("missing persisted id must fail");
+    assert!(matches!(error, OrbitError::Execution(_)), "{error:?}");
 }
 
 #[test]
@@ -439,5 +605,26 @@ fn friction_body_update_is_sanitized_but_tags_are_verbatim() {
         !updated["body"].as_str().expect("body").contains(token),
         "{}",
         updated
+    );
+    let events = runtime
+        .list_audit_events(
+            None,
+            Some("orbit.friction.update".to_string()),
+            None,
+            None,
+            16,
+        )
+        .expect("audit query");
+    let audit = events
+        .iter()
+        .find(|event| event.command == "artifact_redaction")
+        .expect("friction redaction audit event");
+    assert_eq!(audit.target_id.as_deref(), updated["id"].as_str());
+    assert!(
+        !audit
+            .arguments_json
+            .as_deref()
+            .expect("audit payload")
+            .contains(token)
     );
 }
