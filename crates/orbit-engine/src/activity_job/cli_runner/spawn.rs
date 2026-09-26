@@ -381,9 +381,11 @@ pub(crate) fn spawn_bare(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let child = command
-        .spawn()
-        .map_err(|err| SpawnError::from_spawn_io(program, &err))?;
+    #[cfg(target_os = "linux")]
+    let child_result = orbit_common::test_process::retry_executable_busy(|| command.spawn());
+    #[cfg(not(target_os = "linux"))]
+    let child_result = command.spawn();
+    let child = child_result.map_err(|err| SpawnError::from_spawn_io(program, &err))?;
     Ok(SpawnedChild {
         child,
         _profile_temp: None,

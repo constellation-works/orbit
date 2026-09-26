@@ -20,7 +20,7 @@ use super::super::spawn::{
     prepare_macos_codex_ca_environment_with, reject_unsatisfiable_managed_grants, spawn_bare,
     spawn_macos_sandboxed_with,
 };
-use super::test_support::{linux_sandbox_for_test, sandbox_for_test, sh_args};
+use super::test_support::{linux_sandbox_for_test, sandbox_for_test, sh_args, write_executable};
 
 /// [ORB-10917] The bare launcher must hand the child exactly the environment
 /// the dispatcher composed. The ambient variables below are set by this test
@@ -570,6 +570,39 @@ fn spawn_bare_missing_executable_classifies_permanent() {
         "error should name the program: {}",
         err.message
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn spawn_bare_retries_until_fixture_launcher_writer_closes() {
+    let temp = tempdir().expect("tempdir");
+    let launcher = temp.path().join("provider");
+    write_executable(&launcher, "#!/bin/sh\nprintf 'spawned\\n'\n");
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&launcher)
+        .expect("hold launcher open for writing");
+    let error = std::process::Command::new(&launcher)
+        .spawn()
+        .expect_err("Linux rejects an executable that is open for writing");
+    assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+
+    let release_writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(75));
+        drop(writer);
+    });
+    let spawned = spawn_bare(
+        launcher.to_str().expect("utf-8 launcher path"),
+        &[],
+        &[],
+        None,
+    )
+    .expect("provider spawn retries while launcher is busy");
+    release_writer.join().expect("release launcher writer");
+
+    let output = spawned.child.wait_with_output().expect("wait for provider");
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "spawned\n");
 }
 
 #[test]
