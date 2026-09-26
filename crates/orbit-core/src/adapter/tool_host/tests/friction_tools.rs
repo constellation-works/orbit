@@ -4,7 +4,10 @@
 //! These are the boundary tests for the record handle: what an author can set,
 //! what the surface refuses, and what a caller who sets nothing gets.
 
+use std::sync::Arc;
+
 use chrono::{TimeZone, Utc};
+use orbit_common::OrbitError;
 use orbit_common::governance::friction::FRICTION_TITLE_MAX_CHARS;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_store::contracts::StoredFrictionRecord;
@@ -13,6 +16,10 @@ use serde_json::{Value, json};
 
 use super::super::friction_tools::record_to_json;
 use super::super::test_support::{invalid_input_message, run_tool_as_operator, test_runtime};
+use crate::OrbitRuntime;
+use crate::runtime::workspace::catalog::{
+    FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
+};
 
 /// A structured report whose opening line labels a section rather than the
 /// record — the shape derivation has to see through.
@@ -326,6 +333,7 @@ fn stored_record(title: Option<&str>, body: &str) -> StoredFrictionRecord {
             resolved_at: Some(Utc.with_ymd_and_hms(2026, 5, 17, 4, 10, 0).unwrap()),
             during_task: None,
             resolved_by_task: Some("ORB-00093".to_string()),
+            rehome_to: None,
             body: body.to_string(),
         },
         path: Some("frictions/2026-05/F007.md".into()),
@@ -364,4 +372,177 @@ fn record_to_json_derives_a_title_for_a_record_without_one() {
         value["title"],
         json!("The worker exited before claiming the run.")
     );
+}
+
+/// A registry of one owning workspace, so the re-home path resolves its target
+/// the way a registered runtime does without a registry on disk.
+struct OwnerCatalog {
+    target: FederatedWorkspaceTarget,
+    owner: OrbitRuntime,
+}
+
+impl WorkspaceCatalog for OwnerCatalog {
+    fn resolve_scope(
+        &self,
+        scope: &WorkspaceScope,
+    ) -> Result<Vec<FederatedWorkspaceTarget>, OrbitError> {
+        match scope {
+            WorkspaceScope::Selectors(selectors)
+                if selectors
+                    .iter()
+                    .all(|s| *s == self.target.name || *s == self.target.workspace_id) =>
+            {
+                Ok(vec![self.target.clone()])
+            }
+            _ => Err(OrbitError::WorkspaceError(format!(
+                "unknown workspace selector: {scope:?}"
+            ))),
+        }
+    }
+
+    fn open(&self, _target: &FederatedWorkspaceTarget) -> Result<OrbitRuntime, OrbitError> {
+        Ok(self.owner.clone())
+    }
+}
+
+/// A product workspace and the platform workspace that owns its friction,
+/// sharing one host store as registered checkouts do.
+fn product_and_owner() -> (tempfile::TempDir, OrbitRuntime, OrbitRuntime) {
+    let root = tempfile::tempdir().expect("tempdir");
+    let global_root = root.path().join("global");
+    let product_orbit = root.path().join("product").join(".orbit");
+    let owner_orbit = root.path().join("platform").join(".orbit");
+    for dir in [&global_root, &product_orbit, &owner_orbit] {
+        std::fs::create_dir_all(dir).expect("create root");
+    }
+    let owner = OrbitRuntime::from_roots(&global_root, &owner_orbit).expect("owner runtime");
+    let product = OrbitRuntime::from_roots(&global_root, &product_orbit)
+        .expect("product runtime")
+        .with_workspace_catalog(Arc::new(OwnerCatalog {
+            target: FederatedWorkspaceTarget {
+                workspace_id: "ws_platform".to_string(),
+                name: "platform".to_string(),
+                repo_root: root.path().join("platform"),
+            },
+            owner: owner.clone(),
+        }));
+    (root, product, owner)
+}
+
+#[test]
+fn update_records_and_clears_the_rehome_disposition() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let seeded = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.add",
+        json!({ "body": SECTIONED_BODY, "model": TEST_CODEX_MODEL }),
+    )
+    .expect("seed record");
+    let id = seeded["id"].as_str().expect("record id");
+
+    let recorded = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.update",
+        json!({ "id": id, "rehome_to": " ws_orbit " }),
+    )
+    .expect("record the owning workspace");
+    assert_eq!(recorded["rehome_to"], json!("ws_orbit"));
+    assert_eq!(recorded["status"], json!("open"));
+
+    let cleared = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.update",
+        json!({ "id": id, "rehome_to": "" }),
+    )
+    .expect("clear the disposition");
+    assert!(cleared.get("rehome_to").is_none(), "{cleared}");
+}
+
+#[test]
+fn rehome_moves_a_friction_into_the_registered_owner() {
+    let (_temp, product, owner) = product_and_owner();
+    let seeded = run_tool_as_operator(
+        &product,
+        "orbit.friction.add",
+        json!({
+            "body": SECTIONED_BODY,
+            "title": "Worker exits before claiming its run",
+            "tags": ["tooling"],
+            "during_task": "DANI-10691",
+            "model": TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("seed record");
+    let id = seeded["id"].as_str().expect("record id");
+
+    let moved = run_tool_as_operator(
+        &product,
+        "orbit.friction.rehome",
+        json!({ "id": id, "to_workspace": "platform" }),
+    )
+    .expect("rehome");
+
+    assert_eq!(moved["status"], json!("resolved"));
+    assert_eq!(moved["rehome_to"], json!("ws_platform"));
+    let new_id = moved["rehomed_as"]["id"].as_str().expect("new id");
+    assert!(
+        moved["body"].as_str().unwrap_or_default().contains(new_id),
+        "the source points at the moved record: {moved}"
+    );
+
+    let owned = run_tool_as_operator(&owner, "orbit.friction.list", json!({ "status": "open" }))
+        .expect("list owner");
+    let owned = owned.as_array().expect("record array");
+    assert_eq!(owned.len(), 1, "{owned:?}");
+    assert_eq!(owned[0]["id"], json!(new_id));
+    assert_eq!(owned[0]["title"], seeded["title"]);
+    assert_eq!(owned[0]["created_at"], seeded["created_at"]);
+    assert_eq!(owned[0]["during_task"], json!("DANI-10691"));
+    assert!(
+        owned[0]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(SECTIONED_BODY),
+        "{}",
+        owned[0]
+    );
+}
+
+#[test]
+fn rehome_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
+    let (_temp, product, _owner) = product_and_owner();
+    let seeded = run_tool_as_operator(
+        &product,
+        "orbit.friction.add",
+        json!({ "body": SECTIONED_BODY, "model": TEST_CODEX_MODEL }),
+    )
+    .expect("seed record");
+    let id = seeded["id"].as_str().expect("record id");
+
+    run_tool_as_operator(
+        &product,
+        "orbit.friction.rehome",
+        json!({ "id": id, "to_workspace": "nowhere" }),
+    )
+    .expect_err("an unknown workspace is refused");
+
+    let (_bare_temp, bare, _repo) = test_runtime();
+    let bare_seed = run_tool_as_operator(
+        &bare,
+        "orbit.friction.add",
+        json!({ "body": SECTIONED_BODY, "model": TEST_CODEX_MODEL }),
+    )
+    .expect("seed bare record");
+    let error = run_tool_as_operator(
+        &bare,
+        "orbit.friction.rehome",
+        json!({ "id": bare_seed["id"], "to_workspace": "platform" }),
+    )
+    .expect_err("a standalone runtime has no registry to resolve against");
+    assert!(matches!(error, OrbitError::WorkspaceError(_)), "{error:?}");
+
+    let untouched =
+        run_tool_as_operator(&product, "orbit.friction.list", json!({ "status": "open" }))
+            .expect("list product");
+    assert_eq!(untouched.as_array().map(Vec::len), Some(1));
 }

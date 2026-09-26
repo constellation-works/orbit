@@ -271,12 +271,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_plugin_archive_digest,
     },
+    // Friction re-homing: the workspace that owns a friction recorded in
+    // another one, so curation can finish with a durable disposition.
+    Migration {
+        version: 29,
+        name: "friction_rehome_target",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_friction_rehome_target,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 28;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 29;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

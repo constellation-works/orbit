@@ -40,7 +40,7 @@ pub(super) fn dispatch(
 ) -> Result<Value, OrbitError> {
     if matches!(
         verb,
-        FrictionVerb::Add | FrictionVerb::Update | FrictionVerb::Resolve
+        FrictionVerb::Add | FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome
     ) {
         runtime.ensure_coordination_task_write_permitted()?;
     }
@@ -52,6 +52,7 @@ pub(super) fn dispatch(
         FrictionVerb::Tags => tags(runtime),
         FrictionVerb::Update => update(runtime, input),
         FrictionVerb::Resolve => resolve(runtime, input),
+        FrictionVerb::Rehome => rehome(runtime, input),
     }
 }
 
@@ -206,9 +207,20 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         Some(raw) if raw.trim().is_empty() => Some(None),
         Some(raw) => Some(Some(normalize_title(&raw)?)),
     };
-    if status.is_none() && tags.is_none() && body.is_none() && title.is_none() {
+    // Like `title`, an explicit empty `rehome_to` clears the disposition.
+    let rehome_to = optional_raw_string(&input, "rehome_to")?.map(|raw| {
+        let raw = raw.trim();
+        (!raw.is_empty()).then(|| raw.to_string())
+    });
+    if status.is_none()
+        && tags.is_none()
+        && body.is_none()
+        && title.is_none()
+        && rehome_to.is_none()
+    {
         return Err(OrbitError::InvalidInput(
-            "orbit.friction.update requires `status`, `tags`, `body`, or `title`".to_string(),
+            "orbit.friction.update requires `status`, `tags`, `body`, `title`, or `rehome_to`"
+                .to_string(),
         ));
     }
     let stored = crate::runtime::friction::store_for(runtime)?.update(
@@ -219,6 +231,7 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
             title,
             body,
             resolved_by_task: None,
+            rehome_to,
             updated_at: Utc::now(),
         },
     )?;
@@ -229,6 +242,20 @@ fn resolve(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let stored = crate::runtime::friction::store_for(runtime)?.resolve(&id, Utc::now())?;
     record_to_json(stored)
+}
+
+fn rehome(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let id = required_string(&input, &["id"], "id")?;
+    let to_workspace = required_string(&input, &["to_workspace"], "to_workspace")?;
+    let outcome = runtime.rehome_friction(&id, &to_workspace)?;
+    let mut value = record_to_json(outcome.source)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("rehomed_as".to_string(), record_to_json(outcome.target)?);
+        if !outcome.dropped_tags.is_empty() {
+            object.insert("dropped_tags".to_string(), json!(outcome.dropped_tags));
+        }
+    }
+    Ok(value)
 }
 
 fn parse_timestamp(field: &str, raw: &str) -> Result<DateTime<Utc>, OrbitError> {

@@ -66,6 +66,7 @@ pub(super) fn legacy_body(id: &str, model: &str, status: FrictionStatus) -> Fric
         during_task: Some("ORB-00001".to_string()),
         resolved_by_task: matches!(status, FrictionStatus::Resolved)
             .then(|| "ORB-00002".to_string()),
+        rehome_to: None,
         body: format!("Report body for {id}"),
     }
 }

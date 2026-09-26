@@ -21,7 +21,8 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
 | `orbit.task.reject` | `note`, `comment` | - | `id` |
 | `orbit.friction.add` | `body` / `description` | - | `model`, `during_task`, tags |
-| `orbit.friction.update` | `body` | - | `id`, status, tags |
+| `orbit.friction.update` | `body` | - | `id`, status, tags, `rehome_to` |
+| `orbit.friction.rehome` | - | - | `id`, `to_workspace`; the moved body was already redacted when it was written |
 | `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
 | `orbit.docs.add` | - | - | DocsAdd only registers a validated repo-relative path; it does not persist document content. |
 

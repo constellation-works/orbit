@@ -14,8 +14,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::friction::{
-    FrictionAddParams, FrictionListFilter, FrictionReportedCount, FrictionUpdateParams,
-    StoredFrictionRecord,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
+    FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
 };
 use super::invocation::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
@@ -298,6 +298,13 @@ pub trait FrictionStoreBackend: Send + Sync {
         id: &str,
         params: FrictionUpdateParams,
     ) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Move `id` into its owning workspace on this host and resolve the
+    /// source with a pointer to the new record, atomically.
+    fn rehome(
+        &self,
+        id: &str,
+        params: FrictionRehomeParams,
+    ) -> Result<FrictionRehomeOutcome, OrbitError>;
     fn resolve(
         &self,
         id: &str,

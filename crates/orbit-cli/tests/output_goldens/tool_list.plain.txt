@@ -16,6 +16,7 @@ orbit.drain.probe	active	yes	-	Read-only preflight for the distributed drain, se
 orbit.drain.receipt.lookup	active	yes	request_id:string	Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.
 orbit.friction.add	active	yes	body:string, model:string	Append a friction report
 orbit.friction.list	active	yes	-	List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.
+orbit.friction.rehome	active	yes	id:string, to_workspace:string	Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it
 orbit.friction.update	active	yes	id:string	Update triage metadata for a friction record
 orbit.pipeline.invoke	active	yes	job_name:string, input:object	Submit a durable pipeline run and return immediately with its run ID.
 orbit.pipeline.wait	active	yes	run_ids:string|string[]	Block until the supplied pipeline runs reach terminal state or timeout.

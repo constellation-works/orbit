@@ -1,6 +1,8 @@
 use orbit_common::OrbitError;
 use rusqlite::Connection;
 
+use super::introspect::{add_column_if_missing, table_exists};
+
 /// v12 `friction_records_sqlite` migration (ORB-10680): hub friction records
 /// move from the per-workspace Markdown tree into the host-global store.
 ///
@@ -79,4 +81,19 @@ pub(super) fn apply_friction_records_schema(conn: &Connection) -> Result<(), Orb
         "#,
     )
     .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// v29 `friction_rehome_target` migration: the workspace that owns a friction
+/// recorded somewhere else — curation's `rehome_required` disposition, and the
+/// forwarding pointer `orbit.friction.rehome` leaves on the record it moved.
+/// Additive: an older binary ignores the column, and its upsert leaves it
+/// untouched because the column is absent from that binary's `SET` list.
+pub(super) fn apply_friction_rehome_target(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "friction_records")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE friction_records ADD COLUMN rehome_to TEXT",
+    )
 }

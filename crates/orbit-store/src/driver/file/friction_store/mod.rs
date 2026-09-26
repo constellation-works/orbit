@@ -491,6 +491,7 @@ pub(crate) fn read_record_at(path: &Path) -> Result<StoredFrictionRecord, OrbitE
             resolved_at: frontmatter.resolved_at,
             during_task: frontmatter.during_task,
             resolved_by_task: frontmatter.resolved_by_task,
+            rehome_to: None,
             body: body.trim_start_matches('\n').trim_end().to_string(),
         },
         path: Some(path.to_path_buf()),

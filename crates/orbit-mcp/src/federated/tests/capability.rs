@@ -26,6 +26,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.drain.receipt.lookup", McpToolClass::ControlPlane),
     ("orbit.friction.add", McpToolClass::ControlPlane),
     ("orbit.friction.list", McpToolClass::ControlPlane),
+    ("orbit.friction.rehome", McpToolClass::ControlPlane),
     ("orbit.friction.update", McpToolClass::ControlPlane),
     ("orbit.search", McpToolClass::ControlPlane),
     ("orbit.task.add", McpToolClass::ControlPlane),

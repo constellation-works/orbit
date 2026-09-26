@@ -161,6 +161,7 @@ fn generate_corpus(root: &Path, count: usize) {
             resolved_at: None,
             during_task: None,
             resolved_by_task: None,
+            rehome_to: None,
             // A realistic report body: the parse cost the scan paid per record.
             body: format!(
                 "## What happened\n\nGenerated report {index}.\n\n## Evidence\n\n{}\n",

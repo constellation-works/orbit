@@ -65,6 +65,11 @@ fn friction_help_matches_the_shipped_surface() {
             "friction_help/resolve.txt",
             include_str!("friction_help/resolve.txt"),
         ),
+        (
+            &["orbit", "friction", "rehome"],
+            "friction_help/rehome.txt",
+            include_str!("friction_help/rehome.txt"),
+        ),
     ];
 
     for (args, relative, expected) in cases {
@@ -143,6 +148,37 @@ fn cli_parses_friction_update() {
         })
     );
     assert_eq!(parsed.target_id(), Some("F2026-05-001"));
+}
+
+#[test]
+fn cli_parses_friction_rehome_and_the_rehome_disposition() {
+    let parsed = invocation(&[
+        "orbit",
+        "friction",
+        "rehome",
+        "F2026-08-002",
+        "--to-workspace",
+        "orbit",
+    ]);
+    assert_eq!(parsed.spec.verb, FrictionVerb::Rehome);
+    assert_eq!(
+        parsed.input,
+        json!({ "id": "F2026-08-002", "to_workspace": "orbit" })
+    );
+    assert_eq!(parsed.target_id(), Some("F2026-08-002"));
+
+    let disposition = invocation(&[
+        "orbit",
+        "friction",
+        "update",
+        "F2026-08-002",
+        "--rehome-to",
+        "ws_orbit",
+    ]);
+    assert_eq!(
+        disposition.input,
+        json!({ "id": "F2026-08-002", "rehome_to": "ws_orbit" })
+    );
 }
 
 /// The wire field is `tags` while the flag is `--tag`, and repeats accumulate.
@@ -248,6 +284,10 @@ fn each_verb_routes_to_its_registry_tool_name() {
             &["orbit", "friction", "resolve", "F1"],
             "orbit.friction.resolve",
         ),
+        (
+            &["orbit", "friction", "rehome", "F1", "--to-workspace", "w"],
+            "orbit.friction.rehome",
+        ),
     ];
     for (args, tool_name) in cases {
         assert_eq!(invocation(args).spec.tool_name, *tool_name, "{args:?}");
@@ -292,6 +332,20 @@ fn audit_metadata_is_derived_from_the_registry() {
             false,
         ),
         (&["orbit", "friction", "stats"], "stats", None, None, false),
+        (
+            &[
+                "orbit",
+                "friction",
+                "rehome",
+                "F2026-05-001",
+                "--to-workspace",
+                "orbit",
+            ],
+            "rehome",
+            Some("F2026-05-001"),
+            None,
+            false,
+        ),
     ];
 
     for (args, subcommand, target_id, json_preference, read_only) in cases {
@@ -331,6 +385,7 @@ fn required_arguments_are_still_enforced() {
         &["orbit", "friction", "add", "--body", "b"][..],
         &["orbit", "friction", "show"][..],
         &["orbit", "friction", "update"][..],
+        &["orbit", "friction", "rehome", "F2026-05-001"][..],
     ] {
         assert!(
             Cli::try_parse_from(args.iter().copied()).is_err(),

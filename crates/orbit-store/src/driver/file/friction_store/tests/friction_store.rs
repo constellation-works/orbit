@@ -146,6 +146,7 @@ fn a_record_round_trips_through_the_legacy_markdown_layout() {
         resolved_at: None,
         during_task: Some("ORB-00001".to_string()),
         resolved_by_task: None,
+        rehome_to: None,
         body: "The worker exited before claiming the run.".to_string(),
     };
 

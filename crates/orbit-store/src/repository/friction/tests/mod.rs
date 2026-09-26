@@ -3,4 +3,5 @@
 mod bench;
 mod friction_store;
 mod import;
+mod rehome;
 mod support;

@@ -303,6 +303,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::Friction(FrictionVerb::Stats)
         | OrbitBuiltinAction::Friction(FrictionVerb::Tags)
         | OrbitBuiltinAction::Friction(FrictionVerb::Resolve)
+        | OrbitBuiltinAction::Friction(FrictionVerb::Rehome)
         | OrbitBuiltinAction::DrainClaims
         | OrbitBuiltinAction::DrainProbe
         | OrbitBuiltinAction::DrainReceiptLookup
