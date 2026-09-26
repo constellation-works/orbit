@@ -386,6 +386,43 @@ fn generation_root_uses_managed_registry_when_no_override_is_present() {
     assert_eq!(resolved, registry.path());
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_sandbox_managed_process_pin_uses_registry_even_with_orbit_root_env() {
+    let home = tempdir().expect("home tempdir");
+    let registry = tempdir().expect("registry");
+    let workspace = tempdir().expect("workspace root");
+    let explicit = tempdir().expect("explicit root");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let registry_var = registry.path().to_string_lossy().into_owned();
+    let workspace_var = workspace.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", Some(workspace_var.as_str())),
+        ("ORBIT_REGISTRY_ROOT", Some(registry_var.as_str())),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_RUN_ID", Some("jrun-generation-root")),
+    ]);
+
+    assert_eq!(
+        super::super::resolve::resolve_process_generation_root(None)
+            .expect("managed process generation root"),
+        registry.path(),
+        "managed child must join the host pin even when ORBIT_ROOT selects workspace data"
+    );
+    assert_eq!(
+        resolve_generation_root(None).expect("update generation root"),
+        workspace.path(),
+        "update admission must still check the ORBIT_ROOT authority"
+    );
+    assert_eq!(
+        super::super::resolve::resolve_process_generation_root(Some(explicit.path()))
+            .expect("explicit process generation root"),
+        explicit.path(),
+        "an explicit CLI root must retain its generation authority"
+    );
+}
+
 #[test]
 fn inspection_invocation_uses_the_managed_registry_without_a_job_run() {
     let home = tempdir().expect("home tempdir");

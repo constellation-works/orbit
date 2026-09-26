@@ -173,6 +173,13 @@ remote destination; that destination admits its own process. All existing
 workspace selection, operator/agent capability, remote caller and managed-run
 checks still run. Admission grants none of those permissions.
 
+On macOS, a managed child with `ORBIT_REGISTRY_ROOT` joins its parent's host
+generation pin and keeps global stores on that registry even if it sets
+`ORBIT_ROOT` to select shared workspace data. The workspace `.orbit` generation
+record may be absent and cannot be created by the child sandbox. `orbit update`
+and `orbit update --preflight` still check both the explicit workspace authority
+and the host-global authority.
+
 The policy is deliberately conservative: any live process prevents ordinary
 `orbit update`, even an update with the same schema or version. A *writing*
 command from a different executable generation cannot open a runtime while that

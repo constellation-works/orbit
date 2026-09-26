@@ -34,6 +34,9 @@ fn orbit_root_env_pins_global_registry_root() {
     let _env = test_env::scoped([
         ("HOME", Some(home_var.as_str())),
         ("ORBIT_ROOT", Some(root_var.as_str())),
+        ("ORBIT_REGISTRY_ROOT", None),
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_RUN_ID", None),
     ]);
 
     let resolved_roots =
@@ -47,6 +50,33 @@ fn orbit_root_env_pins_global_registry_root() {
     assert_eq!(resolved_roots.shared_root, workspace_root);
     assert_eq!(resolved_roots.local_root, workspace_root);
     assert_ne!(resolved_roots.global_root, home.path().join(".orbit"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_sandbox_managed_orbit_root_keeps_host_registry_global() {
+    let home = tempdir().expect("home tempdir");
+    let root = tempdir().expect("fixture root");
+    let registry = root.path().join("registry");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    seed_initialized_workspace_root(&workspace);
+    let home_var = home.path().to_string_lossy().into_owned();
+    let registry_var = registry.to_string_lossy().into_owned();
+    let workspace_var = workspace.to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", Some(workspace_var.as_str())),
+        ("ORBIT_REGISTRY_ROOT", Some(registry_var.as_str())),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_RUN_ID", Some("jrun-managed-macos-sandbox")),
+    ]);
+
+    let roots =
+        OrbitRuntime::resolve_roots_for_cwd(&repo, None).expect("resolve managed workspace root");
+    assert_eq!(roots.global_root, registry);
+    assert_eq!(roots.shared_root, workspace);
+    assert_eq!(roots.local_root, workspace);
 }
 
 #[test]

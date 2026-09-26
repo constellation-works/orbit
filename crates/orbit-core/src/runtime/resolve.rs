@@ -38,7 +38,8 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
 /// An explicit `--root` or `ORBIT_ROOT` isolates first-create and participation
 /// to that data directory so a read-only unpinned `~/.orbit` cannot block
 /// scratch init. Without those overrides the host-global root is used
-/// (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run).
+/// (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run). Update admission,
+/// plugin root selection, and runtime-less commands use this same precedence.
 pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     if let Some(root) = root_override {
         return Ok(root.to_path_buf());
@@ -50,6 +51,23 @@ pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, 
         }
     }
     resolve_global_root()
+}
+
+/// Resolve only the CLI process pin. A macOS managed child uses its parent's
+/// host registry authority even when `ORBIT_ROOT` selects workspace data: the
+/// workspace generation record may not exist and the sandbox cannot create it.
+/// Update admission still checks the explicit override and the host root.
+pub fn resolve_process_generation_root(
+    root_override: Option<&Path>,
+) -> Result<PathBuf, OrbitError> {
+    #[cfg(target_os = "macos")]
+    if root_override.is_none()
+        && managed_dispatch_context_from_env()
+        && std::env::var(ORBIT_REGISTRY_ROOT_ENV).is_ok_and(|value| !value.trim().is_empty())
+    {
+        return resolve_global_root();
+    }
+    resolve_generation_root(root_override)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
