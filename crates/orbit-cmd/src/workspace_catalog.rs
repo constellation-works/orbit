@@ -149,15 +149,19 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
             WorkspaceScope::Selectors(selectors) => {
                 let registry =
                     RegisteredRuntimeFactory::load_registry_for_selectors(&self.global_root)?;
+                let identity = orbit_registry::inspect_machine_identity(&self.global_root)?;
                 selectors
                     .iter()
                     .map(|selector| {
-                        RegisteredRuntimeFactory::resolve_selector_in(&registry, selector).map(
-                            |selected| RegisteredCheckout {
-                                workspace: selected.workspace,
-                                checkout: selected.checkout,
-                            },
+                        RegisteredRuntimeFactory::resolve_selector_in(
+                            &registry,
+                            selector,
+                            identity.id(),
                         )
+                        .map(|selected| RegisteredCheckout {
+                            workspace: selected.workspace,
+                            checkout: selected.checkout,
+                        })
                     })
                     .collect::<Result<Vec<_>, OrbitError>>()?
             }

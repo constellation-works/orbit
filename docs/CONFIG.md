@@ -244,6 +244,8 @@ Explicit selections that cannot run fail with a stable diagnostic and never fall
 
 Common to every lane below: Orbit passes `--model` from the crew, sends the prompt on **stdin** (never argv, which is visible in process listings and audit), and treats the Orbit OS sandbox as the filesystem boundary. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment), and Orbit never puts a key on argv. Provider-specific write grants apply only while that provider is running. Lanes without native MCP (or without Orbit-managed MCP config) reach Orbit tools with `orbit tool run <tool> --input '<json>'` through their shell tool, under the same grants.
 
+For `orbit tool run`, an explicit `workspace` in the JSON input or the global `--workspace` flag selects a registered workspace from any current directory. The selector may be its name, `ws_*` ID, absolute local checkout path, or a local `hm_*/ws_*` selector copied from federated workspace listing. A selector naming another host fails locally and names that host; run the command on its owner host instead.
+
 ## GitHub Copilot CLI
 
 | | |

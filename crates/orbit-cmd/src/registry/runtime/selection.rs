@@ -95,7 +95,9 @@ pub(super) fn resolve_cli_workspace_target<'a>(
     registry: &'a WorkspaceRegistry,
     runtime: &OrbitRuntime,
     selector: &str,
+    local_machine_id: Option<&str>,
 ) -> Result<CliWorkspaceTarget<'a>, OrbitError> {
+    let selector = local_workspace_selector(selector, local_machine_id)?;
     if selector_looks_like_path(selector) {
         return resolve_cli_workspace_path(registry, Some(runtime), selector);
     }
@@ -111,7 +113,9 @@ pub(super) fn resolve_cli_workspace_target<'a>(
 pub(super) fn resolve_cli_workspace_binding<'a>(
     registry: &'a WorkspaceRegistry,
     selector: &str,
+    local_machine_id: Option<&str>,
 ) -> Result<(&'a Workspace, &'a WorkspaceCheckout, PathBuf), OrbitError> {
+    let selector = local_workspace_selector(selector, local_machine_id)?;
     match if selector_looks_like_path(selector) {
         resolve_cli_workspace_path(registry, None, selector)?
     } else {
@@ -131,6 +135,29 @@ pub(super) fn resolve_cli_workspace_binding<'a>(
         } => Ok((workspace, checkout, local_root)),
         CliWorkspaceTarget::CurrentRuntime => Err(unsupported_cli_workspace(selector)),
     }
+}
+
+/// Federation advertises `hm_*/ws_*` selectors. The local CLI can resolve
+/// only this machine's member; a foreign host must not be treated as a path.
+fn local_workspace_selector<'a>(
+    selector: &'a str,
+    local_machine_id: Option<&str>,
+) -> Result<&'a str, OrbitError> {
+    let Some((host, workspace)) = selector.split_once('/') else {
+        return Ok(selector);
+    };
+    if !host.starts_with("hm_") || !workspace.starts_with("ws_") || workspace.contains('/') {
+        return Ok(selector);
+    }
+    if local_machine_id == Some(host) {
+        return Ok(workspace);
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "workspace selector '{selector}' belongs to host '{host}', not this local host{}",
+        local_machine_id
+            .map(|id| format!(" '{id}'"))
+            .unwrap_or_default()
+    )))
 }
 
 pub(super) fn resolve_named_cli_checkout<'a>(

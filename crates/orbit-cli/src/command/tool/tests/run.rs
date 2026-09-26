@@ -76,6 +76,23 @@ fn id_resolved_task_id_is_read_from_id_resolved_tool_input() {
 }
 
 #[test]
+fn tool_input_workspace_selector_is_available_before_runtime_bootstrap() {
+    let explicit = tool_run_args(
+        "orbit.task.list",
+        r#"{"workspace":" hm_local/ws_alpha ","model":"codex"}"#,
+        Vec::new(),
+    );
+    assert_eq!(
+        explicit.input_workspace_selector().as_deref(),
+        Some("hm_local/ws_alpha")
+    );
+    assert_eq!(
+        tool_run_args("orbit.task.list", r#"{"limit":1}"#, Vec::new()).input_workspace_selector(),
+        None
+    );
+}
+
+#[test]
 fn list_output_uses_minimal_task_projection() {
     let shaped = shape_tool_output(
         "orbit.task.list",

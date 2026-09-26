@@ -31,6 +31,10 @@ pub struct CommandMeta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeNeed {
     Required,
+    /// An explicit tool input selector must bind before cwd-based bootstrap.
+    SelectedWorkspace {
+        selector: String,
+    },
     /// The hidden detached worker may outlive one transient SQLite writer.
     PipelineWorker,
     /// Read an existing workspace without stale-run reconciliation on open.
@@ -428,10 +432,15 @@ fn tool_operation(command: &super::tool::ToolCommand) -> CommandOperation {
         ToolSubcommand::Doctor => ("doctor", None, None, None, "admin".to_string(), None),
     };
     let runtime_need = match &command.command {
-        ToolSubcommand::Run(args) => match args.id_resolved_task_id() {
-            Some(task_id) => RuntimeNeed::TaskOwner { task_id },
-            None => RuntimeNeed::Required,
-        },
+        ToolSubcommand::Run(args) => {
+            if let Some(selector) = args.input_workspace_selector() {
+                RuntimeNeed::SelectedWorkspace { selector }
+            } else if let Some(task_id) = args.id_resolved_task_id() {
+                RuntimeNeed::TaskOwner { task_id }
+            } else {
+                RuntimeNeed::Required
+            }
+        }
         ToolSubcommand::List(_) => RuntimeNeed::ReadOnly,
         _ => RuntimeNeed::Required,
     };
