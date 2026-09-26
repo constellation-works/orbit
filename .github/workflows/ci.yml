@@ -26,6 +26,10 @@ env:
   CARGO_DENY_LINUX_SHA256: f1f8eedc2a3ac297c540873f93785d4104b102c0079506b2a6b3221b7ec956af
   LLVM_COV_VERSION: 0.8.7
   LLVM_COV_LINUX_SHA256: 9a75fe29538d3800b3da57f6f6efb64cba5c720a257bf0cb8b51f39d495a9168
+  # [ORB-13017] The uv-locked Python plugin fixture runs its backend through
+  # uv. Keep in sync with UV_VERSION in ci-macos.yml.
+  UV_VERSION: 0.11.28
+  UV_LINUX_SHA256: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
   # Keep in sync with [workspace.package] rust-version in Cargo.toml.
   MSRV: "1.89"
 
@@ -238,6 +242,21 @@ jobs:
           command -v rg >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends ripgrep
           rg --version | head -1
 
+      # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
+      # binary comes from the network; the plugin fixture's dependency is a
+      # wheel inside the fixture, so the test itself never reaches PyPI.
+      - name: Install uv
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          archive="$(mktemp)"
+          mkdir -p "$cargo_bin"
+          curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" -o "$archive"
+          echo "${UV_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          tar zxf "$archive" --strip-components=1 -C "$cargo_bin" uv-x86_64-unknown-linux-gnu/uv
+          rm -f "$archive"
+          uv --version | grep -F "${UV_VERSION}"
+
       - name: Run CI guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -261,6 +280,8 @@ jobs:
       # descriptor-contract tests, which need a host that enforces Landlock
       # for the same reason the plugin-sandbox tests do. It runs over the same
       # artifact set as the line above it so neither leg triggers a rebuild.
+      # [ORB-13017] It also selects the uv-locked Python plugin fixture test,
+      # ignored in the portable suite because it needs uv on PATH.
       # A prior failure in this job (including `Run CI guardrails`) skips this
       # gate; if this step is missing, the gate did not pass.
       - name: Linux sandbox/policy enforcement gate
@@ -269,7 +290,7 @@ jobs:
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
           cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
             --run-ignored only \
-            -E 'test(/plugin::tests::(backend|mcp|tool)::/) | test(/linux_landlock::ruleset::tests::/)'
+            -E 'test(/plugin::tests::(backend|mcp|tool)::/) | test(/linux_landlock::ruleset::tests::/) | (binary_id(orbit-cli::plugin_cli_group) & test(/uv_locked/))'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage

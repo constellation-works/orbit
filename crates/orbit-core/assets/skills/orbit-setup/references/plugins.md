@@ -267,6 +267,101 @@ does not vouch for what the backend does inside those bounds.
 | `exec` | One process per call. Orbit writes `{"schema_version":1,"tool":…,"input":…,"context":{…}}` on stdin and reads `{"ok":true,"output":…}` or `{"ok":false,"error":{…}}` on stdout. A non-zero exit, non-JSON stdout, or output failing the tool's `output_schema` is a tool error — never a partial result. |
 | `mcp` | The plugin ships a stdio MCP server. Orbit spawns one per caller context per runtime process — a caller in another workspace, or with a different allowed-tools intersection, gets its own child rather than one confined to the first caller's workspace — checks its `tools/list` against the manifest (a disagreement refuses startup, naming the tool), and proxies each `<ns>.<verb>` call as `tools/call`. A crashed or unresponsive server is a tool error within `backend.timeout_ms`, and the next call respawns it. |
 
+## Python backends with dependencies
+
+The scaffold's backend uses only the standard library. A Python backend that
+needs third-party packages ships as a uv project, and uv builds the environment
+under the plugin's state directory on first call. Do not commit a virtualenv:
+it symlinks its interpreter, and `plugin add` refuses a tree that contains a
+symbolic link.
+
+```text
+my-plugin/
+  plugin.yaml
+  pyproject.toml     # [project] dependencies; [tool.uv] package = false
+  uv.lock            # committed: pins every dependency
+  .python-version    # optional: an interpreter uv may download into plugin state
+  backend/main.py
+  bin/my-plugin      # the shim below, executable
+```
+
+```yaml
+spec:
+  requires:
+    programs: [uv]
+  backend:
+    type: exec
+    command: bin/my-plugin
+    timeout_ms: 60000        # the first call installs the environment
+  permissions:
+    fs:
+      write: ["{{plugin_state}}"]
+    network: any             # the first sync downloads the locked wheels
+```
+
+```sh
+#!/bin/sh
+set -eu
+state="${ORBIT_PLUGIN_STATE:?ORBIT_PLUGIN_STATE is not set}"
+export UV_PROJECT_ENVIRONMENT="$state/venv"
+export UV_CACHE_DIR="$state/uv-cache"
+export UV_PYTHON_INSTALL_DIR="$state/uv-python"
+export UV_PYTHON_BIN_DIR="$state/uv-python/bin"
+export PYTHONPYCACHEPREFIX="$state/pycache"   # the plugin root is read-only
+export TMPDIR="$state/tmp"
+mkdir -p "$TMPDIR"
+exec uv run --frozen --exact --no-dev --quiet --project "$ORBIT_PLUGIN_ROOT" \
+  python "$ORBIT_PLUGIN_ROOT/backend/main.py"
+```
+
+Enable it with `orbit plugin enable my-plugin --grant fs,network`, and certify
+it with `orbit plugin test ./my-plugin --grant network`. `uv` is resolved from
+`PATH` when the plugin is enabled and granted at that path. `orbit plugin show`
+lists it under Programs, and `orbit plugin doctor` reports it when it has gone.
+No other grant or sandbox exception is involved. uv reads the plugin root, its
+own binary, and the system runtime directories the sandbox already allows.
+Every write lands under `{{plugin_state}}`. On Linux, Landlock refuses a few
+reads uv can do without, such as its user configuration under `$HOME` and some
+`/proc/self` files; uv continues. Do not set `UV_NO_CONFIG=1`, because it also
+makes uv ignore `.python-version`. Under Landlock the interpreter uv picks must
+also be readable. A system Python qualifies, and so does one uv downloads into
+plugin state. A Python installed under `$HOME`, for example by pyenv, does not.
+On such a host, add `export UV_PYTHON_PREFERENCE=only-managed` to the shim so uv
+always uses an interpreter it downloaded into plugin state.
+
+**Network.** The first call downloads the locked wheels, and the interpreter
+when `.python-version` names one the host lacks. The first call after a
+lockfile change downloads whatever that change added. Both need `network: any`
+and the `network` grant; without them a cold call fails with a connection error
+from uv. Other calls use the cache and open no connection. A plugin that ships
+its wheels in its own tree, locked through `[tool.uv.sources]` path entries,
+needs no network at all.
+
+**Cost.** On one Linux host with Orbit 0.24.0, `orbit <ns> <verb>` took these
+times:
+
+| Call | Time |
+|---|---|
+| Cold, 11 wheels (19 MB) into an empty state directory | about 0.45 s |
+| Cold, also downloading a CPython | about 2 s |
+| Warm | 0.14–0.15 s |
+| The same environment's `python` without uv | 0.11–0.12 s |
+
+`--offline` and `--no-sync` add nothing measurable, and `--offline` breaks the
+cold call. Concurrent cold calls are safe because uv locks its cache and the
+environment.
+
+**Upgrades.** The environment is not part of the install. Every call runs
+`uv run --frozen --exact`, which compares the state-directory environment with
+the installed `uv.lock`. After `orbit plugin upgrade` installs a changed lock,
+the next call adds, upgrades and removes packages to match it, so a stale
+environment never runs. The manifest digest covers `plugin.yaml` only. An
+upgrade that changes just the lockfile therefore reports the requested
+permissions as unchanged and keeps the plugin's grants. Review the lock diff
+before upgrading, because it is new code even though it is not a new
+permission. `orbit plugin remove --purge-state` deletes the environment and
+cache with the rest of the plugin's state.
+
 ## Migrating an existing external tool
 
 The older form — one executable plus one `*.orbit-tool.yaml` sidecar per tool,

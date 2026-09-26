@@ -1,0 +1,20 @@
+#!/bin/sh
+# Run backend/main.py in a uv-managed environment that lives under the
+# plugin's state directory. The plugin root is read-only to the backend, so
+# the environment, uv's cache, any interpreter uv downloads, bytecode and
+# temporary files all go to $ORBIT_PLUGIN_STATE, which the manifest requests
+# as its one write root.
+set -eu
+state="${ORBIT_PLUGIN_STATE:?ORBIT_PLUGIN_STATE is not set}"
+export UV_PROJECT_ENVIRONMENT="$state/venv"
+export UV_CACHE_DIR="$state/uv-cache"
+export UV_PYTHON_INSTALL_DIR="$state/uv-python"
+export UV_PYTHON_BIN_DIR="$state/uv-python/bin"
+export PYTHONPYCACHEPREFIX="$state/pycache"
+export TMPDIR="$state/tmp"
+mkdir -p "$TMPDIR"
+# --frozen installs what uv.lock pins and never rewrites it; --exact also removes
+# anything the lock no longer names. After `orbit plugin upgrade` changes the
+# lock, the next call re-syncs the environment to it.
+exec uv run --frozen --exact --no-dev --quiet --project "$ORBIT_PLUGIN_ROOT" \
+  python "$ORBIT_PLUGIN_ROOT/backend/main.py"
