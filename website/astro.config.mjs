@@ -23,7 +23,7 @@ export default defineConfig({
         },
       },
       description:
-        'Reference documentation for Orbit, a self-hosted runtime for fleets of coding agents.',
+        'Reference documentation for Orbit, a local-first runtime for coding agents.',
       logo: {
         dark: './src/assets/orbit-logo-dark.svg',
         light: './src/assets/orbit-logo-light.svg',

@@ -13,7 +13,7 @@
   <img src="docs/assets/orbit-demo.gif" alt="Animated walkthrough of an illustrative session: an agent files task ORB-1042 with orbit.task.add, you approve it, orbit.workflow.ship runs it in an isolated worktree with file locks through plan, execute, and review, a pull request opens for you to merge, a parallel drain queues overlapping work behind file locks, and orbit task show traces the commit back to its task." width="880" />
 </p>
 
-Orbit is a local-first delivery layer for coding agents. You keep using Claude Code, Codex, Cursor, Copilot, or any of the other supported CLIs. Orbit gives them a durable task queue, isolated sandboxed worktrees, file-level locks for parallel runs, a gated pipeline that ends in a pull request, and an audit log of every step.
+Orbit is a local-first runtime for coding agents. You keep using Claude Code, Codex, Cursor, Copilot, or any of the other supported CLIs. Orbit gives them a durable task queue, isolated sandboxed worktrees, file-level locks for parallel runs, a gated pipeline that ends in a pull request, and an audit log of every step.
 
 **Why:** agents are fast enough that planning, review, and traceability are the first things to go. Six months later nobody can say why a line was written. Orbit makes those disciplines cheap and keeps you out of the clerical work. The agent files the task, Orbit runs it, and every commit carries a task ID you can trace back to the prompt, the plan, and the review.
 
