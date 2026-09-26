@@ -1431,6 +1431,77 @@ fn read_boundary_re_allows_subtrees_and_files_after_the_denies() {
     );
 }
 
+/// Path resolution needs metadata on denied ancestors, while a literal
+/// metadata grant must not make those directories listable or expose siblings.
+#[test]
+fn read_boundary_grants_only_literal_metadata_on_denied_ancestors() {
+    use std::path::PathBuf;
+
+    let resolved = profile("plugin", &[], &[]);
+    let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    let boundary_start = text.len();
+    super::super::append_macos_read_boundary(
+        &mut text,
+        &[
+            PathBuf::from("/srv/orbit"),
+            PathBuf::from("/srv/orbit/state/plugins"),
+        ],
+        &[PathBuf::from("/srv/orbit/state/plugins/demo")],
+        &[PathBuf::from("/srv/orbit/plugins/.grants/demo.json")],
+    );
+    let boundary = &text[boundary_start..];
+    let deny = boundary
+        .find("(deny file-read* (subpath \"/srv/orbit\"))")
+        .expect("global root read deny");
+    for ancestor in [
+        "/srv/orbit",
+        "/srv/orbit/state",
+        "/srv/orbit/state/plugins",
+        "/srv/orbit/plugins",
+        "/srv/orbit/plugins/.grants",
+    ] {
+        let grant = format!("(allow file-read-metadata (literal \"{ancestor}\"))");
+        let occurrences = boundary.lines().filter(|line| *line == grant).count();
+        assert_eq!(
+            occurrences, 1,
+            "denied ancestors need one literal metadata grant for path traversal: {ancestor}\n{boundary}"
+        );
+        assert!(
+            boundary.find(&grant).expect("metadata grant") > deny,
+            "metadata grants must follow the read deny so path traversal works: {boundary}"
+        );
+        for line in boundary
+            .lines()
+            .filter(|line| line.starts_with("(allow ") && line.contains(&format!("\"{ancestor}\"")))
+        {
+            assert_eq!(
+                line, grant,
+                "ancestor traversal must not grant directory data, listing or descendants: {line}\n{boundary}"
+            );
+        }
+    }
+    assert!(
+        boundary.contains("(allow file-read* (subpath \"/srv/orbit/state/plugins/demo\"))"),
+        "the plugin's own state stays readable: {boundary}"
+    );
+    assert!(
+        boundary.contains("(allow file-read* (literal \"/srv/orbit/plugins/.grants/demo.json\"))"),
+        "a granted witness remains a single file: {boundary}"
+    );
+    for sibling in [
+        "/srv/orbit/orbit.db",
+        "/srv/orbit/state/plugins/other",
+        "/srv/orbit/plugins/.grants/other.json",
+    ] {
+        assert!(
+            !boundary
+                .lines()
+                .any(|line| line.starts_with("(allow ") && line.contains(sibling)),
+            "the metadata carve-out must not allow sibling content: {sibling}\n{boundary}"
+        );
+    }
+}
+
 /// The same boundary under the real `sandbox-exec`: the plugin's own state
 /// subtree is readable and listable, a sibling namespace and the tree holding
 /// both are not.
