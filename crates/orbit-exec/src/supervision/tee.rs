@@ -125,15 +125,13 @@ impl<W: Write> RedactingEcho<W> {
 pub(super) fn spawn_stdin_write<W>(
     mut stdin: W,
     bytes: Vec<u8>,
-    result_tx: Sender<Result<(), String>>,
+    result_tx: Sender<std::io::Result<()>>,
 ) -> JoinHandle<()>
 where
     W: Write + Send + 'static,
 {
     thread::spawn(move || {
-        let result = stdin
-            .write_all(&bytes)
-            .map_err(|e| format!("failed to write process stdin: {e}"));
+        let result = stdin.write_all(&bytes);
         let _ = result_tx.send(result);
     })
 }
