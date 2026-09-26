@@ -8,9 +8,9 @@ use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginBackend, PluginProgramStatus, PluginValidationPolicy, load_plugin_dir,
-    manifest_refusal, program_statuses, refuse_covering_fs_write_roots, resolve_declared_programs,
-    validate_loaded_plugin,
+    LoadedPlugin, PLUGIN_TIMEOUT_CEILING_MS, PluginBackend, PluginProgramStatus,
+    PluginValidationPolicy, load_plugin_dir, manifest_refusal, program_statuses,
+    refuse_covering_fs_write_roots, resolve_declared_programs, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginExecutionKind, PluginGrant, PluginGrantSet, PluginProvenance,
@@ -594,6 +594,15 @@ pub fn validate_plugin_dir_for_workspace(
         .transpose()?;
 
     let mut warnings = Vec::new();
+    if let Some(timeout_ms) = plugin.manifest.spec.backend.timeout_ms
+        && timeout_ms > PLUGIN_TIMEOUT_CEILING_MS
+    {
+        warnings.push(format!(
+            "`backend.timeout_ms: {timeout_ms}` exceeds the host ceiling \
+             `PLUGIN_TIMEOUT_CEILING_MS` ({PLUGIN_TIMEOUT_CEILING_MS} ms); runtime caps it at \
+             {PLUGIN_TIMEOUT_CEILING_MS} ms"
+        ));
+    }
     for skill_dir in &plugin.skills {
         if let Some(skill_id) = super::skills::plugin_skill_link_id(plugin.namespace(), skill_dir) {
             warnings.push(format!(
