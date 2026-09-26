@@ -388,7 +388,22 @@ ORBIT_ALLOWED_TOOLS=orbit.task.show,orbit.search  ORBIT_PROC_ALLOWED_PROGRAMS=gi
 ```
 
 stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…}}`
-stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false}}`
+stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false,"detail":{…}}}`
+
+An error requires non-empty string `code` and `message`. `retryable` is a boolean and defaults
+to `false` when omitted; it says whether repeating the identical call can succeed. `detail` is
+optional JSON for actionable facts. Orbit retains it only when its serialized JSON is at most
+16 KiB; a larger detail is omitted while the code, message and retryable value survive. Orbit
+does not forward unknown error fields. A malformed error object remains an ordinary Execution
+error, as does a process or protocol failure. For an `mcp` backend, the equivalent is a
+`tools/call` result with `isError: true` and the same error object in `structuredContent`; a
+single JSON text content item is also accepted. Plain text errors remain Execution errors.
+
+Orbit forwards a valid plugin error as MCP `isError: true` with `structuredContent` containing
+`code`, `message`, `retryable` and any retained `detail`. `orbit tool run <ns>.<verb>`
+exits non-zero and writes the same JSON object to stderr; stdout is empty. A call using the
+deliberate `ORBIT_OPERATOR` override also emits its existing authorization warning on stderr
+before the JSON object.
 
 Non-zero exit, non-JSON stdout, or output failing `output_schema` is a tool error; there is no
 partial success. Timeout is `backend.timeout_ms`, capped by a host ceiling.
@@ -726,6 +741,9 @@ schema self-consistency, definition cross-references, and the `spec.web` rules o
   consent is for the run only.
 - Output is compared as JSON (exact, key order irrelevant); a failure prints expected beside
   actual and exits non-zero.
+- A case can use `expect.error.code` and optionally `expect.error.retryable` and
+  `expect.error.detail`. Omitted optional fields are not compared; detail, when specified, is
+  compared as exact JSON and accepts `{{workspace}}` and `{{plugin_root}}` templates in strings.
 - A passing run records "Certified for: 0.x" on the installed plugin (`orbit plugin show`) only
   when that namespace is installed at the **same manifest digest**; a different install drops
   the claim.

@@ -5,15 +5,60 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use orbit_common::OrbitError;
 use orbit_types::plugin::{PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions};
 use serde_json::{Value, json};
 
 use super::super::loader::load_plugin_dir;
-use super::super::mcp::{McpBackend, McpExpectedTool};
+use super::super::mcp::{McpBackend, McpExpectedTool, tool_result};
 use super::super::schema::CompiledSchema;
 use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
 use super::support::{context, provenance, require_sandbox};
 use crate::{Tool, ToolContext};
+
+#[test]
+fn mcp_error_preserves_structured_fields_and_plain_error_falls_back() {
+    let error = tool_result("mcpdemo.echo", &json!({"result": {
+        "isError": true,
+        "structuredContent": {"code":"busy","message":"try later","retryable":true,"detail":{"retry_after":30}},
+        "content": [{"type":"text","text":"try later"}],
+    }}))
+    .expect_err("server reported an error");
+    assert!(
+        matches!(error, OrbitError::RemoteTool { payload, .. } if payload == json!({
+            "code":"busy","message":"try later","retryable":true,"detail":{"retry_after":30}
+        }))
+    );
+
+    let plain = tool_result(
+        "mcpdemo.echo",
+        &json!({"result": {
+            "isError": true, "content": [{"type":"text","text":"plain failure"}],
+        }}),
+    )
+    .expect_err("server reported an error");
+    assert!(matches!(plain, OrbitError::Execution(message) if message.contains("plain failure")));
+
+    let text_json = tool_result("mcpdemo.echo", &json!({"result": {
+        "isError": true,
+        "content": [{"type":"text","text":"{\"code\":\"limited\",\"message\":\"wait\",\"retryable\":true}"}],
+    }}))
+    .expect_err("server reported a JSON text error");
+    assert!(
+        matches!(text_json, OrbitError::RemoteTool { payload, .. } if payload["code"] == "limited" && payload["retryable"] == true)
+    );
+
+    let malformed = tool_result(
+        "mcpdemo.echo",
+        &json!({"result": {
+            "isError": true,
+            "structuredContent": {"code":"limited","message":"wait","retryable":"yes"},
+            "content": [{"type":"text","text":"{\"code\":\"limited\",\"message\":\"wait\"}"}],
+        }}),
+    )
+    .expect_err("server reported a malformed structured error");
+    assert!(matches!(malformed, OrbitError::Execution(_)));
+}
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plugins/mcp-example")

@@ -3,10 +3,10 @@
 //!
 //! A golden is a plugin's own statement of what its tools return, written
 //! once and re-checked against every Orbit it is certified for. The shape is
-//! deliberately small: a tool, an input, and the output or error code the
+//! deliberately small: a tool, an input, and the output or error fields the
 //! plugin promises.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::manifest::PluginManifestError;
@@ -25,7 +25,7 @@ pub struct PluginTestFile {
     pub tests: Vec<PluginTestCase>,
 }
 
-/// One golden: call `tool` with `input`, expect output or a plugin error code.
+/// One golden: call `tool` with `input`, expect output or plugin error fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginTestCase {
@@ -44,7 +44,7 @@ pub struct PluginTestCase {
 pub enum PluginTestExpectation {
     /// The exact tool output. Compared as JSON, so key order does not matter.
     Output { output: Value },
-    /// A backend-declared `ok: false` error code.
+    /// A backend-declared error, with optional retryability and detail checks.
     Error { error: PluginTestErrorExpectation },
 }
 
@@ -52,6 +52,19 @@ pub enum PluginTestExpectation {
 #[serde(deny_unknown_fields)]
 pub struct PluginTestErrorExpectation {
     pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_json"
+    )]
+    pub detail: Option<Value>,
+}
+
+/// Keep an explicitly expected JSON null distinct from an omitted detail.
+fn present_json<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl PluginTestFile {

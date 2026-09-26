@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
-use super::envelope::call_context;
+use super::envelope::{call_context, plugin_error};
 use crate::ToolContext;
 
 /// Lines the reader may queue ahead of the consumer before it blocks.
@@ -458,7 +458,7 @@ fn manifest_mismatch(expected: &[McpExpectedTool], advertised: &[Value]) -> Opti
 /// Map a `tools/call` result onto the envelope's `output`: an `isError`
 /// result is the tool error, `structuredContent` is the output when present,
 /// otherwise the single text content parsed as JSON, or the raw text.
-fn tool_result(tool_name: &str, response: &Value) -> Result<Value, OrbitError> {
+pub(crate) fn tool_result(tool_name: &str, response: &Value) -> Result<Value, OrbitError> {
     let result = &response["result"];
     let structured = result
         .get("structuredContent")
@@ -472,6 +472,15 @@ fn tool_result(tool_name: &str, response: &Value) -> Result<Value, OrbitError> {
         (texts.len() == 1).then(|| texts[0].to_string())
     });
     if result["isError"].as_bool().unwrap_or(false) {
+        let text_error = text
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok());
+        if let Some(error) = structured
+            .or(text_error.as_ref())
+            .and_then(|value| plugin_error(tool_name, value))
+        {
+            return Err(error);
+        }
         let message = structured
             .and_then(|value| value["message"].as_str().map(ToOwned::to_owned))
             .or(text)
