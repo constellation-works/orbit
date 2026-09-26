@@ -245,11 +245,26 @@ impl FromStr for McpCapability {
 pub struct McpToolDefinition {
     pub schema: ToolSchema,
     pub scope: McpToolScope,
+    /// The tool's own JSON Schema for its input, when it declares one — a
+    /// plugin tool's manifest `input_schema`. MCP advertises it as written
+    /// instead of the schema derived from the flat `schema.parameters`, which
+    /// cannot express `enum`, bounds, `default` or nested shapes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<Value>,
 }
 
 impl McpToolDefinition {
     pub fn new(schema: ToolSchema, scope: McpToolScope) -> Self {
-        Self { schema, scope }
+        Self {
+            schema,
+            scope,
+            input_schema: None,
+        }
+    }
+
+    pub fn with_input_schema(mut self, input_schema: Option<Value>) -> Self {
+        self.input_schema = input_schema;
+        self
     }
 }
 

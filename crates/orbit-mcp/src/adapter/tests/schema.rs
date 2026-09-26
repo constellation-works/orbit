@@ -1112,3 +1112,171 @@ fn task_add_schema_exposes_trimmed_fields_with_common_domain_enums() {
         "crew must appear in MCP schema properties for orbit.task.add"
     );
 }
+
+// A plugin tool's declared `input_schema` is its contract. `tools/list` must
+// carry it as written — the flat parameter list it is also reduced to cannot
+// say `enum`, bounds or `default`, so agents had to guess valid values.
+
+/// The orbit-graph `recommend` request shape, plus the other keywords a
+/// plugin may lean on.
+fn graph_recommend_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Recommend files or symbols related to a task.",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Task to recommend for."
+            },
+            "level": {
+                "type": "string",
+                "enum": ["file", "symbol"],
+                "default": "file",
+                "description": "Granularity of the recommendation."
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 20
+            },
+            "format": { "const": "json" }
+        },
+        "required": ["task_id"],
+        "additionalProperties": false
+    })
+}
+
+fn plugin_definition(name: &str, declared: Value) -> McpToolDefinition {
+    let schema = ToolSchema {
+        name: name.to_string(),
+        description: String::new(),
+        parameters: orbit_tools::plugin::params_from_input_schema(&declared),
+        builtin: false,
+    };
+    McpToolDefinition::new(schema, McpToolScope::WorkspaceRequired)
+        .with_input_schema(Some(declared))
+}
+
+fn advertised_schema(
+    definition: &McpToolDefinition,
+    launch_workspace: Option<&str>,
+) -> serde_json::Map<String, Value> {
+    launch_bound_server(launch_workspace)
+        .input_schema_for(definition)
+        .expect("input schema resolves")
+}
+
+#[test]
+fn plugin_tool_advertises_its_declared_input_schema_keywords() {
+    let definition = plugin_definition("graph.recommend", graph_recommend_schema());
+
+    for (launch_workspace, workspace_required) in [(Some("ws_orbit"), false), (None, true)] {
+        let schema = advertised_schema(&definition, launch_workspace);
+        let properties = schema["properties"].as_object().expect("properties");
+
+        assert_eq!(schema["additionalProperties"], json!(false));
+        assert_eq!(
+            schema["description"],
+            json!("Recommend files or symbols related to a task.")
+        );
+        assert_eq!(properties["level"]["enum"], json!(["file", "symbol"]));
+        assert_eq!(properties["level"]["default"], json!("file"));
+        assert_eq!(
+            properties["level"]["description"],
+            json!("Granularity of the recommendation.")
+        );
+        assert_eq!(properties["limit"]["minimum"], json!(1));
+        assert_eq!(properties["limit"]["maximum"], json!(100));
+        assert_eq!(properties["limit"]["default"], json!(20));
+        assert_eq!(properties["task_id"]["minLength"], json!(1));
+        assert_eq!(properties["format"], json!({ "const": "json" }));
+
+        // The host's selector is the one addition: declared as a property so
+        // `additionalProperties: false` still admits it, and required only
+        // where an unbound session refuses a call without it.
+        assert_eq!(
+            properties.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["format", "level", "limit", "task_id", "workspace"]
+        );
+        let expected_required = if workspace_required {
+            json!(["task_id", "workspace"])
+        } else {
+            json!(["task_id"])
+        };
+        assert_eq!(schema["required"], expected_required);
+    }
+}
+
+/// Mirrors the "Advertised input schema" list in
+/// docs/design/plugins/1_scope.md §4.2: the declared keywords `tools/list`
+/// does not carry as written. Changing what the adapter rewrites means
+/// changing that list too.
+const UNCARRIED_DECLARED_KEYWORDS: &[&str] = &["type"];
+
+#[test]
+fn a_declared_schema_is_advertised_verbatim_except_the_documented_keywords() {
+    let declared = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Maintain request",
+        "type": ["object", "null"],
+        "$defs": { "operation": { "enum": ["history_sync", "import", "orbit_sync"] } },
+        "properties": {
+            "operation": { "$ref": "#/$defs/operation" },
+            "paths": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[^/]" },
+                "minItems": 1,
+                "uniqueItems": true
+            },
+            "ratio": { "type": "number", "exclusiveMinimum": 0, "multipleOf": 0.5 },
+            "note": { "type": ["string", "null"], "maxLength": 80, "examples": ["nightly"] }
+        },
+        "patternProperties": { "^x-": { "type": "string" } },
+        "dependentRequired": { "ratio": ["operation"] },
+        "allOf": [{ "if": { "required": ["paths"] }, "then": { "required": ["operation"] } }],
+        "required": ["operation"],
+        "additionalProperties": false
+    });
+    let definition = plugin_definition("graph.maintain", declared.clone());
+
+    let mut advertised = advertised_schema(&definition, Some("ws_orbit"));
+    advertised["properties"]
+        .as_object_mut()
+        .expect("properties")
+        .remove("workspace")
+        .expect("the host adds its selector");
+
+    let declared = declared.as_object().expect("declared object");
+    let rewritten = declared
+        .keys()
+        .filter(|key| advertised.get(key.as_str()) != declared.get(key.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rewritten, UNCARRIED_DECLARED_KEYWORDS,
+        "keywords tools/list does not carry as declared must match the list in \
+         docs/design/plugins/1_scope.md §4.2"
+    );
+    assert_eq!(
+        advertised.keys().collect::<Vec<_>>(),
+        declared.keys().collect::<Vec<_>>(),
+        "the adapter adds no root keyword to a declared schema in a bound session"
+    );
+    assert_eq!(advertised["type"], json!("object"));
+}
+
+#[test]
+fn a_declared_schema_without_properties_still_gets_the_selector() {
+    let definition = plugin_definition(
+        "graph.status",
+        json!({ "type": "object", "additionalProperties": false }),
+    );
+
+    let schema = advertised_schema(&definition, None);
+
+    assert_eq!(schema["additionalProperties"], json!(false));
+    assert!(schema["properties"]["workspace"].is_object(), "{schema:?}");
+    assert_eq!(schema["required"], json!(["workspace"]));
+}

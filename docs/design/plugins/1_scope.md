@@ -417,6 +417,22 @@ the only client; the plugin never listens on a socket.
 - **One lock per session.** The backend lock covers only the session map, so a long call in
   one workspace does not block another workspace's call or liveness check.
 
+**Advertised input schema.** MCP `tools/list` advertises a tool's declared `input_schema` as
+written — `enum`, `const`, `default`, bounds, `minLength`, `description`, `required`,
+`additionalProperties`, `$defs`/`$ref` and combinators included — not the flat parameter list
+`orbit tool show` prints. For a `workspace`-scoped tool Orbit adds only its `workspace` selector:
+a property (which `additionalProperties: false` then admits), required in an unbound session,
+and stripped before the call reaches the plugin. A tool that declares no `input_schema` is
+advertised as an empty open object. The keywords not carried as declared:
+
+| Keyword | Advertised as | Why |
+|---|---|---|
+| root `type` | `"object"` | MCP's `inputSchema` must be an object schema and `tools/call` arguments are always an object |
+
+A root keyword that constrains property names or counts (`propertyNames`, `maxProperties`) is
+carried too, so it also constrains the injected selector; a plugin using one must admit
+`workspace`.
+
 **Callbacks.** A backend reaches Orbit only via `orbit tool run` or MCP `tools/call`, for
 tools in `permissions.orbit_tools` ∩ granted ∩ reachable by the spawning caller
 (`ORBIT_ALLOWED_TOOLS` echoes this, as information only). Identity is a host-issued session: at

@@ -108,6 +108,7 @@ impl Fixture {
             verb: verb.to_string(),
             description: String::new(),
             parameters: Vec::new(),
+            input_schema: None,
             execution_kind: PluginExecutionKind::ReadOnly,
             output_schema: output_schema
                 .map(|schema| CompiledSchema::compile(schema).expect("compile output_schema")),

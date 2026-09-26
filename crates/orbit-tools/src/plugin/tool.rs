@@ -58,6 +58,9 @@ pub struct PluginTool {
     pub verb: String,
     pub description: String,
     pub parameters: Vec<ToolParam>,
+    /// The manifest's resolved `input_schema`, when it declared one; MCP
+    /// advertises it as written.
+    pub input_schema: Option<Value>,
     pub execution_kind: PluginExecutionKind,
     /// The tool's `output_schema`, compiled once when the plugin loaded.
     pub output_schema: Option<CompiledSchema>,
@@ -73,6 +76,10 @@ impl Tool for PluginTool {
             parameters: self.parameters.clone(),
             builtin: false,
         }
+    }
+
+    fn input_schema(&self) -> Option<Value> {
+        self.input_schema.clone()
     }
 
     fn execution_kind(&self) -> ToolExecutionKind {

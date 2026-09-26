@@ -258,9 +258,10 @@ impl ToolRegistry {
             .values()
             .filter(|entry| entry.availability.is_active())
             .filter_map(|entry| {
-                entry
-                    .mcp_scope
-                    .map(|scope| McpToolDefinition::new(entry.tool.schema(), scope))
+                entry.mcp_scope.map(|scope| {
+                    McpToolDefinition::new(entry.tool.schema(), scope)
+                        .with_input_schema(entry.tool.input_schema())
+                })
             })
             .collect::<Vec<_>>();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));

@@ -104,11 +104,14 @@ impl OrbitToolServer {
         .then(|| self.host.friction_tag_taxonomy(&self.session_context()))
         .transpose()?
         .flatten();
-        let mut schema = super::schema::build_input_schema_with_friction_taxonomy(
-            &definition.schema.name,
-            &definition.schema.parameters,
-            taxonomy.as_deref(),
-        );
+        let mut schema = match definition.input_schema.as_ref().and_then(Value::as_object) {
+            Some(declared) => super::schema::declared_input_schema(declared),
+            None => super::schema::build_input_schema_with_friction_taxonomy(
+                &definition.schema.name,
+                &definition.schema.parameters,
+                taxonomy.as_deref(),
+            ),
+        };
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
         Ok(schema)
     }

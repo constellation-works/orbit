@@ -111,6 +111,9 @@ pub(super) fn plugin_tool(
         verb: tool.verb.clone(),
         description: plugin_tool_description(plugin, tool),
         parameters: tool.parameters.clone(),
+        input_schema: tool
+            .input_schema_declared
+            .then(|| tool.input_schema.clone()),
         execution_kind: tool.execution_kind,
         output_schema: tool.output_schema.clone(),
         binding,
