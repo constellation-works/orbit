@@ -3,6 +3,10 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     target-branch: "agent-main"
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
     schedule:
       interval: "weekly"
   # Dashboard-vendored DOMPurify and marked. The served blobs are checked-in
