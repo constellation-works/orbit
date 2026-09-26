@@ -124,22 +124,19 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
     assert_eq!(output["echo"]["input"]["subject"], "hello");
     drop(client);
 
-    // The read-only plugin row is an identification floor: a caller this
-    // process can name may run the tool, and one it cannot is refused before
-    // the backend starts. The fixture clears every inherited identity, so a
-    // bare invocation is exactly that unidentified caller.
-    let unidentified = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+    // The local CLI identifies an otherwise unmanaged invocation as an agent,
+    // so it reaches the same read-only tool without an operator override.
+    let unmanaged = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .args(["tool", "run", "roundtrip.echo", "--input", "{}"])
         .output()
         .expect("run orbit tool run");
-    assert!(!unidentified.status.success());
-    assert!(
-        String::from_utf8_lossy(&unidentified.stderr).contains("plugin.tool.read_only"),
-        "{unidentified:?}"
-    );
+    assert!(unmanaged.status.success(), "{unmanaged:?}");
+    let unmanaged_output: Value =
+        serde_json::from_slice(&unmanaged.stdout).expect("CLI returns plugin output as JSON");
+    assert_eq!(unmanaged_output["plugin"], "roundtrip");
 
     // `orbit tool run` reaches the same tool through the same audited dispatch.
-    let run = run_orbit_with_env(
+    let run = run_orbit(
         &workspace,
         &[
             "tool",
@@ -148,7 +145,6 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
             "--input",
             "{\"subject\":\"cli\"}",
         ],
-        &[("ORBIT_OPERATOR", "1")],
     );
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(

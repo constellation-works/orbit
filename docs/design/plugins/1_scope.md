@@ -330,6 +330,15 @@ The manifest says *where* a tool appears (`mcp_scope`, `execution_kind`, CLI sha
 Operator | Runner`; `mutating` tools by `Operator | Runner`, and by `Agent` only when the
 task's `required_tools` or the activity allowlist names them.
 
+An unmanaged local CLI invocation with no declared agent or operator identity
+resolves to `Agent` for plugin tool authorization, as other read-only CLI verbs
+do. This applies to both `orbit <ns> <verb>` and `orbit tool run <ns>.<verb>`:
+`read_only` succeeds without `ORBIT_OPERATOR=1`, while `mutating` retains its
+operator, runner, or sanctioned-run requirement. Session grants, an explicit
+operator override, an agent envelope, and an interactive terminal keep their
+precedence over this fallback. MCP callers use their session capabilities;
+the local CLI fallback does not raise an unidentified MCP session.
+
 `permissions:` is a *request*. `--grant` on an enabling add, enable, upgrade or sync is the
 only source of authority, and `orbit plugin show` prints requested vs granted. A stored grant
 set that fails its witness (§3) grants nothing on every surface.
