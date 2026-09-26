@@ -23,6 +23,15 @@ use super::test_support::{
 };
 
 async fn request_cancel(runtime: OrbitRuntime, run_id: &str, origin: Option<&str>) -> Response {
+    request_cancel_with_reason(runtime, run_id, origin, None).await
+}
+
+async fn request_cancel_with_reason(
+    runtime: OrbitRuntime,
+    run_id: &str,
+    origin: Option<&str>,
+    reason: Option<&str>,
+) -> Response {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri(format!("/runs/{run_id}/cancel"));
@@ -31,9 +40,15 @@ async fn request_cancel(runtime: OrbitRuntime, run_id: &str, origin: Option<&str
             .header(header::ORIGIN, origin)
             .header(header::HOST, "localhost:3000");
     }
+    let body = if let Some(reason) = reason {
+        builder = builder.header(header::CONTENT_TYPE, "application/json");
+        Body::from(json!({ "reason": reason }).to_string())
+    } else {
+        Body::empty()
+    };
     router()
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
-        .oneshot(builder.body(Body::empty()).expect("request"))
+        .oneshot(builder.body(body).expect("request"))
         .await
         .expect("response")
 }
@@ -539,6 +554,40 @@ async fn cancel_run_endpoint_cancels_pending_run() {
     assert_eq!(payload["signal_outcome"], Value::Null);
     let stored = runtime.show_job_run(&run.run_id).expect("show cancelled");
     assert_eq!(stored.state, JobRunState::Cancelled);
+}
+
+#[tokio::test]
+async fn dashboard_cancel_records_actor_and_reason_in_run_events() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run = seed_run(
+        &runtime,
+        "jrun-web-cancel-reason",
+        "task_pr_pipeline",
+        JobRunState::Running,
+    );
+
+    let response = request_cancel_with_reason(
+        runtime.clone(),
+        &run.run_id,
+        Some("http://localhost:3000"),
+        Some("operator stopped it"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["final_state"], "cancelled");
+    let events = runtime
+        .collect_run_audit_events(&run.run_id)
+        .expect("run events");
+    let cancelled = events
+        .iter()
+        .find(|event| event.event_type.as_deref() == Some("run.cancelled"))
+        .expect("cancellation event");
+    assert_eq!(cancelled.raw["actor"], "dashboard");
+    assert_eq!(cancelled.raw["source"], "web");
+    assert_eq!(cancelled.raw["reason"], "operator stopped it");
+    assert_eq!(cancelled.raw["previous_state"], "running");
 }
 
 #[tokio::test]

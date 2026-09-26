@@ -82,6 +82,7 @@ fn cancel_requires_confirmation_before_terminalizing_pending_run() {
         run_id: run.run_id.clone(),
         json: false,
         confirm: false,
+        reason: None,
     }
     .execute(&runtime)
     .expect_err("unconfirmed cancellation must refuse");
@@ -99,6 +100,7 @@ fn cancel_requires_confirmation_before_terminalizing_pending_run() {
         run_id: run.run_id.clone(),
         json: false,
         confirm: true,
+        reason: None,
     }
     .execute(&runtime)
     .expect("confirmed cancellation");
@@ -115,9 +117,74 @@ fn cancel_requires_confirmation_before_terminalizing_pending_run() {
         run_id: run.run_id.clone(),
         json: true,
         confirm: true,
+        reason: None,
     }
     .execute(&runtime)
     .expect("duplicate cancellation reports already-terminal success");
+}
+
+#[test]
+fn cli_cancel_records_actor_and_reason_in_run_events() {
+    let command = parse_run(&[
+        "orbit",
+        "run",
+        "cancel",
+        "jrun-cli-reason",
+        "--confirm",
+        "--reason",
+        "operator request",
+    ]);
+    let RunSubcommand::Cancel(args) = command.command else {
+        panic!("expected cancel command");
+    };
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let now = Utc::now();
+    let run = JobRun {
+        executed_on: None,
+        run_id: args.run_id.clone(),
+        job_id: "task_pr_pipeline".to_string(),
+        attempt: 1,
+        state: JobRunState::Running,
+        scheduled_at: now,
+        started_at: Some(now),
+        finished_at: None,
+        duration_ms: None,
+        created_at: now,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    runtime
+        .sqlite_store()
+        .expect("store")
+        .upsert_job_run_for_workspace(&runtime.workspace_id().expect("workspace"), &run, None)
+        .expect("insert running run");
+
+    args.execute(&runtime).expect("cancel from CLI");
+
+    let output = super::events::RunEventsArgs {
+        run_id: Some(run.run_id),
+        step_id: None,
+        event_type: Some("run.cancelled".to_string()),
+        json: true,
+        no_reconcile: true,
+    }
+    .execute(&runtime)
+    .expect("read CLI run events");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("run events should produce a payload");
+    };
+    let (document, _) = payload.into_view();
+    let events = document["events"].as_array().expect("events array");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["actor"], "cli");
+    assert_eq!(events[0]["reason"], "operator request");
+    assert_eq!(events[0]["previous_state"], "running");
 }
 
 #[test]

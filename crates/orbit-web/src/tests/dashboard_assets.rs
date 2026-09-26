@@ -2088,12 +2088,15 @@ globalThis.document = {
   createDocumentFragment: () => new Node(),
 };
 const location = new URL("http://dashboard.test/?run_state=active");
-globalThis.window = { location, innerWidth: 1200, confirm: () => true };
+globalThis.window = { location, innerWidth: 1200, confirm: () => true, prompt: () => "operator stopped it" };
 globalThis.history = { replaceState: (_, __, url) => { location.href = String(url); } };
 Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
 const requests = [];
-globalThis.fetch = async (path) => {
+globalThis.fetch = async (path, options) => {
   requests.push(String(path));
+  if (String(path).includes("/cancel") && JSON.parse(options.body).reason !== "operator stopped it") {
+    throw new Error("cancel reason was not sent to the dashboard API");
+  }
   const payload = { run_id: "jrun-next" };
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };

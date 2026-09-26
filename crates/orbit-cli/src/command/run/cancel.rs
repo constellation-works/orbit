@@ -27,12 +27,21 @@ pub struct RunCancelArgs {
     /// Confirm process termination and irreversible run terminalization
     #[arg(long)]
     pub confirm: bool,
+
+    /// Optional reason recorded with the cancellation audit event
+    #[arg(long)]
+    pub reason: Option<String>,
 }
 
 impl Execute for RunCancelArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         require_confirmation(self.confirm, "run cancellation")?;
-        let result = runtime.cancel_job_run_with_context(&self.run_id, "cli", "run_cancel")?;
+        let result = runtime.cancel_job_run_with_reason(
+            &self.run_id,
+            "cli",
+            "run_cancel",
+            self.reason.as_deref(),
+        )?;
         let doc = json!({
             "run_id": result.run_id,
             "outcome": result.outcome,
