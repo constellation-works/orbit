@@ -3,14 +3,13 @@
 
 use std::path::PathBuf;
 
-use clap::{Command, CommandFactory};
+use clap::Command;
 use orbit_core::adapter::command::{PluginCliGroup, PluginCliVerb};
 use serde_json::{Value, json};
 
-use super::super::{PLUGIN_HELP_HEADING, augment, help_section, invocation_from_matches};
-use crate::command::Cli;
+use super::super::{PLUGIN_HELP_HEADING, help_section, invocation_from_matches};
 use crate::output::sink::FormatArg;
-use crate::{install_format_arg, requested_format};
+use crate::requested_format;
 
 fn group() -> PluginCliGroup {
     PluginCliGroup {
@@ -100,7 +99,7 @@ fn group() -> PluginCliGroup {
 }
 
 fn parser(groups: &[PluginCliGroup]) -> Command {
-    install_format_arg(augment(Cli::command(), groups))
+    crate::cli_command(groups)
 }
 
 fn parse(argv: &[&str]) -> Option<super::super::PluginGroupInvocation> {

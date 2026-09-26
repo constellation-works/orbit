@@ -1,14 +1,13 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use clap::Parser;
 use serde_json::json;
 
 use super::super::run::{
     LOCAL_MACHINE_ID_FALLBACK, ToolRunArgs, local_machine_identity, local_tool_session_context,
     missing_write_sidecar_message, request_write_sidecars_from_cli_fields, shape_tool_output,
 };
-use crate::command::{Cli, CommandOutput, Execute};
+use crate::command::{CommandOutput, Execute};
 
 const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 
@@ -382,10 +381,11 @@ fn task_write_through_tool_run_returns_comments_and_history_when_projected() {
 
 #[test]
 fn tool_run_help_matches_the_shipped_surface() {
-    let actual = match Cli::try_parse_from(["orbit", "tool", "run", "--help"]) {
-        Ok(_) => panic!("--help exits before parsing"),
-        Err(error) => error.to_string(),
-    };
+    let actual =
+        match crate::cli_command(&[]).try_get_matches_from(["orbit", "tool", "run", "--help"]) {
+            Ok(_) => panic!("--help exits before parsing"),
+            Err(error) => error.to_string(),
+        };
     if std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1") {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("src/command/tool/tests/run_help.txt");

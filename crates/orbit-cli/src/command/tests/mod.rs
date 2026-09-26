@@ -62,11 +62,13 @@ fn assert_help_tree_has_no_concrete_artifact_ids(command: &Command) {
     }
 }
 
-/// Render `--help` for an argv prefix, exactly as the binary prints it.
+/// Render `--help` for an argv prefix, exactly as the binary prints it: through
+/// the command tree `main` parses against, global `--format` included, on a
+/// host with no plugin groups.
 fn help_for(args: &[&str]) -> String {
     let mut argv = args.to_vec();
     argv.push("--help");
-    match Cli::try_parse_from(argv) {
+    match crate::cli_command(&[]).try_get_matches_from(argv) {
         Ok(_) => panic!("--help exits before parsing"),
         Err(error) => error.to_string(),
     }

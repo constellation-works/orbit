@@ -35,7 +35,7 @@ pub struct TaskListArgs {
     /// (newest first), followed by terminal tasks (newest first).
     #[arg(long, default_value_t = DEFAULT_TASK_LIST_LIMIT, value_parser = parse_task_list_limit)]
     pub limit: usize,
-    /// Filter by priority level (low, medium, high)
+    /// Filter by priority level
     #[arg(long, value_enum)]
     pub priority: Option<TaskPriority>,
     /// Filter by task type (feature, bug, refactor, chore)

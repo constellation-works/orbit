@@ -3,12 +3,33 @@ Uninstall a plugin from this machine
 Usage: orbit plugin remove [OPTIONS] <NAME>
 
 Arguments:
-  <NAME>  Plugin namespace
+  <NAME>
+          Plugin namespace
 
 Options:
-      --root <ROOT>           Override the Orbit root directory (highest precedence)
-      --yes                   Confirm permanent removal of the plugin install
-      --record-only           Remove only this host's record of the plugin, leaving every installed file in place. Clears a record whose install path this host refuses, without deleting the path it names
-      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
-      --purge-state           Also delete this plugin's Orbit-owned state directory
-  -h, --help                  Print help
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --yes
+          Confirm permanent removal of the plugin install
+
+      --record-only
+          Remove only this host's record of the plugin, leaving every installed file in place. Clears a record whose install path this host refuses, without deleting the path it names
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --purge-state
+          Also delete this plugin's Orbit-owned state directory
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -3,11 +3,30 @@ Generate a starter plugin: backend, tool, panel, skill and goldens
 Usage: orbit plugin scaffold [OPTIONS] <NAMESPACE>
 
 Arguments:
-  <NAMESPACE>  Namespace for the new plugin: it owns `<ns>.*` tools, `orbit <ns>`, and `[plugins.<ns>]`
+  <NAMESPACE>
+          Namespace for the new plugin: it owns `<ns>.*` tools, `orbit <ns>`, and `[plugins.<ns>]`
 
 Options:
-      --dir <DIR>             Directory to create (defaults to `./<namespace>`)
-      --root <ROOT>           Override the Orbit root directory (highest precedence)
-      --force                 Overwrite existing files
-      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
-  -h, --help                  Print help
+      --dir <DIR>
+          Directory to create (defaults to `./<namespace>`)
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --force
+          Overwrite existing files
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')

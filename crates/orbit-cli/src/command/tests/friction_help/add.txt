@@ -3,12 +3,38 @@ Append a friction report
 Usage: orbit friction add [OPTIONS] --body <BODY> --model <MODEL>
 
 Options:
-      --body <BODY>                Markdown body describing what happened and why it caused friction
-      --root <ROOT>                Override the Orbit root directory (highest precedence)
-      --title <TITLE>              One-line record handle, max 120 chars; derived when omitted
-      --workspace <SELECTOR>       Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
-      --tag <TAGS>                 Friction taxonomy tag; repeat or comma-separate for multiple tags
-      --during-task <DURING_TASK>  Optional task ID being worked on when friction occurred
-      --model <MODEL>              Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)
-      --json                       Output as JSON
-  -h, --help                       Print help
+      --body <BODY>
+          Markdown body describing what happened and why it caused friction
+
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --title <TITLE>
+          One-line record handle, max 120 chars; derived when omitted
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --tag <TAGS>
+          Friction taxonomy tag; repeat or comma-separate for multiple tags
+
+      --during-task <DURING_TASK>
+          Optional task ID being worked on when friction occurred
+
+      --model <MODEL>
+          Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)
+
+      --json
+          Output as JSON
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')

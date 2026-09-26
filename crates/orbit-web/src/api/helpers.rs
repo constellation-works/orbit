@@ -213,6 +213,10 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             id,
         } => not_found(format!("task not found: {id}")),
         orbit_core::OrbitError::NotFound {
+            kind: orbit_core::NotFoundKind::Friction,
+            id,
+        } => not_found(format!("friction record not found: {id}")),
+        orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Job,
             id,
         } => not_found(format!("job not found: {id}")),

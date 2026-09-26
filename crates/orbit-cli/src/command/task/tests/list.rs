@@ -73,3 +73,38 @@ fn table_trailing_notices_are_stored_and_rendered() {
         "showing 50 of 60 tasks (newest first); use --limit N or a filter to see more"
     );
 }
+
+/// `--priority` help is the accepted value set, not a hand-kept copy of it: a
+/// copy once omitted `critical`, which the flag has always accepted.
+#[test]
+fn task_list_priority_help_lists_every_accepted_value() {
+    use clap::ValueEnum;
+    use orbit_core::TaskPriority;
+
+    let mut cmd = crate::cli_command(&[]);
+    let list_cmd = cmd
+        .find_subcommand_mut("task")
+        .and_then(|task| task.find_subcommand_mut("list"))
+        .expect("task list subcommand");
+    let help = list_cmd.render_long_help().to_string();
+    let priority_help: String = help
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("--priority"))
+        .take_while(|line| !line.trim_start().starts_with("--type"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for priority in TaskPriority::value_variants() {
+        let name = priority
+            .to_possible_value()
+            .expect("priority has a value")
+            .get_name()
+            .to_string();
+        Cli::try_parse_from(["orbit", "task", "list", "--priority", &name])
+            .unwrap_or_else(|err| panic!("--priority {name} is accepted: {err}"));
+        assert!(
+            priority_help.contains(&name),
+            "--priority help must list `{name}`:\n{priority_help}"
+        );
+    }
+}
