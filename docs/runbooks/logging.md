@@ -84,6 +84,11 @@ Two behaviors keep it bounded on an always-on host [ORB-00423]:
   nothing was due; `--verbose` restores one row per routine.
 - Each pass opportunistically rolls and prunes `sweep.log` through the same rotation machinery
   and `[runtime]` caps as the JSONL sink, producing `sweep.log.<UTC-timestamp>` archives.
+- Consecutive clock ticks refused by an older executable generation are recorded
+  as one line when that generation releases its pin. The line gives UTC start,
+  end, last refusal, and refused tick count, and says the executable changed
+  under live Orbit processes. The active hold is kept in
+  `~/.orbit/.generation-clock-hold.json` so separate tick processes can share it.
 
 On Linux, the sweep unit logs to the journal, which rotates independently.
 

@@ -21,6 +21,7 @@ use super::command::WorkerCommandConfig;
 use super::record::{self, PipelineAuditRow};
 use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
 use super::*;
+use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
 use crate::runtime::event_bus::EventLog;
 
 #[cfg(unix)]
@@ -352,7 +353,19 @@ impl PipelineWorkerSupervisor {
                             format!("{}; {exit}{output_detail}", breach.describe()),
                         ),
                         None => (
-                            None,
+                            {
+                                #[cfg(unix)]
+                                {
+                                    status
+                                        .signal()
+                                        .filter(|signal| *signal == libc::SIGTERM)
+                                        .map(|_| WORKER_TERMINATED_ERROR_CODE)
+                                }
+                                #[cfg(not(unix))]
+                                {
+                                    None
+                                }
+                            },
                             format!(
                                 "{exit}{output_detail}; verify workspace registration, worker root \
                              discovery, and action availability"
@@ -406,8 +419,8 @@ impl PipelineWorkerSupervisor {
 
     /// Terminalize a worker process that exited while it still owned a
     /// non-terminal run. `try_wait` has already reaped the process when this is
-    /// called. Pending exits are interrupted startup; a worker that reached
-    /// running failed its claimed execution.
+    /// called. Pending exits are interrupted startup; a running worker with a
+    /// SIGTERM exit is interrupted like a dead owner found by reconciliation.
     fn finalize_exit_failure(
         &self,
         run: &JobRun,
@@ -426,7 +439,11 @@ impl PipelineWorkerSupervisor {
                 "pipeline.worker.startup",
             ),
             JobRunState::Running => (
-                JobRunState::Failed,
+                if error_code == Some(WORKER_TERMINATED_ERROR_CODE) {
+                    JobRunState::Interrupted
+                } else {
+                    JobRunState::Failed
+                },
                 current.started_at.unwrap_or(current.scheduled_at),
                 "pipeline.worker.exit",
             ),

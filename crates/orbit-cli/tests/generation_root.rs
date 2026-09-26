@@ -21,6 +21,56 @@ use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+#[test]
+fn clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    let root = temp.path().join("orbit-root");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&work).expect("work");
+    let root_arg = root.to_str().expect("utf-8 root");
+    let init = orbit(&work, &home)
+        .args([
+            "--root",
+            root_arg,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "qa-hold",
+            "--task-prefix",
+            "QXQA",
+        ])
+        .output()
+        .expect("init root");
+    assert!(init.status.success(), "{init:?}");
+
+    let foreign = GenerationGuard::acquire(&root, FOREIGN_DIGEST).expect("foreign pin");
+    for _ in 0..4 {
+        let refused = orbit(&work, &home)
+            .args(["--root", root_arg, "clock", "tick"])
+            .output()
+            .expect("refused clock tick");
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        assert!(
+            refused.stderr.is_empty(),
+            "refused tick spammed log: {refused:?}"
+        );
+    }
+    drop(foreign);
+    let resumed = orbit(&work, &home)
+        .args(["--root", root_arg, "clock", "tick"])
+        .output()
+        .expect("resumed clock tick");
+    assert!(resumed.status.success(), "{resumed:?}");
+    let log = String::from_utf8_lossy(&resumed.stderr);
+    assert_eq!(log.lines().count(), 1, "{log}");
+    assert!(
+        log.contains("started_at=") && log.contains("ended_at=") && log.contains("refused_ticks=4"),
+        "{log}"
+    );
+}
+
 fn orbit(work: &Path, home: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {

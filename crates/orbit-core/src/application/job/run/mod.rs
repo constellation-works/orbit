@@ -22,6 +22,10 @@ mod step_recovery;
 mod types;
 mod worker_limit;
 
+/// A claimed worker conclusively exited without a recorded cancellation.
+/// The reconciler cannot recover its exit signal once the process is gone.
+pub(crate) const WORKER_TERMINATED_ERROR_CODE: &str = "worker_terminated";
+
 #[cfg(test)]
 mod tests;
 

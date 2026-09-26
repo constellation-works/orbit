@@ -1,7 +1,49 @@
 use crate::fs::generation::{GenerationGuard, GenerationUpdate};
+use crate::fs::generation::{finish_clock_generation_hold, record_clock_generation_hold};
 
 const OLD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const NEW: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+#[test]
+fn clock_generation_hold_coalesces_refused_ticks_until_resumed() {
+    use chrono::{Duration, TimeZone, Utc};
+
+    let root = tempfile::tempdir().expect("root");
+    let old = GenerationGuard::acquire(root.path(), OLD).expect("old pin");
+    let first = Utc
+        .with_ymd_and_hms(2026, 9, 26, 1, 28, 0)
+        .single()
+        .expect("date");
+    for tick in 0..15 {
+        assert!(GenerationGuard::acquire(root.path(), NEW).is_err());
+        record_clock_generation_hold(root.path(), NEW, first + Duration::minutes(tick))
+            .expect("record refused tick");
+    }
+    assert!(
+        finish_clock_generation_hold(root.path(), OLD, first)
+            .expect("old tick")
+            .is_none()
+    );
+    drop(old);
+    let _new = GenerationGuard::acquire(root.path(), NEW).expect("new generation admitted");
+    let summary = finish_clock_generation_hold(root.path(), NEW, first + Duration::minutes(15))
+        .expect("close hold")
+        .expect("one summary");
+    assert!(
+        summary.contains("started_at=2026-09-26T01:28:00+00:00"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("ended_at=2026-09-26T01:43:00+00:00"),
+        "{summary}"
+    );
+    assert!(summary.contains("refused_ticks=15"), "{summary}");
+    assert!(
+        finish_clock_generation_hold(root.path(), NEW, first + Duration::minutes(16))
+            .expect("second successful tick")
+            .is_none()
+    );
+}
 
 #[test]
 fn missing_root_is_created_on_first_pin() {

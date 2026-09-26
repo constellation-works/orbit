@@ -209,6 +209,12 @@ fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
     }
 }
 
+fn is_clock_tick(command: &command::Commands) -> bool {
+    matches!(command, command::Commands::Sweep(_))
+        || matches!(command, command::Commands::Clock(clock)
+            if matches!(clock.command, command::clock::ClockSubcommand::Tick(_)))
+}
+
 /// The Orbit root this invocation will use, read from argv before clap runs.
 ///
 /// The derived CLI cannot answer this yet: the tree it would parse against
@@ -345,14 +351,48 @@ fn main() {
         print_error(&error, &sink, json_error_preference);
         std::process::exit(1);
     }
+    let clock_tick = is_clock_tick(&cli.command);
+    let quiet_clock_tick =
+        clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
     let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
         None
     } else {
-        match orbit_core::runtime::resolve_generation_root(root_override.as_deref()).and_then(
-            |root| pin_executable_generation(&root, matches!(runtime_need, RuntimeNeed::ReadOnly)),
-        ) {
-            Ok(guard) => Some(guard),
+        let root = match orbit_core::runtime::resolve_generation_root(root_override.as_deref()) {
+            Ok(root) => root,
             Err(error) => {
+                print_error(&error, &sink, None);
+                std::process::exit(1);
+            }
+        };
+        match pin_executable_generation(&root, matches!(runtime_need, RuntimeNeed::ReadOnly)) {
+            Ok(guard) => {
+                if clock_tick
+                    && let Ok(digest) = orbit_common::fs::generation::process_generation()
+                    && let Ok(Some(summary)) =
+                        orbit_common::fs::generation::finish_clock_generation_hold(
+                            &root,
+                            digest,
+                            chrono::Utc::now(),
+                        )
+                {
+                    eprintln!("{summary}");
+                }
+                Some(guard)
+            }
+            Err(error) => {
+                if clock_tick
+                    && orbit_common::fs::generation::is_clock_generation_hold(&error)
+                    && let Ok(digest) = orbit_common::fs::generation::process_generation()
+                    && orbit_common::fs::generation::record_clock_generation_hold(
+                        &root,
+                        digest,
+                        chrono::Utc::now(),
+                    )
+                    .is_ok()
+                    && quiet_clock_tick
+                {
+                    std::process::exit(1);
+                }
                 print_error(&error, &sink, None);
                 std::process::exit(1);
             }

@@ -1,5 +1,6 @@
 //! Stale read/list behavior and terminal timing repair tests.
 
+use super::super::WORKER_TERMINATED_ERROR_CODE;
 use super::*;
 
 use super::super::JobRunListParams;
@@ -30,10 +31,45 @@ fn show_job_run_reconciles_stale_running_owner() {
     assert!(shown.duration_ms.is_some_and(|value| value > 0));
     assert!(shown.steps.iter().any(|step| {
         step.state == JobRunState::Interrupted
-            && step.error_code.as_deref() == Some("process_not_found")
+            && step.error_code.as_deref() == Some(WORKER_TERMINATED_ERROR_CODE)
             && step.error_message.as_deref().is_some_and(|message| {
                 message.contains("recorded worker process is no longer alive")
             })
+    }));
+}
+
+/// The same signal reaches reconciliation first when the supervisor is gone.
+#[cfg(unix)]
+#[test]
+fn claimed_ship_worker_sigterm_reconciler_first_is_interrupted() {
+    use std::process::Command;
+
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "workspace_ship_pipeline");
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn worker");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now() - Duration::seconds(3), child.id())
+        .expect("claim worker");
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    child.wait().expect("reap signalled worker");
+
+    assert_eq!(
+        runtime.reconcile_stale_job_runs(None).expect("reconcile"),
+        1
+    );
+    let stored = runtime.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(stored.state, JobRunState::Interrupted);
+    assert!(stored.steps.iter().any(|step| {
+        step.state == JobRunState::Interrupted
+            && step.error_code.as_deref() == Some(WORKER_TERMINATED_ERROR_CODE)
     }));
 }
 
@@ -115,7 +151,7 @@ fn sweep_interrupts_dead_running_owner_after_startup_grace_without_children() {
         parent
             .steps
             .iter()
-            .any(|step| step.error_code.as_deref() == Some("process_not_found"))
+            .any(|step| step.error_code.as_deref() == Some(WORKER_TERMINATED_ERROR_CODE))
     );
 }
 
@@ -461,7 +497,7 @@ fn sweep_still_condemns_a_run_whose_owner_died_in_this_pid_namespace() {
     let shown = runtime.show_job_run(&run.run_id).expect("show run");
     assert_eq!(shown.state, JobRunState::Interrupted);
     assert!(shown.steps.iter().any(|step| {
-        step.error_code.as_deref() == Some("process_not_found")
+        step.error_code.as_deref() == Some(WORKER_TERMINATED_ERROR_CODE)
             && step.error_message.as_deref().is_some_and(|message| {
                 message.contains("recorded worker process is no longer alive")
             })
@@ -845,7 +881,10 @@ fn reconciling_a_dead_owner_blocks_the_coupled_task_as_interrupted() {
     assert_eq!(task.job_run_id.as_deref(), Some(run.run_id.as_str()));
     let note = interruption_note(&runtime, &stranded).expect("interruption note");
     assert!(note.contains(&format!("run_id={},", run.run_id)), "{note}");
-    assert!(note.contains("error_code=process_not_found"), "{note}");
+    assert!(
+        note.contains(&format!("error_code={WORKER_TERMINATED_ERROR_CODE}")),
+        "{note}"
+    );
 
     assert_eq!(
         runtime.get_task(&shipped).expect("review task").status,
