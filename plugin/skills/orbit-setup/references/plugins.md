@@ -210,7 +210,8 @@ orbit plugin doctor
 ```
 
 One row per plugin, naming the step that would make it active, plus a row for
-any skill link whose target has gone. The four states:
+any skill link whose target has gone and one for each declared secret that is
+not set (see [Secrets](#secrets)). The four states:
 
 | Status | What it means |
 |---|---|
@@ -266,6 +267,42 @@ documented escape hatch, and its use is audited.
 Treat an installed plugin as code the user has chosen to run on their machine,
 and say so when proposing one: the sandbox bounds what a backend can reach, it
 does not vouch for what the backend does inside those bounds.
+
+## Secrets
+
+A plugin that talks to an authenticated service declares the credentials it
+needs by name in its manifest, and the user sets the values on this machine.
+Never put a credential in `[plugins.<ns>]` config or ask for it in a prompt.
+
+```yaml
+spec:
+  secrets:
+    - name: refresh_token          # lowercase letter, then a-z 0-9 _ - (max 64)
+      description: OAuth refresh token.
+      rotatable: true              # the backend may replace it
+```
+
+```bash
+orbit plugin secret set <ns> refresh_token < token.txt   # or run it in a terminal to be prompted
+orbit plugin secret list <ns>                            # names, set/unset, updated-at — never values
+orbit plugin secret rm <ns> refresh_token
+```
+
+- The value comes from stdin or a prompt that does not echo. A value typed on
+  the command line is refused: argv is readable by other processes and lands
+  in shell history. Only names the installed manifest declares can be set.
+- Values live in `~/.orbit/state/plugin-secrets/<ns>.json` (mode `0600`). No
+  plugin backend can read that directory, its own file included; Orbit reads a
+  value and hands it over. A secret value never appears in CLI output,
+  `plugin show`, the dashboard, logs or audit rows.
+- `orbit plugin enable` names every declared secret that is still unset, and
+  `orbit plugin doctor` keeps reporting them. `upgrade` keeps the secrets the
+  new manifest still declares; `remove` deletes the plugin's secrets unless
+  `--record-only` is passed.
+- These are operator commands: a plugin backend calling them is refused
+  `policy_denied`.
+- Delivery to the backend and backend-side rotation are not wired yet: a
+  backend cannot receive a secret in this release.
 
 ## Backends
 

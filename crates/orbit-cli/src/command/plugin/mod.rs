@@ -7,6 +7,7 @@ mod list;
 mod migrate;
 mod remove;
 mod scaffold;
+mod secret;
 mod show;
 mod support;
 mod sync;
@@ -15,6 +16,7 @@ mod upgrade;
 mod validate;
 
 pub use command::{PluginCommand, PluginSubcommand};
+pub use secret::PluginSecretSubcommand;
 
 #[cfg(test)]
 mod tests;

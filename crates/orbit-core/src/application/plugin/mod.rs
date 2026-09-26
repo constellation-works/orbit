@@ -7,7 +7,8 @@
 //!
 //! Beyond tools, a plugin contributes definitions, seeded schedules
 //! ([`seed`]), skills ([`skills`]), a `[plugins.<ns>]` config section,
-//! dashboard panels ([`panels`]) and conformance goldens ([`conformance`]).
+//! dashboard panels ([`panels`]), conformance goldens ([`conformance`]) and
+//! the names of the secrets an operator sets for it ([`secrets`]).
 //! Everything a plugin contributes is refused as a unit: a manifest whose
 //! definitions break the §4.5 rules registers no tools either, because half a
 //! plugin is not a state an operator can reason about.
@@ -17,6 +18,7 @@ mod inspect;
 mod install;
 pub(crate) mod lifecycle;
 mod panels;
+mod secrets;
 pub(crate) mod seed;
 pub(crate) mod skills;
 
@@ -50,5 +52,8 @@ pub use lifecycle::{
 };
 pub use panels::{
     PluginLinkSummary, PluginPanelSummary, plugin_panel_refresh_ms, read_plugin_panel,
+};
+pub use secrets::{
+    PluginSecretStatus, list_plugin_secrets, remove_plugin_secret, set_plugin_secret,
 };
 pub use seed::{PluginSeedAction, PluginSeedOutcome, seed_plugin_definitions};

@@ -11,6 +11,7 @@ Commands:
   list      List installed and pinned plugins
   show      Show one plugin, its tools, and its requested versus granted permissions
   doctor    Report what each plugin needs before it can serve its tools
+  secret    Set, list or remove the secrets a plugin declares in `spec.secrets`
   validate  Check a plugin directory without installing it
   test      Run a plugin's conformance goldens against this Orbit
   scaffold  Generate a starter plugin: backend, tool, panel, skill and goldens
@@ -42,6 +43,7 @@ Examples:
   orbit plugin test ./demo --case status_reports_ready
   orbit plugin test ./demo --update-goldens
   orbit plugin add ./demo --enable
+  orbit plugin secret set demo api_token < token.txt
   orbit plugin list
 
 Plugins install once per machine under the Orbit global root; a repository

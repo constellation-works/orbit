@@ -149,6 +149,7 @@ pub fn migrate_sidecars(
             config: None,
             web: None,
             tests: Vec::new(),
+            secrets: Vec::new(),
         },
     })
 }

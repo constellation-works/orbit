@@ -26,6 +26,7 @@ use crate::runtime::plugin::paths::{plugin_install_path, plugin_namespace_dir};
 
 use super::inspect::{PluginSummary, summary_for_installed};
 use super::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
+use super::secrets::{prune_undeclared_secrets, unset_secret_warnings};
 use super::seed::PluginSeedOutcome;
 use super::skills::PluginSkillLink;
 
@@ -347,6 +348,9 @@ fn install_plugin_inner(
     // install that landed, which is what the row says.
     staged.commit();
     prune_namespace(&global_root, &name, &install_path);
+    // An upgrade keeps each secret the new manifest still declares, value
+    // and version intact, and drops the rest.
+    prune_undeclared_secrets(&global_root, &plugin);
     // `--enable` (including upgrade re-consent) is the operator authorizing
     // this grant set, so it records the integrity value the loader checks the
     // row back against. An ordinary plain `add` deliberately does not rewrite
@@ -384,6 +388,7 @@ fn install_plugin_inner(
                 enable_warnings = unrequested_grant_warnings(&plugin, &record.grants);
                 enable_warnings.extend(contributions.warnings);
                 enable_warnings.append(&mut program_warnings);
+                enable_warnings.extend(unset_secret_warnings(&global_root, &plugin));
                 seeded_outcomes = contributions.seeded;
                 skill_links = contributions.skills;
                 None

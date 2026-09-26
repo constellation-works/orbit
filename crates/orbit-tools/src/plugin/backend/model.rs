@@ -50,8 +50,22 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// must keep, such as an OAuth refresh token. Another plugin reading it could
 /// act as that plugin, so the tree is denied and the child is granted back
 /// only its own `state/plugins/<ns>` ([`PluginBackendSpec::state_dir`]).
-pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] =
-    &["state/plugin-callbacks", "plugins/.grants", "state/plugins"];
+///
+/// [`PLUGIN_SECRET_STORE_DIR`] holds the values operators set with `orbit
+/// plugin secret set`. Nothing in it is granted back, not even a plugin's own
+/// file: the host reads a value and hands it to the backend, so a plugin child
+/// never needs the store itself.
+pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &[
+    "state/plugin-callbacks",
+    "plugins/.grants",
+    "state/plugins",
+    PLUGIN_SECRET_STORE_DIR,
+];
+
+/// The host-owned secret store, relative to the global root (`orbit-core`'s
+/// `runtime::plugin::secrets`). Named here because the sandbox decides who may
+/// read it: no plugin child, whatever it was granted.
+pub const PLUGIN_SECRET_STORE_DIR: &str = "state/plugin-secrets";
 
 /// Host-owned directory beside the namespace install directories, holding one
 /// grant-authorization witness per plugin (`orbit-core`'s `runtime::plugin::grants`).

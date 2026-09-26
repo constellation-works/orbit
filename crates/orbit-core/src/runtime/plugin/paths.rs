@@ -29,6 +29,12 @@ pub fn plugin_state_dir(global_root: &Path, name: &str) -> PathBuf {
     global_root.join("state").join("plugins").join(name)
 }
 
+/// The host-owned secret store (`runtime::plugin::secrets`). No plugin child
+/// can read it: it is on the plugin sandbox's unreadable list.
+pub fn plugin_secret_store_dir(global_root: &Path) -> PathBuf {
+    global_root.join(orbit_tools::plugin::PLUGIN_SECRET_STORE_DIR)
+}
+
 /// The workspace's committed pin file, when it has one.
 pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitError> {
     let Ok(path) = validated_pin_file_path(orbit_dir) else {

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use orbit_core::adapter::command::{PluginAddOptions, PluginEnableOptions};
+use orbit_core::adapter::command::{PluginAddOptions, PluginEnableOptions, PluginSecretValue};
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode};
 use tempfile::TempDir;
@@ -209,6 +209,49 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
         payload["output"],
         serde_json::json!({ "indexed": 7, "state": "ready" }),
         "the panel serves the source tool's output"
+    );
+}
+
+/// A plugin's secret value never reaches the dashboard: `/api/plugins`
+/// answers from the same records `orbit plugin show` does, and neither holds
+/// a value.
+#[cfg(unix)]
+#[tokio::test]
+async fn plugins_list_never_carries_a_secret_value() {
+    const SECRET: &str = "orbit-web-secret-4d8e2a";
+    let fixture = PluginFixture::new();
+    let source = fixture.source();
+    write_plugin(&source);
+    let manifest = source.join("plugin.yaml");
+    let mut document = std::fs::read_to_string(&manifest).expect("read manifest");
+    document.push_str("  secrets:\n    - name: token\n      description: API token.\n");
+    std::fs::write(&manifest, document).expect("declare a secret");
+
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            source.to_str().expect("utf8 source"),
+            &PluginAddOptions {
+                enable: true,
+                ..PluginAddOptions::default()
+            },
+        )
+        .expect("install and enable the fixture plugin");
+    runtime
+        .set_plugin_secret(
+            "panels",
+            "token",
+            &PluginSecretValue::new(SECRET.to_string()).expect("secret value"),
+        )
+        .expect("set the declared secret");
+
+    let response = get(fixture.dashboard_state(), "/plugins").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload[0]["name"], "panels", "{payload}");
+    assert!(
+        !payload.to_string().contains(SECRET),
+        "/api/plugins must never carry a secret value: {payload}"
     );
 }
 

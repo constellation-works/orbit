@@ -593,7 +593,7 @@ impl Commands {
                 .plugin_callback_entry_point(true)
             }
             Commands::Plugin(command) => {
-                use super::super::plugin::PluginSubcommand;
+                use super::super::plugin::{PluginSecretSubcommand, PluginSubcommand};
                 let (subcommand, target_id) = match &command.command {
                     PluginSubcommand::Add(args) => ("add", Some(args.source.clone())),
                     PluginSubcommand::Upgrade(args) => ("upgrade", Some(args.name.clone())),
@@ -603,6 +603,10 @@ impl Commands {
                     PluginSubcommand::List(_) => ("list", None),
                     PluginSubcommand::Show(args) => ("show", Some(args.name.clone())),
                     PluginSubcommand::Doctor => ("doctor", None),
+                    PluginSubcommand::Secret(command) => {
+                        let (subcommand, plugin) = command.command.audit_identity();
+                        (subcommand, Some(plugin.to_string()))
+                    }
                     PluginSubcommand::Validate(args) => {
                         ("validate", Some(args.dir.to_string_lossy().into_owned()))
                     }
@@ -613,16 +617,24 @@ impl Commands {
                     PluginSubcommand::Sync(_) => ("sync", None),
                     PluginSubcommand::Migrate(args) => ("migrate", Some(args.binary.clone())),
                 };
-                // `list`, `show`, `doctor`, `validate` and `scaffold` only
-                // read Orbit state — `scaffold` writes a new directory, never
-                // a record — while `test` records the certification it earned
-                // and the rest write the host's plugin records or install root.
+                // `list`, `show`, `doctor`, `validate`, `scaffold` and
+                // `secret list` only read Orbit state — `scaffold` writes a
+                // new directory, never a record — while `test` records the
+                // certification it earned and the rest write the host's plugin
+                // records, install root or secret store. No `secret` verb is a
+                // callback entry point, so a plugin backend is refused all of
+                // them with `policy_denied`.
                 let runtime_need = match &command.command {
                     PluginSubcommand::List(_)
                     | PluginSubcommand::Show(_)
                     | PluginSubcommand::Doctor
                     | PluginSubcommand::Scaffold(_)
                     | PluginSubcommand::Validate(_) => RuntimeNeed::PluginReadOnly,
+                    PluginSubcommand::Secret(secret)
+                        if matches!(secret.command, PluginSecretSubcommand::List(_)) =>
+                    {
+                        RuntimeNeed::PluginReadOnly
+                    }
                     PluginSubcommand::Sync(args) if args.dry_run => RuntimeNeed::ReadOnly,
                     _ => RuntimeNeed::Required,
                 };

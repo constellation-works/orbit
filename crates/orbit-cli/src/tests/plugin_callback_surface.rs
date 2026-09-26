@@ -47,6 +47,10 @@ fn the_tool_call_entry_points_are_the_only_ones_a_plugin_backend_may_use() {
         // Ordinary governed reads.
         &["orbit", "task", "list"][..],
         &["orbit", "plugin", "list"][..],
+        // Secrets are the operator's to set, list and remove.
+        &["orbit", "plugin", "secret", "set", "graph", "token"][..],
+        &["orbit", "plugin", "secret", "list", "graph"][..],
+        &["orbit", "plugin", "secret", "rm", "graph", "token"][..],
         // Replacing the host binary is emphatically not a callback.
         &["orbit", "update"][..],
     ] {

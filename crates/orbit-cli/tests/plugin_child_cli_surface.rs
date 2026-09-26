@@ -195,6 +195,44 @@ fn the_refusal_is_the_whole_cli_surface_including_self_upgrade() {
     }
 }
 
+/// A plugin backend must not set, list or remove secrets: they are the
+/// operator's, and a backend that could `set` one could plant a credential
+/// for another plugin — or read which ones exist. Every `secret` verb is
+/// refused as `policy_denied`, before anything reads stdin or the store.
+#[test]
+fn a_plugin_child_cannot_manage_plugin_secrets() {
+    let fixture = PluginChildFixture::new();
+
+    for args in [
+        vec!["plugin", "secret", "set", "graph", "token"],
+        vec!["plugin", "secret", "list", "graph"],
+        vec!["plugin", "secret", "rm", "graph", "token"],
+    ] {
+        let mut json_args = args.clone();
+        json_args.extend(["--format", "json"]);
+        let output = fixture.orbit(&json_args);
+        assert!(
+            !output.status.success(),
+            "`orbit {}` must fail for a plugin child",
+            args.join(" ")
+        );
+        let stderr = stderr_of(&output);
+        let error: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap_or_else(|err| {
+            panic!("`orbit {}` JSON error ({err}): {stderr}", args.join(" "))
+        });
+        assert_eq!(
+            error["code"],
+            "policy_denied",
+            "`orbit {}` must be refused as policy, got: {stderr}",
+            args.join(" ")
+        );
+        assert!(
+            !fixture.root.join("state/plugin-secrets").exists(),
+            "a refused secret verb must not touch the store"
+        );
+    }
+}
+
 /// The granted path stays open. `orbit tool run` is not refused by the surface
 /// guard; it proceeds to the callback allowlist, which is the gate that
 /// decides whether *this* plugin may call *that* tool. Here the fixture root
