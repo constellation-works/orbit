@@ -192,7 +192,11 @@ fn reopened_stale_run_state(managed_context: Option<&str>, run_id: Option<&str>)
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&run.run_id, chrono::Utc::now(), 999_999)
+        .mark_job_run_running(
+            &run.run_id,
+            chrono::Utc::now() - chrono::Duration::seconds(3),
+            999_999,
+        )
         .expect("mark run with host-invisible owner");
     drop(runtime);
 
@@ -228,7 +232,11 @@ fn managed_run_context_skips_workspace_open_reconciliation_but_not_explicit_reco
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&run.run_id, chrono::Utc::now(), 999_999)
+        .mark_job_run_running(
+            &run.run_id,
+            chrono::Utc::now() - chrono::Duration::seconds(3),
+            999_999,
+        )
         .expect("mark run with host-invisible owner");
     drop(runtime);
 

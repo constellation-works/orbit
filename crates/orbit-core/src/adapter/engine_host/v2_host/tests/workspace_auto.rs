@@ -1055,8 +1055,12 @@ fn an_orphaned_non_wrapper_leaf_does_not_consume_a_drain_slot() {
         let orphan = jobs
             .insert_job_run(job_name, 1, Utc::now(), None, None)
             .expect("insert orphaned leaf");
-        jobs.mark_job_run_running(&orphan.run_id, Utc::now(), 999_999)
-            .expect("mark orphaned leaf running with a dead pid");
+        jobs.mark_job_run_running(
+            &orphan.run_id,
+            Utc::now() - chrono::Duration::seconds(3),
+            999_999,
+        )
+        .expect("mark orphaned leaf running with a dead pid");
 
         let occupancy_before = jobs
             .drain_leaf_occupancy()
