@@ -144,19 +144,149 @@ impl ExternalRootFixture {
     }
 
     /// Every directory that a mis-resolved run has historically written into.
+    fn outside_config_directories(&self) -> [PathBuf; 4] {
+        [
+            self.orbit_root.clone(),
+            self.orbit_root
+                .parent()
+                .expect("orbit root parent")
+                .to_path_buf(),
+            self.elsewhere.clone(),
+            self.home.clone(),
+        ]
+    }
+
+    /// Reject MCP client config outside the checkout while allowing the
+    /// designed sibling `.claude/skills` links for an overridden root.
     fn assert_no_client_config_outside_the_checkout(&self) {
-        let root_parent = self.orbit_root.parent().expect("orbit root parent");
-        for directory in [&self.orbit_root, root_parent, &self.elsewhere, &self.home] {
-            for entry in [".mcp.json", ".claude.json", ".claude"] {
-                let stray = directory.join(entry);
+        let mut stray_configs = Vec::new();
+        for directory in self.outside_config_directories() {
+            for name in [".mcp.json", ".claude.json"] {
+                let config = directory.join(name);
+                match fs::symlink_metadata(&config) {
+                    Ok(_) => stray_configs.push(config),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        panic!("inspect client config path {}: {error}", config.display())
+                    }
+                }
+            }
+
+            let claude_dir = directory.join(".claude");
+            match fs::read_dir(&claude_dir) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = entry.expect("read .claude entry");
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        if name.starts_with("settings") && name.ends_with(".json") {
+                            stray_configs.push(entry.path());
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!(
+                    "inspect .claude directory {}: {error}",
+                    claude_dir.display()
+                ),
+            }
+        }
+        assert!(
+            stray_configs.is_empty(),
+            "MCP client config written outside the checkout: {}",
+            stray_configs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        self.assert_sibling_claude_contains_only_skill_links();
+    }
+
+    /// The external-root sibling `.claude` is reserved for skill links.
+    fn assert_sibling_claude_contains_only_skill_links(&self) {
+        let claude_dir = self
+            .orbit_root
+            .parent()
+            .expect("orbit root parent")
+            .join(".claude");
+        let metadata = match fs::symlink_metadata(&claude_dir) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => panic!("read sibling .claude metadata: {error}"),
+        };
+        assert!(
+            metadata.file_type().is_dir(),
+            "sibling .claude must be a directory containing only skills links: {}",
+            claude_dir.display()
+        );
+
+        for entry in fs::read_dir(&claude_dir).expect("read sibling .claude") {
+            let entry = entry.expect("read sibling .claude entry");
+            assert_eq!(
+                entry.file_name(),
+                "skills",
+                "sibling .claude may contain only the skills directory: {}",
+                entry.path().display()
+            );
+            assert!(
+                entry.file_type().expect("read skills entry type").is_dir(),
+                "sibling .claude/skills must be a directory: {}",
+                entry.path().display()
+            );
+            for skill in fs::read_dir(entry.path()).expect("read sibling skill links") {
+                let skill = skill.expect("read sibling skill link");
                 assert!(
-                    !stray.exists(),
-                    "MCP client config written outside the checkout: {}",
-                    stray.display()
+                    skill
+                        .file_type()
+                        .expect("read sibling skill link type")
+                        .is_symlink(),
+                    "sibling .claude/skills may contain only skill links: {}",
+                    skill.path().display()
                 );
             }
         }
     }
+}
+
+#[test]
+fn outside_client_config_guard_rejects_config_files_in_scanned_directories() {
+    let fixture = ExternalRootFixture::init();
+
+    for directory in fixture.outside_config_directories() {
+        for relative_path in [
+            ".mcp.json",
+            ".claude.json",
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".claude/settings.extra.json",
+        ] {
+            let config = directory.join(relative_path);
+            fs::create_dir_all(config.parent().expect("config parent"))
+                .expect("create config parent");
+            fs::write(&config, "{}").expect("write stray client config");
+
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fixture.assert_no_client_config_outside_the_checkout();
+            }));
+            let message = result
+                .expect_err("outside client config guard must reject the config")
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                message.contains("MCP client config written outside the checkout")
+                    && message.contains(&config.display().to_string()),
+                "unexpected guard failure for {}: {message}",
+                config.display()
+            );
+
+            fs::remove_file(config).expect("remove stray client config");
+        }
+    }
+
+    fixture.assert_no_client_config_outside_the_checkout();
 }
 
 #[test]
