@@ -26,7 +26,7 @@ use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
 use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
-use crate::runtime::{is_global_orbit_root, resolve_global_root};
+use crate::runtime::resolve_global_root;
 use orbit_config::{ConfigRoots, ConfigSeed, ResolvedConfig, seed_default_config};
 
 const LEGACY_WORKSPACE_SEEDED_SKILL_IDS: [&str; 2] = ["orbit-approve-task", "orbit-pr"];
@@ -69,7 +69,7 @@ pub struct InitOptions {
     /// renders the registry default, which is also what an unregistered
     /// workspace record would carry.
     pub workspace_base_branch: Option<String>,
-    /// When true, create/update user-level skill symlinks for global skills.
+    /// When true, create/update skill symlinks beside the selected global root.
     pub link_global_skills: bool,
     /// Explicit inputs for seeding a fresh `config.toml`: which provider
     /// families this host can dispatch to, plus any crew assignments the init
@@ -230,11 +230,9 @@ pub fn init_workspace_at_root(
 
     let skill_ids = default_skill_ids();
     let mut created_skills_symlink = false;
-    // Home-scoped skill link directories (`~/.agents/skills`, `~/.claude/skills`)
-    // are only ever touched for the true global Orbit root. A non-global root
-    // (a validation root, an alternate `--root`, a workspace root) must leave
-    // them exactly as found — no removal, no re-creation, no replacement.
-    if options.global_only && options.link_global_skills && is_global_orbit_root(&orbit_root) {
+    // The discovery directories are siblings of this global root. An
+    // alternate `--root` links beside that root, never under the caller's HOME.
+    if options.global_only && options.link_global_skills {
         for skills_links_root in &init_target.skills_links_roots {
             created_skills_symlink |=
                 ensure_skill_links(&skills_root, &skill_ids, skills_links_root, options.force)?;
@@ -400,15 +398,8 @@ struct InitTarget {
 
 fn resolve_init_target_from_root(orbit_root: &Path) -> InitTarget {
     let orbit_root = orbit_root.to_path_buf();
-    let skills_links_base = crate::paths::home_dir()
-        .or_else(|| find_git_repo_root(&orbit_root))
-        .unwrap_or_else(|| {
-            orbit_root
-                .parent()
-                .unwrap_or(orbit_root.as_path())
-                .to_path_buf()
-        });
-    let skills_links_roots = skill_link_roots(&skills_links_base);
+    let skills_links_base = orbit_root.parent().unwrap_or(orbit_root.as_path());
+    let skills_links_roots = skill_link_roots(skills_links_base);
 
     InitTarget {
         orbit_root,
@@ -421,10 +412,6 @@ pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
         .into_iter()
         .map(|dir| base_root.join(dir).join("skills"))
         .collect()
-}
-
-fn find_git_repo_root(start: &Path) -> Option<PathBuf> {
-    crate::paths::find_git_repo_root(start)
 }
 
 fn seed_scoreboard_templates(orbit_root: &Path) -> Result<(), OrbitError> {
@@ -761,7 +748,7 @@ pub struct UnlinkResult {
     pub cleaned_dirs: Vec<PathBuf>,
 }
 
-/// Re-create skill symlinks in `~/.agents/skills/` and `~/.claude/skills/`.
+/// Re-create skill symlinks beside the selected global root.
 pub fn link_skills(global_root: &Path) -> Result<LinkResult, OrbitError> {
     let init_target = resolve_init_target_from_root(global_root);
     let skills_root = global_skills_dir(&init_target.orbit_root);
@@ -791,7 +778,7 @@ pub fn link_skills(global_root: &Path) -> Result<LinkResult, OrbitError> {
     })
 }
 
-/// Remove skill symlinks from `~/.agents/skills/` and `~/.claude/skills/`.
+/// Remove skill symlinks beside the selected global root.
 /// Only removes symlinks — regular files and directories are left intact.
 pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
     let init_target = resolve_init_target_from_root(global_root);

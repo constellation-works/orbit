@@ -651,6 +651,116 @@ fn add_enable_renders_the_seeded_skill_and_warning_report_like_enable() {
 
 #[cfg(unix)]
 #[test]
+fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
+    for (root_relative, sync) in [
+        ("isolated/orbit-root", false),
+        ("job/.orbit/tmp/jrun-test/orbit-root2", true),
+    ] {
+        let fixture = Fixture::new();
+        let source = fixture.source("demo");
+        let source_arg = source.to_str().expect("utf8 source");
+        fixture
+            .orbit()
+            .args(["plugin", "scaffold", "demo", "--dir", source_arg])
+            .assert()
+            .success();
+
+        let selected_root = fixture._temp.path().join(root_relative);
+        let root_arg = selected_root.to_str().expect("utf8 selected root");
+        let discovery_base = selected_root.parent().expect("selected root parent");
+        let home_skills =
+            [".agents", ".claude"].map(|provider| fixture.home.join(provider).join("skills"));
+        let home_before = home_skills.clone().map(|path| {
+            if path.exists() {
+                Some(tree_listing(&path))
+            } else {
+                None
+            }
+        });
+
+        fixture
+            .orbit()
+            .args([
+                "--root",
+                root_arg,
+                "init",
+                "--non-interactive",
+                "--machine-name",
+                "isolated-root-host",
+                "--task-prefix",
+                "ISO",
+            ])
+            .assert()
+            .success();
+        fixture
+            .orbit()
+            .args([
+                "--root",
+                root_arg,
+                "workspace",
+                "init",
+                "--name",
+                "isolated-plugin",
+            ])
+            .assert()
+            .success();
+
+        let action_output = if sync {
+            std::fs::write(
+                selected_root.join("plugins.yaml"),
+                format!(
+                    "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {}\n    enabled: true\n",
+                    source.display()
+                ),
+            )
+            .expect("write workspace plugin pin");
+            fixture
+                .orbit()
+                .args(["--root", root_arg, "plugin", "sync"])
+                .output()
+                .expect("sync pinned plugin")
+        } else {
+            fixture
+                .orbit()
+                .args(["--root", root_arg, "plugin", "add", source_arg])
+                .assert()
+                .success();
+            fixture
+                .orbit()
+                .args(["--root", root_arg, "plugin", "enable", "demo"])
+                .output()
+                .expect("enable installed plugin")
+        };
+        assert!(action_output.status.success(), "{action_output:?}");
+
+        let expected_target = selected_root.join("plugins/demo/0.1.0/skills/demo");
+        for provider in [".agents", ".claude"] {
+            let link = discovery_base.join(provider).join("skills/demo-demo");
+            assert!(
+                std::fs::symlink_metadata(&link)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink()),
+                "plugin skill must link beside {root_relative} at {}; output: {action_output:?}",
+                link.display(),
+            );
+            assert_eq!(
+                std::fs::read_link(&link).expect("read plugin skill link"),
+                expected_target
+            );
+        }
+        for (path, before) in home_skills.iter().zip(home_before) {
+            let after = path.exists().then(|| tree_listing(path));
+            assert_eq!(
+                after,
+                before,
+                "plugin must not write under HOME at {}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
     let fixture = Fixture::new();
     // Installation refuses sources inside a workspace repository, so this
