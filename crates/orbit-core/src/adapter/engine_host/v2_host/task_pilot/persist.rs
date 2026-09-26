@@ -51,10 +51,10 @@ pub(super) fn apply_task(
                 .iter()
                 .any(|event| {
                     event.event == "task_pilot_applied"
-                        && event
-                            .note
-                            .as_deref()
-                            .is_some_and(|note| note.lines().next() == Some(receipt.as_str()))
+                        && event.note.as_deref().is_some_and(|note| {
+                            note.ends_with(&format!(" ({receipt})"))
+                                || note.lines().next() == Some(receipt.as_str())
+                        })
                 })
             {
                 outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
@@ -112,6 +112,7 @@ pub(super) fn apply_task(
                 complexity: task.complexity,
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
+                history_summary: assessment_history_summary(&task.assessment),
                 audit_note: serde_json::to_string(&json!({
                     "assessment": task.assessment,
                     "context_files_before": snapshot.context_files,
@@ -169,6 +170,26 @@ pub(super) fn apply_task(
     Err(OrbitError::Execution(
         "task-pilot status retry loop did not settle".to_string(),
     ))
+}
+
+fn assessment_history_summary(assessment: &Value) -> String {
+    let disposition = assessment["disposition"].as_str().unwrap_or("unknown");
+    let confidence = assessment["confidence"].as_str().unwrap_or("unknown");
+    let rationale = assessment["assessment_rationale"]
+        .as_str()
+        .unwrap_or_default()
+        .split(['.', '!', '?'])
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let short = rationale.chars().take(64).collect::<String>();
+    let truncated = rationale.chars().count() > 64;
+    format!(
+        "{disposition} (confidence {confidence}) — {short}{}",
+        if truncated { "…" } else { "" }
+    )
 }
 
 fn status_only_fingerprint(

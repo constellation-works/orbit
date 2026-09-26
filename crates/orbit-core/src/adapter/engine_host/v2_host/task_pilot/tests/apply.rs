@@ -418,11 +418,11 @@ fn replay_returns_already_applied_without_a_second_mutation() {
     let task = seed_task(&runtime, "replay", TaskStatus::Backlog, &[], &[]);
     let task_ids = vec![task.id.clone()];
     let snapshot = prepared(&runtime, &repo_root, &task_ids);
-    let result = partition_result(
-        0,
-        &task_ids,
-        vec![selector_assessment(&task, vec!["file:src/alpha.rs"])],
+    let mut assessment = selector_assessment(&task, vec!["file:src/alpha.rs"]);
+    assessment["assessment_rationale"] = json!(
+        "This assessment is intentionally verbose enough to exceed the summary limit while preserving every original detail. A second sentence also remains in the comment."
     );
+    let result = partition_result(0, &task_ids, vec![assessment]);
     let input = json!({
         "prepared": snapshot,
         "results": [result],
@@ -465,9 +465,40 @@ fn replay_returns_already_applied_without_a_second_mutation() {
         .collect::<Vec<_>>();
     assert_eq!(pilot_events.len(), 1);
     let audit = pilot_events[0].note.as_deref().expect("audit note");
-    assert!(audit.starts_with("operation_id="), "{audit}");
-    assert!(audit.contains("assessment_rationale"), "{audit}");
-    assert!(audit.contains("validation_approach"), "{audit}");
+    assert!(audit.starts_with("selectors (confidence high)"), "{audit}");
+    assert_eq!(audit.lines().count(), 1, "{audit}");
+    assert!(audit.len() <= 200, "history entry is too long: {audit}");
+    assert!(
+        audit.contains("… (operation_id="),
+        "long rationale should be truncated: {audit}"
+    );
+    let comments = runtime
+        .get_task_comments(&task.id)
+        .expect("assessment comments");
+    assert_eq!(
+        comments.len(),
+        1,
+        "replay must not duplicate the assessment"
+    );
+    let (comment_receipt, payload) = comments[0]
+        .message
+        .split_once('\n')
+        .expect("comment receipt and structured assessment");
+    assert!(audit.ends_with(&format!(" ({comment_receipt})")));
+    let persisted: Value = serde_json::from_str(payload).expect("structured assessment");
+    assert_eq!(
+        persisted["assessment"]["reassessment_triggers"],
+        json!(["the target API changes"])
+    );
+    assert_eq!(
+        persisted["assessment"]["validation_approach"],
+        "Run the focused caller tests."
+    );
+    assert!(
+        persisted["assessment"]["assessment_rationale"]
+            .as_str()
+            .is_some_and(|rationale| rationale.contains("A second sentence"))
+    );
 
     let reassessed_task = runtime.get_task(&task.id).expect("reassessed task");
     let fresh = prepared(

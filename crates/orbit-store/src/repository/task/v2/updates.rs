@@ -12,10 +12,12 @@ impl TaskV2Store {
         if fields.actor.trim().is_empty()
             || fields.operation_id.trim().is_empty()
             || fields.event_type.trim().is_empty()
+            || fields.history_summary.trim().is_empty()
+            || fields.history_summary.chars().any(char::is_control)
             || fields.audit_note.trim().is_empty()
         {
             return Err(OrbitError::InvalidInput(
-                "atomic task mutation actor, operation id, event type, and audit note must not be empty"
+                "atomic task mutation requires actor, operation id, event type, a single-line history summary, and audit note"
                     .to_string(),
             ));
         }
@@ -25,10 +27,10 @@ impl TaskV2Store {
             let receipt = format!("operation_id={}", fields.operation_id);
             if bundle.events.iter().any(|event| {
                 event.event_type == fields.event_type
-                    && event
-                        .note
-                        .as_deref()
-                        .is_some_and(|note| note.lines().next() == Some(receipt.as_str()))
+                    && event.note.as_deref().is_some_and(|note| {
+                        note.ends_with(&format!(" ({receipt})"))
+                            || note.lines().next() == Some(receipt.as_str())
+                    })
             }) {
                 return Ok(AtomicTaskMutationOutcome::AlreadyApplied);
             }
@@ -51,11 +53,19 @@ impl TaskV2Store {
                 at: now,
                 by: fields.actor.clone(),
                 event_type: fields.event_type.clone(),
-                note: Some(format!("{receipt}\n{}", fields.audit_note)),
+                note: Some(format!("{} ({receipt})", fields.history_summary)),
                 from_status: status_changed.then_some(bundle.envelope.status),
                 to_status: status_changed.then_some(fields.status),
             };
             self.bundle_store.append_event(id, &event)?;
+            let comment = TaskCommentRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                comment_id: format!("C-{:04}", next_sequence(&bundle.comments, "C-")),
+                at: now,
+                by: fields.actor.clone(),
+                body: format!("{receipt}\n{}", fields.audit_note),
+            };
+            self.bundle_store.append_comment(id, &comment)?;
             fail_if_injected(BundleWriteFault::AfterJsonlAppend)?;
 
             bundle.envelope.context_files = fields.context_files.clone();
