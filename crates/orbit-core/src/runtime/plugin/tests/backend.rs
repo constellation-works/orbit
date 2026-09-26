@@ -144,12 +144,39 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         .spec()
         .sandbox_profile(Some(&workspace_root))
         .expect("call-time profile");
+    let validate_profile = validate
+        .spec()
+        .sandbox_profile(Some(&workspace_root))
+        .expect("validate call-time profile");
+    let conformance_profile = conformance
+        .spec()
+        .sandbox_profile(Some(&workspace_root))
+        .expect("conformance call-time profile");
+    let expected_call_reads = std::iter::once(plugin_root.clone())
+        .chain(registration_roots.read.iter().cloned())
+        .chain(std::iter::once(state_dir.clone()))
+        .collect::<Vec<_>>();
     assert_eq!(
-        call_profile.read[1..],
-        registration_roots.read,
-        "call time adds only the mandatory plugin-root read before the declared roots"
+        call_profile.read, expected_call_reads,
+        "call time includes the plugin root, declared roots, then its own state"
+    );
+    assert_eq!(
+        call_profile.read.last(),
+        Some(&state_dir),
+        "the plugin's exact own-state root is last at call time"
+    );
+    assert_eq!(
+        call_profile
+            .read
+            .iter()
+            .filter(|root| *root == &state_dir)
+            .count(),
+        1,
+        "the plugin's own-state root appears only once at call time"
     );
     assert_eq!(call_profile.write, registration_roots.write);
+    assert_eq!(validate_profile.read, call_profile.read);
+    assert_eq!(conformance_profile.read, call_profile.read);
     assert_eq!(validate_roots, registration_roots);
     assert_eq!(registration_roots, conformance_roots);
 
