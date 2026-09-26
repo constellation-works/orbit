@@ -128,6 +128,7 @@ The limits live only in the global `~/.orbit/config.toml` `[machine]` table:
 | Key | Default | Scope property |
 | --- | --- | --- |
 | `machine.worker_containment` | `true` | `false` launches workers in the caller's cgroup |
+| `machine.worker_containment_strict` | `false` | Refuse a worker launch when a systemd user scope is unavailable; requires containment enabled |
 | `machine.worker_memory_high` | `40%` | `MemoryHigh=`: the kernel throttles the run above it |
 | `machine.worker_memory_max` | `50%` | `MemoryMax=`: OOM kills stay inside the run |
 | `machine.worker_tasks_max` | `4096` | `TasksMax=`: processes plus threads before fork/clone fails |
@@ -162,12 +163,17 @@ still watching the child. A run whose launcher had already exited can still
 end as `interrupted` / `process_not_found`; then correlate with the kernel log
 (`journalctl -k --since '1 hour ago' | rg -i 'oom|orbit-worker'`).
 
-Containment falls back to the old behaviour, with one warning per Orbit
-process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
+By default, containment falls back to the old behaviour, with one warning per
+Orbit process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
 workers launch without a bounded systemd scope"), when it is disabled, on
 macOS, or when `systemd-run --user --scope` cannot reach a user manager
-(containers, sandboxes, sessions without `XDG_RUNTIME_DIR`). Uncontained
-workers share the launching service's cgroup. The rendered `orbit-sweep.service`
+(containers, sandboxes, sessions without `XDG_RUNTIME_DIR`). With
+`machine.worker_containment_strict=true` or `--strict-worker-containment` on
+`orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
+worker before spawn; `orbit run show` reports
+`worker_containment_unavailable` and the reason. The CLI flag is inherited by
+the auto coordinator's leaf workers. Uncontained workers share the launching
+service's cgroup. The rendered `orbit-sweep.service`
 carries `MemoryHigh=70%` and `TasksMax=4096` as a backstop, and re-enabling the
 clock (`orbit clock enable`) rewrites an older installed unit. `orbit-web.service`
 is operator-installed: bound it with a user drop-in such as

@@ -77,6 +77,8 @@ pub(crate) use worker::log::pipeline_worker_log_path;
 #[cfg(all(test, unix))]
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
 #[cfg(test)]
+pub(crate) use worker::scope::TestScopeAvailability;
+#[cfg(test)]
 pub(crate) use worker::supervisor::worker_observer_read_counter;
 
 #[derive(Debug, Clone, Serialize)]

@@ -68,6 +68,10 @@ pub struct ShipCommand {
     /// fails before a run is created. Omitted, shipment remains unrestricted.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Require a systemd user scope for this run and every worker it starts.
+    /// Overrides machine.worker_containment_strict for this invocation.
+    #[arg(long)]
+    pub strict_worker_containment: bool,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -94,7 +98,7 @@ impl Execute for ShipCommand {
         ensure_workflow_exists(SHIP_WORKFLOW)?;
         // Ship is the one workflow whose submission carries task-level
         // admission checks, so it must not use the generic CLI dispatcher.
-        let invoke = runtime.submit_ship_run(
+        let invoke = runtime.submit_ship_run_with_containment(
             mode,
             self.base.as_deref(),
             &self.task_ids,
@@ -103,6 +107,7 @@ impl Execute for ShipCommand {
             None,
             self.claim_token.as_deref(),
             orbit_types::workflow::JobRunTrigger::cli(),
+            self.strict_worker_containment,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,

@@ -19,6 +19,7 @@ fn ship_args(task_ids: &[&str], mode: ShipMode, base: Option<&str>) -> ShipComma
         base: base.map(str::to_string),
         complete: false,
         allow_crew: Vec::new(),
+        strict_worker_containment: false,
         json: false,
         claim_token: None,
     }
@@ -98,6 +99,7 @@ fn ship_mode_uses_selected_root_registry_when_home_registry_is_empty() {
                 base: None,
                 complete: false,
                 allow_crew: Vec::new(),
+                strict_worker_containment: false,
                 json: false,
                 claim_token: None,
             },

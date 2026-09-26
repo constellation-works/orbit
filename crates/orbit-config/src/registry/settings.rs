@@ -134,6 +134,12 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 40,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
+    machine_worker_containment_strict: bool => bool {
+        key: "machine.worker_containment_strict", value_type: "bool",
+        description: "Refuse detached worker launches when a systemd user scope is unavailable. Requires machine.worker_containment=true; default false keeps warn-and-launch behavior.",
+        section: ConfigSection::Machine, order: 45,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     machine_worker_memory_high: MemoryLimit => String {
         key: "machine.worker_memory_high", value_type: "string",
         description: "MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).",
@@ -313,6 +319,12 @@ impl ConfigSnapshot {
         )?;
         self.workflow_default_crew =
             resolve_default_crew(self.workflow_default_crew.take(), crews, env_default)?;
+        if self.machine_worker_containment_strict && !self.machine_worker_containment {
+            return Err(OrbitError::InvalidInput(
+                "machine.worker_containment_strict=true requires machine.worker_containment=true"
+                    .to_string(),
+            ));
+        }
         self.machine().check_complete()?;
         Ok(())
     }
@@ -337,6 +349,8 @@ impl ConfigSnapshot {
 pub struct WorkerContainmentSettings {
     /// `machine.worker_containment` — launch workers in their own scope.
     pub enabled: bool,
+    /// `machine.worker_containment_strict` — refuse uncontained launches.
+    pub strict: bool,
     /// `machine.worker_memory_high` — throttling threshold.
     pub memory_high: MemoryLimit,
     /// `machine.worker_memory_max` — hard limit; OOM kills stay inside the run.
@@ -350,6 +364,7 @@ impl ConfigSnapshot {
     pub fn worker_containment(&self) -> WorkerContainmentSettings {
         WorkerContainmentSettings {
             enabled: self.machine_worker_containment,
+            strict: self.machine_worker_containment_strict,
             memory_high: self.machine_worker_memory_high,
             memory_max: self.machine_worker_memory_max,
             tasks_max: self.machine_worker_tasks_max,

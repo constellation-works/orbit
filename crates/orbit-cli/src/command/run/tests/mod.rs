@@ -238,9 +238,29 @@ fn workspace_auto_stop_conflicts_with_start_flags() {
         ["orbit", "run", "auto", "--stop", "--concurrency", "3"].as_slice(),
         ["orbit", "run", "auto", "--stop", "--complete"].as_slice(),
         ["orbit", "run", "auto", "--stop", "--allow-crew", "luna"].as_slice(),
+        [
+            "orbit",
+            "run",
+            "auto",
+            "--stop",
+            "--strict-worker-containment",
+        ]
+        .as_slice(),
     ] {
         assert_cli_rejects(args, ErrorKind::ArgumentConflict, "--stop");
     }
+}
+
+#[test]
+fn strict_worker_containment_flag_parses_for_ship_and_auto() {
+    let ship = parse_run(&["orbit", "run", "ship", "--strict-worker-containment"]);
+    assert!(matches!(ship.command, RunSubcommand::Ship(args) if args.strict_worker_containment));
+    let auto = parse_run(&["orbit", "run", "auto", "--strict-worker-containment"]);
+    assert!(matches!(auto.command, RunSubcommand::Auto(args) if args.strict_worker_containment));
+    let default = parse_run(&["orbit", "run", "auto"]);
+    assert!(
+        matches!(default.command, RunSubcommand::Auto(args) if !args.strict_worker_containment)
+    );
 }
 
 #[test]
@@ -255,6 +275,7 @@ fn auto_stop_with_no_coordinator_is_idle() {
         concurrency: None,
         complete: false,
         allow_crew: Vec::new(),
+        strict_worker_containment: false,
         json: true,
         claim_token: None,
         stop: true,

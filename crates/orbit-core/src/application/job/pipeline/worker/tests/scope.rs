@@ -8,13 +8,125 @@
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Once};
 
 use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
+use orbit_types::workspace::WorkspacePaths;
 use tempfile::TempDir;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::{Layer, layer::Context};
 
-use crate::application::job::pipeline::worker::scope::{
-    WorkerLimits, WorkerScopeCgroup, event_count, scope_unit_name, scoped_worker_command,
+use crate::application::job::pipeline::worker::command::{
+    WorkerCommandConfig, worker_command_override,
 };
+use crate::application::job::pipeline::worker::scope::{
+    STRICT_WORKER_CONTAINMENT_ENV, TestScopeAvailability, WorkerLimits, WorkerScopeCgroup,
+    contain_worker_command_with_availability, event_count, scope_unit_name, scoped_worker_command,
+};
+
+struct WarningCounter(Arc<AtomicUsize>);
+
+impl<S: tracing::Subscriber> Layer<S> for WarningCounter {
+    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+        if event.metadata().target() == "orbit.core.job_run"
+            && *event.metadata().level() == tracing::Level::WARN
+        {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[test]
+fn unavailable_manager_defaults_to_uncontained_worker_and_warns_once() {
+    let warnings = Arc::new(AtomicUsize::new(0));
+    let warned = Once::new();
+    let subscriber = tracing_subscriber::registry().with(WarningCounter(Arc::clone(&warnings)));
+    tracing::subscriber::with_default(subscriber, || {
+        for run_id in ["run-a", "run-b"] {
+            let base = Command::new("true");
+            let mut command = contain_worker_command_with_availability(
+                base,
+                run_id,
+                Some(&limits()),
+                false,
+                Some(Err("no user manager".into())),
+                &warned,
+            )
+            .expect("default policy launches uncontained");
+            assert_eq!(command.get_program(), OsStr::new("true"));
+            assert!(
+                command
+                    .status()
+                    .expect("launch uncontained process")
+                    .success()
+            );
+        }
+    });
+    assert_eq!(warnings.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn unavailable_manager_in_strict_mode_returns_typed_actionable_error() {
+    let error = contain_worker_command_with_availability(
+        Command::new("worker"),
+        "run-a",
+        Some(&limits()),
+        true,
+        Some(Err("systemd-run missing".into())),
+        &Once::new(),
+    )
+    .expect_err("strict policy refuses the worker before spawn");
+    assert!(matches!(
+        error,
+        orbit_common::OrbitError::WorkerContainmentUnavailable { .. }
+    ));
+    let message = error.to_string();
+    assert!(message.contains("systemd-run missing"), "{message}");
+    assert!(message.contains("user manager"), "{message}");
+    assert!(message.contains("--strict-worker-containment"), "{message}");
+}
+
+#[test]
+fn strict_worker_command_passes_policy_to_descendants() {
+    struct ClearOverride;
+    impl Drop for ClearOverride {
+        fn drop(&mut self) {
+            worker_command_override::clear();
+        }
+    }
+
+    let root = TempDir::new().expect("tempdir");
+    let workspace = root.path().join("repo");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let paths = WorkspacePaths::new(
+        workspace.clone(),
+        workspace.join(".orbit"),
+        root.path().join("global"),
+    );
+    worker_command_override::set(["worker"]);
+    let _clear = ClearOverride;
+    let _available = TestScopeAvailability::available();
+    let command = WorkerCommandConfig::for_paths(&paths)
+        .contained(Some(limits()))
+        .strict_containment(true)
+        .build(&workspace, "run-a")
+        .expect("scope accepted");
+    assert_eq!(command.get_program(), OsStr::new("systemd-run"));
+    assert!(command.get_envs().any(|(name, value)| {
+        name == OsStr::new(STRICT_WORKER_CONTAINMENT_ENV) && value == Some(OsStr::new("1"))
+    }));
+}
+
+#[test]
+fn inherited_strict_policy_applies_to_child_worker_launches() {
+    let strict = super::super::effective_strict_containment;
+    assert!(!strict(false, false, None));
+    assert!(strict(true, false, None));
+    assert!(strict(false, true, None));
+    assert!(strict(false, false, Some(OsStr::new("1"))));
+    assert!(!strict(false, false, Some(OsStr::new("0"))));
+}
 
 fn memory(value: &str) -> MemoryLimit {
     MemoryLimit::parse(value).expect("admitted memory limit")
@@ -23,6 +135,7 @@ fn memory(value: &str) -> MemoryLimit {
 fn settings(memory_high: MemoryLimit, memory_max: MemoryLimit) -> WorkerContainmentSettings {
     WorkerContainmentSettings {
         enabled: true,
+        strict: false,
         memory_high,
         memory_max,
         tasks_max: 512,

@@ -60,7 +60,8 @@ task_prefix = "ORB"
 | `machine.id` | written by init | No | Opaque `hm_…` identity. It names run ownership, workspace ownership and federated routing. |
 | `machine.name` | written by init | Yes (`--global`) | Display label. |
 | `machine.task_prefix` | written by init | No | 2–5 uppercase ASCII letters used for task IDs minted here. Fixed for the life of the local task store. |
-| `machine.worker_containment` | `true` | Yes | Run each detached pipeline worker in its own transient systemd user scope (`orbit-worker-<run_id>-<nonce>.scope`), so a runaway run is throttled or OOM-killed inside it. Without a user manager (macOS, containers) or with `false`, workers run in the caller's cgroup and each Orbit process logs one warning. |
+| `machine.worker_containment` | `true` | Yes | Run each detached pipeline worker in its own transient systemd user scope (`orbit-worker-<run_id>-<nonce>.scope`), so a runaway run is throttled or OOM-killed inside it. Without a user manager (macOS, containers) or with `false`, workers run in the caller's cgroup and each Orbit process logs one warning by default. Must be `true` when strict mode is enabled. |
+| `machine.worker_containment_strict` | `false` | Yes | Refuse a worker launch if a systemd user scope is unavailable. The run reports the reason and how to enable a user manager or disable strict mode; no uncontained worker starts. `true` with `machine.worker_containment=false` fails config load. `orbit run ship --strict-worker-containment` and `orbit run auto --strict-worker-containment` turn it on for one invocation even when config says `false`. The auto coordinator passes this policy to its leaf workers through `ORBIT_WORKER_CONTAINMENT_STRICT` in their inherited environment. |
 | `machine.worker_memory_high` | `40%` | Yes | Scope `MemoryHigh=` (throttle point). Bytes with optional `K`/`M`/`G`/`T`, a percentage of physical RAM, or `infinity`. |
 | `machine.worker_memory_max` | `50%` | Yes | Scope `MemoryMax=` (OOM point). Same grammar. |
 | `machine.worker_tasks_max` | `4096` | Yes | Scope `TasksMax=` (processes plus threads), at least 1. |
@@ -69,6 +70,7 @@ task_prefix = "ORB"
 - Hand edits fail closed. A `[machine]` table missing any identity key is an error. A `task_prefix` that contradicts the local task allocator, or an `id` that contradicts a workspace record naming this machine as owner, is refused. Nothing falls back to the hostname.
 - A legacy `~/.orbit/host.toml` is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths. Delete the stale one.
 - A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
+- A strict launch refused before a worker starts carries error code `worker_containment_unavailable` on the run and in CLI JSON errors.
 
 ---
 

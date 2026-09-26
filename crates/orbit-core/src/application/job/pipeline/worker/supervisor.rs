@@ -467,6 +467,7 @@ impl PipelineWorkerSupervisor {
         &self,
         run: &JobRun,
         message: &str,
+        error_code: Option<&str>,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
         let current = self.host.reconciled_run(&run.run_id)?;
@@ -482,7 +483,7 @@ impl PipelineWorkerSupervisor {
             run,
             run.scheduled_at,
             finished_at,
-            None,
+            error_code,
             message,
             JobRunState::Interrupted,
         )?;

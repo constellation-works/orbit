@@ -267,6 +267,7 @@ fn worker_limits_default_on_and_admit_systemd_sizes() {
         .snapshot
         .worker_containment();
     assert!(defaults.enabled);
+    assert!(!defaults.strict);
     assert!(
         matches!(defaults.memory_max, MemoryLimit::Percent(_)),
         "derived from host RAM"
@@ -288,6 +289,7 @@ fn worker_limits_default_on_and_admit_systemd_sizes() {
         configured,
         WorkerContainmentSettings {
             enabled: false,
+            strict: false,
             memory_high: MemoryLimit::Bytes {
                 amount: 6,
                 unit: Some(MemoryUnit::G),
@@ -296,6 +298,36 @@ fn worker_limits_default_on_and_admit_systemd_sizes() {
             tasks_max: 512,
         }
     );
+}
+
+#[test]
+fn strict_worker_containment_is_admitted_and_requires_containment() {
+    let global = tempdir().expect("global");
+    write_config(
+        global.path(),
+        &format!("{IDENTITY}worker_containment_strict = true\n"),
+    );
+    let snapshot = ResolvedConfig::load(&roots(global.path(), global.path()))
+        .expect("strict mode loads")
+        .snapshot;
+    assert!(snapshot.worker_containment().strict);
+    assert_eq!(
+        snapshot.value_for("machine.worker_containment_strict"),
+        Some(serde_json::json!(true))
+    );
+
+    write_config(
+        global.path(),
+        &format!("{IDENTITY}worker_containment = false\nworker_containment_strict = true\n"),
+    );
+    let error = ResolvedConfig::load(&roots(global.path(), global.path()))
+        .expect_err("strict mode with disabled containment must fail at load")
+        .to_string();
+    assert!(
+        error.contains("machine.worker_containment_strict"),
+        "{error}"
+    );
+    assert!(error.contains("machine.worker_containment=true"), "{error}");
 }
 
 /// The admitted limit renders back as the systemd value the operator wrote,

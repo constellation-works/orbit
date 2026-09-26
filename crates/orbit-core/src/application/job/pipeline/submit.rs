@@ -148,6 +148,36 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
         trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_ship_run_with_containment(
+            mode,
+            base_branch,
+            task_ids,
+            completion,
+            allowed_crews,
+            actor,
+            claim_token,
+            trigger,
+            false,
+        )
+    }
+
+    /// Submit a ship run with a CLI-only strict containment override.
+    /// The marker is persisted with this run's input; its worker passes the
+    /// policy through the environment to any child workers it starts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_ship_run_with_containment(
+        &self,
+        mode: crate::application::workflow::ShipMode,
+        base_branch: Option<&str>,
+        task_ids: &[String],
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+        strict_containment: bool,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
         // [ORB-12500] Explicit shipment converges on the same admission
         // decision the drain, the retained sweep and pull admission make: a
@@ -168,13 +198,16 @@ impl OrbitRuntime {
         let base = base_branch.unwrap_or_else(|| self.workspace_base_branch());
         let allowed_crews = self.canonical_allowed_crews(allowed_crews)?;
         let allowlist = self.crew_allowlist(&allowed_crews)?;
-        let input = crate::application::workflow::build_ship_input(
+        let mut input = crate::application::workflow::build_ship_input(
             mode,
             base,
             task_ids,
             completion,
             &allowed_crews,
         )?;
+        if strict_containment {
+            input["__worker_containment_strict"] = json!(true);
+        }
         // Validate explicit selections before inspecting runs or creating a
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
@@ -231,6 +264,34 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
         trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_workspace_auto_run_with_containment(
+            for_seconds,
+            max_active_leaf_runs,
+            completion,
+            allowed_crews,
+            complexity_crews,
+            actor,
+            claim_token,
+            trigger,
+            false,
+        )
+    }
+
+    /// Submit a drain with a strict policy inherited by its leaf workers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_workspace_auto_run_with_containment(
+        &self,
+        for_seconds: Option<u64>,
+        max_active_leaf_runs: Option<u32>,
+        completion: crate::application::workflow::CompletionPolicy,
+        allowed_crews: &[String],
+        complexity_crews: &orbit_config::ComplexityCrewPools,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+        trigger: JobRunTrigger,
+        strict_containment: bool,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
         // replica executes through pull instead of running one locally.
@@ -251,7 +312,19 @@ impl OrbitRuntime {
             &self.canonical_allowed_crews(allowed_crews)?,
         )?;
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
+        if strict_containment {
+            input["__worker_containment_strict"] = json!(true);
+        }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
+    }
+
+    fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {
+        if strict && !self.context.settings().worker_containment().enabled {
+            return Err(OrbitError::InvalidInput(
+                "--strict-worker-containment requires machine.worker_containment=true".into(),
+            ));
+        }
+        Ok(())
     }
     /// Canonicalize an operator-supplied crew allowlist, rejecting blank or
     /// unconfigured names [ORB-11242].
