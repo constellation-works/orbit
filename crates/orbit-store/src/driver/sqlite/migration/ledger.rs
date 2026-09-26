@@ -287,12 +287,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_plugin_secrets,
     },
+    // Plugin secret rotation: each secret a backend asked to rotate, by
+    // name, and whether the update was applied or refused — never a value.
+    Migration {
+        version: 31,
+        name: "audit_plugin_secret_updates",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_audit_plugin_secret_updates,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 30;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 31;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

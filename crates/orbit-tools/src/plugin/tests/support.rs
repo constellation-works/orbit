@@ -2,8 +2,12 @@
 //! spec with chosen grants, and the availability assertion for tests that
 //! exercise a live sandbox.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use orbit_common::OrbitError;
 
 use orbit_types::plugin::{
     PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions, PluginProvenance,
@@ -11,7 +15,9 @@ use orbit_types::plugin::{
 };
 use serde_json::Value;
 
-use super::super::backend::PluginBackendSpec;
+use super::super::backend::{
+    DeliveredPluginSecret, PluginBackendSpec, PluginSecretRotation, PluginSecretSource,
+};
 use super::super::schema::CompiledSchema;
 use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
 use crate::ToolContext;
@@ -136,4 +142,120 @@ pub(super) fn require_sandbox() {
     {
         panic!("plugin sandbox unavailable on {}", std::env::consts::OS);
     }
+}
+
+/// An in-memory secret store with the host store's compare-and-swap: a check
+/// and write under one lock, and a fresh version on every applied write.
+#[derive(Default)]
+pub(super) struct CasSource {
+    pub(super) values: Mutex<BTreeMap<String, DeliveredPluginSecret>>,
+    writes: AtomicUsize,
+}
+
+impl CasSource {
+    pub(super) fn holding(values: &[(&str, &str, &str)]) -> Arc<Self> {
+        let source = Self::default();
+        {
+            let mut stored = source.values.lock().expect("values");
+            for (name, value, version) in values {
+                stored.insert(
+                    (*name).to_string(),
+                    DeliveredPluginSecret {
+                        value: (*value).to_string(),
+                        version: (*version).to_string(),
+                    },
+                );
+            }
+        }
+        Arc::new(source)
+    }
+
+    pub(super) fn stored(&self, name: &str) -> Option<(String, String)> {
+        self.values
+            .lock()
+            .expect("values")
+            .get(name)
+            .map(|secret| (secret.value.clone(), secret.version.clone()))
+    }
+}
+
+impl PluginSecretSource for CasSource {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        let values = self.values.lock().expect("values");
+        Ok(names
+            .iter()
+            .filter_map(|name| {
+                values
+                    .get(name)
+                    .map(|secret| (name.clone(), secret.clone()))
+            })
+            .collect())
+    }
+
+    fn compare_and_swap(
+        &self,
+        name: &str,
+        value: &str,
+        expected_version: Option<&str>,
+    ) -> Result<PluginSecretRotation, OrbitError> {
+        let mut values = self.values.lock().expect("values");
+        if values.get(name).map(|secret| secret.version.as_str()) != expected_version {
+            return Ok(PluginSecretRotation::Stale);
+        }
+        let write = self.writes.fetch_add(1, Ordering::SeqCst);
+        let version = format!("rotated-{write}");
+        values.insert(
+            name.to_string(),
+            DeliveredPluginSecret {
+                value: value.to_string(),
+                version: version.clone(),
+            },
+        );
+        Ok(PluginSecretRotation::Applied { version })
+    }
+}
+
+/// Run `f` with every `tracing` event at `INFO` and above written to a
+/// buffer, and return that text beside `f`'s result: the log surface a
+/// secret value must never reach.
+pub(super) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, String) {
+    use std::io::{self, Write};
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("capture").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Capture {
+        type Writer = Capture;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(Capture(Arc::clone(&buffer)))
+        .with_max_level(LevelFilter::INFO)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let logs = String::from_utf8(buffer.lock().expect("capture").clone()).expect("utf8 logs");
+    (result, logs)
 }

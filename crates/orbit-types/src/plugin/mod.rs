@@ -45,7 +45,7 @@ pub use pin::{
     PIN_FILE_NAME, PIN_FILE_SCHEMA_VERSION, PLUGIN_ARCHIVE_EXTENSIONS, PluginPin, PluginPinFile,
     parse_archive_digest, remote_archive_source,
 };
-pub use record::{InstalledPlugin, PluginProvenance, PluginStatus};
+pub use record::{InstalledPlugin, PluginProvenance, PluginSecretUpdateStatus, PluginStatus};
 pub use template::{
     PluginTemplateVars, is_allowed_template_reference, render_template, template_references,
     validate_template,

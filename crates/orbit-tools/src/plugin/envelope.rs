@@ -1,17 +1,19 @@
 //! The versioned call envelope (§4.2), the `context` both dispatch surfaces
-//! carry, and `output_schema` validation.
+//! carry, a backend's `secret_updates`, and `output_schema` validation.
 //!
 //! There is no partial success: anything short of `{"ok": true, "output":
 //! <valid>}` is a tool error naming the cause, and the caller never sees
-//! the backend's bytes.
+//! the backend's bytes. A secret rotation is not part of that answer: it is
+//! applied or refused on its own, and never changes what the call returns.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
+use orbit_types::plugin::{PluginSecretUpdateStatus, is_valid_secret_name};
 use serde_json::{Value, json};
 
-use super::backend::{DeliveredPluginSecret, PluginBackendSpec};
+use super::backend::{DeliveredPluginSecret, PluginBackendSpec, PluginSecretRotation};
 use super::schema::CompiledSchema;
 use crate::ToolContext;
 
@@ -113,6 +115,8 @@ impl CallSecrets {
 
 thread_local! {
     static DELIVERED_SECRET_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static SECRET_UPDATES: RefCell<BTreeMap<String, PluginSecretUpdateStatus>> =
+        const { RefCell::new(BTreeMap::new()) };
 }
 
 /// Take the names of the secrets the last plugin call on this thread
@@ -121,6 +125,152 @@ thread_local! {
 /// the call's audit row). Names only: a value never leaves the request.
 pub fn take_delivered_plugin_secret_names() -> Vec<String> {
     DELIVERED_SECRET_NAMES.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
+
+/// Take what the last plugin call on this thread did with its backend's
+/// `secret_updates` — each name and whether it was applied or refused —
+/// clearing the record. The audited dispatch boundary drains it around a call
+/// the same way as [`take_delivered_plugin_secret_names`].
+pub fn take_plugin_secret_updates() -> BTreeMap<String, PluginSecretUpdateStatus> {
+    SECRET_UPDATES.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
+
+/// Why the host refused one `secret_updates` entry. The diagnostic built
+/// from it names the secret and the cause, never a value.
+enum SecretUpdateRefusal {
+    Undeclared,
+    NotRotatable,
+    Malformed,
+    Stale,
+    Unsupported,
+    Failed(OrbitError),
+}
+
+impl SecretUpdateRefusal {
+    fn reason(&self) -> String {
+        match self {
+            Self::Undeclared => "the manifest does not declare it in spec.secrets".to_string(),
+            Self::NotRotatable => "the manifest does not declare it `rotatable`".to_string(),
+            Self::Malformed => "the entry is not `{\"value\": <string>, \"expected_version\": \
+                                <string or null>}`"
+                .to_string(),
+            Self::Stale => "its expected_version is not the stored version; another update or \
+                            `orbit plugin secret set` got there first. The next call carries \
+                            the stored value and version"
+                .to_string(),
+            Self::Unsupported => "this run does not store secret updates".to_string(),
+            Self::Failed(error) => format!("the store could not apply it: {error}"),
+        }
+    }
+}
+
+/// Apply a backend's `secret_updates` (design §3, "Plugin secrets"): `exec`
+/// returns it beside `ok`/`output`, `mcp` as `result._meta.orbit.
+/// secret_updates`. Each entry is `{"value": …, "expected_version": …}`,
+/// where `expected_version` is the version the call was delivered (`null`:
+/// only while the secret is unset).
+///
+/// Only a declared `rotatable` name is written, and only through the
+/// source's compare-and-swap, so of two calls rotating from the same version
+/// exactly one is applied. Every refusal is non-fatal: it is logged as a
+/// diagnostic naming the secret and the cause — never a value — and the call
+/// still returns whatever it would have returned. The outcomes are kept for
+/// the call's audit row ([`take_plugin_secret_updates`]) and returned.
+pub(crate) fn apply_secret_updates(
+    spec: &PluginBackendSpec,
+    tool_name: &str,
+    updates: Option<&Value>,
+) -> BTreeMap<String, PluginSecretUpdateStatus> {
+    let mut outcomes = BTreeMap::new();
+    let Some(updates) = updates.filter(|updates| !updates.is_null()) else {
+        SECRET_UPDATES.with(|cell| cell.borrow_mut().clear());
+        return outcomes;
+    };
+    let Some(entries) = updates.as_object() else {
+        tracing::warn!(
+            target: "orbit.tools.plugin",
+            plugin = %spec.provenance.name,
+            tool = %tool_name,
+            "refused the backend's secret_updates: it is not an object of name to \
+             {{value, expected_version}}; nothing was stored",
+        );
+        SECRET_UPDATES.with(|cell| cell.borrow_mut().clear());
+        return outcomes;
+    };
+    for (name, entry) in entries {
+        // The name is the backend's own bytes: one that is not a valid
+        // secret name is neither logged nor audited, so a value put in a
+        // name's place cannot reach either.
+        if !is_valid_secret_name(name) {
+            tracing::warn!(
+                target: "orbit.tools.plugin",
+                plugin = %spec.provenance.name,
+                tool = %tool_name,
+                "refused a secret update whose name is not a valid secret name",
+            );
+            continue;
+        }
+        let status = match apply_secret_update(spec, name, entry) {
+            Ok(version) => {
+                tracing::info!(
+                    target: "orbit.tools.plugin",
+                    plugin = %spec.provenance.name,
+                    tool = %tool_name,
+                    secret = %name,
+                    version = %version,
+                    "applied the backend's update to a rotatable secret",
+                );
+                PluginSecretUpdateStatus::Applied
+            }
+            Err(refusal) => {
+                tracing::warn!(
+                    target: "orbit.tools.plugin",
+                    plugin = %spec.provenance.name,
+                    tool = %tool_name,
+                    secret = %name,
+                    "refused the backend's update to secret '{name}': {}; the call's result is \
+                     returned unchanged",
+                    refusal.reason(),
+                );
+                PluginSecretUpdateStatus::Refused
+            }
+        };
+        outcomes.insert(name.clone(), status);
+    }
+    SECRET_UPDATES.with(|cell| *cell.borrow_mut() = outcomes.clone());
+    outcomes
+}
+
+/// One entry: the new version when applied, or why it was refused.
+fn apply_secret_update(
+    spec: &PluginBackendSpec,
+    name: &str,
+    entry: &Value,
+) -> Result<String, SecretUpdateRefusal> {
+    if !spec.secrets.declares(name) {
+        return Err(SecretUpdateRefusal::Undeclared);
+    }
+    if !spec.secrets.is_rotatable(name) {
+        return Err(SecretUpdateRefusal::NotRotatable);
+    }
+    let value = entry.get("value").and_then(Value::as_str);
+    let expected_version = match entry.get("expected_version") {
+        Some(Value::String(version)) => Some(Some(version.as_str())),
+        Some(Value::Null) => Some(None),
+        _ => None,
+    };
+    let (Some(value), Some(expected_version)) = (value, expected_version) else {
+        return Err(SecretUpdateRefusal::Malformed);
+    };
+    match spec
+        .secrets
+        .compare_and_swap(name, value, expected_version)
+        .map_err(SecretUpdateRefusal::Failed)?
+    {
+        PluginSecretRotation::Applied { version } => Ok(version),
+        PluginSecretRotation::Stale => Err(SecretUpdateRefusal::Stale),
+        PluginSecretRotation::Unsupported => Err(SecretUpdateRefusal::Unsupported),
+    }
 }
 
 /// The whole stdin envelope one `exec` call writes to its backend.
@@ -141,11 +291,20 @@ pub(crate) fn exec_envelope(
 
 /// Turn the backend's stdout into its `output`, or the error it reported.
 pub fn parse_response(tool_name: &str, stdout: &str) -> Result<Value, OrbitError> {
-    let response: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+    response_output(tool_name, &parse_response_json(tool_name, stdout)?)
+}
+
+/// The backend's stdout as the JSON response it must be.
+pub(crate) fn parse_response_json(tool_name: &str, stdout: &str) -> Result<Value, OrbitError> {
+    serde_json::from_str(stdout.trim()).map_err(|error| {
         OrbitError::Execution(format!(
             "plugin tool '{tool_name}' produced invalid JSON output: {error}"
         ))
-    })?;
+    })
+}
+
+/// A parsed response's `output`, or the error it reported.
+pub(crate) fn response_output(tool_name: &str, response: &Value) -> Result<Value, OrbitError> {
     match response.get("ok").and_then(Value::as_bool) {
         Some(true) => Ok(response.get("output").cloned().unwrap_or(Value::Null)),
         Some(false) => {

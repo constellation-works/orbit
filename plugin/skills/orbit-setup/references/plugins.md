@@ -314,8 +314,28 @@ orbit plugin secret rm <ns> refresh_token
   `--record-only` is passed.
 - These are operator commands: a plugin backend calling them is refused
   `policy_denied`.
-- Backend-side rotation is not wired yet: a backend cannot replace a secret's
-  value in this release.
+- A backend rotates a secret it declares `rotatable: true` by answering with
+  `secret_updates` — beside `ok`/`output` on `exec` stdout, as
+  `result._meta.orbit.secret_updates` on an `mcp` result:
+  `{"<name>": {"value": "<new>", "expected_version": "<version it was delivered>"}}`
+  (`null` writes only while the secret is unset). Orbit applies it with
+  compare-and-swap, so of two calls rotating from one version exactly one
+  wins. An undeclared or non-rotatable name, a malformed entry or a stale
+  version is refused with a warning that names the secret but never a value,
+  and the call still returns its output (or its error). Updates are applied
+  even when the call reports `ok: false`, so a token refreshed before a failed
+  request is kept. The next call's `secrets` shows what is stored, and the
+  audit row records each name as `applied` or `refused`. `orbit plugin test`
+  refuses every update.
+
+  OAuth refresh with X, which invalidates the old refresh token on every
+  refresh:
+
+  ```json
+  {"ok": true, "output": {"posted": "…"},
+   "secret_updates": {"refresh_token": {"value": "<new refresh token>",
+                                        "expected_version": "<context.secrets.refresh_token.version>"}}}
+  ```
 
 ## Backends
 

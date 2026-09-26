@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::plugin::PluginProvenance;
+use crate::plugin::{PluginProvenance, PluginSecretUpdateStatus};
 use crate::telemetry::audit_actor::{CanonicalActor, canonical_actor_for_role_label};
 use crate::tool::{McpCapability, McpTransport};
 
@@ -145,6 +145,13 @@ pub struct AuditEvent {
     /// other call and for rows written before secret delivery.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_secrets: Vec<String>,
+    /// Each secret the plugin's backend asked to rotate through
+    /// `secret_updates`, by name, and whether the update was applied or
+    /// refused (design `docs/design/plugins/1_scope.md` §3, "Plugin
+    /// secrets"). Names and outcomes only — never a value. Empty for every
+    /// call that rotated nothing and for rows written before rotation.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_secret_updates: BTreeMap<String, PluginSecretUpdateStatus>,
 }
 
 impl AuditEvent {

@@ -11,7 +11,11 @@ handshake, list tools, and call them. Tools:
              that a second workspace got its own child rather than the first
              one's. Each delivered secret in `_meta.orbit.secrets` is echoed as
              the SHA-256 of its value, never the value, with whether the value
-             also appears in this process's environment or argv.
+             also appears in this process's environment or argv. An argument
+             `rotate: {<name>: <expected_version>}` is not echoed: for each
+             name the server returns `<delivered value>-rotated` from that
+             version as the result's `_meta.orbit.secret_updates`, the way a
+             backend rotates a secret, so no value travels in the arguments.
 - `slow`   — sleeps `seconds` before answering, for timeout and concurrency
              tests.
 - `crash`  — exits without answering, for dead-child tests.
@@ -98,10 +102,25 @@ def redact_secrets(meta):
     return meta
 
 
+def rotations(meta, rotate):
+    """`secret_updates` replacing each named secret with its delivered value
+    plus `-rotated`, expecting the version the caller named."""
+    delivered = ((meta or {}).get("orbit") or {}).get("secrets") or {}
+    return {
+        name: {
+            "value": (delivered.get(name) or {}).get("value", "") + "-rotated",
+            "expected_version": expected,
+        }
+        for name, expected in rotate.items()
+    }
+
+
 def call(request_id, params):
     name = params.get("name")
     arguments = params.get("arguments") or {}
     if name == "echo":
+        arguments = dict(arguments)
+        rotate = arguments.pop("rotate", None)
         server_request = os.environ.get("MCP_FIXTURE_SERVER_REQUEST")
         payload = {
             "echo": arguments,
@@ -113,8 +132,11 @@ def call(request_id, params):
             "meta": redact_secrets(params.get("_meta")),
             "answer": ask_host(server_request) if server_request else None,
         }
-        reply(request_id, {"content": [{"type": "text", "text": json.dumps(payload)}],
-                           "structuredContent": payload})
+        result = {"content": [{"type": "text", "text": json.dumps(payload)}],
+                  "structuredContent": payload}
+        if isinstance(rotate, dict):
+            result["_meta"] = {"orbit": {"secret_updates": rotations(params.get("_meta"), rotate)}}
+        reply(request_id, result)
     elif name == "slow":
         time.sleep(float(arguments.get("seconds", 5)))
         reply(request_id, {"content": [{"type": "text", "text": "done"}]})

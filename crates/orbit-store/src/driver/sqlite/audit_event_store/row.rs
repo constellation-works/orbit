@@ -19,7 +19,7 @@ pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, comma
      capabilities_json, origin_session_id, mcp_call_id, lease_id, task_id, \
      job_run_id, activity_id, step_index, trace_id, caller_ip, \
      self_reported_actor, plugin_name, plugin_version, plugin_manifest_digest, \
-     plugin_grants, plugin_secrets";
+     plugin_grants, plugin_secrets, plugin_secret_updates";
 
 pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {
     let ts_raw: String = row.get(2)?;
@@ -89,6 +89,10 @@ pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<
         plugin: plugin_provenance_from_row(row)?,
         plugin_secrets: row
             .get::<_, Option<String>>(41)?
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default(),
+        plugin_secret_updates: row
+            .get::<_, Option<String>>(42)?
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default(),
     })

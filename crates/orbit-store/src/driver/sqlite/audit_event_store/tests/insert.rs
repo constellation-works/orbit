@@ -110,6 +110,75 @@ fn plugin_secret_names_round_trip_and_default_to_none() {
     assert!(stored.is_none());
 }
 
+/// A plugin call's row keeps what its backend's `secret_updates` came to —
+/// each name, applied or refused — and a row that rotated nothing writes
+/// nothing and reads back empty.
+#[test]
+fn plugin_secret_update_outcomes_round_trip_and_default_to_none() {
+    use orbit_types::plugin::PluginSecretUpdateStatus;
+    use std::collections::BTreeMap;
+
+    let store = Store::open_in_memory().expect("open store");
+    let outcomes = BTreeMap::from([
+        ("api_key".to_string(), PluginSecretUpdateStatus::Refused),
+        (
+            "refresh_token".to_string(),
+            PluginSecretUpdateStatus::Applied,
+        ),
+    ]);
+    store
+        .insert_audit_event_record_with_invocation(
+            &sample_params(),
+            AuditInvocationFields {
+                plugin_secret_updates: Some(&outcomes),
+                ..AuditInvocationFields::default()
+            },
+        )
+        .expect("insert rotating row");
+    let nothing = BTreeMap::new();
+    store
+        .insert_audit_event_record_with_invocation(
+            &AuditEventInsertParams {
+                execution_id: "exec-test-plain".to_string(),
+                ..sample_params()
+            },
+            AuditInvocationFields {
+                plugin_secret_updates: Some(&nothing),
+                ..AuditInvocationFields::default()
+            },
+        )
+        .expect("insert plain row");
+
+    let mut events = store
+        .list_audit_events(&AuditEventFilter::default())
+        .expect("list audit events");
+    events.sort_by_key(|event| event.id);
+    assert_eq!(events[0].plugin_secret_updates, outcomes);
+    assert!(events[1].plugin_secret_updates.is_empty());
+    let stored: Vec<Option<String>> = [events[0].id, events[1].id]
+        .into_iter()
+        .map(|id| {
+            store
+                .conn
+                .lock()
+                .expect("conn")
+                .query_row(
+                    "SELECT plugin_secret_updates FROM audit_events WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .expect("read column")
+        })
+        .collect();
+    assert_eq!(
+        stored,
+        vec![
+            Some(r#"{"api_key":"refused","refresh_token":"applied"}"#.to_string()),
+            None
+        ]
+    );
+}
+
 #[test]
 fn migration_adds_correlation_columns_to_legacy_table() {
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory connection");
