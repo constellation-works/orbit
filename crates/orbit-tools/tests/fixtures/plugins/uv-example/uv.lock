@@ -1,0 +1,22 @@
+version = 1
+revision = 3
+requires-python = ">=3.9"
+
+[[package]]
+name = "orbit-uv-fixture-dep"
+version = "1.0.0"
+source = { path = "wheels/orbit_uv_fixture_dep-1.0.0-py3-none-any.whl" }
+wheels = [
+    { filename = "orbit_uv_fixture_dep-1.0.0-py3-none-any.whl", hash = "sha256:5cba30c7025c0cc8b7eaee79c35bbff6e4cc6457e6e74a3046ae0d6d6d8b3420" },
+]
+
+[[package]]
+name = "orbit-uvdemo-plugin"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "orbit-uv-fixture-dep" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "orbit-uv-fixture-dep", path = "wheels/orbit_uv_fixture_dep-1.0.0-py3-none-any.whl" }]

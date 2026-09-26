@@ -1,0 +1,33 @@
+# An exec backend with a third-party Python dependency, run through uv
+# (orbit-setup `references/plugins.md`, "Python backends with dependencies").
+# The environment is built under {{plugin_state}} on first call, so the tree
+# holds no virtualenv and passes the install-time symlink walk.
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: uvdemo
+  version: 0.1.0
+  description: Fixture exec backend with a uv-locked dependency.
+spec:
+  requires:
+    platforms: [linux, macos]
+    programs: [uv]
+  backend:
+    type: exec
+    command: bin/uvdemo
+    timeout_ms: 60000
+  permissions:
+    fs:
+      write: ["{{plugin_state}}"]
+    # The fixture's dependency comes from wheels/ inside the plugin root. A
+    # plugin that locks against PyPI needs `network: any` for the first call.
+    network: none
+  tools:
+    - name: status
+      description: Report the locked dependency and where its environment lives.
+      execution_kind: read_only
+      mcp_scope: workspace
+      output_schema:
+        type: object
+        required: [dependency_version, environment_in_plugin_state, cache_in_plugin_state]
+  tests: [tests/conformance/*.yaml]

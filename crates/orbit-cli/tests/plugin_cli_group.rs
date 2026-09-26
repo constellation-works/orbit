@@ -1010,3 +1010,137 @@ fn lifecycle_verbs_refuse_a_relocated_row_and_record_only_clears_it() {
         .assert()
         .failure();
 }
+
+/// Every path beneath `root`, relative and sorted: what a tree holds, so a
+/// write into it shows up as a difference.
+fn tree_listing(root: &Path) -> Vec<String> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).expect("read tree") {
+            let path = entry.expect("tree entry").path();
+            out.push(
+                path.strip_prefix(root)
+                    .expect("entry below root")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            if path.is_dir() {
+                walk(root, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("create copy root");
+    for entry in std::fs::read_dir(from).expect("read fixture tree") {
+        let entry = entry.expect("fixture entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("fixture entry type").is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            // `fs::copy` keeps the permission bits, so the shim stays executable.
+            std::fs::copy(entry.path(), &target).expect("copy fixture file");
+        }
+    }
+}
+
+/// The supported shape for a Python exec backend with third-party
+/// dependencies: a committed `uv.lock`, and a `uv run --frozen` shim that
+/// keeps the environment, uv's cache and interpreters under
+/// `{{plugin_state}}`. Certified under the sandbox, installed through the
+/// symlink walk, and re-synced by `plugin upgrade` after a lockfile change.
+/// The manifest requests `network: none`, so the sandbox itself proves the
+/// dependency came from the wheel inside the plugin tree and not an index.
+#[cfg(unix)]
+#[test]
+#[ignore = "live: needs `uv` on PATH; CI installs a pinned uv and selects it explicitly"]
+fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade() {
+    let fixture = Fixture::new();
+    let source = fixture.source("uvdemo");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../orbit-tools/tests/fixtures/plugins/uv-example"),
+        &source,
+    );
+    let source_arg = source.to_str().expect("utf8 source").to_string();
+    let shipped = tree_listing(&source);
+
+    fixture
+        .orbit()
+        .args(["plugin", "test", &source_arg])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 of 1"));
+    assert_eq!(
+        tree_listing(&source),
+        shipped,
+        "the conformance run must build nothing inside the plugin root"
+    );
+
+    fixture
+        .orbit()
+        .args(["plugin", "add", &source_arg, "--enable", "--grant", "fs"])
+        .assert()
+        .success();
+    let call = || {
+        let output = fixture
+            .orbit_as_operator()
+            .args(["uvdemo", "status", "--format", "json"])
+            .output()
+            .expect("call the uv backend");
+        assert!(output.status.success(), "{output:?}");
+        stdout_json(&output)
+    };
+    let first = call();
+    assert_eq!(first["dependency_version"], "1.0.0", "{first}");
+    assert_eq!(first["environment_in_plugin_state"], true, "{first}");
+    assert_eq!(first["cache_in_plugin_state"], true, "{first}");
+    let install_root = fixture.home.join(".orbit/plugins/uvdemo/0.1.0");
+    assert_eq!(
+        tree_listing(&install_root),
+        shipped,
+        "the installed tree holds no environment, bytecode or cache"
+    );
+    assert!(
+        fixture
+            .home
+            .join(".orbit/state/plugins/uvdemo/venv")
+            .is_dir(),
+        "the environment lives in the plugin's state directory"
+    );
+
+    // An author moves the dependency to 2.0.0 and relocks, offline against
+    // the wheel the tree already carries; the manifest itself is unchanged.
+    let pyproject = source.join("pyproject.toml");
+    let text = std::fs::read_to_string(&pyproject).expect("read pyproject");
+    std::fs::write(
+        &pyproject,
+        text.replace("fixture_dep-1.0.0-py3", "fixture_dep-2.0.0-py3"),
+    )
+    .expect("write pyproject");
+    let relock = std::process::Command::new("uv")
+        .args(["lock", "--offline", "--quiet"])
+        .current_dir(&source)
+        .env("UV_CACHE_DIR", fixture.home.join("author-uv-cache"))
+        .output()
+        .expect("run uv lock");
+    assert!(relock.status.success(), "{relock:?}");
+
+    fixture
+        .orbit()
+        .args(["plugin", "upgrade", "uvdemo"])
+        .assert()
+        .success();
+    let upgraded = call();
+    assert_eq!(
+        upgraded["dependency_version"], "2.0.0",
+        "the first call after the upgrade runs against the new lock, not the old environment: \
+         {upgraded}"
+    );
+    assert_eq!(upgraded["environment_in_plugin_state"], true, "{upgraded}");
+    assert_eq!(tree_listing(&install_root), tree_listing(&source));
+}

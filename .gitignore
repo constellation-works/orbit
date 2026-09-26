@@ -76,6 +76,8 @@ build/
 *.lock
 # npm lockfiles are the Dependabot / GitHub security-alert manifest for JS pins.
 !package-lock.json
+# Plugin fixtures commit the uv.lock their `uv run --frozen` backend installs from.
+!crates/orbit-tools/tests/fixtures/plugins/*/uv.lock
 .vscode
 .grok
 .gemini
