@@ -32,7 +32,8 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 - Before writing a test, weigh what it guards and what it costs: assert what the code guarantees (parses, required fields present, structural safeguards), not policy that lives in config or prompts — crew, model, schedule, complexity, prose wording. A test that pins those turns every ops edit into a red CI; if a pin is truly warranted, cite the incident it guards in the assertion message.
 - Never expose internal task/friction IDs in user-facing output, CLI help (Clap renders `///`), or MCP text.
 - Fixtures that mutate Orbit state must run in an isolated child process — see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md#safe-mutable-cli-fixtures).
-- Prefer the fewest moving parts: delete dead code and stale docs together, keep compatibility only for an external contract or persisted format, ~800 lines per file is a split signal.
+- Prefer the fewest moving parts: delete dead code and stale docs together, keep compatibility only for an external contract or persisted format.
+- File length is a heuristic, not a limit: past ~800 lines, check whether a file holds more than one responsibility and split along those if so; keep closely related functionality together when splitting would only scatter it.
 - Report commands and outcomes at handoff — passed, failed, not run — never "tested".
 
 ## Orbit Workflow
