@@ -1,11 +1,13 @@
 //! Plugin lifecycle as the command surfaces reach it, plus the host-global
 //! plugin tool surface the MCP server advertises.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::stale_plugin_callback_session_count;
-use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use orbit_types::plugin::{InstalledPlugin, PluginStatus};
+use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -74,6 +76,20 @@ impl OrbitRuntime {
         plugin::disable_plugin(self, name)
     }
 
+    /// `orbit plugin enable <ns> --scope workspace`: the workspace toggle only.
+    pub fn enable_plugin_in_workspace(
+        &self,
+        name: &str,
+        force: bool,
+    ) -> Result<PluginEnableResult, OrbitError> {
+        plugin::enable_plugin_in_workspace(self, name, force)
+    }
+
+    /// `orbit plugin disable <ns> --scope workspace`: the workspace toggle only.
+    pub fn disable_plugin_in_workspace(&self, name: &str) -> Result<PluginSummary, OrbitError> {
+        plugin::disable_plugin_in_workspace(self, name)
+    }
+
     pub fn remove_plugin(
         &self,
         name: &str,
@@ -114,7 +130,13 @@ impl OrbitRuntime {
     /// runtime and rebuild it. The replacement then loads manifests, grants,
     /// tools, panels and links from one coherent pass.
     pub fn plugin_state_changed(&self) -> Result<bool, OrbitError> {
-        Ok(self.stores().plugins().list_plugins()? != self.plugin_load().installed)
+        let load = self.plugin_load();
+        if self.stores().plugins().list_plugins()? != load.installed {
+            return Ok(true);
+        }
+        // A workspace toggle narrows the same surface, so flipping one in
+        // `[plugin_enablement]` has to rebuild it too.
+        Ok(plugin::workspace_plugin_toggles(self)? != load.workspace_toggles)
     }
 
     pub fn show_plugin(&self, name: &str) -> Result<PluginSummary, OrbitError> {
@@ -231,6 +253,53 @@ pub fn host_plugin_mcp_definitions(
         &config.persistence.audit_db,
         &config.plugins,
     )
+}
+
+/// This host's plugin rows as stored now, for a long-lived host that keys a
+/// cached runtime on them: a host enable or disable changes the rows, so the
+/// cached runtime is rebuilt on the next call.
+pub fn host_plugin_rows(global_root: &Path) -> Result<Vec<InstalledPlugin>, OrbitError> {
+    let config = global_only_config(global_root)?;
+    orbit_store::Store::open_read_only(&config.persistence.audit_db)?.list_plugins()
+}
+
+/// This host's workspace-scoped plugin tools (`mcp_scope: workspace`), each
+/// mapped to the plugin that serves it.
+///
+/// Only these can be switched off per workspace: a `mcp_scope: global` tool
+/// has no workspace and follows the host state alone. The MCP server uses the
+/// map to leave a workspace-disabled plugin's tools out of `tools/list`.
+pub fn host_plugin_workspace_tool_owners(
+    global_root: &Path,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let config = global_only_config(global_root)?;
+    let (registry, load) = discovery::host_plugin_registry(
+        global_root,
+        &config.persistence.audit_db,
+        &config.plugins,
+    )?;
+    let owners = load
+        .registered
+        .iter()
+        .filter(|entry| entry.status == PluginStatus::Active)
+        .flat_map(|entry| {
+            entry
+                .tools
+                .iter()
+                .map(|tool| (tool.as_str(), entry.name.as_str()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let definitions = registry
+        .mcp_tool_definitions()
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    Ok(definitions
+        .into_iter()
+        .filter(|definition| definition.scope == McpToolScope::WorkspaceRequired)
+        .filter_map(|definition| {
+            let owner = owners.get(definition.schema.name.as_str())?;
+            Some((definition.schema.name, (*owner).to_string()))
+        })
+        .collect())
 }
 
 /// Execute a `mcp_scope: global` plugin tool without a workspace runtime,

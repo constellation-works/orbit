@@ -31,6 +31,8 @@ pub(super) struct DefinitionPlugin<'a> {
     pub(super) skill: bool,
     /// Ship a `spec.config` schema requiring `index_dir: string`.
     pub(super) config: bool,
+    /// Ship a `spec.web` dashboard panel reading the `hello` tool.
+    pub(super) panel: bool,
 }
 
 impl<'a> DefinitionPlugin<'a> {
@@ -47,7 +49,13 @@ impl<'a> DefinitionPlugin<'a> {
             auto_task_enabled: false,
             skill: true,
             config: true,
+            panel: false,
         }
+    }
+
+    pub(super) fn with_panel(mut self) -> Self {
+        self.panel = true;
+        self
     }
 
     pub(super) fn with_version(mut self, version: &'a str) -> Self {
@@ -176,6 +184,11 @@ impl<'a> DefinitionPlugin<'a> {
         } else {
             String::new()
         };
+        let web = if self.panel {
+            "  web:\n    panels:\n      - id: status\n        source: tool:hello\n".to_string()
+        } else {
+            String::new()
+        };
         format!(
             "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {ns}\n  version: {version}\n  \
              description: Fixture plugin with definitions.\nspec:\n  backend:\n    type: exec\n    \
@@ -183,7 +196,7 @@ impl<'a> DefinitionPlugin<'a> {
              execution_kind: read_only\n      mcp_scope: workspace\n  definitions:\n    \
              activities: [definitions/activities/*.yaml]\n    jobs: [definitions/jobs/*.yaml]\n    \
              routines: [definitions/routines/*.yaml]\n    auto_tasks: [definitions/auto_tasks/*.yaml]\n\
-             {skills}{config}",
+             {skills}{config}{web}",
             ns = self.namespace,
             version = self.version,
         )

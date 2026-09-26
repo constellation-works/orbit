@@ -175,6 +175,8 @@ orbit plugin upgrade <ns> [source] [--grant …]
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
+orbit plugin enable|disable <ns> --scope workspace
+                                              →  this workspace's toggle only (host row untouched)
 orbit plugin remove <ns> --yes                →  gone        (prints retained ~/.orbit/state/plugins/<ns> path)
 orbit plugin remove <ns> --yes --purge-state  →  gone        (also deletes this plugin's Orbit-owned state)
 orbit plugin remove <ns> --yes --record-only  →  gone        (record only; every installed file and secret is left in place)
@@ -182,6 +184,28 @@ orbit plugin secret set <ns> <name>           →  secret set  (value from stdin
 orbit plugin secret list <ns> | rm <ns> <name>
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
+
+**Workspace toggles.** The host row is the ceiling; a workspace may narrow it.
+`--scope workspace` writes `[plugin_enablement] <ns> = true|false` into the selected
+workspace's `config.toml` and nothing else. The effective state in a workspace is the host
+state AND the toggle, and an unset toggle inherits (on).
+
+- A workspace disable takes the plugin's whole surface off in that workspace only: tools
+  (listed and `orbit <ns>` calls refuse with `plugin_disabled_in_workspace`), job and activity
+  catalog layers, seeded routines and auto-tasks (skipped with a warning naming the workspace),
+  config contracts stay published, dashboard panels. Other workspaces keep it.
+- A workspace enable while the host row is disabled is refused with `plugin_disabled_on_host`
+  and writes nothing: a toggle can never switch on what the host has not consented to.
+- The toggle is outside the grants witness. It can only narrow, so a tampered toggle can take
+  a plugin off but never widen its grants or switch on a host-disabled plugin.
+- `[plugin_enablement]` in the global `config.toml` is refused at load; host enablement is
+  the plugin store row. A workspace file holding only the toggle table does not count as a
+  workspace config layer, so the replace-only execution keys keep inheriting from global.
+- Skill links are host-level and stay while the host row is enabled.
+- `list`, `show` and `doctor` report the host state beside the effective one and why it
+  differs; `doctor` treats a workspace toggle as a choice, not a finding.
+- Long-lived hosts (MCP server, dashboard) compare the toggles a cached runtime was built
+  from with the file on disk, so a toggle write shows on the next call without a restart.
 
 **Skill links.** Enable creates only the namespaced links `plugin validate` reports, in
 discovery roots that are siblings of the active global root (`~/.orbit` →
@@ -306,8 +330,9 @@ plugins:
 - A source tree containing a symbolic link is refused before copying, naming the entry;
   `load_plugin_dir` repeats the walk so a hand-edited install cannot become active.
 - `orbit plugin sync` converges this host and workspace from the pin file: installs missing
-  plugins, applies `enabled: false` by disabling the host row, and applies `enabled: true`
-  only after permission review. A committed pin is never grant consent; pass the complete
+  plugins, applies `enabled: false` as this workspace's toggle (never the host row), and
+  applies `enabled: true` only after permission review: a host-disabled plugin needs the
+  grant-consenting host enable, and a toggle left `false` is switched back on. A committed pin is never grant consent; pass the complete
   reviewed set with `--grant`. For an already-enabled plugin, sync seeds or refreshes its
   routines and auto-tasks in the current workspace.
 - Before installing a pin, sync checks that the source manifest declares the pinned namespace
@@ -315,8 +340,9 @@ plugins:
   written, enabled, linked or seeded; sync continues with other pins.
 
 Grants, install paths, digests and enable state are **host-local** (SQLite `plugin_store`,
-next to `tool_store`). The pin's `enabled:` is a convergence instruction, so syncing another
-workspace may change that shared host toggle; grants still require explicit consent. A pinned
+next to `tool_store`). The pin's `enabled: false` only ever writes the syncing workspace's
+toggle, so syncing one workspace never changes the host row or another workspace; `enabled:
+true` may enable the host row, and grants still require explicit consent. A pinned
 plugin that is not installed or lacks requested grants gets its tools registered via
 `register_inactive` and one deduped diagnostic naming the missing step.
 
@@ -763,7 +789,8 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   the filename, enabling is refused before anything is written. `--force` may replace an
   operator-customised file of the same plugin; it never transfers ownership.
 - A disabled plugin's seeded definitions are skipped through the retired-routine
-  reconciliation path with a warning naming the plugin, not load errors.
+  reconciliation path with a warning naming the plugin, not load errors. A plugin switched
+  off by a workspace toggle is skipped only in that workspace, and the warning says so.
 - A `[plugins.<ns>]` value the plugin's schema rejects refuses that plugin at load, naming the
   key (§4.9).
 
@@ -790,8 +817,10 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 - `--input '<json>'` and `--input-file` are always accepted and win. The group declares the
   same `CommandOperation` and dispatches through the same `ToolRunArgs` as `orbit tool run`, so
   both spellings are one audited operation. `--dry-run` is accepted.
-- Only an **active** plugin contributes a group. There is no passthrough: an unknown
-  `orbit <word>`, including a disabled plugin's namespace, is clap's unknown-subcommand error.
+- Only a host-enabled plugin contributes a group. There is no passthrough: an unknown
+  `orbit <word>`, including a host-disabled plugin's namespace, is clap's unknown-subcommand
+  error. A plugin switched off in the current workspace keeps its group, and a call refuses
+  through the audited dispatch with `plugin_disabled_in_workspace`.
   `orbit --help` lists groups under `Plugins:`; `orbit <ns> --help` lists verbs.
 - The tree is built at startup from the enabled `plugins` rows (SQLite opened read-only; no
   enabled row, no manifest read). Manifests are cached per process and shared by CLI, runtime
@@ -820,8 +849,9 @@ Mismatched output falls back to `json`; `group` is a presentation hint.
   (default 30 s; 1–3600 s). Failures are not cached. Serialized output is capped at 256 KiB
   (`PANEL_OUTPUT_LIMIT_BYTES`); a larger value becomes a bounded JSON prefix with
   `truncated: true` and a diagnostic naming size and limit.
-- Dashboard runtimes compare host `plugins` rows (with `updated_at`) against those their tool
-  surface was built from, and lazily rebuild on any change; no `orbit web serve` restart.
+- Dashboard runtimes compare host `plugins` rows (with `updated_at`) and the workspace's
+  `[plugin_enablement]` toggles against those their tool surface was built from, and lazily
+  rebuild on any change; no `orbit web serve` restart.
 - `links` are tiles to plugin-hosted UIs with `{{config.<key>}}` rendered from the effective
   `[plugins.<ns>]`. A link containing `{{workspace}}`, `{{plugin_state}}` or an unknown config
   key is left wholly unrendered, never half-resolved. URLs must be `http://` or `https://`:

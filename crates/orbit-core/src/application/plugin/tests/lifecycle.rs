@@ -70,33 +70,6 @@ fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
 }
 
 #[test]
-fn sync_disables_an_enabled_plugin_when_the_workspace_pin_is_disabled() {
-    let fixture = PluginFixture::new();
-    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
-    install_plugin(
-        &fixture.runtime,
-        source.to_str().expect("utf8 path"),
-        &PluginAddOptions {
-            enable: true,
-            ..PluginAddOptions::default()
-        },
-    )
-    .expect("install enabled plugin");
-    fixture.write_pin_file(&format!(
-        "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {}\n    enabled: false\n",
-        source.display()
-    ));
-
-    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync");
-    assert_eq!(outcomes[0].status, PluginStatus::Disabled);
-    assert!(outcomes[0].message.contains("disabled by workspace pin"));
-    assert!(
-        fixture.reopen().show_tool("demo.hello").is_err(),
-        "the disabled pin must take the plugin off the next runtime's surface"
-    );
-}
-
-#[test]
 fn sync_refuses_a_source_namespace_that_differs_from_the_pin_on_every_run() {
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("source", "actual"));

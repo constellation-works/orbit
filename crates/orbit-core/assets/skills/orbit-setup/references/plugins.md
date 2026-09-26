@@ -15,8 +15,9 @@ only when the user asks for the capability it provides.
 
 A plugin lives once per machine under `~/.orbit/plugins/<ns>/<version>/`.
 Enable state, grants, install paths and manifest digests are host-local and are
-never copied into the repository. Sync treats the pin's `enabled:` field as an
-instruction for that shared host state. A repository commits only the pin file:
+never copied into the repository. A workspace can switch a host-enabled plugin
+off for itself (see [Switching a plugin off in one workspace](#switching-a-plugin-off-in-one-workspace)).
+A repository commits only the pin file:
 
 ```yaml
 # .orbit/plugins.yaml — committed to the repository
@@ -73,10 +74,32 @@ orbit plugin sync --grant fs,network     # consent to requested grants while ena
 ```
 
 Sync also applies each pin's `enabled:` state and reconciles an enabled
-plugin's seeded definitions into the current workspace. Enable state is shared
-by every workspace on the host, so a later workspace sync can change it. A pin
-whose manifest requests grants remains disabled unless this invocation supplies
-the complete reviewed set with `--grant`; repository content is never consent.
+plugin's seeded definitions into the current workspace. `enabled: false` switches
+the plugin off in this workspace only; it never disables the host row, so
+syncing one workspace never changes another. `enabled: true` turns a workspace
+toggle back on, and enables a host-disabled plugin only with permission review:
+a pin whose manifest requests grants remains disabled unless this invocation
+supplies the complete reviewed set with `--grant`; repository content is never
+consent.
+
+## Switching a plugin off in one workspace
+
+```bash
+orbit plugin disable graph --scope workspace   # off here; other workspaces keep it
+orbit plugin enable graph --scope workspace    # back on here
+```
+
+The host row is the ceiling and the workspace toggle can only narrow it. The
+toggle is `[plugin_enablement] graph = false` in this workspace's
+`.orbit/config.toml`; an unset entry inherits the host state. Switched off, the
+plugin's tools, job and activity catalog entries, seeded routines and
+auto-tasks, and dashboard panels are gone in this workspace, and a call refuses
+with `plugin_disabled_in_workspace`. `enable --scope workspace` while the host
+row is disabled refuses with `plugin_disabled_on_host` and changes nothing:
+enable it on the host first, with its `--grant` review. Skill links stay,
+because they are host-level. A running MCP server or dashboard picks the change
+up on its next call. `[plugin_enablement]` is refused in the global
+`config.toml`.
 
 ## What enabling installs
 
@@ -135,7 +158,8 @@ swallowing it.
 
 Only an enabled, loading plugin has a group. `orbit <ns>` for a disabled one is an unknown
 command, not a silent no-op, and `orbit --help` lists the groups a machine actually has
-under `Plugins:`.
+under `Plugins:`. A plugin switched off in the current workspace keeps its group, and a
+call refuses with `plugin_disabled_in_workspace`.
 
 ## The dashboard's Plugins tab
 
@@ -219,7 +243,7 @@ not set (see [Secrets](#secrets)). The four states:
 | Status | What it means |
 |---|---|
 | `active` | Installed, enabled, and serving its tools. |
-| `disabled` | Installed but not enabled — run `orbit plugin enable <ns>`. |
+| `disabled` | Installed but not enabled on the host — run `orbit plugin enable <ns>`; or switched off in this workspace — `orbit plugin enable <ns> --scope workspace`. `list` and `show` print the host state and which one it is. `doctor` does not count a workspace toggle as a problem. |
 | `missing` | Pinned by the repository, not installed here — run `orbit plugin sync`. |
 | `inactive` | Enabled but refused at load: the manifest no longer loads, its `requires.orbit`/`requires.host_api` does not hold on this machine, its namespace collides, a definition it ships breaks the rules above, or its `[plugins.<ns>]` config fails its own schema. `orbit plugin show <ns>` names the reason. |
 

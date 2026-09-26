@@ -27,6 +27,11 @@
 //! `execution.env.pass`. An omitted replace-only setting uses its built-in default
 //! rather than inheriting a machine-specific global policy.
 //!
+//! The `[plugin_enablement]` table — per-workspace plugin toggles — is
+//! workspace-only (refused in the global file) and is not a policy layer: a
+//! workspace file holding only that table leaves the replace-only settings
+//! inheriting from global.
+//!
 //! # Role
 //!
 //! A leaf above `orbit-common`: this crate performs no runtime composition and
@@ -51,6 +56,7 @@
 //!   resolution [ORB-11333].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views.
 //! - `persistence` — artifact path resolution from the two roots.
+//! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
 //! - `store` — comment-preserving [`ConfigStore`] edits and atomic save.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
@@ -59,6 +65,7 @@ mod layering;
 mod memory_limit;
 pub mod operation;
 mod persistence;
+mod plugin_enablement;
 pub mod plugins;
 mod raw;
 mod registry;
@@ -88,6 +95,10 @@ pub use operation::{
     OperationPolicy, ReviewPolicy,
 };
 pub use persistence::PersistenceConfig;
+pub use plugin_enablement::{
+    PLUGIN_ENABLEMENT_TABLE, load_workspace_plugin_enablement, plugin_enablement_key,
+    workspace_config_sets_policy,
+};
 pub use plugins::{
     PLUGIN_CONFIG_PREFIX, PluginConfigSchema, PluginFieldKey, parse_plugin_field_key,
     plugin_config_schema, register_plugin_config_schemas, registered_plugin_namespaces,

@@ -1,6 +1,9 @@
 use super::selection::*;
 use super::*;
 
+use orbit_core::adapter::command::host_plugin_rows;
+use orbit_types::plugin::InstalledPlugin;
+
 /// Registered workspace metadata keeps the logical catalog ID distinct from the
 /// task/runtime ID stored in `.orbit/config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +29,7 @@ pub struct ResolvedWorkspaceSelection {
     pub local_root: PathBuf,
 }
 
-/// Freshness stamp for the files [`RegisteredRuntimeFactory`] reads while it
+/// Freshness stamp for the inputs [`RegisteredRuntimeFactory`] reads while it
 /// composes a runtime for one registered checkout.
 ///
 /// Size and modification time, not content: the point is for a long-lived host
@@ -35,14 +38,23 @@ pub struct ResolvedWorkspaceSelection {
 /// server does) covers same-size edits to those records; the stamp covers the
 /// remaining composition inputs — the rest of the registry file, the
 /// checkout's own `config.yaml` task binding, and both `config.toml` layers
-/// the runtime settings (crews, default crew, execution policy, and this
-/// machine's `[machine]` identity) are resolved from at open.
+/// the runtime settings (crews, default crew, execution policy, this
+/// machine's `[machine]` identity, and the workspace `[plugin_enablement]`
+/// toggles) are resolved from at open — plus the host plugin rows, which
+/// decide the plugin tool surface and live in the plugin store, not a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
     workspace_binding: FileStamp,
     global_config: FileStamp,
     workspace_config: FileStamp,
+    /// The host plugin rows. A host `orbit plugin enable|disable` writes the
+    /// plugin store, not a config file, so without this a cached runtime would
+    /// keep serving the tool surface it was built with. A workspace toggle
+    /// lives in `workspace_config` and is covered there. A store that cannot
+    /// be read yet (a fresh host before its first open migrates it) serves no
+    /// plugins, so it stamps as empty rather than forcing a reopen.
+    host_plugins: Vec<InstalledPlugin>,
 }
 
 impl RegisteredRuntimeStamp {
@@ -59,6 +71,7 @@ impl RegisteredRuntimeStamp {
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
             global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
             workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),
+            host_plugins: host_plugin_rows(global_root).unwrap_or_default(),
         }
     }
 }

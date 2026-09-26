@@ -45,7 +45,8 @@ pub struct InstalledPlugin {
 pub enum PluginStatus {
     /// Installed, enabled, manifest loads, requirements satisfied.
     Active,
-    /// Installed but `orbit plugin enable` has not been run.
+    /// Installed but switched off, on the host or in this workspace
+    /// ([`PluginDisabledLayer`] says which).
     Disabled,
     /// Pinned by the workspace but not installed on this host.
     Missing,
@@ -60,6 +61,27 @@ impl PluginStatus {
             Self::Disabled => "disabled",
             Self::Missing => "missing",
             Self::Inactive => "inactive",
+        }
+    }
+}
+
+/// Which layer switched a [`PluginStatus::Disabled`] plugin off: the host
+/// row (`orbit plugin disable`) or the workspace toggle
+/// (`orbit plugin disable --scope workspace`, or a pin's `enabled: false`).
+/// A workspace toggle only narrows the host state; it never enables a plugin
+/// the host has not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginDisabledLayer {
+    Host,
+    Workspace,
+}
+
+impl PluginDisabledLayer {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Workspace => "workspace",
         }
     }
 }

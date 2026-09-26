@@ -4,7 +4,7 @@
 //! document that [`crate::resolved`] admits, and answers "where did this value
 //! come from?" for `orbit config show`/`get`.
 //!
-//! Three layering rules live here and nowhere else:
+//! These layering rules live here and nowhere else:
 //! - nested tables merge recursively, so a workspace can override one crew
 //!   field without restating the crew;
 //! - a registry key is one setting, so a workspace value for a registered
@@ -16,11 +16,16 @@
 //!   re-identify the machine it happens to be checked out on;
 //! - a crew name containing `:` is refused per layer, before the merge, so the
 //!   error names the file that defines it — the only way back from a persisted
-//!   colon-named crew is editing that file.
+//!   colon-named crew is editing that file;
+//! - `[plugin_enablement]` is workspace-only and is lifted off the workspace
+//!   file before the merge ([`crate::plugin_enablement`]), so a file holding
+//!   only plugin toggles does not count as a distinct workspace file for the
+//!   replace-only keys.
 //!
 //! The `[operation]` review keys are resolved per layer by [`crate::operation`]
 //! rather than from the merged document, so their provenance is exact.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +36,9 @@ use crate::ConfigRoots;
 use crate::crew_pools::reject_unpoolable_crew_names_in_document;
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
+use crate::plugin_enablement::{
+    plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
+};
 use crate::registry::{CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX};
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
@@ -252,11 +260,25 @@ pub(crate) fn load_layered_resolved(
     roots: &ConfigRoots,
 ) -> Result<LoadedResolvedConfig, OrbitError> {
     let global = read_config_document(&roots.global().join("config.toml"))?;
-    let workspace = if roots.has_workspace_layer() {
+    if let Some(global_document) = &global {
+        reject_global_plugin_enablement(&global_document.value, &global_document.path)?;
+    }
+    let mut workspace = if roots.has_workspace_layer() {
         read_config_document(&roots.workspace().join("config.toml"))?
     } else {
         None
     };
+    // The plugin toggles are read off the workspace file before it layers:
+    // they are not a config setting, and a file that holds only them is not a
+    // policy layer — it must not switch the replace-only security keys away
+    // from global.
+    let mut plugin_enablement = BTreeMap::new();
+    if let Some(mut document) = workspace.take() {
+        plugin_enablement = plugin_enablement_from_document(&document.value, &document.path)?;
+        if strip_plugin_enablement(&mut document.value) {
+            workspace = Some(document);
+        }
+    }
     let persistence = PersistenceConfig::default_for_roots(roots.global(), roots.workspace());
 
     // Merging erases which file a crew came from, and a colon-named crew is
@@ -270,8 +292,10 @@ pub(crate) fn load_layered_resolved(
     }
 
     if global.is_none() && workspace.is_none() {
+        let mut resolved = ResolvedConfig::built_in(persistence);
+        resolved.plugin_enablement = plugin_enablement;
         return Ok(LoadedResolvedConfig {
-            resolved: ResolvedConfig::built_in(persistence),
+            resolved,
             global,
             workspace,
         });
@@ -310,6 +334,7 @@ pub(crate) fn load_layered_resolved(
         warn_compatibility_keys(&document.value, &document.path);
     }
     resolved.operation = resolve_operation_layers(global.as_ref(), workspace.as_ref())?;
+    resolved.plugin_enablement = plugin_enablement;
     Ok(LoadedResolvedConfig {
         resolved,
         global,

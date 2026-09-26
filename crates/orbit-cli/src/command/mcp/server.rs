@@ -4,7 +4,7 @@
 //! same trusted session envelope, so a call's dispatch and audit path does not
 //! depend on how its bytes arrived.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
     ToolEntryPoint, execute_global_in_process_tool_dispatch, execute_global_plugin_tool,
-    host_plugin_mcp_definitions,
+    host_plugin_mcp_definitions, host_plugin_workspace_tool_owners,
 };
 use orbit_core::runtime::{HostLifetime, resolve_global_root};
 use orbit_mcp::federated;
@@ -412,6 +412,43 @@ impl ServerMcpHost {
         })
     }
 
+    /// The plugins every registered checkout on this host has switched off.
+    ///
+    /// Reads each checkout's `[plugin_enablement]` table only, not a whole
+    /// runtime: an unbound `tools/list` should not open every workspace. No
+    /// registered checkout means no workspace to be off in, so nothing is.
+    fn plugins_off_in_every_workspace<'a>(
+        &self,
+        plugins: impl Iterator<Item = &'a String>,
+    ) -> BTreeSet<String> {
+        let registry_path =
+            orbit_registry::workspace_registry::registry_path_for(&self.global_root);
+        let Ok(registry) = orbit_registry::workspace_registry::load_registry_from(&registry_path)
+        else {
+            return BTreeSet::new();
+        };
+        if registry.checkouts.is_empty() {
+            return BTreeSet::new();
+        }
+        let mut toggles = Vec::with_capacity(registry.checkouts.len());
+        for checkout in &registry.checkouts {
+            let roots = orbit_config::ConfigRoots::new(&self.global_root, &checkout.orbit_dir);
+            match orbit_config::load_workspace_plugin_enablement(&roots) {
+                Ok(checkout_toggles) => toggles.push(checkout_toggles),
+                // An unreadable checkout may still serve the plugin.
+                Err(_) => return BTreeSet::new(),
+            }
+        }
+        plugins
+            .filter(|plugin| {
+                toggles
+                    .iter()
+                    .all(|checkout| checkout.get(plugin.as_str()) == Some(&false))
+            })
+            .cloned()
+            .collect()
+    }
+
     fn workspace_selector<'a>(
         input: &'a Value,
         context: &'a ToolSessionContext,
@@ -702,6 +739,39 @@ impl McpHost for ServerMcpHost {
             return Ok(None);
         };
         runtime.friction_tag_taxonomy().map(Some)
+    }
+
+    /// A workspace-scoped plugin tool is left out of `tools/list` where its
+    /// plugin is switched off: in the bound workspace for a bound session, or
+    /// in every registered workspace for an unbound one. `mcp_scope: global`
+    /// tools follow the host state alone and are never hidden here. Any read
+    /// that fails hides nothing — `tools/call` refuses on its own.
+    fn hidden_tool_names(&self, context: &ToolSessionContext) -> BTreeSet<String> {
+        let owners = match host_plugin_workspace_tool_owners(&self.global_root) {
+            Ok(owners) if !owners.is_empty() => owners,
+            _ => return BTreeSet::new(),
+        };
+        let switched_off: BTreeSet<String> = if context.workspace.is_some() {
+            let Some(probe) = owners.keys().next() else {
+                return BTreeSet::new();
+            };
+            let input = Value::Object(Default::default());
+            let Ok((runtime, _)) = self.resolve_workspace_runtime(probe, &input, context) else {
+                return BTreeSet::new();
+            };
+            owners
+                .values()
+                .filter(|plugin| runtime.ensure_plugin_enabled_in_workspace(plugin).is_err())
+                .cloned()
+                .collect()
+        } else {
+            self.plugins_off_in_every_workspace(owners.values())
+        };
+        owners
+            .into_iter()
+            .filter(|(_, plugin)| switched_off.contains(plugin))
+            .map(|(tool, _)| tool)
+            .collect()
     }
 
     fn call_tool(

@@ -117,7 +117,9 @@ pub(super) fn effective_text(
         display_path(&global_path, global_path.exists()),
         display_path(&workspace_path, workspace_file_exists),
     );
-    if workspace_file_exists {
+    // A workspace file holding only `[plugin_enablement]` is not a policy
+    // layer, so the exception is not in force for it.
+    if workspace_file_exists && orbit_config::workspace_config_sets_policy(&workspace_path) {
         let _ = writeln!(
             out,
             "{:<HEADING_WIDTH$} ⚠ security keys (execution.*) do not inherit from global once a \

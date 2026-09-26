@@ -420,6 +420,21 @@ impl OrbitRuntime {
         self.workspace_binding.as_deref()
     }
 
+    /// Short label naming this runtime's workspace in a refusal: the
+    /// checkout directory's name, never an internal id.
+    pub(crate) fn workspace_label(&self) -> String {
+        let repo_root = self
+            .workspace_binding
+            .as_deref()
+            .map_or(self.paths().repo_root.as_path(), |binding| {
+                binding.repo_root.as_path()
+            });
+        repo_root.file_name().map_or_else(
+            || repo_root.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    }
+
     /// Returns the effective `config.toml` path.
     ///
     /// Workspace config replaces global if present; a genuinely missing

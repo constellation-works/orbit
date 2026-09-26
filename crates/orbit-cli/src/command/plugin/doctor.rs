@@ -18,8 +18,13 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
     ])
     .empty_message("no plugins installed or pinned");
     let mut issues = 0;
+    let mut switched_off = 0;
     for result in &results {
-        if !result.message.is_empty() {
+        // A plugin switched off in this workspace is the operator's choice:
+        // shown, so the state stays visible, but not counted as a finding.
+        if result.intentional {
+            switched_off += 1;
+        } else if !result.message.is_empty() {
             issues += 1;
         }
         table.add_row(vec![
@@ -35,6 +40,7 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
                 "plugin": result.plugin,
                 "status": result.status.as_str(),
                 "message": result.message,
+                "intentional": result.intentional,
             })
         })
         .collect::<Vec<_>>();
@@ -80,9 +86,17 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
 
     let mut blocks = vec![Block::table(table)];
     if issues == 0 {
+        let summary = if switched_off == 0 {
+            "Every plugin is serving its tools.".to_string()
+        } else {
+            format!(
+                "Every plugin enabled in this workspace is serving its tools ({switched_off} \
+                 switched off here)."
+            )
+        };
         blocks.push(Block::text(format!(
             "\n{}",
-            crate::output::color::text("Every plugin is serving its tools.", Role::Ok)
+            crate::output::color::text(&summary, Role::Ok)
         )));
     } else {
         eprintln!("\n{issues} plugin(s) need attention.");

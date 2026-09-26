@@ -3,7 +3,7 @@ use orbit_core::OrbitRuntime;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
-use super::support::plugin_record;
+use super::support::{host_state, plugin_record, state_reason};
 
 #[derive(Args)]
 pub struct PluginShowArgs {
@@ -29,6 +29,18 @@ impl Execute for PluginShowArgs {
             bold("Manifest digest:"),
             plugin.manifest_digest,
         );
+        // STATUS is the effective state in the selected workspace; the host
+        // row and the reason say which layer decided it.
+        header.push_str(&format!("\n{} {}", bold("Host:"), host_state(&plugin)));
+        let toggle = match plugin.workspace_toggle {
+            Some(true) => "on",
+            Some(false) => "off",
+            None => "inherits the host",
+        };
+        header.push_str(&format!("\n{} {toggle}", bold("Workspace toggle:")));
+        if let Some(reason) = state_reason(&plugin).filter(|_| plugin.diagnostic.is_none()) {
+            header.push_str(&format!("\n{} {reason}", bold("Reason:")));
+        }
         if let Some(publisher) = &plugin.publisher {
             header.push_str(&format!("\n{} {publisher}", bold("Publisher:")));
         }

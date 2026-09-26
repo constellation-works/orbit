@@ -36,6 +36,7 @@ pub use plugin::{
     PluginSeedOutcome, PluginSkillLink, PluginSummary, PluginSyncOutcome, PluginTestOptions,
     PluginTestOutcome, PluginTestReport, PluginToolSummary, PluginUpgradeOptions,
     PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
-    host_plugin_cli_groups, host_plugin_mcp_definitions, migrate_plugin_sidecars,
+    host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows,
+    host_plugin_workspace_tool_owners, migrate_plugin_sidecars,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

@@ -261,7 +261,28 @@ impl OrbitRuntime {
                 "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
             )));
         }
+        // A plugin this workspace switched off registers nothing, so its
+        // tools would otherwise read as unknown. Name the toggle instead.
+        if let Some(owner) = self.plugin_load().workspace_disabled_owner(name) {
+            return Err(self.plugin_disabled_in_workspace(&owner.name));
+        }
         Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
+    }
+
+    /// Refuse an `orbit <ns>` verb, before dispatch, when this workspace has
+    /// switched the plugin off.
+    pub fn ensure_plugin_enabled_in_workspace(&self, namespace: &str) -> Result<(), OrbitError> {
+        if self.plugin_load().is_disabled_in_workspace(namespace) {
+            return Err(self.plugin_disabled_in_workspace(namespace));
+        }
+        Ok(())
+    }
+
+    fn plugin_disabled_in_workspace(&self, plugin: &str) -> OrbitError {
+        OrbitError::PluginDisabledInWorkspace {
+            plugin: plugin.to_string(),
+            workspace: self.workspace_label(),
+        }
     }
 
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {

@@ -20,6 +20,9 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::layering::reject_workspace_machine_table;
 use crate::persistence::PersistenceConfig;
+use crate::plugin_enablement::{
+    PLUGIN_ENABLEMENT_TABLE, reject_global_plugin_enablement, workspace_config_sets_policy,
+};
 use crate::registry::{self, ConfigSnapshot};
 use crate::resolved::ResolvedConfig;
 
@@ -87,9 +90,15 @@ impl ConfigStore {
         mode: WorkspaceInitMode,
     ) -> Result<Self, OrbitError> {
         let path = workspace_config_path.into();
-        if path.exists() {
+        // A file holding only `[plugin_enablement]` is not a policy layer
+        // yet, so the first real setting written into it gets the same
+        // fail-closed choice as a missing file; the toggles are carried over.
+        if workspace_config_sets_policy(&path) {
             return Self::open(ConfigScope::Workspace, path);
         }
+        let toggles = Self::open(ConfigScope::Workspace, path.clone())?
+            .doc
+            .remove(PLUGIN_ENABLEMENT_TABLE);
         let content = match mode {
             WorkspaceInitMode::RequireExisting => {
                 return Err(OrbitError::invalid_input_with_suggestions(
@@ -108,7 +117,11 @@ impl ConfigStore {
             WorkspaceInitMode::SeedFromGlobal => read_optional(global_config_path)?,
             WorkspaceInitMode::Fresh => String::new(),
         };
-        Self::from_content(ConfigScope::Workspace, path, &content)
+        let mut store = Self::from_content(ConfigScope::Workspace, path, &content)?;
+        if let Some(toggles) = toggles {
+            store.doc.insert(PLUGIN_ENABLEMENT_TABLE, toggles);
+        }
+        Ok(store)
     }
 
     fn from_content(scope: ConfigScope, path: PathBuf, content: &str) -> Result<Self, OrbitError> {
@@ -385,20 +398,21 @@ impl ConfigStore {
         self.snapshot().map(|_| ())
     }
 
-    /// A workspace file may not carry `[machine]` at all, however it got
-    /// there. The scope-free admission pipeline cannot see which file it is
-    /// resolving, so the store — which does — states the rule.
+    /// A workspace file may not carry `[machine]` at all, and the global file
+    /// may not carry `[plugin_enablement]`, however either got there. The
+    /// scope-free admission pipeline cannot see which file it is resolving,
+    /// so the store — which does — states the rule.
     fn reject_workspace_machine_table(&self) -> Result<(), OrbitError> {
-        if self.scope != ConfigScope::Workspace {
-            return Ok(());
-        }
         let document = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid TOML in '{}': {err}",
                 redact_home_dir(&self.path.display().to_string())
             ))
         })?;
-        reject_workspace_machine_table(&document, &self.path)
+        match self.scope {
+            ConfigScope::Workspace => reject_workspace_machine_table(&document, &self.path),
+            ConfigScope::Global => reject_global_plugin_enablement(&document, &self.path),
+        }
     }
 
     /// Admission plus a write-time refusal for `orbit config set`.

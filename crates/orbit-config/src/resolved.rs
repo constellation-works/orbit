@@ -140,6 +140,11 @@ pub struct ResolvedConfig {
     /// structurally here; the plugin's own JSON Schema is applied by the layer
     /// that knows which plugins are installed (design §1).
     pub plugins: BTreeMap<String, serde_json::Value>,
+    /// Workspace `[plugin_enablement]` toggles: `false` switches an
+    /// otherwise host-enabled plugin off in this workspace; an absent entry
+    /// inherits the host state. Always empty for the global layer, which
+    /// refuses the table.
+    pub plugin_enablement: BTreeMap<String, bool>,
 }
 
 impl ResolvedConfig {
@@ -172,6 +177,7 @@ impl ResolvedConfig {
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties: Vec::new(),
             plugins: BTreeMap::new(),
+            plugin_enablement: BTreeMap::new(),
             snapshot,
         }
     }
@@ -285,6 +291,8 @@ impl ResolvedConfig {
         }
 
         let plugins = plugin_sections_from_raw(parsed.plugins.as_ref(), config_path)?;
+        let plugin_enablement =
+            crate::plugin_enablement::plugin_enablement_from_document(&document, config_path)?;
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
@@ -310,6 +318,7 @@ impl ResolvedConfig {
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties,
             plugins,
+            plugin_enablement,
             snapshot,
         })
     }

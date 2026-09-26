@@ -21,8 +21,9 @@ Ordinary settings inherit per key: workspace values override global values, glob
 
 - **Tables** layer down to individual settings. **Scalars and arrays** replace the matching global value.
 - **Named crews** layer by crew name and field, so `[crews.sol]` with only `model = "gpt-5.6-terra"` in the workspace file overrides one field of the global `sol` crew.
-- **Security exceptions.** `execution.codex.sandbox`, `execution.codex.approval_policy` and `execution.env.pass` never inherit from global once a workspace file exists. If the workspace file omits one, its built-in default applies.
+- **Security exceptions.** `execution.codex.sandbox`, `execution.codex.approval_policy` and `execution.env.pass` never inherit from global once a workspace file exists. If the workspace file omits one, its built-in default applies. A workspace file holding only `[plugin_enablement]` does not count: those keys keep inheriting.
 - **Global-only.** A `[machine]` table in a workspace file is refused at load, naming the file.
+- **Workspace-only.** A `[plugin_enablement]` table in the global file is refused at load, naming the file.
 
 The workspace identity file `.orbit/config.yaml` (it stores `workspace_id`) is a separate artifact and not runtime config.
 
@@ -456,6 +457,13 @@ plugins:
 - **Sources:** a directory outside the current repo, `git+<url>#<ref>`, a local `.tar.gz`/`.tgz`/`.tar`/`.zip`, or an `https://` archive pinned by `sha256` digest (no trust-on-first-use). Sources containing symlinks are refused.
 - **Permissions are requested, never implied.** `spec.permissions` in the manifest is a request. Only `--grant` on `plugin add --enable`, `enable`, `upgrade` or `sync` grants it, and an ungranted plugin's tools register inactive. An upgrade that widens the request disables the plugin until you re-grant it.
 - **`[plugins.<ns>]`** holds the plugin's own settings, validated against its `spec.config.schema` with its defaults underneath. `orbit config get`/`set plugins.<ns>.<key>` accepts only declared keys, and values layer workspace over global. An invalid value disables only that plugin. A section for a plugin this machine hasn't installed is warned about and ignored.
+- **`[plugin_enablement]`** (workspace file only) switches a host-enabled plugin off in this workspace: `<ns> = false`. Write it with `orbit plugin disable|enable <ns> --scope workspace` rather than by hand. An unset entry inherits the host state, and `true` never switches on a plugin the host has disabled — `enable --scope workspace` refuses instead. The pin's `enabled: false` is applied here by `orbit plugin sync`, never to the host row. Values must be booleans keyed by plugin namespace, and the table is refused in the global file.
+
+```toml
+# .orbit/config.toml — this workspace only
+[plugin_enablement]
+graph = false
+```
 
 ---
 

@@ -10,3 +10,4 @@ mod plugin_config;
 mod secrets;
 mod seed;
 mod skills;
+mod workspace_toggle;
