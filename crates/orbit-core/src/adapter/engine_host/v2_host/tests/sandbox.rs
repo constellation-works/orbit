@@ -1032,7 +1032,7 @@ mod copilot_state_roots {
     }
 
     #[test]
-    fn other_providers_get_nothing() {
+    fn non_copilot_providers_get_nothing() {
         for provider in [
             "claude",
             "codex",
@@ -1041,6 +1041,7 @@ mod copilot_state_roots {
             "cursor",
             "ollama",
             "local-shell",
+            "not-a-provider",
         ] {
             assert!(
                 linux_copilot_state_roots_with(provider, Some(Path::new("/home/test")), None, None)
@@ -1048,19 +1049,6 @@ mod copilot_state_roots {
                 "{provider} must not inherit copilot roots",
             );
         }
-    }
-
-    #[test]
-    fn unknown_provider_is_not_treated_as_copilot() {
-        assert!(
-            linux_copilot_state_roots_with(
-                "not-a-provider",
-                Some(Path::new("/home/test")),
-                None,
-                None
-            )
-            .is_empty()
-        );
     }
 }
 
