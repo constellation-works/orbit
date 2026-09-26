@@ -74,6 +74,16 @@ Verify transitive impact with `rg` or by reading callers directly. Run the
 repo-approved verification commands, honoring repo instructions if tests are
 forbidden.
 
+When a clean task checkout is already covered by this task's or a sibling
+task's landed commit, verify the current acceptance criteria and attach
+`already-landed.json` plus captured validation logs with `orbit.task.artifact.put`
+in the current run, including the first attempt. The artifact names the current
+task and the covering task separately. `git_commit` checks the pinned HEAD,
+covering commit marker and ancestry, unchanged task scope, clean tree, and
+required validation logs. A success summary alone does not satisfy that gate.
+If a required check or covering evidence is unavailable, record the blocker;
+do not claim a verified already-landed result.
+
 Implement in testable increments. Breadth or an ordinary missing API is not a
 blocker when the task owns that outcome. A real authority refusal, unavailable
 prerequisite or unresolved product decision is: record the specific evidence and

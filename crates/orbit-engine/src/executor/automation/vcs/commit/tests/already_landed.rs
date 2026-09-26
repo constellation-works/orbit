@@ -172,6 +172,7 @@ fn already_landed_sibling_coverage_completes_without_new_commit() {
     assert_eq!(completed["merge"]["reason"], "verified_already_landed");
     assert_eq!(completed["merge"]["merged"], false);
     assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::Done);
+    assert!(host.get_task("T1").unwrap().external_refs.is_empty());
     assert_git_unmutated(temp.path(), &input["base_sha"]);
 }
 
