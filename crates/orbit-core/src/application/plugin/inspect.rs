@@ -8,8 +8,9 @@ use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginBackend, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
-    refuse_covering_fs_write_roots, validate_loaded_plugin,
+    LoadedPlugin, PluginBackend, PluginProgramStatus, PluginValidationPolicy, load_plugin_dir,
+    manifest_refusal, program_statuses, refuse_covering_fs_write_roots, resolve_declared_programs,
+    validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginExecutionKind, PluginGrant, PluginGrantSet, PluginProvenance,
@@ -23,6 +24,7 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::backend::{build_plugin_backend, plugin_backend};
 use crate::runtime::plugin::cache::load_installed_plugin;
 use crate::runtime::plugin::config::plugin_config_section;
+use crate::runtime::plugin::grants::recorded_program_paths;
 use crate::runtime::plugin::paths::{plugin_state_dir, read_pin_file};
 use crate::runtime::plugin::requirements::{host_api_deprecation, unmet_requirement};
 
@@ -74,6 +76,10 @@ pub struct PluginSummary {
     /// `backend.sandbox: none` with the `unsandboxed` grant: the backend runs
     /// unconfined, which `doctor` reports as a finding (§4.3).
     pub unsandboxed: bool,
+    /// Every `requires.programs` entry beside the path the last enabling
+    /// command resolved it to, and why the sandbox will not grant it when it
+    /// will not (§4.3).
+    pub programs: Vec<PluginProgramStatus>,
     pub tools: Vec<PluginToolSummary>,
     /// `spec.web.panels[]` of an active plugin (§4.7). Empty for a plugin
     /// that is not serving its tools: a panel reads one of them.
@@ -167,6 +173,7 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
             permissions: Vec::new(),
             granted: Vec::new(),
             unsandboxed: false,
+            programs: Vec::new(),
             tools: Vec::new(),
             panels: Vec::new(),
             links: Vec::new(),
@@ -204,6 +211,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
     let scoped_out = scoped_out_fs_root_rows(runtime)?;
+    let ungranted_programs = ungranted_program_rows(&summaries);
     let host_api_deprecated = host_api_deprecation_rows(runtime);
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
@@ -269,11 +277,41 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     rows.extend(stale_seeded);
     rows.extend(archive_drift);
     rows.extend(scoped_out);
+    rows.extend(ungranted_programs);
     rows.extend(host_api_deprecated);
     if let Some(finding) = invalid_pin_file {
         rows.push(finding);
     }
     Ok(rows)
+}
+
+/// Findings for an active plugin whose declared program the sandbox will not
+/// grant: it did not resolve when the plugin was enabled, or the recorded
+/// path no longer names that executable.
+///
+/// Without this row an active plugin looks healthy until its backend tries
+/// to run the program and gets `Permission denied` from inside the sandbox.
+fn ungranted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult> {
+    summaries
+        .iter()
+        .filter(|summary| summary.status == PluginStatus::Active)
+        .flat_map(|summary| {
+            summary.programs.iter().filter_map(|program| {
+                let problem = program.problem.as_deref()?;
+                Some(PluginDoctorResult {
+                    plugin: summary.name.clone(),
+                    status: summary.status,
+                    message: format!(
+                        "plugin '{}' declares program `{}` in `requires.programs`, but {problem}; \
+                         its sandboxed backend cannot execute it. Make it resolve on PATH (or \
+                         declare its absolute path), then re-run `orbit plugin enable {}` to \
+                         record it",
+                        summary.name, program.name, summary.name,
+                    ),
+                })
+            })
+        })
+        .collect()
 }
 
 /// Findings for a plugin running on the `host_api` previous-major grace
@@ -539,6 +577,14 @@ pub fn validate_plugin_dir_for_workspace(
         &global_root,
         grants,
         plugin_config_section(&plugin, &config.plugins),
+        // No operator has consented yet, so the programs resolve against this
+        // process's `PATH`, exactly as `orbit plugin enable` from here would
+        // record them.
+        resolve_declared_programs(
+            &plugin.manifest.spec.requires.programs,
+            std::env::var_os("PATH").as_deref(),
+        )
+        .0,
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let rendered = workspace
@@ -739,7 +785,7 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
     let loaded = registered
         .and_then(|entry| entry.loaded.as_deref())
         .or(disabled.as_deref());
-    let mut summary = summary_for_installed(installed, loaded, status);
+    let mut summary = summary_for_installed(installed, loaded, status, &runtime.global_root());
     // Panels and links are the *active* surface, so they are projected from
     // the load pass that built it — including the effective `[plugins.<ns>]`
     // values a link template reads — rather than from the manifest alone.
@@ -786,6 +832,7 @@ pub(super) fn summary_for_installed(
     installed: &InstalledPlugin,
     plugin: Option<&LoadedPlugin>,
     status: PluginStatus,
+    global_root: &Path,
 ) -> PluginSummary {
     let (panels, links) = plugin
         .filter(|_| status == PluginStatus::Active)
@@ -837,6 +884,16 @@ pub(super) fn summary_for_installed(
                     .iter()
                     .any(|grant| grant == PluginGrant::Unsandboxed.as_str())
         }),
+        programs: plugin
+            .map(|plugin| {
+                program_statuses(
+                    &plugin.manifest.spec.requires.programs,
+                    &recorded_program_paths(global_root, &installed.name),
+                    global_root,
+                    &plugin_state_dir(global_root, &installed.name),
+                )
+            })
+            .unwrap_or_default(),
         tools,
         panels,
         links,

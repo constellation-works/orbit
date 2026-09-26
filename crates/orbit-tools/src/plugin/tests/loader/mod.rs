@@ -53,6 +53,7 @@ fn backend_spec(
         sandbox: plugin.manifest.spec.backend.sandbox,
         permissions: plugin.manifest.spec.permissions.clone(),
         programs: plugin.manifest.spec.requires.programs.clone(),
+        program_paths: Default::default(),
         config: Default::default(),
         grants,
     }

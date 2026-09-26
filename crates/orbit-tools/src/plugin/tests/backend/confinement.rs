@@ -768,3 +768,87 @@ fn the_macos_profile_denies_callback_sessions_and_re_allows_the_childs_own_recor
         "SBPL is last-match-wins: the re-allow must follow the deny\n{profile_text}"
     );
 }
+
+/// Runs `$TOOL` — a program the manifest declares — and reports whether the
+/// sandbox let it execute.
+const PROGRAM_RUNNER_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nif out=$(\"$TOOL\" 2>/dev/null); then result=\"$out\"; else result=denied; fi\nprintf '{\"ok\":true,\"output\":{\"result\":\"%s\"}}\\n' \"$result\"\n";
+
+fn declared_program(dir: &Path) -> PathBuf {
+    let program = dir.join("off-path/bin/tool");
+    std::fs::create_dir_all(program.parent().expect("parent")).expect("program dir");
+    std::fs::write(&program, "#!/bin/sh\necho ran\n").expect("write program");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    program.canonicalize().expect("canonical program")
+}
+
+#[test]
+fn a_recorded_program_is_on_both_platform_profiles_and_an_unrecorded_one_is_not() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    let program = declared_program(temp.path());
+    let mut spec = (*spec(root.join("bin"), &root, PluginPermissions::default(), &[])).clone();
+    spec.programs = vec!["tool".into(), "unrecorded".into()];
+    spec.program_paths = [("tool".to_string(), program.clone())]
+        .into_iter()
+        .collect();
+
+    let profile = spec.sandbox_profile(None).expect("profile");
+    assert!(profile.read.contains(&program), "{:?}", profile.read);
+    assert!(
+        profile
+            .macos_fs_rules()
+            .read
+            .contains(&format!("{}/**", program.display())),
+        "the seatbelt profile allows the same program"
+    );
+
+    // A recorded path for a name the manifest no longer declares grants
+    // nothing: an upgrade that drops a program drops its grant with it.
+    spec.programs = vec!["unrecorded".into()];
+    let profile = spec.sandbox_profile(None).expect("profile");
+    assert!(!profile.read.contains(&program), "{:?}", profile.read);
+}
+
+/// The caller's `PATH` holds only the system directories, as a systemd unit
+/// or a bare `env -i` shell would. The backend still executes a declared
+/// program installed elsewhere because the sandbox grants the path recorded
+/// at consent — and, under Landlock, cannot without that record.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_declared_program_off_the_caller_path_runs_under_the_sandbox() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    let program = declared_program(temp.path());
+    let command = stub_backend(&root, PROGRAM_RUNNER_BACKEND);
+    let ctx = ToolContext {
+        proc_spawn_environment: Some(vec![
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("TOOL".to_string(), program.to_string_lossy().into_owned()),
+        ]),
+        ..context(temp.path())
+    };
+    let mut declared = (*spec(command, &root, PluginPermissions::default(), &[])).clone();
+    declared.programs = vec!["tool".into()];
+
+    if cfg!(target_os = "linux") {
+        let unrecorded = tool(std::sync::Arc::new(declared.clone()), None);
+        let output = unrecorded.execute(&ctx, json!({})).expect("backend runs");
+        assert_eq!(
+            output["result"], "denied",
+            "an unrecorded program off the caller PATH is not executable under Landlock"
+        );
+    }
+
+    declared.program_paths = [("tool".to_string(), program)].into_iter().collect();
+    let recorded = tool(std::sync::Arc::new(declared), None);
+    let output = recorded.execute(&ctx, json!({})).expect("backend runs");
+    assert_eq!(output["result"], "ran");
+}

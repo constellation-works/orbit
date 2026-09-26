@@ -1,6 +1,6 @@
 //! What every tool of one plugin shares: the backend program, the granted
-//! profile the sandbox enforces, and the child environment (design §4.2,
-//! §4.3).
+//! profile the sandbox enforces, the declared programs it may execute, and
+//! the child environment (design §4.2, §4.3).
 //!
 //! The manifest's `permissions` are requests. By the time a [`PluginBackendSpec`]
 //! exists the host has checked that every required grant is recorded
@@ -8,6 +8,7 @@
 //! the profile resolved here is exactly the granted one.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -29,7 +30,9 @@ use crate::{TIMEOUT_SLOW_MS, ToolContext, upsert_env};
 
 mod execution;
 mod model;
+mod programs;
 mod sandbox;
 
 pub use self::model::*;
+pub use self::programs::*;
 pub use self::sandbox::*;

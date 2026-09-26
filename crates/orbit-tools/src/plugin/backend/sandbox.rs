@@ -4,8 +4,10 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSandboxProfile {
     /// Readable (and executable) roots: the plugin root plus granted reads,
-    /// and — for `orbit_tools` — Orbit's global root and the workspace's
-    /// `.orbit/`, which `orbit tool run` reads but must not rewrite.
+    /// each declared program at the path recorded when the operator enabled
+    /// the plugin, and — for `orbit_tools` — Orbit's global root and the
+    /// workspace's `.orbit/`, which `orbit tool run` reads but must not
+    /// rewrite.
     pub read: Vec<PathBuf>,
     /// Host-owned trees carved out of [`Self::read`] however it was composed:
     /// the live callback sessions, the grant witnesses and every plugin's

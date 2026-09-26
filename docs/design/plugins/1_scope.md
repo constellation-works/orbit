@@ -89,7 +89,7 @@ spec:
     orbit: ">=0.24.0 <1.0.0"        # semver range on the host binary
     host_api: 1                     # protocol major (§4.8)
     platforms: [linux, macos]
-    programs: [git]                 # host programs the backend spawns (proc allowlist)
+    programs: [git]                 # host programs the backend spawns; resolved at enable (§4.3)
 
   backend:
     type: exec                      # exec | mcp
@@ -252,6 +252,9 @@ is the write boundary: `orbit_tools` makes `orbit.db` writable but never `plugin
   `orbit plugin enable <ns> --grant …` once per granted plugin.
 - When a manifest's request widens without re-consent, the installer first writes a disabled,
   empty-grant witness, so the old witness cannot be replayed against the new manifest.
+- The witness also records the path each `requires.programs` entry resolved to at that
+  consent (§4.3). Those paths are not in the digest: they live only in the host-owned witness,
+  which is itself the consent.
 
 **The row's install path is held to the install root.** The witness covers only `name`,
 `enabled` and grants (binding version or digest would refuse every upgrade), so a backend could
@@ -435,8 +438,30 @@ reliability view.
 | `network: any` | `network` | TCP left open | `(allow network*)` stands |
 | `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files literally; the unreadable trees stay denied as in the first row |
 | `permissions.env_pass` | `env_pass` | Named vars copied into the allowlisted child env via `allowlisted_child_env`; `ORBIT_*` names are refused by `validate_structure`, so `ORBIT_OPERATOR` or `ORBIT_WORKSPACE_CLAIM_TOKEN` never reach a child | same |
-| `requires.programs` | — | Not a sandbox rule: checked against a restricted caller's `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
+| `requires.programs` | — (resolved at enable) | Each program's recorded path as a read-and-execute file, whatever the caller's `PATH`; also checked against a restricted caller's `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | The same path as a read `subpath` (the compiler already allows `process*`) |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset | No `sandbox-exec` wrapper |
+
+**Declared programs.** Landlock executes only out of the caller's `PATH` directories and
+granted roots, so a program off that `PATH` (a `uv` in `~/.local/bin` spawned by a systemd
+unit) would get `Permission denied`. Every enabling command (`enable`, `add --enable`, an
+upgrading `--grant`, a consenting `sync`) therefore resolves `requires.programs` once, against
+the consenting operator's `PATH`:
+
+- A bare name is searched on `PATH` (absolute entries only, executable regular files only); an
+  absolute path is taken as written; a relative path is refused. Either way the **canonical**
+  path is what gets recorded, in the grant witness (§3).
+- The profile grants each recorded path read and execute, whichever caller (systemd unit, MCP
+  server, ssh shell) spawns the backend. Nothing is resolved at call time.
+- A recorded path is granted only while it still names that executable: it exists, is an
+  executable regular file, is still its own canonical path (a link retargeted after consent
+  stops matching), and lies outside the unreadable trees below. A path for a name the manifest
+  no longer declares grants nothing.
+- A changed resolution is a re-consent event: re-running `orbit plugin enable <ns>` records the
+  new path and warns with the old and new one. A program that did not resolve warns at enable.
+- `orbit plugin show` lists each program with its recorded path and whether it is granted.
+  `orbit plugin doctor` reports every program of an active plugin that will not be granted,
+  including those with no recorded path (unresolved at enable, or enabled by an Orbit that did
+  not record them).
 
 **The `orbit_tools` inventory.** A callback *is* `orbit tool run`, which needs `config.toml`,
 the recorded install and `workspaces.json`, so the global root and the workspace `.orbit/`

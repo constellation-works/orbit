@@ -55,7 +55,19 @@
 //!   loader refuses a `true` row for a manifest that does not claim
 //!   `origin: orbit`, and the validator names tools from the manifest.
 //! - `source`, `certified_orbit_version`, timestamps — informational.
+//!
+//! # Resolved programs
+//!
+//! The witness also carries the canonical path each `requires.programs`
+//! entry resolved to when the operator enabled the plugin. Those paths are
+//! the consent itself, not a claim checked against the row, so they are not
+//! in the digest: they live only in this host-owned file, which a confined
+//! backend cannot write, and the sandbox grants them read and execute
+//! whatever `PATH` the spawning caller has. Changing one means writing this
+//! file again, which only an enabling command does — a changed resolution is
+//! a re-consent event.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -92,6 +104,11 @@ struct GrantAuthorization {
     /// [`plugin_grants_digest`] over the authorized set.
     grants_digest: String,
     authorized_at: String,
+    /// Declared program name → the canonical path it resolved to at consent.
+    /// Absent from witnesses written before programs were resolved, which
+    /// therefore grant no program (see the module docs).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    programs: BTreeMap<String, PathBuf>,
 }
 
 /// Where the witness for `name` lives.
@@ -161,6 +178,18 @@ pub fn record_authorized_grants(
     enabled: bool,
     grants: &[String],
 ) -> Result<(), OrbitError> {
+    record_authorization(global_root, name, enabled, grants, &BTreeMap::new())
+}
+
+/// [`record_authorized_grants`], plus the program paths this consent
+/// resolved `requires.programs` to (module docs).
+pub fn record_authorization(
+    global_root: &Path,
+    name: &str,
+    enabled: bool,
+    grants: &[String],
+    programs: &BTreeMap<String, PathBuf>,
+) -> Result<(), OrbitError> {
     if !is_valid_namespace(name) {
         return Err(OrbitError::Execution(format!(
             "cannot record grant authorization for invalid plugin namespace '{name}'"
@@ -172,6 +201,7 @@ pub fn record_authorized_grants(
         plugin: name.to_string(),
         grants_digest: plugin_grants_digest(name, enabled, grants),
         authorized_at: chrono::Utc::now().to_rfc3339(),
+        programs: programs.clone(),
     };
     let body = serde_json::to_string_pretty(&witness).map_err(|error| {
         OrbitError::Execution(format!("serialize grant authorization: {error}"))
@@ -183,6 +213,25 @@ pub fn record_authorized_grants(
     atomic_write_text(&path, &format!("{body}\n"))
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
     Ok(())
+}
+
+/// The program paths the last enabling command recorded for `name`, empty
+/// when there is no readable witness written for it.
+///
+/// Read without judging the grant set: a row whose grants do not match its
+/// witness is refused whole by the loader, so no backend is built from it.
+pub fn recorded_program_paths(global_root: &Path, name: &str) -> BTreeMap<String, PathBuf> {
+    if !is_valid_namespace(name) {
+        return BTreeMap::new();
+    }
+    std::fs::read_to_string(plugin_grant_witness_path(global_root, name))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<GrantAuthorization>(&raw).ok())
+        .filter(|witness| {
+            witness.schema_version == WITNESS_SCHEMA_VERSION && witness.plugin == name
+        })
+        .map(|witness| witness.programs)
+        .unwrap_or_default()
 }
 
 /// Drop the witness when the install goes away, so a later reinstall of the

@@ -161,3 +161,68 @@ fn doctor_reports_an_unparseable_pin_file_and_exits_nonzero() {
         "{finding}"
     );
 }
+
+/// An active plugin whose declared program did not resolve at enable time is
+/// not "serving its tools": its sandboxed backend would get `Permission
+/// denied` running it, so doctor names the program and exits non-zero.
+#[test]
+fn doctor_reports_a_declared_program_that_cannot_be_resolved() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let workspace_root = temp.path().join("repo/.orbit");
+    let source = temp.path().join("sources/demo");
+    for dir in [&global_root, &workspace_root, &source.join("bin")] {
+        std::fs::create_dir_all(dir).expect("create fixture dir");
+    }
+    let backend = source.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .expect("write backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    std::fs::write(
+        source.join("plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: demo\n  version: 1.0.0\n  description: Fixture plugin.\nspec:\n  requires:\n    programs: [orbit-fixture-no-such-program]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: hello\n      description: Say hello.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n",
+    )
+    .expect("write manifest");
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime");
+    runtime
+        .add_plugin(
+            source.to_str().expect("utf8 path"),
+            &orbit_core::adapter::command::PluginAddOptions {
+                enable: true,
+                ..Default::default()
+            },
+        )
+        .expect("add and enable");
+
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).expect("reopen");
+    let CommandOutput::Payload(payload) = execute_doctor(&runtime).expect("run plugin doctor")
+    else {
+        panic!("plugin doctor must return a payload");
+    };
+    assert_eq!(
+        payload.exit_code(),
+        1,
+        "an unresolvable program needs attention"
+    );
+    let (document, _) = payload.into_view();
+    let finding = document
+        .as_array()
+        .expect("doctor records")
+        .iter()
+        .find(|record| {
+            record["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("orbit-fixture-no-such-program"))
+        })
+        .expect("unresolvable program finding");
+    assert_eq!(finding["plugin"], "demo");
+    assert_eq!(finding["status"], "active");
+}

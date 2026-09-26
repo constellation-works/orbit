@@ -179,6 +179,11 @@ pub struct PluginBackendSpec {
     pub permissions: PluginPermissions,
     /// `spec.requires.programs`: what the backend declares it spawns.
     pub programs: Vec<String>,
+    /// The canonical path each declared program resolved to when the
+    /// operator consented, keyed by the declared name. The sandbox grants
+    /// these read and execute whatever `PATH` the spawning caller has; a
+    /// declared name with no entry here gets no grant (design §4.3).
+    pub program_paths: BTreeMap<String, PathBuf>,
     /// The effective `[plugins.<ns>]` section. One resolution serves the
     /// backend's own view of its configuration — `context.config` on both
     /// dispatch surfaces — and the manifest's `{{config.<key>}}` templates,

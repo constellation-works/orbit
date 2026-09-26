@@ -1,11 +1,15 @@
 //! Enable, disable, remove, sync and migrate.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
-use orbit_tools::plugin::{load_plugin_dir, load_sidecar_manifest, migrate_sidecars};
+use orbit_tools::plugin::{
+    LoadedPlugin, load_plugin_dir, load_sidecar_manifest, migrate_sidecars,
+    resolve_declared_programs,
+};
 use orbit_types::plugin::{
     InstalledPlugin, MANIFEST_FILE_NAME, PluginGrantEntry, PluginGrantSet, PluginStatus,
     parse_grants, parse_stored_grants, resolve_grant_selection,
@@ -14,7 +18,7 @@ use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::{
-    forget_authorized_grants, record_authorized_grants, verify_install_path,
+    forget_authorized_grants, record_authorization, recorded_program_paths, verify_install_path,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, read_pin_file};
@@ -98,7 +102,18 @@ pub fn enable_plugin(
     let warn_against: &[String] = record_grants.as_deref().unwrap_or_default();
     let mut warnings = unrequested_grant_warnings(&plugin, warn_against);
     warnings.extend(contributions.warnings);
-    let summary = set_enabled(runtime, name, true, record_grants.as_deref())?;
+    // Every enable is consent, with or without `--grant`, so each one
+    // resolves the declared programs afresh; re-running it is how an
+    // operator records a program that moved or was installed since.
+    let (programs, program_warnings) = resolve_consented_programs(&runtime.global_root(), &plugin);
+    warnings.extend(program_warnings);
+    let summary = set_enabled(
+        runtime,
+        name,
+        true,
+        record_grants.as_deref(),
+        Some(&programs),
+    )?;
 
     Ok(PluginEnableResult {
         summary,
@@ -106,6 +121,45 @@ pub fn enable_plugin(
         skills: contributions.skills,
         warnings,
     })
+}
+
+/// Resolve `plugin`'s `requires.programs` for an enabling command, against
+/// this process's `PATH` — the consenting operator's — together with a
+/// warning for every entry that did not resolve, and for every one that now
+/// resolves somewhere other than the last consent recorded (design §4.3).
+pub(super) fn resolve_consented_programs(
+    global_root: &Path,
+    plugin: &LoadedPlugin,
+) -> (BTreeMap<String, PathBuf>, Vec<String>) {
+    let (resolved, unresolved) = resolve_declared_programs(
+        &plugin.manifest.spec.requires.programs,
+        std::env::var_os("PATH").as_deref(),
+    );
+    let previous = recorded_program_paths(global_root, plugin.namespace());
+    let mut warnings: Vec<String> = unresolved
+        .into_iter()
+        .map(|(program, reason)| {
+            format!(
+                "plugin '{}' declares program `{program}`, which did not resolve: {reason}; its \
+                 sandboxed backend cannot execute it. Make it resolve on PATH (or declare its \
+                 absolute path), then re-run `orbit plugin enable {}`",
+                plugin.namespace(),
+                plugin.namespace()
+            )
+        })
+        .collect();
+    for (program, path) in &resolved {
+        if let Some(before) = previous.get(program).filter(|before| *before != path) {
+            warnings.push(format!(
+                "plugin '{}' program `{program}` now resolves to {} (previously {}); this \
+                 enable records the new path",
+                plugin.namespace(),
+                path.display(),
+                before.display()
+            ));
+        }
+    }
+    (resolved, warnings)
 }
 
 /// What a plugin contributes to the workspace once it is enabled.
@@ -173,7 +227,7 @@ pub struct PluginEnableResult {
 /// (§3).
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
     verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
-    let summary = set_enabled(runtime, name, false, None)?;
+    let summary = set_enabled(runtime, name, false, None, None)?;
     unlink_namespace_skills(runtime, name)?;
     Ok(summary)
 }
@@ -192,11 +246,15 @@ fn unlink_namespace_skills(runtime: &OrbitRuntime, name: &str) -> Result<(), Orb
     Ok(())
 }
 
+/// `programs` is the resolution an enabling command just made; `None` keeps
+/// the one last recorded, so a disabled plugin still shows what it was
+/// consented to run.
 fn set_enabled(
     runtime: &OrbitRuntime,
     name: &str,
     enabled: bool,
     grants: Option<&[String]>,
+    programs: Option<&BTreeMap<String, PathBuf>>,
 ) -> Result<PluginSummary, OrbitError> {
     let mut existing = runtime
         .stores()
@@ -244,9 +302,17 @@ fn set_enabled(
     // value the loader checks the row back against. Written after the row, so
     // a failure here leaves a plugin that refuses to load and says why, rather
     // than a witness authorizing a grant set the store never took [ORB-12778].
-    record_authorized_grants(&runtime.global_root(), name, enabled, &grants)?;
+    let programs = programs
+        .cloned()
+        .unwrap_or_else(|| recorded_program_paths(&runtime.global_root(), name));
+    record_authorization(&runtime.global_root(), name, enabled, &grants, &programs)?;
     if let Some((projection, plugin)) = projection {
-        let mut summary = summary_for_installed(&existing, Some(&plugin), projection.status);
+        let mut summary = summary_for_installed(
+            &existing,
+            Some(&plugin),
+            projection.status,
+            &runtime.global_root(),
+        );
         summary.diagnostic = projection.diagnostic;
         return Ok(summary);
     }
@@ -351,7 +417,7 @@ pub fn remove_plugin(
     // every discovery link into this namespace's install family; deleting the
     // tree first would leave those links dangling with no plugin row left for
     // doctor to inspect.
-    set_enabled(runtime, name, false, None)?;
+    set_enabled(runtime, name, false, None, None)?;
     unlink_namespace_skills(runtime, name)?;
 
     runtime.with_mutation(|| {
