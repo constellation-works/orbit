@@ -101,6 +101,7 @@ fn seed_failed_delivery_run(
         job_name,
         task_id,
         retry_source,
+        Utc::now(),
         std::process::id(),
     );
     runtime
@@ -122,6 +123,7 @@ fn seed_checkpointed_delivery_run(
     job_name: &str,
     task_id: &str,
     retry_source: Option<&str>,
+    started_at: chrono::DateTime<Utc>,
     owner_pid: u32,
 ) -> String {
     let input = json!({"seconds": 0, "task_ids": [task_id]});
@@ -149,7 +151,7 @@ fn seed_checkpointed_delivery_run(
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&run.run_id, Utc::now(), owner_pid)
+        .mark_job_run_running(&run.run_id, started_at, owner_pid)
         .expect("mark source run running");
 
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
@@ -265,8 +267,14 @@ fn resume_readmits_a_task_blocked_by_an_interrupted_source() {
 
     let task_id = seed_task(&runtime, "interrupted resume fixture");
     // An owner pid that cannot exist: the worker died with the host.
-    let source_run_id =
-        seed_checkpointed_delivery_run(&runtime, "qa_resume_interrupted", &task_id, None, 999_999);
+    let source_run_id = seed_checkpointed_delivery_run(
+        &runtime,
+        "qa_resume_interrupted",
+        &task_id,
+        None,
+        Utc::now() - chrono::Duration::seconds(3),
+        999_999,
+    );
     runtime
         .reconcile_stale_job_runs(None)
         .expect("orphan sweep");

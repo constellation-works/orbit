@@ -515,7 +515,8 @@ fn same_pid_namespace_token_still_reconciles_a_dead_owner_end_to_end() {
         return;
     };
     let persisted = format!("{STABLE_TOKEN_PREFIX}pidns={current}:Sun Aug  2 20:13:45 2026");
-    let run = running_run_with_token(999_999, Some(&persisted));
+    let mut run = running_run_with_token(999_999, Some(&persisted));
+    run.started_at = Some(Utc::now() - Duration::seconds(3));
     assert_eq!(
         running_run_owner_stale_reason(&run),
         Some(OwnerIdentity::Missing),

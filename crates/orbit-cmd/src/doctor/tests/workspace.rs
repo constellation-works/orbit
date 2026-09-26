@@ -660,7 +660,7 @@ pub(super) fn orphaned_running_run_is_reported() {
         attempt: 1,
         state: JobRunState::Running,
         scheduled_at: now,
-        started_at: Some(now),
+        started_at: Some(now - chrono::Duration::seconds(3)),
         finished_at: None,
         duration_ms: None,
         created_at: now,

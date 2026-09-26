@@ -1526,7 +1526,11 @@ fn interrupted_run_resumes_skipping_checkpointed_steps() {
     runtime
         .stores()
         .jobs()
-        .mark_job_run_running(&run.run_id, Utc::now(), child.id())
+        .mark_job_run_running(
+            &run.run_id,
+            Utc::now() - chrono::Duration::seconds(3),
+            child.id(),
+        )
         .expect("mark running under fake worker pid");
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
         &runtime,
