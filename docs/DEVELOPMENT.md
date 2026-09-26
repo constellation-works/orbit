@@ -140,8 +140,11 @@ re-executes the current binary. From a test, that binary is the libtest
 harness, which reads the worker argv as test filters and can re-run the
 spawning test without bound. The 2026-09-23 outage
 ([RCA](rca/2026-09-23-cross-crate-test-worker-oom.md)) started this way.
-The worker spawn therefore refuses any cargo test harness with an
-`OrbitError::Execution`, so a test that submits without a substitute fails.
+The CLI `main` explicitly marks its process as allowed to re-execute as a
+worker. A libtest harness never runs that entry point, so an unsubstituted
+submission fails with `OrbitError::Execution` before spawning, whatever path
+the harness has. The old Cargo `deps/<crate>-<hash>` path check was removed;
+worker permission no longer depends on Cargo's filename layout.
 
 - Inside `orbit-core`, install a per-thread substitute with
   `worker_command_override::set` and clear it on drop.
@@ -151,7 +154,8 @@ The worker spawn therefore refuses any cargo test harness with an
   submission. It is process-wide, so it also covers submissions that run on
   another thread, such as a dashboard handler's blocking pool. Install one
   argv per test binary, as `substitute_pipeline_worker` in the `orbit-web`
-  and `orbit-cli` test modules does.
+  test module does. CLI integration tests that execute the real `orbit`
+  binary instead exercise its production entry point.
 
 ## Toolchain (MSRV)
 

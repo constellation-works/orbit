@@ -53,6 +53,13 @@ pub mod metrics;
 mod paths;
 pub mod runtime;
 
+/// Allow this production Orbit binary to re-execute itself as a pipeline
+/// worker. Call once from its `main` before it can submit any runs. Tests in
+/// other crates must install the `test-support` worker override instead.
+pub fn mark_process_as_pipeline_worker_binary() {
+    application::job::pipeline::mark_process_as_pipeline_worker_binary();
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -64,8 +71,8 @@ pub mod test_support {
     pub use crate::application::job::pipeline::worker_command_override::RUN_ID_PLACEHOLDER;
     /// Substitute the detached pipeline worker program for this whole test
     /// process. Any test that submits a pipeline run (ship, resume, auto, job)
-    /// must install one: the production spawn refuses to re-exec a cargo test
-    /// harness, so an unsubstituted submission fails.
+    /// must install one: a test harness has no production entry-point marker,
+    /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
 }
 

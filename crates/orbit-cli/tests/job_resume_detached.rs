@@ -6,7 +6,7 @@
 #[cfg(unix)]
 mod unix {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -107,6 +107,24 @@ mod unix {
             serde_json::from_slice(&output).expect("CLI JSON")
         }
 
+        fn installed_json(&self, program: &Path, args: &[&str]) -> Value {
+            let mut command = assert_cmd::Command::new(program);
+            test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let output = command
+                .current_dir(&self.repo)
+                .env("HOME", &self.home)
+                .env("USERPROFILE", &self.home)
+                .args(args)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            serde_json::from_slice(&output).expect("installed CLI JSON")
+        }
+
         fn interrupted_source(&self) -> String {
             let source = self.json(&[
                 "run",
@@ -144,6 +162,56 @@ mod unix {
                 );
                 std::thread::sleep(Duration::from_millis(100));
             }
+        }
+
+        fn write_pipeline_job(&self, name: &str) {
+            let jobs = self.home.join(".orbit/resources/jobs");
+            fs::write(
+                jobs.join(format!("{name}.yaml")),
+                format!(
+                    "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 1\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"
+                ),
+            )
+            .expect("write workflow job");
+        }
+
+        fn assert_worker_started(&self, run_id: &str) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let shown = self.json(&["run", "show", run_id, "--json"]);
+                if let Some(pid) = shown["run"]["pid"].as_u64() {
+                    assert_ne!(pid, std::process::id() as u64, "worker is a child process");
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "worker never started for {run_id}: {shown}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    /// `orbit web serve` is launched by this same CLI main. Both CLI workflow
+    /// entry points must mark the binary before the shared worker spawn path.
+    #[test]
+    fn ship_and_auto_cli_commands_launch_workers() {
+        let fixture = Fixture::new();
+        fixture.write_pipeline_job("task_auto_pipeline");
+        fixture.write_pipeline_job("workspace_auto_pipeline");
+        let installed = fixture.home.join(".orbit/bin/orbit");
+        fs::create_dir_all(installed.parent().expect("installation directory"))
+            .expect("create installation directory");
+        fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install tested binary");
+
+        for args in [
+            &["run", "ship", "--mode", "local", "--json"][..],
+            &["run", "auto", "--json"][..],
+        ] {
+            let submitted = fixture.installed_json(&installed, args);
+            let run_id = submitted["run_id"].as_str().expect("submitted run id");
+            fixture.assert_worker_started(run_id);
+            fixture.poll_run(run_id, "success", Duration::from_secs(10));
         }
     }
 
