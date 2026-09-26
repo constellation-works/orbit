@@ -585,6 +585,8 @@ pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAcc
 /// a confined backend keeps its *own* state tree whole, and a read grant on
 /// its own callback session record and grant witness — the single files
 /// inside a denied directory it is entitled to — and nothing else there.
+/// Resolve each path physically before emitting it: Seatbelt matches the
+/// kernel's `/private/var` path even when a caller supplied `/var`.
 pub fn append_macos_read_boundary(
     profile: &mut String,
     denied_subpaths: &[PathBuf],
@@ -594,19 +596,31 @@ pub fn append_macos_read_boundary(
     for path in denied_subpaths {
         profile.push_str(&format!(
             "(deny file-read* (subpath \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+            super::sbpl_filter::sbpl_escape(
+                &crate::physical_with_missing_tail(path)
+                    .display()
+                    .to_string()
+            )
         ));
     }
     for path in readable_subpaths {
         profile.push_str(&format!(
             "(allow file-read* (subpath \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+            super::sbpl_filter::sbpl_escape(
+                &crate::physical_with_missing_tail(path)
+                    .display()
+                    .to_string()
+            )
         ));
     }
     for path in readable_files {
         profile.push_str(&format!(
             "(allow file-read* (literal \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+            super::sbpl_filter::sbpl_escape(
+                &crate::physical_with_missing_tail(path)
+                    .display()
+                    .to_string()
+            )
         ));
     }
 }

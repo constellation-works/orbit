@@ -51,6 +51,118 @@ fn state_plugin(
     spec
 }
 
+/// The shared spawn path makes the plugin's state before launching an exec
+/// backend, including when `fs` was not granted. This starts with a fresh
+/// global root so an earlier install or conformance run cannot mask it.
+#[cfg(unix)]
+#[test]
+fn an_exec_call_creates_its_own_state_before_backend_launch() {
+    for grants in [
+        &[PluginGrant::Fs, PluginGrant::Unsandboxed][..],
+        &[PluginGrant::Unsandboxed][..],
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let global_root = temp.path().join("global");
+        let plugin_root = temp.path().join("demo");
+        std::fs::create_dir_all(&plugin_root).expect("plugin root");
+        let command = stub_backend(
+            &plugin_root,
+            "#!/bin/sh\ncat >/dev/null\n[ -d \"$ORBIT_PLUGIN_STATE\" ] || exit 3\nprintf '{\"ok\":true,\"output\":{\"result\":\"ok\"}}\\n'\n",
+        );
+        let mut spec = state_plugin(&global_root, &plugin_root, "demo", "other", grants);
+        spec.command = command;
+        spec.sandbox = PluginSandbox::None;
+        let state = spec.state_dir.clone();
+        let profile = spec.sandbox_profile(None).expect("profile");
+        if grants.contains(&PluginGrant::Fs) {
+            assert_eq!(
+                profile.write.as_slice(),
+                std::slice::from_ref(&state),
+                "fs grants only the own state"
+            );
+        } else {
+            assert!(
+                profile.write.is_empty(),
+                "state creation does not grant writes"
+            );
+        }
+        assert!(
+            !state.exists(),
+            "fresh root has no plugin state before the call"
+        );
+
+        tool(std::sync::Arc::new(spec), None)
+            .execute(&context(&plugin_root), json!({}))
+            .expect("exec backend launches with host-created state");
+
+        assert!(
+            state.is_dir(),
+            "Orbit creates the state before backend launch"
+        );
+    }
+}
+
+/// A `/var`-style alias must resolve to the same physical path for the write
+/// grant, the state-tree deny, and the plugin's own read carve-out.
+#[cfg(unix)]
+#[test]
+fn seatbelt_state_rules_use_the_physical_path_of_an_aliased_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base = temp.path().canonicalize().expect("physical temp root");
+    let real = base.join("real");
+    let alias = base.join("alias");
+    std::fs::create_dir(&real).expect("real root");
+    symlink(&real, &alias).expect("root alias");
+    let spec = state_plugin(
+        &alias.join("global"),
+        &real.join("demo"),
+        "demo",
+        "other",
+        &[PluginGrant::Fs],
+    );
+    let profile = spec.sandbox_profile(None).expect("profile");
+    let state = real.join("global/state/plugins/demo");
+    let rules = profile.macos_fs_rules();
+    assert_eq!(
+        rules.modify,
+        [format!("{}/**", state.display())],
+        "Seatbelt writes only the physical plugin state path"
+    );
+    assert!(
+        rules.read.contains(&format!("{}/**", state.display())),
+        "Seatbelt reads the physical plugin state path"
+    );
+
+    let mut text = orbit_exec::compile_macos_sandbox_profile(&rules, "plugin")
+        .expect("compile Seatbelt rules");
+    orbit_exec::append_macos_read_boundary(
+        &mut text,
+        &profile.read_denies,
+        &profile.readable_denied_trees(),
+        &profile.readable_denied_files(),
+    );
+    assert!(
+        text.contains(&format!(
+            "(deny file-read* (subpath \"{}\"))",
+            real.join("global/state/plugins").display()
+        )),
+        "Seatbelt must deny the physical parent of all plugin states"
+    );
+    assert!(
+        text.contains(&format!(
+            "(allow file-read* (subpath \"{}\"))",
+            state.display()
+        )),
+        "Seatbelt must re-allow only the physical own state"
+    );
+    assert!(
+        !text.contains(&alias.display().to_string()),
+        "Seatbelt must not name a symlink alias for plugin state"
+    );
+}
+
 /// The profile shape both platforms compile from: `state/plugins/` denied,
 /// the plugin's own state re-allowed, and a manifest read root that resolves
 /// into another plugin's state never reaching the profile.
