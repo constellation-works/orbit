@@ -15,6 +15,9 @@ use crate::ToolContext;
 /// The stdin envelope version the backend receives.
 pub const PLUGIN_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
+/// Maximum serialized JSON bytes retained from a backend's error detail.
+pub(crate) const MAX_PLUGIN_ERROR_DETAIL_BYTES: usize = 16 * 1024;
+
 /// What a backend is told about the call it is serving.
 ///
 /// `exec` sends it as the envelope's `context` on stdin and `mcp` sends it as
@@ -76,6 +79,9 @@ pub fn parse_response(tool_name: &str, stdout: &str) -> Result<Value, OrbitError
         Some(true) => Ok(response.get("output").cloned().unwrap_or(Value::Null)),
         Some(false) => {
             let error = response.get("error").cloned().unwrap_or(Value::Null);
+            if let Some(error) = plugin_error(tool_name, &error) {
+                return Err(error);
+            }
             let code = error
                 .get("code")
                 .and_then(Value::as_str)
@@ -92,6 +98,35 @@ pub fn parse_response(tool_name: &str, stdout: &str) -> Result<Value, OrbitError
             "plugin tool '{tool_name}' returned an envelope without a boolean `ok`"
         ))),
     }
+}
+
+/// Accept only a well-formed backend error. Keep its public payload separate
+/// from the backend's untrusted object, so unknown fields cannot leak out.
+pub(crate) fn plugin_error(tool_name: &str, error: &Value) -> Option<OrbitError> {
+    let code = error.get("code")?.as_str()?;
+    let message = error.get("message")?.as_str()?;
+    if code.trim().is_empty() || message.trim().is_empty() {
+        return None;
+    }
+    let retryable = match error.get("retryable") {
+        Some(value) => value.as_bool()?,
+        None => false,
+    };
+    let mut payload = json!({
+        "code": code,
+        "message": message,
+        "retryable": retryable,
+    });
+    if let Some(detail) = error.get("detail")
+        && serde_json::to_vec(detail).ok()?.len() <= MAX_PLUGIN_ERROR_DETAIL_BYTES
+    {
+        payload["detail"] = detail.clone();
+    }
+    Some(OrbitError::RemoteTool {
+        code: code.to_string(),
+        message: format!("plugin tool '{tool_name}' failed: {message}"),
+        payload,
+    })
 }
 
 /// Check `output` against the tool's `output_schema`, when it declares one.

@@ -64,6 +64,33 @@ fn advertised_tool_names(client: &mut McpClient) -> Vec<String> {
 
 #[cfg(unix)]
 #[test]
+fn exec_plugin_error_reaches_mcp_caller_as_structured_content() {
+    let workspace = McpWorkspace::init();
+    let source = write_plugin(&workspace.home, "pluginerror");
+    std::fs::write(
+        source.join("bin/backend.sh"),
+        "#!/bin/sh\nprintf '{\"ok\":false,\"error\":{\"code\":\"bad_plan\",\"message\":\"invalid post\",\"retryable\":false,\"detail\":{\"at\":\"posts[0]\"}}}\\n'\n",
+    )
+    .expect("write error backend");
+    run_orbit(
+        &workspace,
+        &["plugin", "add", source.to_str().expect("utf8 source")],
+    );
+    run_orbit(&workspace, &["plugin", "enable", "pluginerror"]);
+
+    let mut client = workspace.serve();
+    let error = client.call_tool_err("pluginerror_echo", json!({}));
+    assert_eq!(
+        error,
+        json!({
+            "code": "bad_plan", "message": "invalid post", "retryable": false,
+            "detail": {"at": "posts[0]"}
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not() {
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "roundtrip");

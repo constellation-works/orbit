@@ -3,11 +3,14 @@
 
 use std::path::Path;
 
+use orbit_common::OrbitError;
 use orbit_types::plugin::{PluginGrant, PluginPermissions};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::super::backend::{PluginBackendSpec, PluginConfigSection};
-use super::super::envelope::{call_context, exec_envelope};
+use super::super::envelope::{
+    MAX_PLUGIN_ERROR_DETAIL_BYTES, call_context, exec_envelope, parse_response,
+};
 use super::super::mcp::tools_call_params;
 use super::support::{context, spec};
 use crate::ToolContext;
@@ -148,4 +151,60 @@ fn an_unconfigured_plugin_still_receives_a_config_object() {
     let context = call_context(&spec, &ctx, None);
     assert_eq!(context["config"], json!({}));
     assert!(spec.config_values().is_empty());
+}
+
+#[test]
+fn exec_error_preserves_structured_fields_and_defaults_retryable() {
+    let error = parse_response(
+        "demo.hello",
+        r#"{"ok":false,"error":{"code":"bad_plan","message":"invalid step","retryable":true,"detail":{"at":"posts[0]"}}}"#,
+    )
+    .expect_err("the backend reported an error");
+    match error {
+        OrbitError::RemoteTool { code, payload, .. } => {
+            assert_eq!(code, "bad_plan");
+            assert_eq!(
+                payload,
+                json!({"code":"bad_plan","message":"invalid step","retryable":true,"detail":{"at":"posts[0]"}})
+            );
+        }
+        other => panic!("expected structured plugin error, got {other}"),
+    }
+
+    let error = parse_response(
+        "demo.hello",
+        r#"{"ok":false,"error":{"code":"refused","message":"no"}}"#,
+    )
+    .expect_err("the backend reported an error");
+    assert!(
+        matches!(error, OrbitError::RemoteTool { payload, .. } if payload["retryable"] == false && payload.get("detail").is_none())
+    );
+}
+
+#[test]
+fn malformed_error_falls_back_to_execution_and_oversized_detail_is_omitted() {
+    for error in [
+        json!(null),
+        json!({"code": 42, "message": "bad"}),
+        json!({"code": "bad", "message": ""}),
+        json!({"code": "bad", "message": "bad", "retryable": "yes"}),
+    ] {
+        let response = json!({"ok": false, "error": error}).to_string();
+        assert!(
+            matches!(
+                parse_response("demo.hello", &response),
+                Err(OrbitError::Execution(_))
+            ),
+            "malformed error must retain the execution failure: {response}"
+        );
+    }
+    let detail = Value::String("x".repeat(MAX_PLUGIN_ERROR_DETAIL_BYTES));
+    let response = json!({"ok": false, "error": {
+        "code": "too_large", "message": "detail exceeds limit", "detail": detail,
+    }});
+    let error = parse_response("demo.hello", &response.to_string())
+        .expect_err("the backend reported an error");
+    assert!(
+        matches!(error, OrbitError::RemoteTool { payload, .. } if payload.get("detail").is_none() && payload["code"] == "too_large")
+    );
 }

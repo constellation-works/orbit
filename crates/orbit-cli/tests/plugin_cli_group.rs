@@ -210,6 +210,51 @@ fn stdout_json(output: &std::process::Output) -> Value {
 
 #[cfg(unix)]
 #[test]
+fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
+    let fixture = Fixture::new();
+    let source = fixture.source("errors");
+    write_status_plugin(&source, "errors", "");
+    std::fs::write(
+        source.join("bin/backend.sh"),
+        "#!/bin/sh\nprintf '{\"ok\":false,\"error\":{\"code\":\"budget_exceeded\",\"message\":\"wait\",\"retryable\":true,\"detail\":{\"retry_after\":30}}}\\n'\n",
+    )
+    .expect("write error backend");
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "enable", "errors"])
+        .assert()
+        .success();
+
+    let output = fixture
+        .orbit()
+        .env("ORBIT_AGENT_NAME", "codex")
+        .args(["tool", "run", "errors.status", "--input", "{}"])
+        .output()
+        .expect("run plugin tool");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|parse_error| {
+        panic!(
+            "JSON error on stderr ({parse_error}): {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+    assert_eq!(
+        error,
+        json!({
+            "code": "budget_exceeded", "message": "wait", "retryable": true,
+            "detail": {"retry_after": 30}
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
     let fixture = Fixture::new();
     let source = fixture.source("shapes");

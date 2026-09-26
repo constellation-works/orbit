@@ -378,19 +378,31 @@ fn run_case(
             }
         }
         Err(error) => {
-            let actual_code = reported_plugin_error_code(&error);
-            let passed = matches!(
-                &case.expect,
-                PluginTestExpectation::Error { error }
-                    if actual_code.as_deref() == Some(error.code.as_str())
-            );
+            let payload = match &error {
+                OrbitError::RemoteTool { payload, .. } => Some(payload),
+                _ => None,
+            };
+            let passed = match (&case.expect, payload) {
+                (PluginTestExpectation::Error { error: expected }, Some(actual)) => {
+                    actual["code"] == expected.code
+                        && expected
+                            .retryable
+                            .is_none_or(|retryable| actual["retryable"] == retryable)
+                        && expected.detail.as_ref().is_none_or(|detail| {
+                            actual.get("detail")
+                                == Some(&render_golden_value(detail, workspace_root, &plugin.root))
+                        })
+                }
+                _ => false,
+            };
             let detail = if passed {
                 String::new()
             } else {
                 match &case.expect {
                     PluginTestExpectation::Error { error: expected } => format!(
-                        "expected plugin error code '{}', got {}",
-                        expected.code, error
+                        "expected plugin error {}, got {}",
+                        compact(&serde_json::to_value(expected).unwrap_or(Value::Null)),
+                        payload.map_or_else(|| error.to_string(), compact)
                     ),
                     PluginTestExpectation::Output { output } => format!(
                         "expected {}, got error: {}",
@@ -469,13 +481,6 @@ fn template_golden_value(value: &Value, workspace: &Path, plugin_root: &Path) ->
         ),
         other => other.clone(),
     }
-}
-
-fn reported_plugin_error_code(error: &OrbitError) -> Option<String> {
-    let message = error.to_string();
-    let (_, after) = message.split_once(" failed (")?;
-    let (code, _) = after.split_once("):")?;
-    (!code.is_empty()).then(|| code.to_string())
 }
 
 fn compact(value: &Value) -> String {

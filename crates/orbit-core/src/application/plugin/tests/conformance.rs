@@ -134,7 +134,7 @@ fn golden_templates_and_backend_error_codes_run_in_the_hermetic_workspace() {
 request=$(cat)
 case "$request" in
   *'"subject":"fail"'*)
-    printf '{"ok":false,"error":{"code":"backend_error","message":"requested"}}\n'
+    printf '{"ok":false,"error":{"code":"backend_error","message":"requested","retryable":true,"detail":{"at":"%s/plan.yaml"}}}\n' "$ORBIT_WORKSPACE_ROOT"
     ;;
   *"$ORBIT_PLUGIN_ROOT"*)
     printf '{"ok":true,"output":{"subject":"%s"}}\n' "$ORBIT_WORKSPACE_ROOT"
@@ -166,6 +166,9 @@ tests:
     expect:
       error:
         code: backend_error
+        retryable: true
+        detail:
+          at: "{{workspace}}/plan.yaml"
 "#,
     )
     .expect("write templated goldens");
@@ -173,6 +176,31 @@ tests:
     let report = run(&fixture.runtime, &root).expect("run templated conformance suite");
     assert!(report.passed(), "{:?}", report.results);
     assert_eq!(report.results.len(), 2);
+
+    let golden_text = std::fs::read_to_string(&golden).expect("read golden");
+    std::fs::write(
+        &golden,
+        golden_text.replace("retryable: true", "retryable: false"),
+    )
+    .expect("change expected retryability");
+    let report = run(&fixture.runtime, &root).expect("run mismatched retryability");
+    assert_eq!(report.failures(), ["errors_match_code"]);
+
+    std::fs::write(&golden, golden_text.replace("plan.yaml", "other.yaml"))
+        .expect("change expected detail");
+    let report = run(&fixture.runtime, &root).expect("run mismatched detail");
+    assert_eq!(report.failures(), ["errors_match_code"]);
+
+    std::fs::write(
+        &golden,
+        golden_text.replace(
+            "detail:\n          at: \"{{workspace}}/plan.yaml\"",
+            "detail: null",
+        ),
+    )
+    .expect("expect explicit null detail");
+    let report = run(&fixture.runtime, &root).expect("run explicit null detail");
+    assert_eq!(report.failures(), ["errors_match_code"]);
 }
 
 #[cfg(unix)]
