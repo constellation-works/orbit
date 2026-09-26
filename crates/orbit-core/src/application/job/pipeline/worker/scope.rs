@@ -16,10 +16,14 @@
 //! reads the scope's `memory.events` / `pids.events` counters to tell a
 //! resource-limit failure apart from any other one.
 //!
-//! Where containment is disabled or unavailable (macOS, containers, sandboxes
-//! without a user bus) workers launch exactly as before and one warning per
-//! process says why.
+//! By default, disabled or unavailable containment (macOS, containers,
+//! sandboxes without a user bus) launches workers uncontained with one warning
+//! per process. `machine.worker_containment_strict=true` or the CLI's
+//! `--strict-worker-containment` refuses an unavailable scope before spawning
+//! the worker. Strict mode requires `machine.worker_containment=true`.
 
+#[cfg(test)]
+use std::cell::RefCell;
 #[cfg(any(target_os = "linux", test))]
 use std::path::Path;
 use std::path::PathBuf;
@@ -31,6 +35,8 @@ use orbit_config::{MemoryLimit, WorkerContainmentSettings};
 /// Error code on the diagnostic step of a run that failed after its worker
 /// scope hit a memory or task limit.
 pub(crate) const WORKER_RESOURCE_LIMIT_ERROR_CODE: &str = "worker_resource_limit";
+/// Diagnostic code for a strict launch refused before any worker process ran.
+pub(crate) const WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE: &str = "worker_containment_unavailable";
 
 /// Unit-name prefix of every worker scope. Breach detection only trusts
 /// counters from a cgroup carrying it, so a worker that fell back to its
@@ -38,6 +44,39 @@ pub(crate) const WORKER_RESOURCE_LIMIT_ERROR_CODE: &str = "worker_resource_limit
 const SCOPE_UNIT_PREFIX: &str = "orbit-worker-";
 const SCOPE_UNIT_SUFFIX: &str = ".scope";
 const SYSTEMD_RUN: &str = "systemd-run";
+/// Inherited by a coordinator's child workers so one CLI invocation keeps its
+/// containment policy for every leaf it admits.
+pub(crate) const STRICT_WORKER_CONTAINMENT_ENV: &str = "ORBIT_WORKER_CONTAINMENT_STRICT";
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SCOPE_AVAILABILITY: RefCell<Option<Result<(), String>>> = const { RefCell::new(None) };
+}
+
+/// Override the manager probe on this test thread only; production never has
+/// this hook. Drop restores the probe for the next test on the thread.
+#[cfg(test)]
+pub(crate) struct TestScopeAvailability;
+
+#[cfg(test)]
+impl TestScopeAvailability {
+    pub(crate) fn available() -> Self {
+        TEST_SCOPE_AVAILABILITY.with(|slot| *slot.borrow_mut() = Some(Ok(())));
+        Self
+    }
+
+    pub(crate) fn unavailable(reason: &str) -> Self {
+        TEST_SCOPE_AVAILABILITY.with(|slot| *slot.borrow_mut() = Some(Err(reason.to_string())));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestScopeAvailability {
+    fn drop(&mut self) {
+        TEST_SCOPE_AVAILABILITY.with(|slot| *slot.borrow_mut() = None);
+    }
+}
 
 /// The limits applied to one worker scope, admitted from `machine.worker_*`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,30 +108,54 @@ impl WorkerLimits {
     }
 }
 
-/// Launch `base` inside a fresh worker scope when containment is configured
-/// and the user manager accepts transient scopes; otherwise return `base`
-/// unchanged after a once-per-process warning.
+/// Launch `base` inside a fresh worker scope when available. In strict mode,
+/// refuse an unavailable scope before the worker is spawned.
 pub(crate) fn contain_worker_command(
     base: Command,
     run_id: &str,
     limits: Option<&WorkerLimits>,
-) -> Command {
+    strict: bool,
+) -> Result<Command, orbit_common::OrbitError> {
+    static WARNED: Once = Once::new();
+    let availability = limits.map(|_| user_scope_availability());
+    contain_worker_command_with_availability(base, run_id, limits, strict, availability, &WARNED)
+}
+
+pub(crate) fn contain_worker_command_with_availability(
+    base: Command,
+    run_id: &str,
+    limits: Option<&WorkerLimits>,
+    strict: bool,
+    availability: Option<Result<(), String>>,
+    warned: &Once,
+) -> Result<Command, orbit_common::OrbitError> {
     let Some(limits) = limits else {
-        warn_uncontained("machine.worker_containment is false");
-        return base;
+        if strict {
+            return Err(orbit_common::OrbitError::WorkerContainmentUnavailable {
+                reason: "machine.worker_containment=false".into(),
+            });
+        }
+        warn_uncontained("machine.worker_containment is false", warned);
+        return Ok(base);
     };
-    match user_scope_availability() {
-        Ok(()) => scoped_worker_command(&base, &scope_unit_name(run_id), limits),
+    match availability.unwrap_or_else(user_scope_availability) {
+        Ok(()) => Ok(scoped_worker_command(
+            &base,
+            &scope_unit_name(run_id),
+            limits,
+        )),
         Err(reason) => {
-            warn_uncontained(&reason);
-            base
+            if strict {
+                return Err(orbit_common::OrbitError::WorkerContainmentUnavailable { reason });
+            }
+            warn_uncontained(&reason, warned);
+            Ok(base)
         }
     }
 }
 
-fn warn_uncontained(reason: &str) {
-    static WARNED: Once = Once::new();
-    WARNED.call_once(|| {
+fn warn_uncontained(reason: &str, warned: &Once) {
+    warned.call_once(|| {
         tracing::warn!(
             target: "orbit.core.job_run",
             reason,
@@ -155,12 +218,21 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
 fn user_scope_availability() -> Result<(), String> {
     use std::sync::OnceLock;
 
+    #[cfg(test)]
+    if let Some(result) = TEST_SCOPE_AVAILABILITY.with(|slot| slot.borrow().clone()) {
+        return result;
+    }
+
     static PROBE: OnceLock<Result<(), String>> = OnceLock::new();
     PROBE.get_or_init(probe_user_scope).clone()
 }
 
 #[cfg(not(target_os = "linux"))]
 fn user_scope_availability() -> Result<(), String> {
+    #[cfg(test)]
+    if let Some(result) = TEST_SCOPE_AVAILABILITY.with(|slot| slot.borrow().clone()) {
+        return result;
+    }
     Err("worker scopes need Linux with a systemd user manager".to_string())
 }
 

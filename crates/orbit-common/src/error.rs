@@ -231,6 +231,11 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// Strict worker containment refused a launch before the worker existed.
+    #[error(
+        "worker containment required but unavailable: {reason}; enable machine.worker_containment and run under a Linux systemd user manager, or drop --strict-worker-containment / machine.worker_containment_strict"
+    )]
+    WorkerContainmentUnavailable { reason: String },
     #[error(
         "recoverable VCS conflict during '{}': original base '{}', target base '{}'; {}; conflicting paths: {}",
         .0.operation,

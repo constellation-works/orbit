@@ -168,8 +168,12 @@ impl OrbitRuntime {
             if let SubmittedDefinition::Snapshot { yaml, .. } = &definition
                 && let Err(error) = self.write_run_definition_snapshot(&run.run_id, yaml)
             {
-                let _ =
-                    self.finalize_pipeline_worker_startup_failure(&run, &error.to_string(), actor);
+                let _ = self.finalize_pipeline_worker_startup_failure(
+                    &run,
+                    &error.to_string(),
+                    None,
+                    actor,
+                );
                 return Err(error);
             }
 
@@ -183,7 +187,11 @@ impl OrbitRuntime {
             // A repeated automation admission resolves the original run. Only
             // pending runs need delivery; the existing Start CAS fences workers.
             if (action_key.is_none() || run.state == JobRunState::Pending)
-                && let Err(error) = self.spawn_pipeline_worker(&run.run_id, actor)
+                && let Err(error) = self.spawn_pipeline_worker(
+                    &run.run_id,
+                    actor,
+                    input["__worker_containment_strict"] == true,
+                )
             {
                 let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id)?;
                 let message = format!(
@@ -193,7 +201,10 @@ impl OrbitRuntime {
                     self.paths().repo_root.display(),
                     worker_log.display(),
                 );
-                let _ = self.finalize_pipeline_worker_startup_failure(&run, &message, actor);
+                let error_code = matches!(error, OrbitError::WorkerContainmentUnavailable { .. })
+                    .then_some(worker::scope::WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE);
+                let _ = self
+                    .finalize_pipeline_worker_startup_failure(&run, &message, error_code, actor);
                 return Err(error);
             }
             Ok(ChildSubmission::Submitted(PipelineInvokeResult {

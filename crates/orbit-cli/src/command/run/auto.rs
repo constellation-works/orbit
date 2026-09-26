@@ -69,6 +69,10 @@ pub struct AutoCommand {
     /// invocation is already running is cancelled.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
+    /// Require a systemd user scope for the coordinator and every leaf worker
+    /// it starts. Overrides machine.worker_containment_strict for this drain.
+    #[arg(long)]
+    pub strict_worker_containment: bool,
     /// Random crew pool for unassigned low-complexity tasks. Entries are
     /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
     /// bare or all weighted. Overrides the matching workflow pool; pass the
@@ -105,7 +109,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews"]
     )]
     pub stop: bool,
 }
@@ -131,7 +135,7 @@ impl Execute for AutoCommand {
         } else {
             CompletionPolicy::Review
         };
-        let invoke = runtime.submit_workspace_auto_run(
+        let invoke = runtime.submit_workspace_auto_run_with_containment(
             for_seconds,
             self.concurrency,
             completion,
@@ -140,6 +144,7 @@ impl Execute for AutoCommand {
             None,
             self.claim_token.as_deref(),
             orbit_types::workflow::JobRunTrigger::cli(),
+            self.strict_worker_containment,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,

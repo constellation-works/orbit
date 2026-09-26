@@ -145,7 +145,7 @@ fn startup_failure_records_diagnostic_state_event_and_audit() {
 
     fixture
         .supervisor
-        .finalize_startup_failure(&run, "worker could not start", Some("test-actor"))
+        .finalize_startup_failure(&run, "worker could not start", None, Some("test-actor"))
         .expect("finalize startup failure");
 
     assert_eq!(
@@ -208,7 +208,7 @@ fn startup_failure_leaves_a_claimed_run_to_its_worker() {
 
     fixture
         .supervisor
-        .finalize_startup_failure(&run, "worker could not start", None)
+        .finalize_startup_failure(&run, "worker could not start", None, None)
         .expect("finalize startup failure");
 
     assert!(fixture.host.terminalizations().is_empty());
@@ -372,6 +372,7 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
     ))
     .contained(WorkerLimits::from_settings(&WorkerContainmentSettings {
         enabled: true,
+        strict: false,
         memory_high: MemoryLimit::Bytes {
             amount: 48,
             unit: Some(MemoryUnit::M),

@@ -102,6 +102,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
         OrbitError::Execution(_) => "execution_failed",
+        OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
         OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
         OrbitError::Store(_) => "store_error",
         OrbitError::TaskStatusTransition(_) => "task_status_transition",

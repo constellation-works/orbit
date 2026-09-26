@@ -16,6 +16,7 @@ use tempfile::TempDir;
 
 use crate::OrbitRuntime;
 use crate::application::job::JobRunListParams;
+use crate::application::job::pipeline::TestScopeAvailability;
 use crate::application::job::pipeline::{run_definition_snapshot_path, worker_command_override};
 
 /// A finite worker for submission-path assertions. The startup observer reaps
@@ -196,6 +197,151 @@ fn worker_startup_failure_fails_the_submission_and_terminalizes_the_run() {
         runs[0].state,
         JobRunState::Interrupted,
         "a run whose worker never started must not stay pending"
+    );
+}
+
+#[test]
+fn strict_config_refuses_unavailable_scope_without_starting_a_worker() {
+    let root = TempDir::new().expect("tempdir");
+    let global_root = root.path().join("global");
+    let workspace_root = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global_root).expect("global");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    std::fs::write(
+        global_root.join("config.toml"),
+        "[machine]\nid = \"hm_0123456789abcdef\"\nname = \"test\"\ntask_prefix = \"TST\"\nworker_containment_strict = true\n",
+    )
+    .expect("config");
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
+        .expect("runtime with strict config");
+    seed_catalog_job(&runtime, "qa_strict_scope", 1);
+    let marker = root.path().join("worker-started");
+    let _worker = WorkerOverride::shell(&format!("touch {}", marker.display()));
+    let _manager = TestScopeAvailability::unavailable("no systemd user manager");
+
+    let error = runtime
+        .submit_job_run("qa_strict_scope", serde_json::json!({}), Some("test"))
+        .expect_err("strict config must refuse unavailable containment");
+    assert!(
+        matches!(error, OrbitError::WorkerContainmentUnavailable { .. }),
+        "{error:?}"
+    );
+    assert!(!marker.exists(), "uncontained worker must not start");
+    let runs = runtime
+        .list_job_runs(JobRunListParams {
+            job_id: Some("qa_strict_scope".into()),
+            ..Default::default()
+        })
+        .expect("list runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].state, JobRunState::Interrupted);
+    assert_eq!(runs[0].pid, None);
+    assert_eq!(
+        runs[0]
+            .steps
+            .last()
+            .and_then(|step| step.error_code.as_deref()),
+        Some("worker_containment_unavailable")
+    );
+    let reason = runs[0]
+        .steps
+        .last()
+        .and_then(|step| step.error_message.as_deref())
+        .expect("diagnostic");
+    assert!(reason.contains("no systemd user manager"), "{reason}");
+    assert!(
+        reason.contains("drop --strict-worker-containment"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn strict_cli_override_refuses_unavailable_auto_coordinator() {
+    let (_root, runtime) = test_runtime();
+    write_job_file(
+        &runtime.paths().global_dir.join("resources/jobs"),
+        "workspace_auto_pipeline",
+        &job_yaml("workspace_auto_pipeline", 1),
+    );
+    let _worker = WorkerOverride::shell(IDLE_WORKER);
+    let _manager = TestScopeAvailability::unavailable("systemd-run missing");
+    let error = runtime
+        .submit_workspace_auto_run_with_containment(
+            None,
+            None,
+            crate::CompletionPolicy::Review,
+            &[],
+            &orbit_config::ComplexityCrewPools::default(),
+            None,
+            None,
+            orbit_types::workflow::JobRunTrigger::cli(),
+            true,
+        )
+        .expect_err("CLI strict override must refuse unavailable containment");
+    assert!(
+        matches!(error, OrbitError::WorkerContainmentUnavailable { .. }),
+        "{error:?}"
+    );
+    let runs = runtime
+        .list_job_runs(JobRunListParams {
+            job_id: Some("workspace_auto_pipeline".into()),
+            ..Default::default()
+        })
+        .expect("list runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].state, JobRunState::Interrupted);
+    assert_eq!(runs[0].pid, None);
+    assert_eq!(
+        runs[0].input.as_ref().expect("run input")["__worker_containment_strict"],
+        true
+    );
+    assert_eq!(
+        runs[0]
+            .steps
+            .last()
+            .and_then(|step| step.error_code.as_deref()),
+        Some("worker_containment_unavailable")
+    );
+}
+
+#[test]
+fn strict_cli_override_rejects_disabled_containment_before_run_creation() {
+    let root = TempDir::new().expect("tempdir");
+    let global_root = root.path().join("global");
+    let workspace_root = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global_root).expect("global");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    std::fs::write(
+        global_root.join("config.toml"),
+        "[machine]\nid = \"hm_0123456789abcdef\"\nname = \"test\"\ntask_prefix = \"TST\"\nworker_containment = false\n",
+    )
+    .expect("config");
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
+        .expect("runtime with disabled containment");
+    let error = runtime
+        .submit_workspace_auto_run_with_containment(
+            None,
+            None,
+            crate::CompletionPolicy::Review,
+            &[],
+            &orbit_config::ComplexityCrewPools::default(),
+            None,
+            None,
+            orbit_types::workflow::JobRunTrigger::cli(),
+            true,
+        )
+        .expect_err("strict CLI flag requires enabled containment");
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("machine.worker_containment=true")
+    );
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("runs")
+            .is_empty()
     );
 }
 

@@ -26,6 +26,14 @@ mod record;
 pub(super) mod scope;
 pub(super) mod supervisor;
 
+fn effective_strict_containment(
+    configured: bool,
+    override_for_run: bool,
+    inherited: Option<&std::ffi::OsStr>,
+) -> bool {
+    configured || override_for_run || inherited == Some(std::ffi::OsStr::new("1"))
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -376,21 +384,27 @@ impl OrbitRuntime {
     ///
     /// Built per call: supervision is a short-lived unit of work, and a fresh
     /// one always reflects the runtime's current handles.
-    fn pipeline_worker_supervisor(&self) -> PipelineWorkerSupervisor {
+    fn pipeline_worker_supervisor(&self, strict_override: bool) -> PipelineWorkerSupervisor {
         // Tests substitute the worker program and must not reach the host's
         // service manager; the live containment test opts in on its own
         // supervisor.
-        let limits = if cfg!(test) || worker_substituted_process_wide() {
+        let settings = self.context.settings().worker_containment();
+        let inherited = std::env::var_os(scope::STRICT_WORKER_CONTAINMENT_ENV);
+        let strict =
+            effective_strict_containment(settings.strict, strict_override, inherited.as_deref());
+        let limits = if (cfg!(test) || worker_substituted_process_wide()) && !strict {
             None
         } else {
-            scope::WorkerLimits::from_settings(self.context.settings().worker_containment())
+            scope::WorkerLimits::from_settings(settings)
         };
         PipelineWorkerSupervisor::new(
             Arc::clone(&self.stores().job_run),
             Arc::clone(&self.stores().audit_event),
             self.paths().clone(),
             self.event_log.clone(),
-            WorkerCommandConfig::for_paths(self.paths()).contained(limits),
+            WorkerCommandConfig::for_paths(self.paths())
+                .contained(limits)
+                .strict_containment(strict),
             Arc::new(self.clone()),
         )
     }
@@ -406,15 +420,17 @@ impl OrbitRuntime {
                 "a claimed leaf worker must be launched from a bound runtime".into(),
             ));
         }
-        self.pipeline_worker_supervisor().spawn(run_id, None)
+        self.pipeline_worker_supervisor(false).spawn(run_id, None)
     }
 
     pub(super) fn spawn_pipeline_worker(
         &self,
         run_id: &str,
         actor: Option<&str>,
+        strict_override: bool,
     ) -> Result<(), OrbitError> {
-        self.pipeline_worker_supervisor().spawn(run_id, actor)
+        self.pipeline_worker_supervisor(strict_override)
+            .spawn(run_id, actor)
     }
     /// Spawn an already-built worker command. Production spawns go through
     /// [`PipelineWorkerSupervisor::spawn`]; this is the runtime-shaped entry
@@ -427,7 +443,7 @@ impl OrbitRuntime {
         command: Command,
         worker_log: PipelineWorkerLog,
     ) -> Result<u32, OrbitError> {
-        self.pipeline_worker_supervisor()
+        self.pipeline_worker_supervisor(false)
             .spawn_process(run_id, actor, command, worker_log)
     }
     /// Runtime-shaped entry point for the cancellation-race test; the
@@ -440,17 +456,18 @@ impl OrbitRuntime {
         exit_status: &str,
         actor: Option<&str>,
     ) -> Result<bool, OrbitError> {
-        self.pipeline_worker_supervisor()
+        self.pipeline_worker_supervisor(false)
             .record_cancellation_exit(run, signal, exit_status, actor)
     }
     pub(super) fn finalize_pipeline_worker_startup_failure(
         &self,
         run: &JobRun,
         message: &str,
+        error_code: Option<&str>,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
-        self.pipeline_worker_supervisor()
-            .finalize_startup_failure(run, message, actor)
+        self.pipeline_worker_supervisor(false)
+            .finalize_startup_failure(run, message, error_code, actor)
     }
     pub(crate) fn record_pipeline_audit(
         &self,

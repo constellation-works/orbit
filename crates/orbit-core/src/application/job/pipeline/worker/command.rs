@@ -1,5 +1,5 @@
 use super::log::pipeline_worker_file_name;
-use super::scope::{WorkerLimits, contain_worker_command};
+use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
 
 /// Return a stable path suitable for launching a fresh worker process.
@@ -311,6 +311,7 @@ pub(crate) struct WorkerCommandConfig {
     /// Limits for the worker's own systemd scope [ORB-12903]; `None` launches
     /// it in the caller's cgroup.
     containment: Option<WorkerLimits>,
+    strict_containment: bool,
 }
 
 impl WorkerCommandConfig {
@@ -319,6 +320,7 @@ impl WorkerCommandConfig {
         Self {
             root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
             containment: None,
+            strict_containment: false,
         }
     }
 
@@ -328,10 +330,26 @@ impl WorkerCommandConfig {
         self
     }
 
+    /// Apply the effective policy to this worker and all workers it starts.
+    pub(crate) fn strict_containment(mut self, strict: bool) -> Self {
+        self.strict_containment = strict;
+        self
+    }
+
     /// The command that runs `run_id`'s worker from `workspace`.
     pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
-        self.build_uncontained(workspace, run_id)
-            .map(|command| contain_worker_command(command, run_id, self.containment.as_ref()))
+        let mut command = self.build_uncontained(workspace, run_id)?;
+        if self.strict_containment {
+            command.env(STRICT_WORKER_CONTAINMENT_ENV, "1");
+        } else {
+            command.env_remove(STRICT_WORKER_CONTAINMENT_ENV);
+        }
+        contain_worker_command(
+            command,
+            run_id,
+            self.containment.as_ref(),
+            self.strict_containment,
+        )
     }
 
     fn build_uncontained(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {

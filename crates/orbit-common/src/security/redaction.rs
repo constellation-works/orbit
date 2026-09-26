@@ -223,6 +223,11 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
             payload: redact_sensitive_env_json(payload),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_sensitive_env_text(&m)),
+        OrbitError::WorkerContainmentUnavailable { reason } => {
+            OrbitError::WorkerContainmentUnavailable {
+                reason: redact_sensitive_env_text(&reason),
+            }
+        }
         OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
             redact_recoverable_vcs_conflict(*conflict, redact_sensitive_env_text),
         ),
@@ -384,6 +389,11 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             payload: redact_json_with(payload, redact_all),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_all(&m)),
+        OrbitError::WorkerContainmentUnavailable { reason } => {
+            OrbitError::WorkerContainmentUnavailable {
+                reason: redact_all(&reason),
+            }
+        }
         OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
             redact_recoverable_vcs_conflict(*conflict, redact_all),
         ),
