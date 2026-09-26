@@ -427,13 +427,13 @@ reliability view.
 
 | Manifest | Grant | Linux (`spawn_under_linux_landlock_boundary`) | macOS (`compile_macos_sandbox_profile` + `append_macos_network_access`) |
 |---|---|---|---|
-| (always) | — | Plugin root readable and executable; host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the same table as activity-scoped `proc.spawn` | The compiler's read allow plus its credential denies |
+| (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the same table as activity-scoped `proc.spawn`; the unreadable trees below get no grant | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then the child's own state re-allowed as a `subpath` and its own record and witness as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
 | `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
 | `network: loopback` | `network` | TCP left open (Landlock has no address filter) | `(deny network*)` then loopback re-allows |
 | `network: any` | `network` | TCP left open | `(allow network*)` stands |
-| `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files literally; unreadable trees as `(deny file-read* (subpath …))` after the broad read allow, with the child's own record and witness re-allowed after them (last match wins) |
+| `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files literally; the unreadable trees stay denied as in the first row |
 | `permissions.env_pass` | `env_pass` | Named vars copied into the allowlisted child env via `allowlisted_child_env`; `ORBIT_*` names are refused by `validate_structure`, so `ORBIT_OPERATOR` or `ORBIT_WORKSPACE_CLAIM_TOKEN` never reach a child | same |
 | `requires.programs` | — | Not a sandbox rule: checked against a restricted caller's `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset | No `sandbox-exec` wrapper |
@@ -449,10 +449,17 @@ become **readable**. Writable is a named inventory, never the roots:
 
 `bin/orbit` (run unconfined by the scheduler and workers), `plugins/`, `config.toml`,
 `mcp-callers.toml`, `clock.toml`, and the workspace's `plugins.yaml`, `routines/` and
-`auto_tasks/` stay read-only. `state/plugin-callbacks/` and `plugins/.grants/` are
-**unreadable** except for the child's own session record and own grant witness, so another
-plugin's token or witness is unreachable (a confined child loading another plugin's row
-registers it inactive). This is the inventory the agent sandbox grants a nested Orbit
+`auto_tasks/` stay read-only.
+
+**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/` and `state/plugins/` are
+**unreadable** to every plugin child, whatever it was granted. Each child gets back exactly its
+own session record and own grant witness (single files), and its own `state/plugins/<ns>`
+(`{{plugin_state}}`, a whole tree). So another plugin's token, witness or state is
+unreachable: a confined child loading another plugin's row registers it inactive, and a
+credential a plugin keeps in `{{plugin_state}}` is readable by that plugin alone. A manifest
+`fs.read` root that resolves inside one of these trees, outside the plugin's own state, is
+dropped from the profile with a warning; no grant re-allows it. Writing `{{plugin_state}}`
+still needs an `fs.write` root there and the `fs` grant (§4.1 admission is unchanged). This is the inventory the agent sandbox grants a nested Orbit
 (`append_linux_runtime_write_roots` in `orbit-core`); widening it is a security decision
 [ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. The witness under `plugins/` stays read-only
 only because both grant paths compose: the inventory omits `plugins/`, and `fs.write`
@@ -486,8 +493,12 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 (an ancestor granted list-only would still let the child enumerate credentials). Consequences:
 
 - A confined backend can read `{global_root}/config.toml` and recorded installs but cannot
-  list `{global_root}`, `{global_root}/state/` or `{global_root}/plugins/`.
-- A name created directly inside a carved-out directory after spawn is not readable.
+  list `{global_root}`, `{global_root}/state/`, `{global_root}/state/plugins/` or
+  `{global_root}/plugins/`.
+- A name created directly inside a carved-out directory after spawn is not readable. An
+  unreadable tree that does not exist yet at spawn is carved out the same way (its ancestors
+  get no grant), so a `state/plugins/<ns>` another plugin creates while a long-lived backend
+  runs stays out of reach.
 - The session record is granted as one inode, so the host rewrites it in place when binding
   the backend pid; a rename would leave the grant on an unlinked inode.
 

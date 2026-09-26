@@ -576,21 +576,30 @@ pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAcc
 /// Append a plugin's read carve-outs to a compiled profile.
 ///
 /// [`compile_macos_sandbox_profile`] allows reads broadly, which is right for
-/// an agent CLI. A plugin backend must not read the host's callback sessions
-/// or its grant witnesses, so those subpaths are denied here — after the
-/// broad allow, where SBPL's last-match-wins makes the denial stick.
+/// an agent CLI. A plugin backend must not read the host's callback sessions,
+/// its grant witnesses or another plugin's state, so those subpaths are
+/// denied here — after the broad allow, where SBPL's last-match-wins makes
+/// the denial stick.
 ///
-/// `readable_files` is re-allowed after the denies: a confined backend keeps
-/// a read grant on its *own* callback session record, the one file inside a
-/// denied directory it is entitled to, and nothing else there.
+/// `readable_subpaths` and `readable_files` are re-allowed after the denies:
+/// a confined backend keeps its *own* state tree whole, and a read grant on
+/// its own callback session record and grant witness — the single files
+/// inside a denied directory it is entitled to — and nothing else there.
 pub fn append_macos_read_boundary(
     profile: &mut String,
     denied_subpaths: &[PathBuf],
+    readable_subpaths: &[PathBuf],
     readable_files: &[PathBuf],
 ) {
     for path in denied_subpaths {
         profile.push_str(&format!(
             "(deny file-read* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&path.display().to_string())
+        ));
+    }
+    for path in readable_subpaths {
+        profile.push_str(&format!(
+            "(allow file-read* (subpath \"{}\"))\n",
             super::sbpl_filter::sbpl_escape(&path.display().to_string())
         ));
     }

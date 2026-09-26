@@ -179,9 +179,9 @@ fn a_scoped_grant_intersects_the_manifests_request() {
     );
     assert_eq!(
         profile.read,
-        vec![root.clone(), workspace.join("shared")],
-        "the plugin root is always readable, and a root that is granted exactly as \
-         requested passes through"
+        vec![root.clone(), workspace.join("shared"), root.join("state")],
+        "the plugin root and its own state are always readable, and a root that is \
+         granted exactly as requested passes through"
     );
 
     // A grant wider than a requested root does not widen it: the request is
@@ -275,7 +275,11 @@ fn the_profile_follows_the_grants_not_the_requests() {
     let profile = ungranted
         .sandbox_profile(Some(temp.path()))
         .expect("profile");
-    assert_eq!(profile.read, vec![root.clone()], "only the plugin root");
+    assert_eq!(
+        profile.read,
+        vec![root.clone(), root.join("state")],
+        "only the plugin root and its own state"
+    );
     assert!(profile.write.is_empty());
     assert_eq!(profile.network, PluginNetworkPermission::None);
 
@@ -286,7 +290,10 @@ fn the_profile_follows_the_grants_not_the_requests() {
         &[PluginGrant::Fs, PluginGrant::Network],
     );
     let profile = granted.sandbox_profile(Some(temp.path())).expect("profile");
-    assert_eq!(profile.read, vec![root.clone(), temp.path().to_path_buf()]);
+    assert_eq!(
+        profile.read,
+        vec![root.clone(), temp.path().to_path_buf(), root.join("state")]
+    );
     assert_eq!(
         profile.write,
         vec![temp.path().join(".cache"), root.join("state")]

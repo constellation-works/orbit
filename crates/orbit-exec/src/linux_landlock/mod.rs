@@ -187,7 +187,9 @@ pub struct LandlockBoundary {
     pub read: Vec<PathBuf>,
     /// Directories beneath [`Self::read`] the child must *not* reach: the
     /// grant is compiled so each of them keeps no granted ancestor, which
-    /// refuses listing them as well as reading what is inside. A rule binds an
+    /// refuses listing them as well as reading what is inside. An absent
+    /// entry is carved out the same way, so it stays unreachable when it is
+    /// created after spawn. A rule binds an
     /// inode and Landlock has no deny, so the ancestors are not granted and
     /// each of their allowed children is granted in its own right — the
     /// ancestors themselves therefore stop being listable. Naming a file in
@@ -232,10 +234,14 @@ pub fn linux_landlock_boundary_grants(
             grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
         }
     }
+    // A denied tree that does not exist yet is still carved out: its
+    // ancestors get no grant, so a directory created there after spawn — a
+    // second plugin's first `state/plugins/<ns>` while a long-lived backend
+    // runs — has no readable ancestor either.
     let denied: BTreeSet<PathBuf> = boundary
         .read_denies
         .iter()
-        .filter_map(|path| existing_canonical(path))
+        .map(|path| crate::path_identity::physical_with_missing_tail(path))
         .collect();
     for root in &boundary.read {
         let Some(path) = existing_canonical(root) else {
