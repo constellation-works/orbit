@@ -163,6 +163,9 @@ spec:
         verify that commit and current acceptance checks. On first attempt or
         retry, do not manufacture a change: attach `already-landed.json` and
         each validation log through `orbit.task.artifact.put` before success.
+        After required checks pass, for a genuine no-op, attach `no-diff.json`
+        and validation logs via `orbit.task.artifact.put`, using the schema in
+        the Orbit task-execution reference.
         The report needs schema_version 1,
         task_id, run_id, tested_head, covering_commit, covering_task_id (this
         task or covering sibling), scope (title, description,
