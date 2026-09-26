@@ -10,6 +10,7 @@ mod lint;
 mod list;
 pub(crate) mod output;
 mod publication;
+mod recheck_blocked;
 mod reindex;
 pub(crate) mod show;
 mod update;

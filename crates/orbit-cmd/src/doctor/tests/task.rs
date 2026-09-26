@@ -943,3 +943,117 @@ fn unreachable_checkout_partition_is_reported_without_the_deletion_repair() {
         "the repair must not delete task bundles it cannot prove are abandoned"
     );
 }
+
+/// Block a new task the way run terminalization does, with `error` as the
+/// failing step's message.
+fn add_task_blocked_by_run_failure(runtime: &OrbitRuntime, run_id: &str, error: &str) -> String {
+    use orbit_engine::RuntimeHost;
+    let task = runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: format!("blocked by {run_id}"),
+            ..Default::default()
+        })
+        .expect("add task");
+    runtime
+        .apply_task_automation_update(
+            &task.id,
+            orbit_engine::TaskAutomationUpdate {
+                job_run_id: Some(run_id.to_string()),
+                ..orbit_engine::blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some(error),
+                )
+            },
+        )
+        .expect("block task");
+    task.id
+}
+
+fn missing_launcher_error(program: &Path) -> String {
+    format!(
+        "execution failed: v2 job dispatch: cli invocation failed (permanent): provider \
+         launcher `{}` for provider `codex` was not found; searched: /usr/bin/codex",
+        program.display()
+    )
+}
+
+#[test]
+fn infra_blocked_row_is_ok_when_no_block_names_a_missing_launcher() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    add_task_blocked_by_run_failure(
+        &runtime,
+        "jrun-task",
+        "step `implement_one` completed with success=false",
+    );
+
+    let results = runtime.doctor_workspace().expect("doctor");
+
+    let row = status_of(&results, "infra-blocked-tasks");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok, "{row:?}");
+}
+
+/// Doctor separates launcher blocks that no longer reproduce from ones that
+/// still do, names the requeue command, and leaves task-level failures out.
+#[cfg(unix)]
+#[test]
+fn infra_blocked_row_reports_launcher_blocks_that_no_longer_reproduce() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let installed = temp.path().join("bin/codex");
+    fs::create_dir_all(installed.parent().expect("bin dir")).expect("create bin dir");
+    fs::write(&installed, "#!/bin/sh\nexit 0\n").expect("install launcher");
+    fs::set_permissions(&installed, fs::Permissions::from_mode(0o755))
+        .expect("make launcher executable");
+    let cleared = add_task_blocked_by_run_failure(
+        &runtime,
+        "jrun-cleared",
+        &missing_launcher_error(&installed),
+    );
+    let reproducing = add_task_blocked_by_run_failure(
+        &runtime,
+        "jrun-missing",
+        &missing_launcher_error(&temp.path().join("absent/codex")),
+    );
+    let task_failure = add_task_blocked_by_run_failure(
+        &runtime,
+        "jrun-task",
+        "step `implement_one` completed with success=false",
+    );
+
+    let results = runtime.doctor_workspace().expect("doctor");
+
+    let row = status_of(&results, "infra-blocked-tasks");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    let (now_resolves, still_missing) = row
+        .message
+        .split_once("; ")
+        .expect("one clause per condition");
+    assert!(
+        now_resolves.contains("now resolves")
+            && now_resolves.contains(&cleared)
+            && now_resolves.contains(&installed.display().to_string()),
+        "{}",
+        row.message
+    );
+    assert!(
+        still_missing.contains("still missing") && still_missing.contains(&reproducing),
+        "{}",
+        row.message
+    );
+    assert!(
+        !row.message.contains(&task_failure),
+        "a task-level failure is not an infra block: {}",
+        row.message
+    );
+    assert!(
+        row.remediation
+            .as_deref()
+            .is_some_and(|step| step.contains("orbit task recheck-blocked --confirm")),
+        "{row:?}"
+    );
+}

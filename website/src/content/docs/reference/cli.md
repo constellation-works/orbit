@@ -48,6 +48,7 @@ before the subcommand.
 | `orbit task artifact` | Manage task artifact files. |
 | `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Omit the ID to sweep active tasks; `--restore-pruned` re-declares `context_files` entries an earlier prune recorded in task history; `--status` narrows the sweep. |
 | `orbit task flow` | Filed-vs-closed rates over time — is the backlog draining? |
+| `orbit task recheck-blocked` | List tasks blocked because dispatch could not find the provider launcher, and whether that launcher resolves now. `--confirm` returns the ones that resolve to `backlog` with an `infra_block_cleared` history note; tasks blocked by their own failure stay blocked. The launcher is resolved from the invoking shell's `PATH` and `HOME`. |
 | `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
 | `orbit task export` \| `import` \| `reindex` | Portable `tar.zst` task bundles, and index rebuild. |
 | `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, verify, read, or restore a task snapshot. Nothing publishes automatically. |
@@ -110,7 +111,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 |---|---|
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit log tail` | Tail the unified Orbit log feed. |
-| `orbit doctor` | Diagnose workspace health: config, database, disk, indexes, locks, runs. The `--fix-*` flags are opt-in repairs. |
+| `orbit doctor` | Diagnose workspace health: config, database, disk, indexes, locks, runs, and tasks blocked by a missing provider launcher (`infra-blocked-tasks`). The `--fix-*` flags are opt-in repairs. |
 | `orbit doctor providers` | Each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. `--json`. |
 | `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. `--json`. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
 

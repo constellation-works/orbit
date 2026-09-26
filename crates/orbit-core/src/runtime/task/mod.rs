@@ -11,6 +11,7 @@ mod reservation_cleanup;
 #[cfg(test)]
 mod tests;
 
+pub use block_on_run_failure::InfraBlockedTask;
 pub use reservation_cleanup::StaleTaskReservation;
 
 /// One task's declared context selectors, canonicalized against a workspace

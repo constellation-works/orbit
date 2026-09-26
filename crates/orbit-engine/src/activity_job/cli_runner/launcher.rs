@@ -261,8 +261,46 @@ pub(crate) fn resolve_provider_launcher_with_extra_dirs(
             .join(", ")
     };
     Err(SpawnError::permanent(format!(
-        "provider launcher `{program}` for provider `{provider}` was not found; searched: {searched}"
+        "{}; searched: {searched}",
+        missing_launcher_message(program, provider)
     )))
+}
+
+/// A provider launcher that dispatch could not find, as named by the
+/// permanent spawn error [`resolve_provider_launcher`] returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingLauncher {
+    pub program: String,
+    pub provider: String,
+}
+
+const MISSING_LAUNCHER_PREFIX: &str = "provider launcher `";
+const MISSING_LAUNCHER_PROVIDER: &str = "` for provider `";
+const MISSING_LAUNCHER_SUFFIX: &str = "` was not found";
+
+fn missing_launcher_message(program: &str, provider: &str) -> String {
+    format!(
+        "{MISSING_LAUNCHER_PREFIX}{program}{MISSING_LAUNCHER_PROVIDER}{provider}{MISSING_LAUNCHER_SUFFIX}"
+    )
+}
+
+/// The launcher a "provider launcher not found" failure names, wherever that
+/// error appears in `text` — a run step's error message or the task-history
+/// note that quotes it. The failure is permanent for its run but not for its
+/// task: installing the launcher fixes it, so callers that re-check blocked
+/// tasks need the program back out of the recorded text. Parsed here, beside
+/// [`missing_launcher_message`], so the format and its reader cannot drift.
+pub fn missing_launcher_in(text: &str) -> Option<MissingLauncher> {
+    let (_, rest) = text.split_once(MISSING_LAUNCHER_PREFIX)?;
+    let (program, rest) = rest.split_once(MISSING_LAUNCHER_PROVIDER)?;
+    let (provider, _) = rest.split_once(MISSING_LAUNCHER_SUFFIX)?;
+    if program.is_empty() || program.contains('`') || provider.contains('`') {
+        return None;
+    }
+    Some(MissingLauncher {
+        program: program.to_string(),
+        provider: provider.to_string(),
+    })
 }
 
 #[cfg(windows)]

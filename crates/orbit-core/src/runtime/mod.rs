@@ -35,7 +35,7 @@ pub(crate) mod recovery_authority;
 mod resolve;
 pub(crate) mod run_input;
 pub(crate) mod task;
-pub use task::StaleTaskReservation;
+pub use task::{InfraBlockedTask, StaleTaskReservation};
 pub(crate) mod tool_exec;
 mod worker_coordination;
 pub mod workspace;

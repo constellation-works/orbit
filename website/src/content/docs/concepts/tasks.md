@@ -62,7 +62,7 @@ defining one.
 | `in-progress` | Actively being worked on. |
 | `review`      | Implementation complete; awaiting review/merge. Completion out of `review` requires an `execution_summary` or a successful run. |
 | `done`        | Accepted and closed. **Terminal** — reopening needs an explicit human override. |
-| `blocked`     | Temporarily paused (waiting on a dependency or decision). A failed run sends a task here only once step recovery is exhausted; an agent-declared failed envelope enters recovery first rather than blocking recoverable work. |
+| `blocked`     | Temporarily paused (waiting on a dependency or decision). A failed run sends a task here only once step recovery is exhausted; an agent-declared failed envelope enters recovery first rather than blocking recoverable work. A run that failed because dispatch could not find the provider launcher leaves the task *infra-blocked*: `orbit doctor` lists it under `infra-blocked-tasks`, and `orbit task recheck-blocked --confirm` returns it to `backlog` once the launcher resolves. |
 | `archived`    | Soft-deleted, with `orbit task archive` or a `--status archived` update. **Terminal** — restore it to any other status with `orbit task update <id> --status <status> --force`. |
 | `rejected`    | Declined. Reconsidered to `backlog` or `in-progress` on the lifecycle table; any other status needs `--force`. |
 

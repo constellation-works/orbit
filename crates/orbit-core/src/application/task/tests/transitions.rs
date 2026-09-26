@@ -184,3 +184,109 @@ fn transition_read_hook_does_not_affect_a_sibling_runtime_with_the_same_task_id(
     );
     runtime_a.set_transition_read_hook_status(None, None);
 }
+
+fn block_by_run_failure(runtime: &crate::OrbitRuntime, id: &str, run_id: &str, error: &str) {
+    use orbit_engine::RuntimeHost;
+    // Coupled to its run as `worktree_setup` leaves it, then blocked by the
+    // same update run terminalization applies.
+    runtime
+        .apply_task_automation_update(
+            id,
+            orbit_engine::TaskAutomationUpdate {
+                job_run_id: Some(run_id.to_string()),
+                ..orbit_engine::blocked_workflow_failure_update(
+                    "task_pr_pipeline",
+                    run_id,
+                    Some("STEP_FAILED"),
+                    Some(error),
+                )
+            },
+        )
+        .expect("block through the workflow-failure update");
+}
+
+fn missing_launcher_error(program: &std::path::Path) -> String {
+    format!(
+        "execution failed: v2 job dispatch: cli invocation failed (permanent): provider \
+         launcher `{}` for provider `codex` was not found; searched: /usr/bin/codex",
+        program.display()
+    )
+}
+
+/// The re-check returns exactly the blocks whose launcher now resolves, with an
+/// audit note, and leaves a still-missing launcher and a task-level failure
+/// blocked. A second pass finds nothing left to do.
+#[cfg(unix)]
+#[test]
+fn requeue_returns_only_cleared_infra_blocks_to_backlog_with_an_audit_note() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (root, runtime) = test_runtime();
+    let installed = root.path().join("bin/codex");
+    std::fs::create_dir_all(installed.parent().expect("bin dir")).expect("create bin dir");
+    std::fs::write(&installed, "#!/bin/sh\nexit 0\n").expect("install launcher");
+    std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755))
+        .expect("make launcher executable");
+    let still_missing = root.path().join("absent/codex");
+
+    let cleared = add_task(&runtime, "Launcher installed since");
+    let missing = add_task(&runtime, "Launcher still missing");
+    let task_failure = add_task(&runtime, "Task-level failure");
+    block_by_run_failure(
+        &runtime,
+        &cleared.id,
+        "jrun-cleared",
+        &missing_launcher_error(&installed),
+    );
+    block_by_run_failure(
+        &runtime,
+        &missing.id,
+        "jrun-missing",
+        &missing_launcher_error(&still_missing),
+    );
+    block_by_run_failure(
+        &runtime,
+        &task_failure.id,
+        "jrun-task",
+        "step `implement_one` completed with success=false",
+    );
+
+    let requeued = runtime
+        .requeue_cleared_infra_blocked_tasks()
+        .expect("requeue cleared blocks");
+
+    assert_eq!(
+        requeued
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![cleared.id.as_str()]
+    );
+    let status = |id: &str| runtime.get_task(id).expect("task").status;
+    assert_eq!(status(&cleared.id), TaskStatus::Backlog);
+    assert_eq!(status(&missing.id), TaskStatus::Blocked);
+    assert_eq!(status(&task_failure.id), TaskStatus::Blocked);
+
+    let history = runtime.get_task_history(&cleared.id).expect("history");
+    let audit = history.last().expect("audit entry");
+    assert_eq!(audit.event, "infra_block_cleared");
+    assert_eq!(audit.from_status, Some(TaskStatus::Blocked));
+    assert_eq!(audit.to_status, Some(TaskStatus::Backlog));
+    let note = audit.note.as_deref().unwrap_or_default();
+    assert!(
+        note.contains(&installed.display().to_string()),
+        "names where it resolves: {note}"
+    );
+    assert!(
+        note.contains("run_id=jrun-cleared"),
+        "names the block: {note}"
+    );
+
+    assert!(
+        runtime
+            .requeue_cleared_infra_blocked_tasks()
+            .expect("second pass")
+            .is_empty(),
+        "a requeued task is no longer blocked, so a re-run is a no-op"
+    );
+}
