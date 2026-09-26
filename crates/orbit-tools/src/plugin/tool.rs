@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
-use super::envelope::{exec_envelope, parse_response, validate_output};
+use super::envelope::{CallSecrets, exec_envelope, parse_response, validate_output};
 use super::mcp::McpBackend;
 use super::schema::CompiledSchema;
 use crate::{Tool, ToolContext, ToolExecutionKind};
@@ -119,7 +119,8 @@ impl PluginTool {
                 self.name
             ))
         })?;
-        let envelope = exec_envelope(spec, ctx, &self.name, input);
+        let secrets = CallSecrets::resolve(spec)?;
+        let envelope = exec_envelope(spec, ctx, &self.name, input, &secrets);
         let stdin = serde_json::to_vec(&envelope).map_err(|error| {
             OrbitError::Execution(format!("serialize plugin envelope: {error}"))
         })?;
@@ -151,6 +152,7 @@ impl PluginTool {
             debug: false,
         };
         sandbox.validate(&request)?;
+        secrets.record_delivery();
         let mut child = sandbox.spawn(&request)?;
         if let Err(error) = callback.bind_pid(child.id()) {
             let _ = child.kill();

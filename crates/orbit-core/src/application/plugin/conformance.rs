@@ -15,24 +15,32 @@
 //! names each of those grants. With that consent the run uses the requested
 //! profile. Consent applies to this run only; it does not record a host grant.
 //!
+//! Secrets come from the goldens alone: a case's `secrets` map is delivered
+//! the way the host delivers stored values (`context.secrets` /
+//! `_meta.orbit.secrets`, each at version `fixture`), and the host's own
+//! secret store is never opened, so a run cannot read — or certify against —
+//! a real credential.
+//!
 //! Certification is written only when this host has the same plugin
 //! installed at the same manifest digest: a directory that differs from the
 //! installed tree says nothing about the tree the host would run.
 
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{
-    LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginTool, PluginToolBinding,
-    PluginValidationPolicy, load_plugin_dir, manifest_refusal, refuse_covering_fs_write_roots,
-    resolve_declared_programs, validate_loaded_plugin,
+    DeliveredPluginSecret, LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginSecretSource,
+    PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
+    refuse_covering_fs_write_roots, resolve_declared_programs, validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
-    PluginGrant, PluginGrantSet, PluginManifest, PluginNetworkPermission, PluginProvenance,
-    PluginSandbox, PluginTestCase, PluginTestExpectation, parse_grants, plugin_tool_name,
+    FIXTURE_SECRET_VERSION, PluginGrant, PluginGrantSet, PluginManifest, PluginNetworkPermission,
+    PluginProvenance, PluginSandbox, PluginTestCase, PluginTestExpectation, parse_grants,
+    plugin_tool_name,
 };
 use serde_json::Value;
 
@@ -164,6 +172,7 @@ pub fn test_plugin_dir(
     // every grant it builds is the unscoped form. Operator consent above
     // decides whether the run happens, not how wide its profile is.
     let grants = PluginGrantSet::from_grants(plugin.manifest.required_grants());
+    let fixture_secrets = Arc::new(FixtureSecrets::default());
     let backend = build_plugin_backend(
         &plugin,
         PluginProvenance {
@@ -184,11 +193,14 @@ pub fn test_plugin_dir(
             std::env::var_os("PATH").as_deref(),
         )
         .0,
+        // The goldens' fixtures, swapped in per case; never the host store.
+        Some(Arc::clone(&fixture_secrets) as Arc<dyn PluginSecretSource>),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let mut results = Vec::with_capacity(case_locations.len());
     let mut changed_files = std::collections::BTreeSet::new();
     for (file_index, case_index) in case_locations {
+        fixture_secrets.supply(&plugin.tests[file_index].file.tests[case_index].secrets);
         let execution = run_case(
             &plugin,
             &backend,
@@ -237,6 +249,47 @@ pub fn test_plugin_dir(
     report.certified = certified;
     report.certification_note = note;
     Ok(report)
+}
+
+/// The secret source of a conformance run: the current case's `secrets`
+/// map, replaced before each case. One backend serves every case (an `mcp`
+/// server is spawned once), and delivery reads the source per call, so the
+/// case that is running is the case whose fixtures a call carries.
+#[derive(Default)]
+struct FixtureSecrets(Mutex<BTreeMap<String, DeliveredPluginSecret>>);
+
+impl FixtureSecrets {
+    fn supply(&self, secrets: &BTreeMap<String, String>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = secrets
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    DeliveredPluginSecret {
+                        value: value.clone(),
+                        version: FIXTURE_SECRET_VERSION.to_string(),
+                    },
+                )
+            })
+            .collect();
+    }
+}
+
+impl PluginSecretSource for FixtureSecrets {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        let supplied = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok(names
+            .iter()
+            .filter_map(|name| {
+                supplied
+                    .get(name)
+                    .map(|secret| (name.clone(), secret.clone()))
+            })
+            .collect())
+    }
 }
 
 fn selected_case_locations(

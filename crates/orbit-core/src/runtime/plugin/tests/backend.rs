@@ -95,6 +95,7 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         grants.clone(),
         section.clone(),
         BTreeMap::new(),
+        None,
     );
     refuse_covering_fs_write_roots(validate.spec(), None).expect("validate roots");
 
@@ -123,6 +124,7 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         grants,
         section,
         BTreeMap::new(),
+        None,
     );
     refuse_covering_fs_write_roots(conformance.spec(), None).expect("conformance roots");
 

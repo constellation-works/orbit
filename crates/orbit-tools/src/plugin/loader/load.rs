@@ -133,6 +133,23 @@ fn resolve_tests(
                 )
                 .into());
             }
+            // A fixture for a name the manifest does not declare would never
+            // be delivered: the host carries declared secrets only.
+            if let Some(name) = case
+                .secrets
+                .keys()
+                .find(|name| !manifest.declares_secret(name))
+            {
+                return Err(PluginManifestError::new(
+                    &field,
+                    format!(
+                        "test '{}' supplies secret '{name}', which this manifest does not declare \
+                         in spec.secrets",
+                        case.name
+                    ),
+                )
+                .into());
+            }
         }
         files.push(LoadedPluginTestFile { path, file });
     }

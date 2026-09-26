@@ -1,14 +1,16 @@
 //! The `mcp` backend against the fixture server: spawned once per backend,
 //! verified against the manifest, and never a hang when the child dies.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::{PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions};
 use serde_json::{Value, json};
 
+use super::super::backend::{DeliveredPluginSecret, PluginSecretDelivery, PluginSecretSource};
 use super::super::loader::load_plugin_dir;
 use super::super::mcp::{McpBackend, McpExpectedTool, tool_result};
 use super::super::schema::CompiledSchema;
@@ -79,7 +81,12 @@ struct Fixture {
 
 impl Fixture {
     fn new(env: &[(&str, &str)], timeout_ms: u64) -> Self {
-        Self::build(env, timeout_ms, None, Vec::new())
+        Self::build(env, timeout_ms, None, Vec::new(), Default::default())
+    }
+
+    /// A backend whose plugin declares secrets, delivered from `secrets`.
+    fn with_secrets(secrets: PluginSecretDelivery) -> Self {
+        Self::build(&[], 5_000, None, Vec::new(), secrets)
     }
 
     /// A backend granted `orbit_tools`, so `ORBIT_ALLOWED_TOOLS` is the
@@ -94,6 +101,7 @@ impl Fixture {
             timeout_ms,
             Some(permissions),
             vec![PluginGrant::OrbitTools],
+            Default::default(),
         )
     }
 
@@ -102,6 +110,7 @@ impl Fixture {
         timeout_ms: u64,
         permissions: Option<PluginPermissions>,
         grants: Vec<PluginGrant>,
+        secrets: PluginSecretDelivery,
     ) -> Self {
         let plugin = load_plugin_dir(&fixture_root()).expect("fixture loads");
         let host_root = tempfile::tempdir().expect("temporary plugin host root");
@@ -127,6 +136,7 @@ impl Fixture {
                 json!({ "index_dir": "/srv/graph", "max_nodes": 500 }),
             ),
             grants: PluginGrantSet::from_grants(grants),
+            secrets,
         });
         let expected = plugin
             .tools
@@ -567,6 +577,88 @@ fn tools_call_carries_this_call_s_context_not_the_session_s() {
     // child names its own binding on its own request [ORB-13115].
     assert_eq!(second["meta"]["orbit"]["task_id"], "ORB-7");
     assert_eq!(second["meta"]["orbit"]["job_run_id"], "jrun-host");
+}
+
+/// A secret source whose value the test can change between calls, standing
+/// in for `orbit plugin secret set` while the server is running.
+struct MutableSource(Mutex<BTreeMap<String, DeliveredPluginSecret>>);
+
+impl PluginSecretSource for MutableSource {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        let values = self.0.lock().expect("values");
+        Ok(names
+            .iter()
+            .filter_map(|name| {
+                values
+                    .get(name)
+                    .map(|secret| (name.clone(), secret.clone()))
+            })
+            .collect())
+    }
+}
+
+fn sha256_hex(value: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The plugin's declared secrets reach the long-lived server on each
+/// `tools/call` as `_meta.orbit.secrets`, read per call — a value set after
+/// the server started arrives without a respawn — and never in its
+/// environment or argv. The fixture echoes a digest, so the value is not in
+/// the response either.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn tools_call_carries_the_declared_secrets_per_call_and_never_in_env() {
+    require_sandbox();
+    require_python3();
+    let value = "mcp-secret-value-4be1d0";
+    let source = Arc::new(MutableSource(Mutex::new(BTreeMap::new())));
+    let fixture = Fixture::with_secrets(PluginSecretDelivery::new(
+        vec!["api_token".to_string(), "refresh_token".to_string()],
+        Arc::clone(&source) as Arc<dyn PluginSecretSource>,
+    ));
+    let echo = fixture.tool("echo", None);
+    let ctx = fixture.context(&[]);
+
+    let before = echo.execute(&ctx, json!({})).expect("call before set");
+    assert_eq!(
+        before["meta"]["orbit"]["secrets"],
+        json!({}),
+        "declared but unset secrets are omitted: {before}"
+    );
+
+    source.0.lock().expect("values").insert(
+        "api_token".to_string(),
+        DeliveredPluginSecret {
+            value: value.to_string(),
+            version: "v1".to_string(),
+        },
+    );
+    let after = echo.execute(&ctx, json!({})).expect("call after set");
+    assert_eq!(
+        after["pid"], before["pid"],
+        "the same server serves both calls"
+    );
+    assert_eq!(
+        after["meta"]["orbit"]["secrets"],
+        json!({
+            "api_token": {
+                "sha256": sha256_hex(value),
+                "version": "v1",
+                "in_env_or_argv": false,
+            }
+        }),
+        "{after}"
+    );
+    assert!(!after.to_string().contains(value));
 }
 
 #[cfg(unix)]

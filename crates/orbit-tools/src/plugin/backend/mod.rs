@@ -12,6 +12,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::{allowlisted_child_env, allowlisted_child_env_from};

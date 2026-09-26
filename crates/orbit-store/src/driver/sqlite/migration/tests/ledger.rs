@@ -313,6 +313,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0029".to_string(),
                 "friction_rehome_target".to_string()
             ),
+            (
+                "migration.v0030".to_string(),
+                "audit_plugin_secrets".to_string()
+            ),
         ]
     );
 }
@@ -600,7 +604,7 @@ fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     );
     assert_eq!(
         applied.last().map(|migration| migration.name.as_str()),
-        Some("friction_rehome_target")
+        Some("audit_plugin_secrets")
     );
     let connection = store.connection();
     let conn = connection.lock().expect("connection");

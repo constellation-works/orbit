@@ -1,8 +1,12 @@
 use orbit_types::plugin::{PluginGrant, PluginPermissions};
 use serde_json::json;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::super::backend::PluginConfigSection;
+use super::super::backend::{
+    DeliveredPluginSecret, PluginConfigSection, PluginSecretDelivery, PluginSecretSource,
+};
 use super::support::{context, require_sandbox, spec, stub_backend, tool};
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
@@ -186,4 +190,68 @@ fn an_exec_backend_that_does_not_answer_is_killed_at_its_timeout() {
         elapsed >= Duration::from_millis(100) && elapsed < Duration::from_secs(3),
         "the configured timeout is the execution bound: {elapsed:?}"
     );
+}
+
+/// The value an `exec` backend is handed, and the one string its script
+/// searches its own environment and argv for.
+const EXEC_SECRET: &str = "exec-secret-value-9c2f";
+
+/// A plugin's declared secret reaches its `exec` backend on stdin, under
+/// `context.secrets`, and nowhere the process could leak it by being
+/// inspected: not its environment, not its argv.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn an_exec_backend_receives_its_secret_on_stdin_and_not_in_env_or_argv() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let command = stub_backend(
+        temp.path(),
+        &format!(
+            "#!/bin/sh\ninput=$(cat)\nenv_hits=$(env | grep -c '{EXEC_SECRET}' || true)\n\
+             argv_hits=$(printf '%s\\n' \"$0\" \"$@\" | grep -c '{EXEC_SECRET}' || true)\n\
+             printf '{{\"ok\":true,\"output\":{{\"env_hits\":%s,\"argv_hits\":%s,\"envelope\":%s}}}}\\n' \
+             \"$env_hits\" \"$argv_hits\" \"$input\"\n"
+        ),
+    );
+    let mut backend = (*spec(command, temp.path(), PluginPermissions::default(), &[])).clone();
+    backend.secrets = PluginSecretDelivery::new(
+        vec!["api_token".to_string(), "unset_token".to_string()],
+        Arc::new(FixedSource),
+    );
+
+    let output = tool(Arc::new(backend), None)
+        .execute(&context(temp.path()), json!({}))
+        .expect("backend succeeds");
+
+    assert_eq!(
+        output["envelope"]["context"]["secrets"],
+        json!({ "api_token": { "value": EXEC_SECRET, "version": "v7" } }),
+        "the declared, set secret rides stdin with its version; the unset one is omitted"
+    );
+    assert_eq!(output["env_hits"], 0, "the value is not in the environment");
+    assert_eq!(output["argv_hits"], 0, "the value is not in argv");
+}
+
+struct FixedSource;
+
+impl PluginSecretSource for FixedSource {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, orbit_common::OrbitError> {
+        Ok(names
+            .iter()
+            .filter(|name| *name == "api_token")
+            .map(|name| {
+                (
+                    name.clone(),
+                    DeliveredPluginSecret {
+                        value: EXEC_SECRET.to_string(),
+                        version: "v7".to_string(),
+                    },
+                )
+            })
+            .collect())
+    }
 }

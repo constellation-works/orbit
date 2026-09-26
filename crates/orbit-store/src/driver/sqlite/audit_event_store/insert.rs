@@ -81,8 +81,9 @@ fn insert_audit_event_record_on_connection(
             task_id, job_run_id, activity_id, step_index, trace_id, caller_ip,
             actor_kind, actor_id, actor_vendor, actor_family, actor_model,
             actor_alias_version, self_reported_actor,
-            plugin_name, plugin_version, plugin_manifest_digest, plugin_grants
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46)"#,
+            plugin_name, plugin_version, plugin_manifest_digest, plugin_grants,
+            plugin_secrets
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47)"#,
         rusqlite::params![
             params.execution_id,
             now_string(),
@@ -132,6 +133,8 @@ fn insert_audit_event_record_on_connection(
             invocation
                 .plugin
                 .map(|plugin| serde_json::to_string(&plugin.grants).unwrap_or_default()),
+            (!invocation.plugin_secrets.is_empty())
+                .then(|| serde_json::to_string(invocation.plugin_secrets).unwrap_or_default()),
         ],
     )
         .map_err(|e| OrbitError::Store(e.to_string()))?;

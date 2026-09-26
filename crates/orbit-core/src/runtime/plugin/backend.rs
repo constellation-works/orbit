@@ -4,11 +4,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use orbit_common::OrbitError;
 use serde_json::Value;
 
 use orbit_tools::plugin::{
-    LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec,
-    PluginConfigSection, PluginTool, PluginToolBinding,
+    DeliveredPluginSecret, LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend,
+    PluginBackendSpec, PluginConfigSection, PluginSecretDelivery, PluginSecretSource, PluginTool,
+    PluginToolBinding,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginBackendType, PluginGrantSet, PluginProvenance, parse_stored_grants,
@@ -16,6 +18,35 @@ use orbit_types::plugin::{
 
 use super::grants::recorded_program_paths;
 use super::paths::plugin_state_dir;
+use super::secrets::PluginSecretStore;
+
+/// The host's secret store as one installed plugin's secret source: the
+/// plugin's own file under the store and nothing else, read on every call.
+struct HostPluginSecrets {
+    store: PluginSecretStore,
+    plugin: String,
+}
+
+impl PluginSecretSource for HostPluginSecrets {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        let mut delivered = BTreeMap::new();
+        for name in names {
+            if let Some(secret) = self.store.get(&self.plugin, name)? {
+                delivered.insert(
+                    name.clone(),
+                    DeliveredPluginSecret {
+                        value: secret.value.expose().to_string(),
+                        version: secret.version,
+                    },
+                );
+            }
+        }
+        Ok(delivered)
+    }
+}
 
 /// The backend every tool of this plugin shares: the spec for `exec`, or one
 /// long-lived server proxy for `mcp` (design §4.2).
@@ -53,10 +84,22 @@ pub(crate) fn plugin_backend(
         // `PATH`: which process spawns the backend must not change what it
         // may execute (design §4.3).
         recorded_program_paths(global_root, &installed.name),
+        // The installed row's name keys the store, so a plugin reads its own
+        // file and no other plugin's, whatever its manifest declares.
+        Some(Arc::new(HostPluginSecrets {
+            store: PluginSecretStore::new(global_root),
+            plugin: installed.name.clone(),
+        })),
     )
 }
 
 /// Construct the backend shared by runtime registration and conformance.
+///
+/// `secrets` is where the manifest's declared secrets are read from on each
+/// call: the host store for an installed plugin, a golden's fixtures for
+/// `orbit plugin test`, and `None` for a backend that never runs (validate),
+/// whose calls would carry no secrets.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_plugin_backend(
     plugin: &LoadedPlugin,
     provenance: PluginProvenance,
@@ -65,7 +108,15 @@ pub(crate) fn build_plugin_backend(
     grants: PluginGrantSet,
     config: PluginConfigSection,
     program_paths: BTreeMap<String, PathBuf>,
+    secrets: Option<Arc<dyn PluginSecretSource>>,
 ) -> PluginBackend {
+    let declared = plugin
+        .manifest
+        .spec
+        .secrets
+        .iter()
+        .map(|secret| secret.name.clone())
+        .collect();
     let spec = Arc::new(PluginBackendSpec {
         provenance,
         plugin_root: plugin.root.clone(),
@@ -80,6 +131,9 @@ pub(crate) fn build_plugin_backend(
         program_paths,
         config,
         grants,
+        secrets: secrets
+            .map(|source| PluginSecretDelivery::new(declared, source))
+            .unwrap_or_default(),
     });
     match plugin.manifest.spec.backend.backend_type {
         PluginBackendType::Exec => PluginBackend::Exec(spec),

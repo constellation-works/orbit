@@ -159,6 +159,10 @@ pub struct AuditInvocationFields<'a> {
     /// (design `docs/design/plugins/1_scope.md` §4.4). `None` for every
     /// built-in and legacy external tool.
     pub plugin: Option<&'a PluginProvenance>,
+    /// The names of the declared secrets the plugin call's request carried
+    /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
+    /// only: no value reaches an audit row. Empty for every other call.
+    pub plugin_secrets: &'a [String],
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

@@ -1,15 +1,21 @@
 //! What both dispatch surfaces tell a backend about the call, and what they
 //! must never tell anything else.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::{PluginGrant, PluginPermissions};
 use serde_json::{Value, json};
 
-use super::super::backend::{PluginBackendSpec, PluginConfigSection};
+use super::super::backend::{
+    DeliveredPluginSecret, PluginBackendSpec, PluginConfigSection, PluginSecretDelivery,
+    PluginSecretSource,
+};
 use super::super::envelope::{
-    MAX_PLUGIN_ERROR_DETAIL_BYTES, call_context, exec_envelope, parse_response,
+    CallSecrets, MAX_PLUGIN_ERROR_DETAIL_BYTES, call_context, exec_envelope, parse_response,
+    take_delivered_plugin_secret_names,
 };
 use super::super::mcp::tools_call_params;
 use super::support::{context, spec};
@@ -34,6 +40,61 @@ fn configured_spec(root: &Path) -> PluginBackendSpec {
     spec
 }
 
+fn no_secrets() -> CallSecrets {
+    CallSecrets::default()
+}
+
+/// A source holding values for more names than any one plugin declares, and
+/// recording which names it was asked for.
+#[derive(Default)]
+struct RecordingSource {
+    values: BTreeMap<String, DeliveredPluginSecret>,
+    asked: Mutex<Vec<Vec<String>>>,
+}
+
+impl RecordingSource {
+    fn holding(values: &[(&str, &str, &str)]) -> Arc<Self> {
+        Arc::new(Self {
+            values: values
+                .iter()
+                .map(|(name, value, version)| {
+                    (
+                        (*name).to_string(),
+                        DeliveredPluginSecret {
+                            value: (*value).to_string(),
+                            version: (*version).to_string(),
+                        },
+                    )
+                })
+                .collect(),
+            asked: Mutex::default(),
+        })
+    }
+}
+
+impl PluginSecretSource for RecordingSource {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        self.asked.lock().expect("asked").push(names.to_vec());
+        // Deliberately answers with everything it holds, asked for or not:
+        // the delivery must bound the result itself.
+        Ok(self.values.clone())
+    }
+}
+
+/// A spec declaring `api_token` and `refresh_token`, over a source that also
+/// holds a value for a name the plugin never declared.
+fn secret_spec(root: &Path, source: Arc<RecordingSource>) -> PluginBackendSpec {
+    let mut spec = configured_spec(root);
+    spec.secrets = PluginSecretDelivery::new(
+        vec!["api_token".to_string(), "refresh_token".to_string()],
+        source,
+    );
+    spec
+}
+
 fn call_ctx(root: &Path, workspace: &Path) -> ToolContext {
     ToolContext {
         workspace_root: Some(workspace.to_path_buf()),
@@ -53,7 +114,13 @@ fn the_exec_envelope_carries_the_effective_config_section() {
     let spec = configured_spec(temp.path());
     let ctx = call_ctx(temp.path(), &workspace);
 
-    let envelope = exec_envelope(&spec, &ctx, "demo.hello", json!({ "name": "world" }));
+    let envelope = exec_envelope(
+        &spec,
+        &ctx,
+        "demo.hello",
+        json!({ "name": "world" }),
+        &no_secrets(),
+    );
 
     assert_eq!(envelope["schema_version"], 1);
     assert_eq!(envelope["tool"], "demo.hello");
@@ -92,13 +159,20 @@ fn both_dispatch_surfaces_send_the_same_config_for_one_plugin_and_workspace() {
     let spec = configured_spec(temp.path());
     let ctx = call_ctx(temp.path(), &workspace);
 
-    let exec = exec_envelope(&spec, &ctx, "demo.hello", json!({ "name": "world" }));
+    let exec = exec_envelope(
+        &spec,
+        &ctx,
+        "demo.hello",
+        json!({ "name": "world" }),
+        &no_secrets(),
+    );
     let mcp = tools_call_params(
         &spec,
         &ctx,
         "demo.hello",
         "hello",
         json!({ "name": "world" }),
+        &no_secrets(),
     );
 
     assert_eq!(
@@ -139,8 +213,15 @@ fn a_managed_call_names_its_host_attested_task_and_run_on_both_surfaces() {
         "_meta": { "orbit": { "task_id": "ORB-999" } },
     });
 
-    let exec = exec_envelope(&spec, &ctx, "demo.hello", forged.clone());
-    let mcp = tools_call_params(&spec, &ctx, "demo.hello", "hello", forged.clone());
+    let exec = exec_envelope(&spec, &ctx, "demo.hello", forged.clone(), &no_secrets());
+    let mcp = tools_call_params(
+        &spec,
+        &ctx,
+        "demo.hello",
+        "hello",
+        forged.clone(),
+        &no_secrets(),
+    );
 
     for (surface, context) in [("exec", &exec["context"]), ("mcp", &mcp["_meta"]["orbit"])] {
         assert_eq!(context["task_id"], "ORB-7", "{surface}: {context}");
@@ -160,7 +241,7 @@ fn a_managed_call_names_its_host_attested_task_and_run_on_both_surfaces() {
         }),
         ..call_ctx(temp.path(), &workspace)
     };
-    let context = call_context(&spec, &ctx, None);
+    let context = call_context(&spec, &ctx, None, &no_secrets());
     assert_eq!(context["task_id"], Value::Null);
     assert_eq!(context["job_run_id"], "jrun-host");
 }
@@ -200,7 +281,7 @@ fn an_unconfigured_plugin_still_receives_a_config_object() {
     .clone();
     let ctx = context(temp.path());
 
-    let context = call_context(&spec, &ctx, None);
+    let context = call_context(&spec, &ctx, None, &no_secrets());
     assert_eq!(context["config"], json!({}));
     assert!(spec.config_values().is_empty());
 }
@@ -259,4 +340,88 @@ fn malformed_error_falls_back_to_execution_and_oversized_detail_is_omitted() {
     assert!(
         matches!(error, OrbitError::RemoteTool { payload, .. } if payload.get("detail").is_none() && payload["code"] == "too_large")
     );
+}
+
+/// Both dispatch surfaces carry the plugin's declared secrets in the request:
+/// `context.secrets` on the `exec` envelope, `_meta.orbit.secrets` on `mcp`,
+/// each entry `{value, version}`. A declared secret with no value is omitted,
+/// and a name the manifest does not declare is never delivered, whatever the
+/// source holds.
+#[test]
+fn declared_secrets_ride_the_request_on_both_surfaces() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let source = RecordingSource::holding(&[
+        ("api_token", "tok-value", "v1"),
+        ("other_plugin_token", "not-yours", "v9"),
+    ]);
+    let spec = secret_spec(temp.path(), Arc::clone(&source));
+    let ctx = call_ctx(temp.path(), &workspace);
+
+    let secrets = CallSecrets::resolve(&spec).expect("resolve");
+    let exec = exec_envelope(&spec, &ctx, "demo.hello", json!({}), &secrets);
+    let mcp = tools_call_params(&spec, &ctx, "demo.hello", "hello", json!({}), &secrets);
+
+    let expected = json!({ "api_token": { "value": "tok-value", "version": "v1" } });
+    assert_eq!(exec["context"]["secrets"], expected, "{exec}");
+    assert_eq!(mcp["_meta"]["orbit"]["secrets"], expected, "{mcp}");
+    assert_eq!(
+        *source.asked.lock().expect("asked"),
+        vec![vec!["api_token".to_string(), "refresh_token".to_string()]],
+        "the source is asked for the declared names only"
+    );
+    for request in [&exec, &mcp] {
+        let text = request.to_string();
+        assert!(
+            !text.contains("not-yours") && !text.contains("other_plugin_token"),
+            "an undeclared name never reaches the request: {text}"
+        );
+        assert!(
+            !text.contains("refresh_token"),
+            "an unset declared secret is omitted, not sent empty: {text}"
+        );
+    }
+}
+
+/// A plugin that declares no secrets has no `secrets` key at all, and one that
+/// declares some but has none set gets an empty object.
+#[test]
+fn the_secrets_object_is_present_exactly_when_the_plugin_declares_secrets() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let ctx = call_ctx(temp.path(), &workspace);
+
+    let undeclared = configured_spec(temp.path());
+    let secrets = CallSecrets::resolve(&undeclared).expect("resolve");
+    let context = call_context(&undeclared, &ctx, None, &secrets);
+    assert!(context.get("secrets").is_none(), "{context}");
+
+    let unset = secret_spec(temp.path(), RecordingSource::holding(&[]));
+    let secrets = CallSecrets::resolve(&unset).expect("resolve");
+    let context = call_context(&unset, &ctx, None, &secrets);
+    assert_eq!(context["secrets"], json!({}));
+}
+
+/// The audit row names what a call delivered, and a formatted spec or
+/// resolution names no value.
+#[test]
+fn delivery_records_names_and_debug_prints_no_value() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let spec = secret_spec(
+        temp.path(),
+        RecordingSource::holding(&[("api_token", "tok-value", "v1")]),
+    );
+    let secrets = CallSecrets::resolve(&spec).expect("resolve");
+
+    let _ = take_delivered_plugin_secret_names();
+    secrets.record_delivery();
+    assert_eq!(take_delivered_plugin_secret_names(), vec!["api_token"]);
+    assert!(
+        take_delivered_plugin_secret_names().is_empty(),
+        "taking the record clears it"
+    );
+
+    for rendered in [format!("{spec:?}"), format!("{secrets:?}")] {
+        assert!(!rendered.contains("tok-value"), "{rendered}");
+    }
 }

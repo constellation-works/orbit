@@ -9,7 +9,9 @@ handshake, list tools, and call them. Tools:
              call's `params._meta`, so a test can prove one server serves many
              calls, that a narrower caller did not inherit a wider session, and
              that a second workspace got its own child rather than the first
-             one's.
+             one's. Each delivered secret in `_meta.orbit.secrets` is echoed as
+             the SHA-256 of its value, never the value, with whether the value
+             also appears in this process's environment or argv.
 - `slow`   — sleeps `seconds` before answering, for timeout and concurrency
              tests.
 - `crash`  — exits without answering, for dead-child tests.
@@ -21,6 +23,7 @@ makes `echo` send that server-initiated request and *wait* for the host's
 answer before replying, which is how a client that drops server requests shows
 up as a deadlock rather than as a quiet omission.
 """
+import hashlib
 import json
 import os
 import sys
@@ -72,6 +75,29 @@ def ask_host(method):
     return json.loads(line) if line.strip() else None
 
 
+def redact_secrets(meta):
+    """Echo `_meta` with each secret value replaced by its SHA-256.
+
+    The response is a surface the value must never reach, so the fixture
+    proves delivery by digest and reports where else the value was visible.
+    """
+    secrets = ((meta or {}).get("orbit") or {}).get("secrets")
+    if not isinstance(secrets, dict):
+        return meta
+    visible = list(os.environ.values()) + sys.argv
+    redacted = {}
+    for name, secret in secrets.items():
+        value = secret.get("value", "")
+        redacted[name] = {
+            "sha256": hashlib.sha256(value.encode()).hexdigest(),
+            "version": secret.get("version"),
+            "in_env_or_argv": any(value in text for text in visible),
+        }
+    meta = json.loads(json.dumps(meta))
+    meta["orbit"]["secrets"] = redacted
+    return meta
+
+
 def call(request_id, params):
     name = params.get("name")
     arguments = params.get("arguments") or {}
@@ -84,7 +110,7 @@ def call(request_id, params):
             "allowed": os.environ.get("ORBIT_ALLOWED_TOOLS", ""),
             "cwd": os.getcwd(),
             "workspace": os.environ.get("ORBIT_WORKSPACE_ROOT"),
-            "meta": params.get("_meta"),
+            "meta": redact_secrets(params.get("_meta")),
             "answer": ask_host(server_request) if server_request else None,
         }
         reply(request_id, {"content": [{"type": "text", "text": json.dumps(payload)}],

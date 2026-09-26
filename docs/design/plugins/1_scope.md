@@ -228,9 +228,9 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   refused `policy_denied` before stdin or the store is touched (§4.3).
 - **Storage.** One JSON file per plugin at `<global_root>/state/plugin-secrets/<ns>.json`, mode
   `0600` in a `0700` directory, replaced by rename and written under a per-plugin lock file. Each
-  write stamps a fresh random `version`; the store offers a versioned get and a compare-and-swap
-  put (applied only against the expected version, or only when unset) for per-call delivery
-  and backend rotation, which are not wired yet. There is no OS keychain backend: one file
+  write stamps a fresh random `version`; the store offers a versioned get for per-call delivery
+  and a compare-and-swap put (applied only against the expected version, or only when unset)
+  for backend rotation, which is not wired yet. There is no OS keychain backend: one file
   format keeps the semantics identical on every host and lets compare-and-swap sit under a
   single lock.
 - **Unreadable to plugins.** `state/plugin-secrets/` is on the plugin sandbox's unreadable list
@@ -238,6 +238,17 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   hands it over. It is *not* denied to agent sandboxes: a nested `orbit` inside an agent
   sandbox must still be able to deliver a secret to its backend, so until the host-side broker
   lands an agent sandbox can read the global root, this tree included [ORB-13038].
+- **Delivery.** Each backend call carries the plugin's declared secrets in the request itself:
+  `context.secrets` on the `exec` stdin envelope, `params._meta.orbit.secrets` on an `mcp`
+  `tools/call` (§4.2). The object maps each declared name that is set to
+  `{"value": …, "version": …}`; an unset name is omitted rather than an error, and the object
+  is present exactly when the manifest declares secrets. The host reads the plugin's own store
+  file — keyed by the installed row's name, filtered to the manifest's declared names — once
+  per call, so a value set while an `mcp` server runs reaches its next call without a respawn.
+  Nothing goes into the child's environment or argv. No grant is needed, and a plugin never
+  receives another plugin's secrets or a stored name its manifest no longer declares. The
+  call's audit row records the delivered names (§4.4), never a value. `orbit plugin test`
+  never opens the store; goldens supply fixture values instead (§5).
 - **Lifecycle.** `enable` (and `add --enable`) warns once per declared secret that has no value.
   `upgrade` (and any reinstall) keeps each secret the new manifest still declares, value and
   version intact, and deletes the rest. `remove` deletes the plugin's secrets unless
@@ -416,7 +427,10 @@ callback credential; its value is `3`, and the value itself is not a credential.
 retired token-based identity kept for legacy compatibility; the descriptor record is the current
 callback identity.
 
-stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,"job_run_id":…}}`
+stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,"job_run_id":…,"secrets":{"<name>":{"value":…,"version":…}}}}`
+
+`context.secrets` is present only for a plugin that declares `spec.secrets` and holds the ones
+that are set (§3, "Plugin secrets").
 stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false,"detail":{…}}}`
 
 **Call identity.** `context.task_id` and `context.job_run_id` (the same keys in an `mcp`
@@ -485,8 +499,11 @@ the only client; the plugin never listens on a socket.
   ```
   {"name":"recommend","arguments":{…},
    "_meta":{"orbit":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,
-                     "job_run_id":…,"tool":"graph.recommend"}}}
+                     "job_run_id":…,"tool":"graph.recommend","secrets":{…}}}}
   ```
+
+  The plugin's declared secrets ride here too, read for each call and never placed in the
+  child's environment (§3, "Plugin secrets").
 
 - **Orbit answers server-initiated requests**: `ping` with `{}`, anything else with JSON-RPC
   `-32601` (Orbit declares no client capabilities). A server waiting on an unanswered request
@@ -686,6 +703,8 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 - Every call goes through the audited dispatch with `ToolEntryPoint` plus
   `plugin: {name, version, manifest_digest}`, where `manifest_digest` is the SHA-256 of the
   `plugin.yaml` bytes loaded for that call.
+- A call whose request carried declared secrets records their names in `plugin_secrets` (a
+  JSON array); no value is ever written to the row (§3, "Plugin secrets").
 - Tasks minted by a plugin auto-task carry `plugin:<ns>` beside `auto-task:<name>`; seeded
   definitions carry the provenance header. Removing a plugin never rewrites task history.
 
@@ -803,8 +822,12 @@ schema self-consistency, definition cross-references, and the `spec.web` rules o
 `orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol.
 
 - Each file is `schemaVersion: 1`, `kind: PluginTest`, a list of
-  `{name, tool, input, expect.output}` cases; `tool` is the manifest verb. A case naming an
+  `{name, tool, input, secrets, expect.output}` cases; `tool` is the manifest verb. A case naming an
   undeclared tool refuses the directory.
+- `secrets: {<name>: <value>}` supplies fixture values for declared secrets, delivered exactly
+  as stored ones are, each at version `fixture`; a declared secret the case omits is unset for
+  that case. A fixture for an undeclared name refuses the directory. The run never reads the
+  host's secret store.
 - A temp directory stands in for the global root and workspace. Template paths,
   `network: loopback` and `orbit_tools` run under the requested profile. `sandbox: none`, an
   absolute non-template `fs.write` root, `network: any`, or any `env_pass` is refused (printing

@@ -9,6 +9,7 @@ use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::Store;
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_tools::plugin::take_delivered_plugin_secret_names;
 use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::plugin::PluginProvenance;
 use orbit_types::policy::Role;
@@ -456,7 +457,13 @@ where
 
     // Keep the callback inside the audit boundary so setup, policy, and
     // implementation failures all produce a failure-status row.
+    //
+    // A plugin call records the names of the secrets its request carried on
+    // this thread; anything left from an earlier call is dropped first so
+    // this row names only what this call delivered.
+    let _ = take_delivered_plugin_secret_names();
     let result = dispatch(input);
+    let plugin_secrets = take_delivered_plugin_secret_names();
     let plugin = take_callback_plugin_provenance().or(plugin);
     let duration_ms = (start.elapsed().as_millis() as i64).max(1);
 
@@ -556,6 +563,7 @@ where
             .as_ref()
             .and_then(|context| context.self_reported_actor.as_deref()),
         plugin: plugin.as_ref(),
+        plugin_secrets: &plugin_secrets,
     };
     let audit_write = open_audit_store()
         .and_then(|store| store.insert_audit_event_record_with_invocation(&params, invocation));

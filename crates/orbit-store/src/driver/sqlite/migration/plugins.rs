@@ -44,6 +44,19 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// v30 `audit_plugin_secrets` migration: the names (JSON array) of the
+/// declared secrets a plugin-backed tool call's request carried, beside the
+/// plugin provenance columns (design `docs/design/plugins/1_scope.md` §3,
+/// "Plugin secrets"). Names only; a value never reaches the table. Additive:
+/// an older binary ignores the column.
+pub(super) fn apply_audit_plugin_secrets(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema(conn)?;
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE audit_events ADD COLUMN plugin_secrets TEXT",
+    )
+}
+
 /// v27 `plugin_certified_orbit_version` migration: the Orbit version a
 /// plugin's `spec.tests` goldens last passed on, written by `orbit plugin
 /// test` and printed by `orbit plugin show` (design

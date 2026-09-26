@@ -5,10 +5,13 @@
 //! <valid>}` is a tool error naming the cause, and the caller never sees
 //! the backend's bytes.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::backend::PluginBackendSpec;
+use super::backend::{DeliveredPluginSecret, PluginBackendSpec};
 use super::schema::CompiledSchema;
 use crate::ToolContext;
 
@@ -36,10 +39,16 @@ pub(crate) const MAX_PLUGIN_ERROR_DETAIL_BYTES: usize = 16 * 1024;
 /// `tool_name` is `Some` only for `mcp`: the `exec` envelope already names the
 /// tool at its top level, while one `mcp` child serves every tool of its
 /// plugin and has no `ORBIT_TOOL_NAME` in its environment (§4.2).
+///
+/// `secrets` is what [`CallSecrets::resolve`] read for this call: present
+/// only when the plugin declares secrets, holding `{value, version}` for each
+/// declared one that is set. This request is the only place a value travels —
+/// never the child's environment or argv.
 pub(crate) fn call_context(
     spec: &PluginBackendSpec,
     ctx: &ToolContext,
     tool_name: Option<&str>,
+    secrets: &CallSecrets,
 ) -> Value {
     let mut context = json!({
         "workspace_root": ctx
@@ -58,12 +67,60 @@ pub(crate) fn call_context(
             .as_ref()
             .map(|binding| binding.job_run_id.as_str()),
     });
-    if let Some(tool_name) = tool_name
-        && let Some(fields) = context.as_object_mut()
-    {
-        fields.insert("tool".to_string(), Value::String(tool_name.to_string()));
+    if let Some(fields) = context.as_object_mut() {
+        if let Some(tool_name) = tool_name {
+            fields.insert("tool".to_string(), Value::String(tool_name.to_string()));
+        }
+        if let Some(secrets) = &secrets.0 {
+            let delivered = secrets
+                .iter()
+                .map(|(name, secret)| {
+                    (
+                        name.clone(),
+                        json!({ "value": secret.value, "version": secret.version }),
+                    )
+                })
+                .collect();
+            fields.insert("secrets".to_string(), Value::Object(delivered));
+        }
     }
     context
+}
+
+/// The declared secrets one call carries, read once for that call.
+#[derive(Debug, Default)]
+pub(crate) struct CallSecrets(Option<BTreeMap<String, DeliveredPluginSecret>>);
+
+impl CallSecrets {
+    /// Read the plugin's declared secrets for one call. A read that fails
+    /// fails the call before anything is spawned or sent.
+    pub(crate) fn resolve(spec: &PluginBackendSpec) -> Result<Self, OrbitError> {
+        spec.secrets.resolve().map(Self)
+    }
+
+    /// Record that this call's request is about to carry these secrets, so
+    /// the audit row for the call can name them. Called once the request
+    /// is built and immediately before it is sent.
+    pub(crate) fn record_delivery(&self) {
+        let names = self
+            .0
+            .as_ref()
+            .map(|secrets| secrets.keys().cloned().collect())
+            .unwrap_or_default();
+        DELIVERED_SECRET_NAMES.with(|cell| *cell.borrow_mut() = names);
+    }
+}
+
+thread_local! {
+    static DELIVERED_SECRET_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Take the names of the secrets the last plugin call on this thread
+/// delivered, clearing the record. The audited dispatch boundary calls it
+/// before a call (to drop anything stale) and after (to write the names on
+/// the call's audit row). Names only: a value never leaves the request.
+pub fn take_delivered_plugin_secret_names() -> Vec<String> {
+    DELIVERED_SECRET_NAMES.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
 }
 
 /// The whole stdin envelope one `exec` call writes to its backend.
@@ -72,12 +129,13 @@ pub(crate) fn exec_envelope(
     ctx: &ToolContext,
     tool_name: &str,
     input: Value,
+    secrets: &CallSecrets,
 ) -> Value {
     json!({
         "schema_version": PLUGIN_ENVELOPE_SCHEMA_VERSION,
         "tool": tool_name,
         "input": input,
-        "context": call_context(spec, ctx, None),
+        "context": call_context(spec, ctx, None, secrets),
     })
 }
 

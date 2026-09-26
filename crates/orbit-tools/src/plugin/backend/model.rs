@@ -171,6 +171,99 @@ impl fmt::Debug for PluginConfigSection {
     }
 }
 
+/// One declared secret as a backend receives it: the value and the opaque
+/// version it was stored at (design §3, "Plugin secrets").
+///
+/// `Debug` never prints the value, so a delivered secret cannot reach a log
+/// line through a formatted struct.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeliveredPluginSecret {
+    pub value: String,
+    pub version: String,
+}
+
+impl fmt::Debug for DeliveredPluginSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeliveredPluginSecret")
+            .field("value", &"<redacted>")
+            .field("version", &self.version)
+            .finish()
+    }
+}
+
+/// Where the values behind a plugin's declared secrets are read from.
+///
+/// The host implements it over its own secret store, and `orbit plugin test`
+/// over the fixture secrets a golden supplies, so a conformance run never
+/// reads a real host secret. It is asked once per call: a value the operator
+/// set since the last call is what the next call carries, `mcp` included.
+pub trait PluginSecretSource: Send + Sync {
+    /// The value and version of each of `names` that is set. An unset name is
+    /// absent from the map, not an error.
+    fn read(&self, names: &[String])
+    -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError>;
+}
+
+/// The plugin's declared secret names and the source their values come from.
+///
+/// Delivery is bounded here rather than trusted to the source: whatever a
+/// source returns, a call carries only names the plugin's own manifest
+/// declares. `Debug` names the declared secrets and never a value.
+#[derive(Clone, Default)]
+pub struct PluginSecretDelivery {
+    declared: Vec<String>,
+    source: Option<Arc<dyn PluginSecretSource>>,
+}
+
+impl PluginSecretDelivery {
+    /// Deliver `declared` from `source`.
+    pub fn new(declared: Vec<String>, source: Arc<dyn PluginSecretSource>) -> Self {
+        Self {
+            declared,
+            source: Some(source),
+        }
+    }
+
+    /// The manifest's `spec.secrets` names.
+    pub fn declared(&self) -> &[String] {
+        &self.declared
+    }
+
+    /// What one call carries: each declared secret that is set, by name.
+    /// `None` when the plugin declares no secrets, so its request has no
+    /// `secrets` object at all.
+    pub fn resolve(&self) -> Result<Option<BTreeMap<String, DeliveredPluginSecret>>, OrbitError> {
+        if self.declared.is_empty() {
+            return Ok(None);
+        }
+        let Some(source) = &self.source else {
+            return Ok(Some(BTreeMap::new()));
+        };
+        let mut secrets = source.read(&self.declared)?;
+        secrets.retain(|name, _| self.declared.contains(name));
+        Ok(Some(secrets))
+    }
+}
+
+impl PartialEq for PluginSecretDelivery {
+    fn eq(&self, other: &Self) -> bool {
+        self.declared == other.declared
+            && match (&self.source, &other.source) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                _ => false,
+            }
+    }
+}
+
+impl fmt::Debug for PluginSecretDelivery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PluginSecretDelivery")
+            .field("declared", &self.declared)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The per-plugin facts a backend needs to run one of its tools.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginBackendSpec {
@@ -206,6 +299,11 @@ pub struct PluginBackendSpec {
     /// The grants recorded at enable time, with the roots `fs` was scoped to
     /// when the operator named them.
     pub grants: PluginGrantSet,
+    /// `spec.secrets`, read per call and carried in the request itself —
+    /// `context.secrets` for `exec`, `_meta.orbit.secrets` for `mcp` — never
+    /// in the child's environment or argv. No grant is needed: a plugin
+    /// always receives its own declared secrets and nothing else.
+    pub secrets: PluginSecretDelivery,
 }
 
 /// Manifest-declared filesystem roots after template rendering and resolution
