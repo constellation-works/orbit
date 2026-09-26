@@ -322,108 +322,53 @@ async fn get_task_artifact_normalizes_text_plain_and_keeps_it_inline() {
 }
 
 #[tokio::test]
-async fn get_task_artifact_downloads_html_instead_of_serving_inline() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let task = seed_task_with_artifact_payload(
-        &runtime,
-        "reports/payload.html",
-        "text/html; charset=utf-8",
-        br#"<script>fetch("/api/tasks")</script>"#.to_vec(),
-    );
+async fn get_task_artifact_downloads_unsafe_media_types() {
+    let cases: [(&str, &str, &[u8]); 3] = [
+        (
+            "reports/payload.html",
+            "text/html; charset=utf-8",
+            br#"<script>fetch("/api/tasks")</script>"#,
+        ),
+        (
+            "reports/payload.js",
+            "application/javascript",
+            b"fetch('/api/tasks')",
+        ),
+        (
+            "reports/payload.custom",
+            "application/x-orbit-preview",
+            b"custom artifact",
+        ),
+    ];
 
-    let response = request(
-        runtime,
-        &format!("/tasks/{}/artifacts/reports/payload.html", task.id),
-    )
-    .await;
+    for (path, media_type, expected_body) in cases {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let task =
+            seed_task_with_artifact_payload(&runtime, path, media_type, expected_body.to_vec());
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get(header::CONTENT_TYPE),
-        Some(&HeaderValue::from_static("application/octet-stream"))
-    );
-    assert_eq!(
-        response.headers().get("x-content-type-options"),
-        Some(&HeaderValue::from_static("nosniff"))
-    );
-    assert_eq!(
-        response.headers().get(header::CONTENT_DISPOSITION),
-        Some(&HeaderValue::from_static("attachment"))
-    );
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read response body");
-    assert_eq!(&bytes[..], br#"<script>fetch("/api/tasks")</script>"#);
-}
+        let response = request(runtime, &format!("/tasks/{}/artifacts/{path}", task.id)).await;
 
-#[tokio::test]
-async fn get_task_artifact_downloads_script_media_types() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let task = seed_task_with_artifact_payload(
-        &runtime,
-        "reports/payload.js",
-        "application/javascript",
-        b"fetch('/api/tasks')".to_vec(),
-    );
-
-    let response = request(
-        runtime,
-        &format!("/tasks/{}/artifacts/reports/payload.js", task.id),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get(header::CONTENT_TYPE),
-        Some(&HeaderValue::from_static("application/octet-stream"))
-    );
-    assert_eq!(
-        response.headers().get("x-content-type-options"),
-        Some(&HeaderValue::from_static("nosniff"))
-    );
-    assert_eq!(
-        response.headers().get(header::CONTENT_DISPOSITION),
-        Some(&HeaderValue::from_static("attachment"))
-    );
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read response body");
-    assert_eq!(&bytes[..], b"fetch('/api/tasks')");
-}
-
-#[tokio::test]
-async fn get_task_artifact_downloads_unknown_media_types() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let task = seed_task_with_artifact_payload(
-        &runtime,
-        "reports/payload.custom",
-        "application/x-orbit-preview",
-        b"custom artifact".to_vec(),
-    );
-
-    let response = request(
-        runtime,
-        &format!("/tasks/{}/artifacts/reports/payload.custom", task.id),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get(header::CONTENT_TYPE),
-        Some(&HeaderValue::from_static("application/octet-stream"))
-    );
-    assert_eq!(
-        response.headers().get("x-content-type-options"),
-        Some(&HeaderValue::from_static("nosniff"))
-    );
-    assert_eq!(
-        response.headers().get(header::CONTENT_DISPOSITION),
-        Some(&HeaderValue::from_static("attachment"))
-    );
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read response body");
-    assert_eq!(&bytes[..], b"custom artifact");
+        assert_eq!(response.status(), StatusCode::OK, "{media_type}");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/octet-stream")),
+            "{media_type}"
+        );
+        assert_eq!(
+            response.headers().get("x-content-type-options"),
+            Some(&HeaderValue::from_static("nosniff")),
+            "{media_type}"
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_DISPOSITION),
+            Some(&HeaderValue::from_static("attachment")),
+            "{media_type}"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read response body");
+        assert_eq!(&bytes[..], expected_body, "{media_type}");
+    }
 }
 
 #[tokio::test]
