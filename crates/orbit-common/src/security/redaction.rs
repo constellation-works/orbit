@@ -267,6 +267,12 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
             task_id: redact_sensitive_env_text(&task_id),
             run_id: redact_sensitive_env_text(&run_id),
         },
+        OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
+            OrbitError::TaskCompletionLiveRun {
+                task_id: redact_sensitive_env_text(&task_id),
+                run_id: redact_sensitive_env_text(&run_id),
+            }
+        }
         OrbitError::ResumeRunInFlight {
             source_run_id,
             run_id,
@@ -420,6 +426,12 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             task_id: redact_all(&task_id),
             run_id: redact_all(&run_id),
         },
+        OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
+            OrbitError::TaskCompletionLiveRun {
+                task_id: redact_all(&task_id),
+                run_id: redact_all(&run_id),
+            }
+        }
         OrbitError::ResumeRunInFlight {
             source_run_id,
             run_id,

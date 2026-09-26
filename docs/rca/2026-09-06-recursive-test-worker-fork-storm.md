@@ -2,7 +2,7 @@
 type: context
 summary: Root cause analysis of the recursive Orbit test-worker fork storm that saturated a 14-CPU Linux host.
 incident_date: 2026-09-06
-last_validated: 2026-09-06
+last_validated: 2026-09-26
 tags: [incident, rca, pipeline, testing, operations]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-core/src/application/tests/**", "crates/orbit-core/src/adapter/tool_host/tests/**"]
 related_artifacts: [ORB-11365, ORB-11414, ORB-11415, ORB-11416, F2026-09-042]
@@ -227,6 +227,14 @@ Code remediation is intentionally outside this RCA's scope. The open friction
 record is the handoff for turning test isolation, fixture cleanup, and run
 containment gaps into separately scoped implementation work. Automatic
 cancellation or throttling was not authorized as part of the visibility task.
+
+Subsequent lifecycle work guards task completion against a linked implementation
+run, including recorded child runs, whose persisted owner identity still matches
+a running process. A completed run, a dead owner, or a PID now held by a different
+process does not hold the task open. The delivery pipeline exempts its own run
+while executing its final completion step; recorded children still have to stop.
+The refusal reports `task_completion_live_run` with the run ID so operators can
+inspect or stop that run before retrying completion.
 
 ## Evidence retained
 

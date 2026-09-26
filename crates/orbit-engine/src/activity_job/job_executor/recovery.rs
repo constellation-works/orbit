@@ -484,6 +484,7 @@ pub(super) fn attempt_failure_activity(
     let error_code = match original_err {
         DispatchError::WorktreeIntegrity { code, .. } => *code,
         DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
+        DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         _ => "pipeline_step_failed",
     };
     let input = serde_json::json!({

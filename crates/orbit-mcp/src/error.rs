@@ -40,6 +40,12 @@ fn error_payload(err: &OrbitError) -> Value {
         object.insert("task_id".to_string(), json!(task_id));
         object.insert("run_id".to_string(), json!(run_id));
     }
+    if let OrbitError::TaskCompletionLiveRun { task_id, run_id } = err
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("task_id".to_string(), json!(task_id));
+        object.insert("run_id".to_string(), json!(run_id));
+    }
     if let Some((source_run_id, run_id)) = err.resume_run_in_flight()
         && let Some(object) = payload.as_object_mut()
     {
@@ -91,6 +97,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
         OrbitError::CapabilityRefused(_) => "capability_refused",
         OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
+        OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
         OrbitError::TaskStatusTransition(_)

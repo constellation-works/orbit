@@ -12,8 +12,10 @@
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
+use std::collections::HashSet;
 
 use crate::OrbitRuntime;
+use crate::application::job::running_run_has_verified_owner;
 
 use super::params::TaskUpdateParams;
 
@@ -126,6 +128,15 @@ pub(crate) fn ensure_status_change_allowed(
         ));
     }
 
+    if target == TaskStatus::Done {
+        ensure_completion_run_stopped(
+            runtime,
+            task,
+            params.job_run_id.as_ref().and_then(|id| id.as_deref()),
+            None,
+        )?;
+    }
+
     match target {
         TaskStatus::InProgress if in_progress_transition_requires_plan(from) => {
             let plan = params.plan.as_deref().unwrap_or(task.plan.as_str());
@@ -140,6 +151,47 @@ pub(crate) fn ensure_status_change_allowed(
         )),
         _ => Ok(()),
     }
+}
+
+/// Refuse completion while a linked implementation run (or a recorded child)
+/// still has its original owner. The trusted delivery activity exempts only
+/// its own run: that run necessarily remains Running until its last step exits.
+/// A simultaneous replacement of `job_run_id` cannot hide the original link.
+pub(crate) fn ensure_completion_run_stopped(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    replacement_run_id: Option<&str>,
+    calling_run_id: Option<&str>,
+) -> Result<(), OrbitError> {
+    let mut pending = Vec::new();
+    pending.extend(task.job_run_id.clone());
+    pending.extend(replacement_run_id.map(str::to_string));
+    let mut visited = HashSet::new();
+
+    while let Some(run_id) = pending.pop() {
+        let run_id = run_id.trim();
+        if run_id.is_empty() || !visited.insert(run_id.to_string()) {
+            continue;
+        }
+        let Some(run) = runtime.get_job_run_backend(run_id)? else {
+            continue;
+        };
+        if Some(run_id) != calling_run_id && running_run_has_verified_owner(&run) {
+            return Err(OrbitError::TaskCompletionLiveRun {
+                task_id: task.id.clone(),
+                run_id: run_id.to_string(),
+            });
+        }
+        if let Some(state) = runtime.read_run_state(run_id)? {
+            pending.extend(
+                state
+                    .child_dispatches
+                    .into_iter()
+                    .map(|child| child.child_run_id),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The precondition a refused edge is missing, in the terms of the pair that

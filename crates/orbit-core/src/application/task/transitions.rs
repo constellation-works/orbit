@@ -136,6 +136,7 @@ impl OrbitRuntime {
             let implemented_by =
                 implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
             if task.status == TaskStatus::Review {
+                super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
 

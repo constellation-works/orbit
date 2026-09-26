@@ -289,6 +289,12 @@ pub enum OrbitError {
         "task {task_id} already has an in-flight run ({run_id}); wait for it to finish or cancel it"
     )]
     ShipRunInFlight { task_id: String, run_id: String },
+    /// Completion cannot overtake the linked implementation run while its
+    /// recorded PID and start-time identity still name a running owner.
+    #[error(
+        "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
+    )]
+    TaskCompletionLiveRun { task_id: String, run_id: String },
     /// A resume was refused because the source run's retry lineage already
     /// has a non-terminal run. Raised atomically by the store insert on the
     /// shared resume path, so the CLI, MCP, and HTTP surfaces refuse the

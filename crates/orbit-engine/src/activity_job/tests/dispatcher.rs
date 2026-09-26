@@ -33,6 +33,10 @@ fn dispatch_error_retryability_classification_table() {
             conflicting_paths: vec!["src/lib.rs".into()],
             diagnostic: "stopped on unmerged index entries".into(),
         },
+        DispatchError::TaskCompletionLiveRun {
+            task_id: "T1".into(),
+            run_id: "jrun-live".into(),
+        },
     ];
     for err in &permanent {
         assert!(err.is_non_retryable(), "expected non-retryable: {err:?}");
@@ -85,6 +89,15 @@ fn dispatch_error_to_orbit_keeps_validation_variant_and_buckets_the_rest() {
                 && details.original_base_sha == "base-before"
                 && details.target_base_sha == "base-target"
                 && details.conflicting_paths == ["src/lib.rs"]
+    ));
+
+    assert!(matches!(
+        dispatch_error_to_orbit(DispatchError::TaskCompletionLiveRun {
+            task_id: "T1".into(),
+            run_id: "jrun-live".into(),
+        }),
+        OrbitError::TaskCompletionLiveRun { task_id, run_id }
+            if task_id == "T1" && run_id == "jrun-live"
     ));
 }
 
