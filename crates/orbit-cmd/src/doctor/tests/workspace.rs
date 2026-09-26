@@ -198,9 +198,9 @@ pub(super) fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Fourteen infrastructure checks plus one definition-artifact row per kind
+    // Fifteen infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 19, "one row per check: {results:?}");
+    assert_eq!(results.len(), 20, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -252,6 +252,11 @@ pub(super) fn healthy_fresh_workspace_has_no_failures() {
     );
     assert_eq!(
         status_of(&results, "unresolved-task-bundles").status,
+        WorkspaceDoctorStatus::Ok
+    );
+    // No blocked tasks yet → nothing to classify as infra-blocked.
+    assert_eq!(
+        status_of(&results, "infra-blocked-tasks").status,
         WorkspaceDoctorStatus::Ok
     );
 }
