@@ -898,7 +898,7 @@ async fn ship_endpoint_rejects_unknown_mode() {
     );
 }
 
-async fn request_ship_global(
+async fn request_workflow_global(
     state: crate::state::DashboardState,
     uri: &str,
     body: Value,
@@ -919,27 +919,30 @@ async fn request_ship_global(
         .expect("response")
 }
 
-/// ORB-10008: an unknown `?workspace=` on the ship endpoint is a clean 404
-/// JSON rejection from the workspace extractor, not a 500.
+/// ORB-10008: both workflow routes reject an unknown `?workspace=` with a
+/// clean 404 JSON response from the workspace extractor.
 #[tokio::test]
-async fn ship_endpoint_rejects_unknown_workspace_with_404_json() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
-    let state = crate::state::DashboardState::single(Arc::new(runtime));
+async fn workflow_endpoints_reject_unknown_workspace_with_404_json() {
+    for (uri, body) in [
+        ("/workflows/ship?workspace=ghost", json!({ "mode": "pr" })),
+        (
+            "/workflows/auto?workspace=ghost",
+            json!({ "for_duration": "30m" }),
+        ),
+    ] {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let state = crate::state::DashboardState::single(Arc::new(runtime));
+        let response = request_workflow_global(state, uri, body).await;
 
-    let response = request_ship_global(
-        state,
-        "/workflows/ship?workspace=ghost",
-        json!({ "mode": "pr" }),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let payload = body_json(response).await;
-    assert!(
-        payload["error"]
-            .as_str()
-            .is_some_and(|m| m.contains("unknown workspace: ghost"))
-    );
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        let payload = body_json(response).await;
+        assert!(
+            payload["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("unknown workspace: ghost")),
+            "{uri}: {payload}"
+        );
+    }
 }
 
 /// ORB-10444: Ship is a write against a live pipeline, so a second click while
@@ -1723,39 +1726,6 @@ mod auto_drain {
             assert_eq!(input["for_seconds"], 7200);
         })
         .await;
-    }
-
-    /// ORB-10008: an unknown `?workspace=` is a clean 404 JSON rejection from
-    /// the workspace extractor, matching the ship endpoint's behavior — this
-    /// is how the endpoint refuses all-workspace mode too, since aggregate
-    /// state has no default workspace to fall back on.
-    #[tokio::test]
-    async fn auto_endpoint_rejects_unknown_workspace_with_404_json() {
-        let runtime = OrbitRuntime::in_memory().expect("build runtime");
-        let state = crate::state::DashboardState::single(Arc::new(runtime));
-
-        let response = router()
-            .with_state(state)
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/workflows/auto?workspace=ghost")
-                    .header(header::ORIGIN, "http://localhost:7878")
-                    .header(header::HOST, "localhost:7878")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(json!({ "for_duration": "30m" }).to_string()))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let payload = body_json(response).await;
-        assert!(
-            payload["error"]
-                .as_str()
-                .is_some_and(|m| m.contains("unknown workspace: ghost"))
-        );
     }
 
     #[tokio::test]
