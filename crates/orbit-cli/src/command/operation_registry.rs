@@ -622,7 +622,7 @@ impl Commands {
                     | PluginSubcommand::Show(_)
                     | PluginSubcommand::Doctor
                     | PluginSubcommand::Scaffold(_)
-                    | PluginSubcommand::Validate(_) => RuntimeNeed::ReadOnly,
+                    | PluginSubcommand::Validate(_) => RuntimeNeed::PluginReadOnly,
                     PluginSubcommand::Sync(args) if args.dry_run => RuntimeNeed::ReadOnly,
                     _ => RuntimeNeed::Required,
                 };

@@ -24,7 +24,7 @@ pub struct PluginScaffoldArgs {
     /// Namespace for the new plugin: it owns `<ns>.*` tools, `orbit <ns>`,
     /// and `[plugins.<ns>]`
     pub namespace: String,
-    /// Directory to create (defaults to `~/.orbit/scaffold/<namespace>`)
+    /// Directory to create (defaults to `./<namespace>`)
     #[arg(long)]
     pub dir: Option<PathBuf>,
     /// Overwrite existing files
@@ -41,9 +41,6 @@ impl Execute for PluginScaffoldArgs {
                  '_' or '-', starting with a letter, and not the reserved 'orbit'"
             )));
         }
-        // Plugin installation deliberately refuses sources inside a workspace
-        // repository. Keep the no-flag scaffold path vendorable when this
-        // command is run from the repository it just initialized.
         let root = self.dir.unwrap_or_else(|| default_scaffold_dir(&namespace));
         let files = scaffold_files(&namespace);
         if !self.force {
@@ -100,12 +97,7 @@ impl Execute for PluginScaffoldArgs {
 }
 
 fn default_scaffold_dir(namespace: &str) -> PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".orbit/scaffold")
-        .join(namespace)
+    PathBuf::from(".").join(namespace)
 }
 
 /// `(path relative to the plugin root, contents, executable)`.

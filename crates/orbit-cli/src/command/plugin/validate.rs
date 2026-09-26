@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -15,8 +15,8 @@ pub struct PluginValidateArgs {
     #[arg(long)]
     pub first_party: bool,
     /// Print the effective sandbox profile and child environment for the
-    /// selected workspace without executing the backend. Use the global
-    /// `--workspace <SELECTOR>` option to render another workspace.
+    /// registered workspace without executing the backend. Outside one,
+    /// render with host config; use `--workspace` for workspace config.
     #[arg(long)]
     pub render: bool,
 }
@@ -28,7 +28,15 @@ impl Execute for PluginValidateArgs {
                 &self.dir,
                 self.first_party,
                 &runtime.paths().repo_root,
-            )?
+            ).map_err(|error| {
+                if runtime.shared_root() == runtime.global_root() {
+                    OrbitError::InvalidInput(format!(
+                        "{error}; use --workspace <SELECTOR> if rendering needs workspace config"
+                    ))
+                } else {
+                    error
+                }
+            })?
         } else {
             runtime.validate_plugin_dir(&self.dir, self.first_party)?
         };

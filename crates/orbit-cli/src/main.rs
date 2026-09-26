@@ -366,7 +366,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-        match pin_executable_generation(&root, matches!(runtime_need, RuntimeNeed::ReadOnly)) {
+        match pin_executable_generation(
+            &root,
+            matches!(
+                runtime_need,
+                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
+            ),
+        ) {
             Ok(guard) => {
                 if clock_tick
                     && let Ok(digest) = orbit_common::fs::generation::process_generation()
@@ -447,6 +453,12 @@ fn main() {
                 workspace_selector.as_deref(),
             ),
         },
+        RuntimeNeed::PluginReadOnly => {
+            RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            )
+        }
         RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
             root_override.as_deref(),
             workspace_selector.as_deref(),

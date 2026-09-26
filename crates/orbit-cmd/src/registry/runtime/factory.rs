@@ -180,7 +180,7 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides_mode(root_override, workspace_selector, false)
+        Self::initialize_with_overrides_mode(root_override, workspace_selector, false, false)
     }
 
     /// Construct a workspace runtime for an observation command without the
@@ -189,13 +189,24 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides_mode(root_override, workspace_selector, true)
+        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, false)
+    }
+
+    /// Plugin inspection uses a registered checkout when one is selected by
+    /// cwd or `--workspace`, otherwise it reads only the host's plugin state.
+    /// An unregistered cwd must never become a workspace as a side effect.
+    pub fn initialize_plugin_read_only_with_overrides(
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
     }
 
     fn initialize_with_overrides_mode(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
         read_only: bool,
+        host_fallback: bool,
     ) -> Result<OrbitRuntime, OrbitError> {
         let explicit_selector = workspace_selector
             .map(str::trim)
@@ -223,7 +234,7 @@ impl RegisteredRuntimeFactory {
             let hint = preloaded
                 .as_ref()
                 .and_then(|inputs| checkout_root_hint(&inputs.registry, &cwd));
-            let roots =
+            let mut roots =
                 OrbitRuntime::resolve_roots_for_cwd_with_hint(&cwd, root_override, hint.as_ref())?;
             let inputs = match preloaded {
                 Some(inputs) if inputs.global_root == roots.global_root => inputs,
@@ -233,6 +244,13 @@ impl RegisteredRuntimeFactory {
                 sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
             }
             let selection = select_workspace_for_cwd_and_roots(&cwd, &roots, &inputs.registry)?;
+            if host_fallback && selection.is_none() {
+                // A plugin inspection without a registered checkout has no
+                // workspace pin file or workspace config to read. Keep every
+                // runtime path at the host root, including the local root.
+                roots.shared_root = roots.global_root.clone();
+                roots.local_root = roots.global_root.clone();
+            }
             let binding = selection
                 .as_ref()
                 .map(|selection| {

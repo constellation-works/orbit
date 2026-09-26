@@ -8,6 +8,6 @@ Arguments:
 Options:
       --first-party           Treat the source as a verified first-party checkout, so an `origin: orbit` manifest is validated as it would be on install
       --root <ROOT>           Override the Orbit root directory (highest precedence)
-      --render                Print the effective sandbox profile and child environment for the selected workspace without executing the backend. Use the global `--workspace <SELECTOR>` option to render another workspace
+      --render                Print the effective sandbox profile and child environment for the registered workspace without executing the backend. Outside one, render with host config; use `--workspace` for workspace config
       --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
   -h, --help                  Print help

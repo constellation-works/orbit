@@ -39,6 +39,8 @@ pub enum RuntimeNeed {
     PipelineWorker,
     /// Read an existing workspace without stale-run reconciliation on open.
     ReadOnly,
+    /// Inspect host plugins without treating an unregistered cwd as a workspace.
+    PluginReadOnly,
     Forbidden,
     /// Bind the workspace that owns this task ID rather than the one the cwd
     /// or `--workspace` walk would pick [ORB-10797] [ORB-10961].

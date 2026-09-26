@@ -118,6 +118,11 @@ fn plugin_help_matches_the_shipped_surface() {
             include_str!("plugin_help/validate.txt"),
         ),
         (
+            &["orbit", "plugin", "scaffold"],
+            "plugin_help/scaffold.txt",
+            include_str!("plugin_help/scaffold.txt"),
+        ),
+        (
             &["orbit", "plugin", "test"],
             "plugin_help/test.txt",
             include_str!("plugin_help/test.txt"),
