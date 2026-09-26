@@ -815,10 +815,24 @@ backend = "cli"
 /// arm still omitted it, so the hook fired as "deterministic action not
 /// registered" on three runs, each after a task had been admitted,
 /// implemented, and validated. `worktree_gc` had the same gap.
+/// Check seeded activities too, including those no shipped job targets yet,
+/// so their first use cannot inherit the same skew.
 #[test]
-fn default_jobs_only_reference_registered_deterministic_actions() {
+fn default_catalog_deterministic_actions_are_registered_in_the_runtime() {
     let (_root, runtime, _global_root, _workspace_root) = test_runtime();
     let catalog = default_activity_catalog();
+
+    for (name, _) in DEFAULT_ACTIVITY_FILES {
+        let activity = catalog.get(name).expect("seeded activity in catalog");
+        let ActivityV2Spec::Deterministic(spec) = &activity.spec else {
+            continue;
+        };
+        assert!(
+            orbit_engine::RuntimeHost::has_deterministic_action(&runtime, &spec.action),
+            "seeded activity `{name}` names deterministic action `{}`, which this runtime cannot dispatch",
+            spec.action
+        );
+    }
 
     for (job_name, yaml) in DEFAULT_JOB_FILES {
         let mut asset = load_job_asset(yaml)
@@ -854,27 +868,6 @@ fn default_jobs_only_read_step_output_from_always_run_steps() {
                 "default job {job_name} reads a conditional step's output from a when/break_when: {err}"
             )
         });
-    }
-}
-
-/// Companion to the job sweep above: a seeded deterministic activity that
-/// no shipped job targets yet must still be dispatchable, or the first job
-/// to bind it inherits the same skew.
-#[test]
-fn default_deterministic_activities_are_registered_in_the_runtime() {
-    let (_root, runtime, _global_root, _workspace_root) = test_runtime();
-
-    for (name, yaml) in DEFAULT_ACTIVITY_FILES {
-        let asset = load_activity_asset(yaml)
-            .unwrap_or_else(|err| panic!("default activity {name} should parse: {err}"));
-        let ActivityV2Spec::Deterministic(spec) = &asset.spec.spec else {
-            continue;
-        };
-        assert!(
-            orbit_engine::RuntimeHost::has_deterministic_action(&runtime, &spec.action),
-            "seeded activity `{name}` names deterministic action `{}`, which this runtime cannot dispatch",
-            spec.action
-        );
     }
 }
 
