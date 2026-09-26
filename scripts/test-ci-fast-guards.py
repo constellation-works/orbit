@@ -181,6 +181,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
+        (self.root / "Cargo.toml").write_text(
+            '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
+        )
         manifests = {}
         for name in {owner, dependency}:
             path = self.root / f"{name}.toml"
@@ -209,6 +212,18 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
 
     def test_dev_only_dependency_accepts_test_edge(self):
         result = self.dependency_result("orbit-core", "orbit-exec", "dev")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_workspace_dependency_must_be_inherited(self):
+        self.dependency_result("orbit-common", "orbit-types")
+        manifest = self.root / "orbit-common.toml"
+        manifest.write_text('[dev-dependencies]\ntempfile = "3"\n')
+        result = self.run_guard("check-dependency-direction.sh")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dev-dependencies.tempfile must inherit", result.stdout)
+
+        manifest.write_text('[dev-dependencies]\ntempfile.workspace = true\n')
+        result = self.run_guard("check-dependency-direction.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_goldens_runs_only_the_orbit_cli_snapshot_tests(self):

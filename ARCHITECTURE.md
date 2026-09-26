@@ -31,10 +31,15 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-automation` | internal | common, store, types |
 | `orbit-engine` | internal | agent, common, exec, store, tools, types |
 | `orbit-mcp` | internal | common, registry, tools, types |
-| `orbit-core` | internal | automation, common, config, engine, policy, search, store, tools, types |
+| `orbit-core` | internal | automation, common, config, engine, policy, search, store, tools, types (dev: exec) |
 | `orbit-cmd` | internal | common, config, core, engine, mcp, registry, store, tools, types |
 | `orbit-web` | internal | cmd, common, core, registry, types |
 | `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web |
+
+The `orbit-core` → `orbit-exec` edge is dev-only for Linux sandbox regression
+tests; production Core does not depend on Exec. The dependency-direction guard
+also checks that dependencies defined in `[workspace.dependencies]` are inherited
+in member manifests with `workspace = true`.
 
 ### Foundation and kernel
 

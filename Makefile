@@ -161,6 +161,7 @@ ci-fast:
 # scripts/ci-guardrails.sh: production enforces bounded channels, then all
 # targets retain the other workspace lints without flagging test-only channels.
 ci-lint:
+	./scripts/check-dependency-direction.sh
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -D clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
 

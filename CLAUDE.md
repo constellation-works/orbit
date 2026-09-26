@@ -25,7 +25,8 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 ## Code
 
 - Layering and scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
-- Lints are enforced via `[workspace.lints]`: no `unwrap`/`expect` at crate boundaries (propagate `OrbitError`), no `print!` (use `tracing`), no lock guards across `.await`.
+- Lints are configured via `[workspace.lints]`: `unwrap`/`expect` are warned on in production code throughout each crate (tests are exempted at crate roots); propagate errors, using `OrbitError` at crate boundaries. No `print!` (use `tracing`), no lock guards across `.await`.
+- `missing_docs` is a workspace warning that crate roots may allow while documentation is incomplete. It is currently enforced in `orbit-config` and `orbit-web`; the other crate roots opt out.
 - Default to `pub(crate)`; workspace deps via `.workspace = true`; bounded channels; typed `thiserror` variants.
 - Unit tests live in a sibling `tests/` dir mirroring source filenames ([`test_layout.md`](docs/design-patterns/test_layout.md)); crate-root `tests/` is integration only.
 - Before writing a test, weigh what it guards and what it costs: assert what the code guarantees (parses, required fields present, structural safeguards), not policy that lives in config or prompts — crew, model, schedule, complexity, prose wording. A test that pins those turns every ops edit into a red CI; if a pin is truly warranted, cite the incident it guards in the assertion message.

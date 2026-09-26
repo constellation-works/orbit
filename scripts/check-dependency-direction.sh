@@ -165,6 +165,49 @@ for index in "${!workspace_crates[@]}"; do
   fi
 done
 
+# Cargo metadata resolves workspace inheritance, so inspect the manifests to
+# catch a member that pins a dependency already defined by the workspace.
+# Include target-specific and dev/build dependencies, not just production ones.
+if ! python3 - "$repo_root/Cargo.toml" "${workspace_manifests[@]}" <<'PY'
+import pathlib
+import sys
+import tomllib
+
+workspace_manifest = pathlib.Path(sys.argv[1])
+workspace_deps = tomllib.loads(workspace_manifest.read_text())["workspace"]["dependencies"]
+failed = False
+
+
+def check_group(manifest, section, dependencies):
+    global failed
+    for name, declaration in dependencies.items():
+        package = declaration.get("package", name) if isinstance(declaration, dict) else name
+        if (name in workspace_deps or package in workspace_deps) and not (
+            isinstance(declaration, dict) and declaration.get("workspace") is True
+        ):
+            print(
+                f"{manifest}: {section}.{name} must inherit its workspace dependency "
+                "with workspace = true"
+            )
+            failed = True
+
+
+for raw_path in sys.argv[2:]:
+    path = pathlib.Path(raw_path)
+    manifest = path.relative_to(workspace_manifest.parent)
+    data = tomllib.loads(path.read_text())
+    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+        check_group(manifest, section, data.get(section, {}))
+    for target, groups in data.get("target", {}).items():
+        for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+            check_group(manifest, f"target.{target}.{section}", groups.get(section, {}))
+
+sys.exit(1 if failed else 0)
+PY
+then
+  fail=1
+fi
+
 while IFS=$'\t' read -r crate manifest dependency kind; do
   allowed="$(allowed_internal_deps "$crate")"
 
