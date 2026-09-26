@@ -13,7 +13,9 @@ Areas where help goes furthest: locking, worktree management, execution primitiv
 
 ## Set up
 
-You need Rust 1.89 or newer, `git`, and `rg` (ripgrep). To run the website, you also need Node 18+.
+You need Rust 1.89 or newer, `git`, and `rg` (ripgrep). Running the `orbit-cli`
+tests also needs `uv` on `PATH` (CI uses 0.11.28). To run the website, you also
+need Node 18+.
 
 ```bash
 git clone https://github.com/constellation-works/orbit && cd orbit

@@ -351,7 +351,8 @@ export UV_PROJECT_ENVIRONMENT="$state/venv"
 export UV_CACHE_DIR="$state/uv-cache"
 export UV_PYTHON_INSTALL_DIR="$state/uv-python"
 export UV_PYTHON_BIN_DIR="$state/uv-python/bin"
-export PYTHONPYCACHEPREFIX="$state/pycache"   # the plugin root is read-only
+unset PYTHONPYCACHEPREFIX
+export PYTHONDONTWRITEBYTECODE=1     # the plugin root is read-only
 export TMPDIR="$state/tmp"
 mkdir -p "$TMPDIR"
 exec uv run --frozen --exact --no-dev --quiet --project "$ORBIT_PLUGIN_ROOT" \
@@ -398,10 +399,13 @@ environment.
 **Upgrades.** The environment is not part of the install. Every call runs
 `uv run --frozen --exact`, which compares the state-directory environment with
 the installed `uv.lock`. After `orbit plugin upgrade` installs a changed lock,
-the next call adds, upgrades and removes packages to match it, so a stale
-environment never runs. The manifest digest covers `plugin.yaml` only. An
-upgrade that changes just the lockfile therefore reports the requested
-permissions as unchanged and keeps the plugin's grants. Review the lock diff
+the next call adds, upgrades and removes packages to match it. Disable Python
+bytecode caching as in the shim above: a shared `PYTHONPYCACHEPREFIX` can reuse
+old bytecode after an upgrade when the old and new source have the same size
+and second-resolution timestamp, even though uv installed the new wheel. The
+manifest digest covers `plugin.yaml` only. An upgrade that changes just the
+lockfile therefore reports the requested permissions as unchanged and keeps
+the plugin's grants. Review the lock diff
 before upgrading, because it is new code even though it is not a new
 permission. `orbit plugin remove --purge-state` deletes the environment and
 cache with the rest of the plugin's state.
