@@ -670,6 +670,72 @@ fn plugin_inspection_from_unregistered_cwd_creates_no_files() {
 }
 
 #[test]
+fn plugin_validate_warns_when_timeout_exceeds_the_host_ceiling() {
+    let fixture = Fixture::new();
+    let source = fixture.source("timeout");
+    write_status_plugin(&source, "timeout", "");
+    let manifest = source.join("plugin.yaml");
+    let original = std::fs::read_to_string(&manifest).expect("read manifest");
+    let command = "    command: bin/backend.sh\n";
+
+    std::fs::write(
+        &manifest,
+        original.replace(command, &format!("{command}    timeout_ms: 300000\n")),
+    )
+    .expect("set timeout at the host ceiling");
+    let boundary = fixture
+        .orbit()
+        .args(["plugin", "validate", source.to_str().expect("utf8 source")])
+        .output()
+        .expect("validate timeout at the host ceiling");
+    assert!(boundary.status.success(), "{boundary:?}");
+    assert!(
+        !String::from_utf8_lossy(&boundary.stdout).contains("backend.timeout_ms"),
+        "the host ceiling itself should not warn: {}",
+        String::from_utf8_lossy(&boundary.stdout)
+    );
+
+    std::fs::write(
+        &manifest,
+        original.replace(command, &format!("{command}    timeout_ms: 300001\n")),
+    )
+    .expect("set timeout above the host ceiling");
+    let source_arg = source.to_str().expect("utf8 source");
+    let text = fixture
+        .orbit()
+        .args(["plugin", "validate", source_arg])
+        .output()
+        .expect("validate timeout in text format");
+    assert!(text.status.success(), "{text:?}");
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.contains("PLUGIN_TIMEOUT_CEILING_MS") && text.contains("300000 ms"),
+        "text output must name the host ceiling: {text}"
+    );
+
+    let json = fixture
+        .orbit()
+        .args(["plugin", "validate", source_arg, "--format", "json"])
+        .output()
+        .expect("validate timeout in JSON format");
+    assert!(json.status.success(), "{json:?}");
+    let json = stdout_json(&json);
+    assert!(
+        json["warnings"]
+            .as_array()
+            .is_some_and(
+                |warnings| warnings
+                    .iter()
+                    .any(|warning| warning.as_str().is_some_and(|warning| {
+                        warning.contains("PLUGIN_TIMEOUT_CEILING_MS")
+                            && warning.contains("300000 ms")
+                    }))
+            ),
+        "JSON warnings must name the host ceiling: {json}"
+    );
+}
+
+#[test]
 fn scaffold_defaults_to_the_current_directory_and_honors_explicit_dir() {
     let fixture = Fixture::new();
     let scratch = fixture._temp.path().join("scratch");

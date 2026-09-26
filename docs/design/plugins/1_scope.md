@@ -370,6 +370,11 @@ diagnostic naming both digests; recovery is `orbit plugin add <source> --force` 
 one. The comparison is meaningful only because `install_path` is first held to
 `~/.orbit/plugins/<ns>/` (§3) [ORB-12785].
 
+The digest covers only `plugin.yaml`, not the backend executable, Python shim, `uv.lock` or
+other files in the plugin tree. Changing one of those files without changing the manifest does
+not change the digest or by itself require grants to be reviewed again; a forced reinstall can
+therefore retain the plugin's existing enabled and grant state.
+
 **Write-root admission.** Every rendered `permissions.fs.write` root is normalized
 physically (kernel-resolved longest existing prefix plus the missing names), so a symlink
 planted in `{{plugin_state}}` cannot pass a root into the install namespace [ORB-12799].
@@ -386,15 +391,29 @@ call time (against the real one). An `fs` grant therefore cannot reopen `bin/`,
 
 ### 4.2 Execution protocol
 
-`exec` backend — one process per call, current dir = caller cwd, env cleared to the
-allowlisted child env plus:
+`exec` backend — one process per call, current dir = caller cwd. The inherited baseline
+allowlist is `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `TZ` and
+`USER`, each only when present. Orbit also forwards its recognized execution-envelope names
+when present (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_AGENT_NAME`,
+`ORBIT_AGENT_MODEL`, `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`, `ORBIT_ROOT`,
+`ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_SCRATCH_DIR`,
+`ORBIT_BIN`, `ORBIT_STEP_INDEX`, `ORBIT_TASK_ACTOR_KIND` and `ORBIT_ACTIVITY_*`). Any
+`permissions.env_pass` names the operator grants are copied when available. Other ambient
+variables are cleared. Orbit then sets:
 
 ```
 ORBIT_HOST_API=1  ORBIT_VERSION=0.24.0  ORBIT_PLUGIN=graph  ORBIT_PLUGIN_VERSION=…
-ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=<host-issued token>
+ORBIT_PLUGIN_ROOT=…  ORBIT_PLUGIN_STATE=…  ORBIT_PLUGIN_CALLBACK=<legacy token>
+ORBIT_PLUGIN_CALLBACK_FD=3
 ORBIT_TOOL_NAME=graph.recommend  ORBIT_TOOL_CWD=…  ORBIT_WORKSPACE_ROOT=…
 ORBIT_ALLOWED_TOOLS=orbit.task.show,orbit.search  ORBIT_PROC_ALLOWED_PROGRAMS=git
 ```
+
+`ORBIT_PLUGIN_CALLBACK_FD` names the inherited descriptor carrying this backend's host-issued
+callback credential; its value is `3`, and the value itself is not a credential. Keep descriptor
+3 open in the backend and any descendant that needs callbacks. `ORBIT_PLUGIN_CALLBACK` is a
+retired token-based identity kept for legacy compatibility; the descriptor record is the current
+callback identity.
 
 stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…}}`
 stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false,"detail":{…}}}`
@@ -415,7 +434,9 @@ deliberate `ORBIT_OPERATOR` override also emits its existing authorization warni
 before the JSON object.
 
 Non-zero exit, non-JSON stdout, or output failing `output_schema` is a tool error; there is no
-partial success. Timeout is `backend.timeout_ms`, capped by a host ceiling.
+partial success. Timeout is `backend.timeout_ms`, capped by the host's
+`PLUGIN_TIMEOUT_CEILING_MS` (300000 ms). `orbit plugin validate` warns when the configured
+timeout exceeds that ceiling.
 
 `mcp` backend — Orbit spawns the plugin's stdio MCP server once per *caller context* per
 runtime, keeps it alive, proxies each `<ns>.<verb>` as `tools/call`, and refuses to start if
