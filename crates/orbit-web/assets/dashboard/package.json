@@ -4,6 +4,6 @@
   "description": "Pinned npm identity for the dashboard's vendored DOMPurify and marked copies. Served files are the checked-in JS blobs; see VENDOR.md.",
   "dependencies": {
     "dompurify": "3.4.15",
-    "marked": "18.0.13"
+    "marked": "18.0.14"
   }
 }
