@@ -7,8 +7,8 @@ use serde_json::json;
 
 use super::super::ORBIT_MANAGED_RUN_CONTEXT_ENV;
 use super::super::audit::{
-    audit_role_label, audit_role_label_for_entry_point, reservation_owner_from_env,
-    resolve_audit_context, trusted_mcp_audit_context,
+    activity_binding_from_env, audit_role_label, audit_role_label_for_entry_point,
+    reservation_owner_from_env, resolve_audit_context, trusted_mcp_audit_context,
 };
 use super::super::execute::ToolEntryPoint;
 use crate::adapter::command::tests::support::{
@@ -386,6 +386,41 @@ fn reservation_owner_context_comes_from_managed_orbit_run_env() {
             .owner_metadata_json
             .as_deref()
             .is_some_and(|raw| { raw.contains("\"source\":\"orbit_cli\"") })
+    );
+}
+
+/// [ORB-13115] A nested `orbit tool run` / `orbit mcp serve` call binds its
+/// plugin context to the run envelope the host stamped, and only under the
+/// managed marker: a shell that merely inherits `ORBIT_RUN_ID` is interactive.
+#[test]
+fn activity_binding_comes_only_from_the_managed_run_envelope() {
+    let _g = env_guard();
+    clear_audit_context_env();
+    set_audit_context_env("ORB-7", "jrun-managed", "agent_implement", "2");
+    let unmanaged = activity_binding_from_env();
+    // SAFETY: tests serialize through `env_guard()` before mutating env.
+    unsafe {
+        std::env::set_var(ORBIT_MANAGED_RUN_CONTEXT_ENV, "1");
+    }
+    let managed = activity_binding_from_env();
+    // SAFETY: as above.
+    unsafe {
+        std::env::remove_var("ORBIT_TASK_ID");
+    }
+    let taskless = activity_binding_from_env();
+    clear_audit_context_env();
+
+    assert_eq!(unmanaged, None, "no managed marker, no binding");
+    assert_eq!(
+        managed,
+        Some(orbit_tools::ActivityBinding {
+            job_run_id: "jrun-managed".to_string(),
+            task_id: Some("ORB-7".to_string()),
+        })
+    );
+    assert_eq!(
+        taskless.map(|binding| (binding.job_run_id, binding.task_id)),
+        Some(("jrun-managed".to_string(), None))
     );
 }
 

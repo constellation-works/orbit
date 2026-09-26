@@ -416,8 +416,38 @@ callback credential; its value is `3`, and the value itself is not a credential.
 retired token-based identity kept for legacy compatibility; the descriptor record is the current
 callback identity.
 
-stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…}}`
+stdin:  `{"schema_version":1,"tool":"graph.recommend","input":{…},"context":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,"job_run_id":…}}`
 stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","message":"…","retryable":false,"detail":{…}}}`
+
+**Call identity.** `context.task_id` and `context.job_run_id` (the same keys in an `mcp`
+call's `_meta.orbit`) name the managed activity the call serves, so a backend that authorizes
+its own writes can match them against a policy enabled for that task [ORB-13115]. Both keys are
+always present; both are `null` for an interactive call — a person's `orbit tool run`, an
+unmanaged `orbit mcp serve` session, the dashboard. `task_id` is also `null` for a run step
+that serves no task. Orbit takes them from the dispatch, never from tool input:
+
+- A job step that calls a plugin tool (`plugin.tool_call`) gets the run the dispatcher is
+  executing, and the task its run input names (`task_id`, `task.id`, else the first of
+  `task_ids`) — the value a CLI agent step exports as `ORBIT_TASK_ID`. The step's `input` for
+  the tool does not contribute.
+- A CLI agent's nested `orbit tool run` or `orbit mcp serve` gets `ORBIT_RUN_ID` and
+  `ORBIT_TASK_ID` from the run envelope Orbit stamped into the agent's environment, honored
+  only with `ORBIT_MANAGED_RUN_CONTEXT` set — the boundary that already scopes reservation
+  owners and MCP audit correlation. Without the marker the call is interactive.
+
+A `task_id` or `job_run_id` in the tool's arguments reaches the backend as input and nothing
+else. Read identity from `context`, not from the forwarded `ORBIT_*` environment names, which
+are present only when the calling process has them.
+
+Trust level: host-attested, not authenticated. The agent cannot set or change the fields
+through a tool call. But the nested case reads process environment, and an agent with a shell
+inside its own sandbox can export different `ORBIT_*` values before running `orbit tool run`.
+So the fields tie a write to the run Orbit dispatched and are fit for matching an
+operator-enabled policy; they are not a credential that holds against a hostile agent.
+
+No routine or auto-task id is sent. The run's trigger records the routine host-side, but
+neither the dispatcher's activity context nor the managed-run envelope carries it, so Orbit has
+no attested value to pass. A backend must not accept one from tool input instead.
 
 An error requires non-empty string `code` and `message`. `retryable` is a boolean and defaults
 to `false` when omitted; it says whether repeating the identical call can succeed. `detail` is
@@ -454,7 +484,8 @@ the only client; the plugin never listens on a socket.
 
   ```
   {"name":"recommend","arguments":{…},
-   "_meta":{"orbit":{"workspace_root":…,"agent":…,"model":…,"tool":"graph.recommend"}}}
+   "_meta":{"orbit":{"workspace_root":…,"agent":…,"model":…,"config":{…},"task_id":…,
+                     "job_run_id":…,"tool":"graph.recommend"}}}
   ```
 
 - **Orbit answers server-initiated requests**: `ping` with `{}`, anything else with JSON-RPC

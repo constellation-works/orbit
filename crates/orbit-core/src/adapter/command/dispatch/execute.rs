@@ -23,8 +23,8 @@ use crate::runtime::tool_exec::{
 };
 
 use super::audit::{
-    audit_role_label_for_entry_point, managed_run_context, reservation_owner_from_env,
-    resolve_agent_identity_for_entry_point, resolve_audit_context,
+    activity_binding_from_env, audit_role_label_for_entry_point, managed_run_context,
+    reservation_owner_from_env, resolve_agent_identity_for_entry_point, resolve_audit_context,
 };
 use super::callback::{
     enforce_plugin_callback_allowlist, enforce_plugin_callback_allowlist_from_root,
@@ -124,6 +124,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             .ok()
             .map(|path| path.to_string_lossy().into_owned()),
         session_context: session_context.clone(),
+        activity_binding: activity_binding_from_env(),
         ..Default::default()
     };
     execute_tool_dispatch_with_audit_store(
@@ -331,6 +332,7 @@ impl OrbitRuntime {
                     proc_spawn_environment,
                     proc_spawn_activity_scoped,
                     reservation_owner: reservation_owner_from_env(),
+                    activity_binding: activity_binding_from_env(),
                     ..Default::default()
                 };
                 if proc_spawn_activity_scoped {

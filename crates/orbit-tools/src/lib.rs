@@ -219,6 +219,23 @@ pub struct ReservationOwnerContext {
     pub owner_metadata_json: Option<String>,
 }
 
+/// The managed activity a tool call serves, attested by the host that
+/// dispatched it.
+///
+/// Built only from the dispatcher's own run binding: the in-process activity
+/// context, or the managed-run environment Orbit stamps into a CLI agent it
+/// spawns (`ORBIT_MANAGED_RUN_CONTEXT` with `ORBIT_RUN_ID` and
+/// `ORBIT_TASK_ID`). Tool input never contributes to it, and an interactive
+/// call has none. Plugin backends receive it as `task_id` / `job_run_id` in
+/// their call context (`plugin::envelope`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActivityBinding {
+    /// The job run the activity belongs to.
+    pub job_run_id: String,
+    /// The task the activity is bound to, when it serves one.
+    pub task_id: Option<String>,
+}
+
 #[derive(Clone, Default)]
 pub struct ToolContext {
     pub cwd: Option<String>,
@@ -265,6 +282,9 @@ pub struct ToolContext {
     /// Trusted runtime-owned reservation metadata. Tool inputs cannot set this;
     /// only Orbit dispatch context or Orbit-managed CLI environments can.
     pub reservation_owner: Option<ReservationOwnerContext>,
+    /// Host-attested managed activity this call serves. `None` for an
+    /// interactive call. Tool input cannot set it.
+    pub activity_binding: Option<ActivityBinding>,
     /// Narrow Orbit application host used by Orbit builtins instead of respawning
     /// the Orbit CLI or carrying task-specific state in the generic tool context.
     pub orbit_host: Option<Arc<dyn OrbitToolHost>>,
@@ -292,6 +312,7 @@ impl std::fmt::Debug for ToolContext {
             .field("has_policy_engine", &self.policy_engine.is_some())
             .field("fs_profile", &self.fs_profile)
             .field("reservation_owner", &self.reservation_owner)
+            .field("activity_binding", &self.activity_binding)
             .field("has_orbit_host", &self.orbit_host.is_some())
             .finish()
     }

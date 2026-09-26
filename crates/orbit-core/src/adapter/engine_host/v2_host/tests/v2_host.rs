@@ -287,6 +287,38 @@ fn tool_context_for_activity_passes_proc_allowlist() {
     assert!(empty_scoped.proc_spawn_activity_scoped);
 }
 
+/// [ORB-13115] An activity context names the run it was built for, so a
+/// plugin it calls can bind a write to it; a context built without a run is
+/// bound to none.
+#[test]
+fn tool_context_for_activity_binds_its_own_run() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+
+    let bound = <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
+        &runtime,
+        Some(" jrun-bound "),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        bound.activity_binding,
+        Some(orbit_tools::ActivityBinding {
+            job_run_id: "jrun-bound".to_string(),
+            task_id: None,
+        }),
+        "the dispatcher, not the host, adds the task from the run's input"
+    );
+
+    for run_id in [None, Some("  ")] {
+        let unbound = <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
+            &runtime, run_id, None, None, None,
+        );
+        assert_eq!(unbound.activity_binding, None, "run_id {run_id:?}");
+        assert_eq!(unbound.reservation_owner, None, "run_id {run_id:?}");
+    }
+}
+
 /// Run the real recovery dispatch through crew resolution, task loading,
 /// worktree validation and Linux policy compilation. Stop at the launcher with
 /// a deterministic failure so this test needs no provider or user namespaces.
