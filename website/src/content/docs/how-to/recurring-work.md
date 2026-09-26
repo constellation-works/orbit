@@ -200,6 +200,33 @@ orbit auto-task toggle weekly-dep-audit off
 kill-switch, not a delete — the definition and its history are preserved, so you
 can turn it back `on` later.
 
+### Delete a definition
+
+When a chore no longer applies, delete it rather than leaving it disabled:
+
+```bash
+orbit auto-task delete weekly-dep-audit --reason "moved to Renovate"
+```
+
+Delete removes the definition file and its scheduler cursor, and writes an
+audit record with the optional reason. It refuses while a task minted from the
+definition is still open, and names those tasks; `--force` deletes anyway and
+leaves the open tasks alone. For a `--deliveries-landed` definition it also
+drops the coverage ledger through the audited `reset`, together with the
+automation refs the ledger pinned, so it refuses whenever that reset would.
+
+Deleting one of the definitions `orbit workspace init` ships — for example
+`code-review` or `qa-sweep` in a repository that holds no code — also records an
+opt-out. Later `orbit workspace init --force` and `orbit workspace sync` runs
+leave it absent, and `orbit doctor` does not report it missing. To bring one
+back with its shipped content:
+
+```bash
+orbit auto-task restore code-review
+```
+
+The restored definition is disabled, as shipped, and reseeds manage it again.
+
 ### Recover a delivery-triggered definition
 
 A definition scheduled with `--deliveries-landed` keeps a coverage ledger, so it

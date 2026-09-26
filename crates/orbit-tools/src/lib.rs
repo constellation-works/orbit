@@ -125,6 +125,7 @@ pub enum OrbitBuiltinAction {
     AutoTaskShow,
     AutoTaskUpdate,
     AutoTaskToggle,
+    AutoTaskDelete,
     AgentInvoke,
     CommandExec,
     DrainClaims,

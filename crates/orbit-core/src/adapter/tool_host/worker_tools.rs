@@ -33,6 +33,7 @@ pub(crate) fn execute(
             | OrbitBuiltinAction::AutoTaskAdd
             | OrbitBuiltinAction::AutoTaskUpdate
             | OrbitBuiltinAction::AutoTaskToggle
+            | OrbitBuiltinAction::AutoTaskDelete
             | OrbitBuiltinAction::Friction(_)
     ) {
         return Ok(None);
@@ -205,7 +206,8 @@ pub(crate) fn execute(
         // must pass the worker destination check above before ordinary CRUD.
         OrbitBuiltinAction::AutoTaskAdd
         | OrbitBuiltinAction::AutoTaskUpdate
-        | OrbitBuiltinAction::AutoTaskToggle => {
+        | OrbitBuiltinAction::AutoTaskToggle
+        | OrbitBuiltinAction::AutoTaskDelete => {
             binding
                 .validate_arguments(input)
                 .map_err(OrbitError::InvalidInput)?;

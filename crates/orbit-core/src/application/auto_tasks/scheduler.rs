@@ -97,12 +97,23 @@ pub fn open_auto_task_instance(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
-    let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(&definition.name)])?;
+    Ok(open_auto_task_instances(runtime, &definition.name)?
+        .into_iter()
+        .next())
+}
+
+/// Every still-open instance of the named definition's mints, in task-list
+/// order. Delete refuses while any remain.
+pub(crate) fn open_auto_task_instances(
+    runtime: &OrbitRuntime,
+    name: &str,
+) -> Result<Vec<String>, OrbitError> {
+    let tasks = runtime.list_tasks_by_tags(&[auto_task_tag(name)])?;
     // `someday` is an explicit "not now" park, not an active instance
     // [ORB-12148]: it must not block every later mint of this auto-task.
     Ok(tasks
         .into_iter()
-        .find(|task| {
+        .filter(|task| {
             !matches!(
                 task.status,
                 TaskStatus::Done
@@ -111,7 +122,8 @@ pub fn open_auto_task_instance(
                     | TaskStatus::Someday
             )
         })
-        .map(|task| task.id))
+        .map(|task| task.id)
+        .collect())
 }
 
 pub fn run_auto_task_scheduler_at(

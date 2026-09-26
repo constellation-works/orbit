@@ -331,3 +331,89 @@ fn legacy(consumer: &str, runtime: &OrbitRuntime, at: SourceRevision) -> Automat
         stall: None,
     }
 }
+
+fn delete(name: &str, force: bool) -> crate::application::auto_tasks::AutoTaskDeleteParams {
+    crate::application::auto_tasks::AutoTaskDeleteParams {
+        name: name.into(),
+        reason: Some("workspace has no code to review".into()),
+        force,
+    }
+}
+
+/// Deleting a delivery definition leaves no consumer behind: the audited reset
+/// destroys its state and records why, and no automation ref stays pinned.
+#[test]
+fn deleting_a_delivery_definition_resets_its_consumer() {
+    let runtime = runtime();
+    let qa = definition(&runtime, "delivery-qa", CoverageClass::IntegratedQaV1);
+    evaluate_auto_task(&runtime, &qa, false, Utc::now()).unwrap();
+    let consumer = consumer_key(&runtime, "auto-task", &qa.name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_state(&consumer).unwrap().is_some());
+
+    let report = runtime.auto_task_delete(delete(&qa.name, false)).unwrap();
+
+    let teardown = report
+        .consumer
+        .expect("a delivery definition has a consumer");
+    assert_eq!(teardown.consumer, consumer);
+    assert!(teardown.reset);
+    assert_eq!(store.automation_state(&consumer).unwrap(), None);
+    let audit = store.automation_recoveries(&consumer, 10).unwrap();
+    assert_eq!(audit.len(), 1, "the reset is audited");
+    assert_eq!(audit[0].reason, "workspace has no code to review");
+    assert!(pinned_refs(&runtime).is_empty());
+    assert!(runtime.auto_task_show(&qa.name).unwrap().is_none());
+}
+
+/// A consumer executing an action refuses the delete exactly as it refuses a
+/// reset, and leaves the definition in place; forcing abandons the action and
+/// releases its pinned batch.
+#[test]
+fn an_executing_delivery_action_refuses_the_delete_until_it_is_forced() {
+    let runtime = runtime();
+    let qa = definition(&runtime, "delivery-qa", CoverageClass::IntegratedQaV1);
+    admitted(&runtime, &qa);
+    let consumer = consumer_key(&runtime, "auto-task", &qa.name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let before = store.automation_state(&consumer).unwrap();
+    assert!(!pinned_refs(&runtime).is_empty(), "the batch is pinned");
+
+    // The admitted batch minted a task; the open-task refusal comes first.
+    let refused = runtime
+        .auto_task_delete(delete(&qa.name, false))
+        .expect_err("an executing consumer is not dropped silently");
+    assert!(
+        refused.to_string().contains("open minted tasks"),
+        "{refused}"
+    );
+
+    // With the task closed, the executing action still refuses, and the
+    // refusal points at the reset that owns the consumer.
+    let minted = runtime
+        .list_tasks_by_tags(&[orbit_types::workflow::auto_task_tag(&qa.name)])
+        .unwrap();
+    assert!(!minted.is_empty());
+    for task in &minted {
+        runtime.archive_task(&task.id).unwrap();
+    }
+    let refused = runtime
+        .auto_task_delete(delete(&qa.name, false))
+        .expect_err("an executing action refuses the delete");
+    let message = refused.to_string();
+    assert!(message.contains("action_executing"), "{message}");
+    assert!(message.contains("orbit auto-task reset"), "{message}");
+    assert_eq!(store.automation_state(&consumer).unwrap(), before);
+    assert!(runtime.auto_task_show(&qa.name).unwrap().is_some());
+
+    let report = runtime.auto_task_delete(delete(&qa.name, true)).unwrap();
+
+    let teardown = report.consumer.expect("consumer torn down");
+    assert!(teardown.reset);
+    assert!(!teardown.released_refs.is_empty());
+    assert_eq!(store.automation_state(&consumer).unwrap(), None);
+    assert!(
+        pinned_refs(&runtime).is_empty(),
+        "no pin outlives the consumer"
+    );
+}

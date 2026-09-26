@@ -115,12 +115,46 @@ orbit auto-task show <name>
 orbit auto-task update <name> --cron "0 9 * * 2"   # present fields only
 orbit auto-task toggle <name> on|off    # the kill-switch — preserved, not deleted
 orbit auto-task mint <name>             # mint one right now
+orbit auto-task delete <name> --reason "<why>"   # remove it for good
+orbit auto-task restore <name>          # reinstate a deleted shipped default
 ```
 
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
 `show` first; mint only when creating that task is intended. Over MCP: `orbit_auto_task_list` and
 `orbit_auto_task_mint`.
+
+### Deleting a definition
+
+`toggle off` pauses a definition and keeps it listed. `delete` removes it: the
+YAML file, its scheduler cursor, and — for a `deliveries_landed` definition —
+its consumer state. Every delete writes an audit record naming who deleted
+what and the optional `--reason`.
+
+- It refuses while a task minted from the definition is still open and names
+  those tasks. Finish or close them, or pass `--force`; a forced delete leaves
+  the open tasks as they are.
+- A delivery consumer is torn down through the audited `reset` (see below),
+  and every pinned `refs/orbit/automation/*` ref it held is deleted. Delete
+  therefore refuses whenever that reset would — an executing action, or a
+  consumer owned by another machine — and points at
+  `orbit auto-task reset <name>` to preview it. `--force` abandons an
+  executing action, exactly as it does for `reset`.
+- Deleting one of the shipped defaults below records an opt-out in
+  `.orbit/auto_tasks/.orbit-managed-assets.json`. `orbit workspace init
+  --force` and `orbit workspace sync` leave an opted-out default absent, and
+  `orbit doctor` does not report it missing. Use this to drop the code
+  sweeps from a workspace whose repository holds no code.
+- `orbit auto-task restore <name>` is the way back for a deleted shipped
+  default. It writes the shipped content (disabled, as shipped) and clears the
+  opt-out, so later reseeds manage it again. `restore` refuses a name Orbit
+  does not ship and a definition that already exists. `auto-task add` under a
+  deleted default's name creates your own definition instead; the opt-out
+  stays, so reseeds never overwrite it.
+
+A user-authored definition records no opt-out: delete simply removes it. Over
+MCP: `orbit_auto_task_delete` (`name`, optional `reason` and `force`).
+`restore` is CLI-only.
 
 Required tools in a template extend the selected agent activity's baseline;
 they do not replace it or bypass runtime capability, policy, filesystem,
@@ -155,7 +189,8 @@ plugin being removed.
 
 ## The nine seeded definitions
 
-`orbit workspace init` seeds all nine, disabled:
+`orbit workspace init` seeds all nine, disabled, except any you deleted (see
+[Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
   through their real user-facing paths rather than just re-running the test

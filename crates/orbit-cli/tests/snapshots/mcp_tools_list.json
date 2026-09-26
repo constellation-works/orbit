@@ -111,6 +111,35 @@
     "name": "orbit_auto_task_add"
   },
   {
+    "description": "Delete an auto-task definition with its scheduler cursor and delivery consumer state. Deleting a shipped default records an opt-out, so reseeding does not re-create it; `orbit auto-task restore` reinstates it.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "force": {
+          "description": "Delete even while a task minted from the definition is open or a delivery action is executing. Defaults to false.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Definition name. Required.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the definition is deleted, kept in the audit record.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_auto_task_delete"
+  },
+  {
     "description": "List every auto-task definition in this workspace.",
     "inputSchema": {
       "additionalProperties": true,

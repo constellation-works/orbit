@@ -17,17 +17,20 @@
 //! - [`scheduler`] — the evaluator called by the host tick.
 //! - `change_probe` — the `skip_if_unchanged` precondition's evidence.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
+//! - [`delete`] — audited delete, and restore of a deleted shipped default.
 
 use std::borrow::Cow;
 
 mod change_probe;
 pub mod crud;
+pub mod delete;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
 pub mod state;
 
 pub use crud::{AutoTaskAddParams, AutoTaskUpdateParams};
+pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
 pub use loader::{
     AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,
     definition_path,

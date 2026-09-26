@@ -234,11 +234,20 @@ job, activity, or job run is created, and fires do not appear on
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
 rejects duplicate names; update patches present fields; toggle flips `enabled`
-(disabling is preserved, never a delete). Both surfaces validate the schedule
+(disabling pauses and preserves; removal is `delete`, below). Both surfaces validate the schedule
 (cron parse / interval > 0) and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
+
+`delete.rs` owns removal (`orbit auto-task delete`, `orbit.auto_task.delete`).
+Delete refuses while a minted task is open unless forced. It removes the
+definition and its cursor under the cursor lock, tears a delivery consumer down
+through the audited reset, and writes an audit event. Deleting a shipped
+default also records it under `optedOut` in the auto-task managed-asset
+manifest. Reconciliation then leaves it absent and doctor does not report it
+missing. `orbit auto-task restore` writes the shipped content back and clears
+the opt-out.
 
 `list` is fail-closed-aware. The loader collects a per-file `AutoTaskLoadError`
 for every definition it rejects, and after [ORB-10800] those errors are no longer

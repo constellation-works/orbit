@@ -1,7 +1,7 @@
 //! Diagnosis half of definition-artifact health: classify one managed
 //! catalog's files and collect load faults through the production loaders.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -72,6 +72,11 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
     let tracked: BTreeMap<String, String> = manifest
         .as_ref()
         .map(|manifest| manifest.assets.clone())
+        .unwrap_or_default();
+    // Shipped defaults an operator deleted are an explicit choice, not drift.
+    let opted_out: BTreeSet<String> = manifest
+        .as_ref()
+        .map(|manifest| manifest.opted_out.clone())
         .unwrap_or_default();
 
     // Deprecated: tracked by the manifest, still on disk, no longer shipped.
@@ -150,6 +155,9 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
     // a bundled default's name.
     if let Some(embedded) = &catalog.embedded {
         for (name, rendered) in embedded {
+            if opted_out.contains(name) {
+                continue;
+            }
             let path = catalog.path_of(name);
             let Some(on_disk) = read_artifact(&path) else {
                 continue;
@@ -207,7 +215,7 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
     // invisible — including after a warm open that trusted the defaults stamp.
     if manifest.is_some() {
         for name in &catalog.shipped {
-            if !is_primary_shipped_asset(kind, name) {
+            if !is_primary_shipped_asset(kind, name) || opted_out.contains(name) {
                 continue;
             }
             let path = catalog.path_of(name);

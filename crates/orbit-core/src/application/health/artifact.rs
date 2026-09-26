@@ -21,6 +21,8 @@
 //!   shipped default this binary still embeds is absent from disk. Warm opens
 //!   skip reconciliation when the defaults stamp matches, so this state can
 //!   persist until `orbit init` or `orbit workspace sync` restores the file.
+//!   A default the manifest records as operator-deleted (`orbit auto-task
+//!   delete`) is an opt-out, reported neither missing nor stale.
 //!
 //! Provenance judgements are made from the per-kind managed manifest written by
 //! [`crate::application::managed_assets::reconcile_managed_assets`]. Residual
