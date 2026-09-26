@@ -110,7 +110,9 @@ pub struct AtomicTaskMutationParams {
     pub complexity: TaskComplexity,
     pub event_type: String,
     pub event_note: String,
-    /// Human-inspectable evidence for the decision committed by this mutation.
+    /// Bounded, single-line description stored with the operation receipt in history.
+    pub history_summary: String,
+    /// Full decision evidence stored as a task comment in the same bundle commit.
     pub audit_note: String,
 }
 

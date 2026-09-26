@@ -650,6 +650,7 @@ fn atomic_task_mutation_commits_receipt_event_and_envelope_together() {
         complexity: TaskComplexity::Hard,
         event_type: "task_pilot_applied".to_string(),
         event_note: "task-pilot atomic application".to_string(),
+        history_summary: "selectors (confidence high) — bounded repair".to_string(),
         audit_note: r#"{"assessment_rationale":"cross-component repair"}"#.to_string(),
     };
 
@@ -681,8 +682,16 @@ fn atomic_task_mutation_commits_receipt_event_and_envelope_together() {
         .find(|event| event.event == "task_pilot_applied")
         .and_then(|event| event.note.as_deref())
         .expect("task-pilot audit note");
-    assert!(note.starts_with("operation_id=operation-one\n"), "{note}");
-    assert!(note.contains("assessment_rationale"), "{note}");
+    assert_eq!(
+        note,
+        "selectors (confidence high) — bounded repair (operation_id=operation-one)"
+    );
+    let comments = store.get_task_comments("ORB-00000").unwrap().unwrap();
+    assert_eq!(comments.len(), 2);
+    assert_eq!(
+        comments[1].message,
+        "operation_id=operation-one\n{\"assessment_rationale\":\"cross-component repair\"}"
+    );
 }
 
 #[test]
@@ -703,6 +712,7 @@ fn atomic_task_mutation_refuses_a_changed_complexity_without_partial_audit() {
         )
         .expect("operator changes complexity");
     let history_before = store.get_task_history("ORB-00000").unwrap().unwrap();
+    let comments_before = store.get_task_comments("ORB-00000").unwrap().unwrap();
 
     let outcome = store
         .apply_atomic_task_mutation(
@@ -720,6 +730,7 @@ fn atomic_task_mutation_refuses_a_changed_complexity_without_partial_audit() {
                 complexity: TaskComplexity::Low,
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
+                history_summary: "selectors (confidence high) — stale".to_string(),
                 audit_note: "stale assessment".to_string(),
             },
         )
@@ -736,6 +747,10 @@ fn atomic_task_mutation_refuses_a_changed_complexity_without_partial_audit() {
         store.get_task_history("ORB-00000").unwrap().unwrap(),
         history_before
     );
+    assert_eq!(
+        store.get_task_comments("ORB-00000").unwrap().unwrap(),
+        comments_before
+    );
 }
 
 #[test]
@@ -748,6 +763,7 @@ fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
         .create_task(create_params("Atomic fault", TaskStatus::Backlog))
         .expect("create task");
     let history_before = store.get_task_history("ORB-00000").unwrap().unwrap();
+    let comments_before = store.get_task_comments("ORB-00000").unwrap().unwrap();
     inject_bundle_write_faults(&[BundleWriteFault::AfterEnvelopeStage]);
 
     store
@@ -766,6 +782,7 @@ fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
                 complexity: TaskComplexity::Hard,
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
+                history_summary: "selectors (confidence high) — fault".to_string(),
                 audit_note: r#"{"assessment_rationale":"fault fixture"}"#.to_string(),
             },
         )
@@ -780,6 +797,10 @@ fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
     assert_eq!(
         store.get_task_history("ORB-00000").unwrap().unwrap(),
         history_before
+    );
+    assert_eq!(
+        store.get_task_comments("ORB-00000").unwrap().unwrap(),
+        comments_before
     );
 }
 

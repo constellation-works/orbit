@@ -171,13 +171,13 @@ fn host_operational_assessment(task: &Task, complexity: &str) -> Value {
 
 fn task_pilot_audits(runtime: &OrbitRuntime, task_id: &str) -> Vec<Value> {
     runtime
-        .get_task_history(task_id)
-        .expect("task history")
+        .get_task_comments(task_id)
+        .expect("task comments")
         .into_iter()
-        .filter(|event| event.event == "task_pilot_applied")
-        .map(|event| {
-            let note = event.note.expect("task_pilot_applied note");
-            let (_receipt, audit) = note.split_once('\n').expect("audit payload");
+        .filter(|comment| comment.by == "task-pilot")
+        .map(|comment| {
+            let (receipt, audit) = comment.message.split_once('\n').expect("audit payload");
+            assert!(receipt.starts_with("operation_id="));
             serde_json::from_str::<Value>(audit).expect("audit json")
         })
         .collect()
@@ -185,8 +185,8 @@ fn task_pilot_audits(runtime: &OrbitRuntime, task_id: &str) -> Vec<Value> {
 
 /// ORB-12099 reported a successful task-pilot event (`unassessed` -> `hard`)
 /// against a task that later read `unassessed`, and asked whether the
-/// assessment failed to persist. It did not: the durable history carries two
-/// `task_pilot_applied` audits, and the second one — a later pass that reported
+/// assessment failed to persist. It did not: the durable comments carry two
+/// assessments, and the second one — a later pass that reported
 /// `unassessed` with evidence gaps — is the legitimate write that changed the
 /// value. This pins both halves: an applied assessment is durably readable
 /// across a runtime reopen and survives an auto-task refresh untouched, and a
@@ -242,6 +242,12 @@ fn an_applied_assessment_is_durable_and_only_a_later_audited_pass_changes_it() {
         reopened.get_task(&minted.id).expect("reopened").complexity,
         Some(TaskComplexity::Hard)
     );
+    let reopened_audits = task_pilot_audits(&reopened, &minted.id);
+    assert_eq!(reopened_audits.len(), 1);
+    assert_eq!(
+        reopened_audits[0]["assessment"]["reassessment_triggers"],
+        json!(["the owning boundary changes"])
+    );
 
     // Auto-task refresh sees an open instance, skips, and rewrites nothing.
     let outcome = run_auto_task_scheduler_at(
@@ -266,7 +272,7 @@ fn an_applied_assessment_is_durable_and_only_a_later_audited_pass_changes_it() {
     );
 
     // A later pass that cannot support a rating is a legitimate audited write,
-    // not a lost one: both audits remain readable, in order.
+    // not a lost one: both assessments remain readable, in order.
     let reprepared = prepare_task(
         &runtime,
         &repo_root,
