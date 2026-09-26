@@ -24,6 +24,7 @@ const ALL_VERBS: &[FrictionVerb] = &[
     FrictionVerb::Tags,
     FrictionVerb::Update,
     FrictionVerb::Resolve,
+    FrictionVerb::Rehome,
 ];
 
 #[test]
@@ -98,7 +99,9 @@ fn subcommand_order_is_the_shipped_help_order() {
     let order: Vec<&str> = FRICTION_OPERATIONS.iter().map(|spec| spec.name).collect();
     assert_eq!(
         order,
-        vec!["add", "list", "show", "stats", "tags", "update", "resolve"],
+        vec![
+            "add", "list", "show", "stats", "tags", "update", "resolve", "rehome"
+        ],
         "`orbit friction --help` lists subcommands in registry order"
     );
 }
