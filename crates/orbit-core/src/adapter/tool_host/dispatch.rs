@@ -53,6 +53,7 @@ pub(super) fn execute(
             action,
             &mut result,
             &redaction_report,
+            None,
             agent.as_deref(),
             model.as_deref(),
         )?;
@@ -60,6 +61,7 @@ pub(super) fn execute(
     }
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
+    let mut persisted_task_id = None;
     let mut response = match action {
         OrbitBuiltinAction::AdrAdd
         | OrbitBuiltinAction::AdrShow
@@ -106,7 +108,11 @@ pub(super) fn execute(
         OrbitBuiltinAction::Search => super::search_tools::search(runtime, input),
         OrbitBuiltinAction::StateGet => super::state_tools::get(task_scope, input),
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
-        OrbitBuiltinAction::TaskAdd => super::task_tools::add(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskAdd => {
+            let written = super::task_tools::add(runtime, input, agent, model)?;
+            persisted_task_id = Some(written.persisted_id);
+            Ok(written.response)
+        }
         OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
         OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
@@ -118,16 +124,24 @@ pub(super) fn execute(
         OrbitBuiltinAction::TaskLocksReserve => {
             crate::runtime::task::locks::reserve(runtime, input, agent, model, reservation_owner)
         }
-        OrbitBuiltinAction::TaskReject => super::task_tools::reject(runtime, input, agent, model),
+        OrbitBuiltinAction::TaskReject => {
+            let written = super::task_tools::reject(runtime, input, agent, model)?;
+            persisted_task_id = Some(written.persisted_id);
+            Ok(written.response)
+        }
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
-        OrbitBuiltinAction::TaskUpdate => super::task_tools::update(
-            runtime,
-            input,
-            agent,
-            model,
-            reservation_owner,
-            runtime.artifact_origin(session_context),
-        ),
+        OrbitBuiltinAction::TaskUpdate => {
+            let written = super::task_tools::update(
+                runtime,
+                input,
+                agent,
+                model,
+                reservation_owner,
+                runtime.artifact_origin(session_context),
+            )?;
+            persisted_task_id = Some(written.persisted_id);
+            Ok(written.response)
+        }
         OrbitBuiltinAction::WorkflowShip => super::workflow_tools::ship(
             runtime,
             input,
@@ -156,6 +170,7 @@ pub(super) fn execute(
         action,
         &mut response,
         &redaction_report,
+        persisted_task_id.as_deref(),
         agent_for_audit.as_deref(),
         model_for_audit.as_deref(),
     )?;
