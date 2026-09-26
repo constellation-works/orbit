@@ -8,11 +8,16 @@ pub struct PluginSandboxProfile {
     /// `.orbit/`, which `orbit tool run` reads but must not rewrite.
     pub read: Vec<PathBuf>,
     /// Host-owned trees carved out of [`Self::read`] however it was composed:
-    /// the live callback sessions and the grant witnesses
-    /// ([`PLUGIN_GLOBAL_READ_DENY_DIRS`]). Neither platform lets a manifest
-    /// buy them back, because the carve-out is applied after the granted
-    /// paths rather than beside them.
+    /// the live callback sessions, the grant witnesses and every plugin's
+    /// state ([`PLUGIN_GLOBAL_READ_DENY_DIRS`]). Neither platform lets a
+    /// manifest buy them back: the carve-out is applied after the granted
+    /// paths rather than beside them, and a manifest read root inside one of
+    /// them never reaches [`Self::read`].
     pub read_denies: Vec<PathBuf>,
+    /// This plugin's own `{{plugin_state}}`, which [`Self::read`] always
+    /// carries: the one tree inside [`Self::read_denies`] re-allowed whole
+    /// rather than as a single file.
+    pub state_dir: PathBuf,
     /// Writable directories: granted writes only. Materialised before the
     /// child starts when they are beneath a host-owned materialization root;
     /// granted host paths outside those roots must already exist because a
@@ -58,18 +63,31 @@ impl PluginSandboxProfile {
         self
     }
 
-    /// The callback records this profile re-allows inside a denied directory:
-    /// what [`Self::with_callback_session`] granted, and nothing else.
+    /// The single files this profile re-allows inside a denied directory:
+    /// the callback record [`Self::with_callback_session`] granted and the
+    /// plugin's own grant witness, and nothing else.
     pub fn readable_denied_files(&self) -> Vec<PathBuf> {
         self.read
             .iter()
-            .filter(|path| {
-                self.read_denies
-                    .iter()
-                    .any(|denied| path.starts_with(denied))
-            })
+            .filter(|path| self.is_denied(path) && !path.starts_with(&self.state_dir))
             .cloned()
             .collect()
+    }
+
+    /// The trees this profile re-allows inside a denied directory: the
+    /// plugin's own state, when it sits beneath a denied tree.
+    pub fn readable_denied_trees(&self) -> Vec<PathBuf> {
+        if self.is_denied(&self.state_dir) {
+            vec![self.state_dir.clone()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn is_denied(&self, path: &Path) -> bool {
+        self.read_denies
+            .iter()
+            .any(|denied| path.starts_with(denied))
     }
 
     /// The seatbelt view of this boundary.
@@ -313,11 +331,12 @@ fn spawn_confined(
     // credential deny (it fails closed on an unknown provider).
     let mut profile_text = compile_macos_sandbox_profile(&rules, "plugin")?;
     // The compiler allows reads broadly, so the plugin's read carve-outs are
-    // denials appended after it; the child's own callback record is re-allowed
-    // last. SBPL is last-match-wins.
+    // denials appended after it; the child's own state tree, callback record
+    // and witness are re-allowed last. SBPL is last-match-wins.
     append_macos_read_boundary(
         &mut profile_text,
         &profile.read_denies,
+        &profile.readable_denied_trees(),
         &profile.readable_denied_files(),
     );
     append_macos_network_access(

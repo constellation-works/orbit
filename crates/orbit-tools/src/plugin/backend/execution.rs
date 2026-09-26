@@ -47,20 +47,40 @@ impl PluginBackendSpec {
             ),
             None => None,
         };
+        let read_denies: Vec<PathBuf> = PLUGIN_GLOBAL_READ_DENY_DIRS
+            .iter()
+            .map(|relative| self.global_root.join(relative))
+            .collect();
         let mut dropped = Vec::new();
         let mut read = vec![self.plugin_root.clone()];
         if self.granted(PluginGrant::Fs) {
-            read.extend(
-                scope_fs_roots(
-                    &roots.read,
-                    &self.permissions.fs.read,
-                    granted_roots.as_deref(),
-                    "spec.permissions.fs.read",
-                    &mut dropped,
-                )
-                .into_iter()
-                .map(|root| root.path),
-            );
+            for root in scope_fs_roots(
+                &roots.read,
+                &self.permissions.fs.read,
+                granted_roots.as_deref(),
+                "spec.permissions.fs.read",
+                &mut dropped,
+            ) {
+                // Both platforms grant a read root that sits *inside* a
+                // denied tree — that is how the host hands a child its own
+                // record — so a manifest root there would buy back another
+                // plugin's state, session or witness. Only the host names
+                // those re-allows; a manifest root inside a denied tree is
+                // dropped unless it is within this plugin's own state.
+                if self.inside_foreign_denied_tree(&root.path, &read_denies) {
+                    tracing::warn!(
+                        target: "orbit.tools.plugin",
+                        plugin = %self.provenance.name,
+                        field = %root.field,
+                        requested = %root.declared,
+                        "plugin requests a read root inside host-owned Orbit state (another \
+                         plugin's state, the callback sessions or the grant witnesses); it is \
+                         not on the sandbox profile and no grant can add it",
+                    );
+                    continue;
+                }
+                read.push(root.path);
+            }
         }
         let scoped_write = if self.granted(PluginGrant::Fs) {
             scope_fs_roots(
@@ -153,6 +173,15 @@ impl PluginBackendSpec {
             }
         }
         write.extend(host_write_dirs.iter().cloned());
+        // The child's own state tree, re-allowed inside the denied
+        // `state/plugins/` on every profile: the one directory the standard
+        // gives a plugin for durable state stays readable to it and to no
+        // other plugin. Writing it is still the `fs.write` grant's decision
+        // above; this only keeps the carve-out from taking a plugin's own
+        // state away from it.
+        if !read.contains(&self.state_dir) {
+            read.push(self.state_dir.clone());
+        }
         let network = if self.granted(PluginGrant::Network) {
             self.permissions.network
         } else {
@@ -160,10 +189,8 @@ impl PluginBackendSpec {
         };
         Ok(PluginSandboxProfile {
             read,
-            read_denies: PLUGIN_GLOBAL_READ_DENY_DIRS
-                .iter()
-                .map(|relative| self.global_root.join(relative))
-                .collect(),
+            read_denies,
+            state_dir: self.state_dir.clone(),
             write,
             write_files,
             // The whole host-materialized prefix set, stated once: the
@@ -184,6 +211,19 @@ impl PluginBackendSpec {
             // Set by `with_callback_session` once the session exists.
             callback_fd: None,
         })
+    }
+
+    /// Whether `path` resolves at or beneath a denied tree without resolving
+    /// into this plugin's own state tree.
+    fn inside_foreign_denied_tree(&self, path: &Path, read_denies: &[PathBuf]) -> bool {
+        let path = physical_with_missing_tail(path);
+        let own_state = physical_with_missing_tail(&self.state_dir);
+        if path.starts_with(&own_state) {
+            return false;
+        }
+        read_denies
+            .iter()
+            .any(|denied| path.starts_with(physical_with_missing_tail(denied)))
     }
 
     /// The manifest roots the operator's `fs` scope leaves out, for a surface

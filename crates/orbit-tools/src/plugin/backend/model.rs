@@ -44,8 +44,14 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// the host's answer, never a plugin's input, and the child is likewise
 /// granted only its own ([`plugin_grant_witness_relative`]) so it can verify
 /// its own row and read nothing about any other plugin [ORB-12798].
+///
+/// `state/plugins/` holds every plugin's `{{plugin_state}}`, the one place
+/// the standard gives a plugin for durable state — including a credential it
+/// must keep, such as an OAuth refresh token. Another plugin reading it could
+/// act as that plugin, so the tree is denied and the child is granted back
+/// only its own `state/plugins/<ns>` ([`PluginBackendSpec::state_dir`]).
 pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] =
-    &["state/plugin-callbacks", "plugins/.grants"];
+    &["state/plugin-callbacks", "plugins/.grants", "state/plugins"];
 
 /// Host-owned directory beside the namespace install directories, holding one
 /// grant-authorization witness per plugin (`orbit-core`'s `runtime::plugin::grants`).

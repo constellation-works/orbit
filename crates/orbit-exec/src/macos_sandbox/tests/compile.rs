@@ -1398,3 +1398,91 @@ fn plugin_network_access_is_appended_after_the_broad_allow() {
         "the loopback re-allow must follow the deny:\n{loopback}"
     );
 }
+
+/// A plugin's read boundary: a denied subtree, a subtree inside it re-allowed
+/// whole (the plugin's own state), and single files re-allowed literally —
+/// emitted in that order after the broad read allow, since SBPL is
+/// last-match-wins.
+#[test]
+fn read_boundary_re_allows_subtrees_and_files_after_the_denies() {
+    let resolved = profile("plugin", &[], &[]);
+    let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    super::super::append_macos_read_boundary(
+        &mut text,
+        &[std::path::PathBuf::from("/srv/orbit/state/plugins")],
+        &[std::path::PathBuf::from("/srv/orbit/state/plugins/demo")],
+        &[std::path::PathBuf::from(
+            "/srv/orbit/plugins/.grants/demo.json",
+        )],
+    );
+    let broad = text.find("(allow file-read*)").expect("broad read allow");
+    let deny = text
+        .find("(deny file-read* (subpath \"/srv/orbit/state/plugins\"))")
+        .expect("state tree deny");
+    let tree = text
+        .find("(allow file-read* (subpath \"/srv/orbit/state/plugins/demo\"))")
+        .expect("own state re-allow");
+    let file = text
+        .find("(allow file-read* (literal \"/srv/orbit/plugins/.grants/demo.json\"))")
+        .expect("own witness re-allow");
+    assert!(
+        broad < deny && deny < tree && deny < file,
+        "re-allows must follow the deny they carve into: {text}"
+    );
+}
+
+/// The same boundary under the real `sandbox-exec`: the plugin's own state
+/// subtree is readable and listable, a sibling namespace and the tree holding
+/// both are not.
+#[cfg(target_os = "macos")]
+#[test]
+fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+    let parent = sandbox_test_parent("plugin-state");
+    let _cleanup = ScopeGuard(parent.clone());
+    let root = parent.canonicalize().expect("canonical test parent");
+    let plugins = root.join("state/plugins");
+    for name in ["demo", "other"] {
+        std::fs::create_dir_all(plugins.join(name)).expect("plugin state");
+        std::fs::write(plugins.join(name).join("secret"), name).expect("secret");
+    }
+    let resolved = profile("plugin", &[], &[]);
+    let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    super::super::append_macos_read_boundary(
+        &mut text,
+        std::slice::from_ref(&plugins),
+        &[plugins.join("demo")],
+        &[],
+    );
+    let lists = |path: &std::path::Path| {
+        use std::io::Write;
+        let mut profile_file = tempfile::Builder::new()
+            .suffix(".sb")
+            .tempfile()
+            .expect("tempfile");
+        profile_file
+            .write_all(text.as_bytes())
+            .expect("write profile");
+        std::process::Command::new(sandbox_exec_path_for_test())
+            .arg("-f")
+            .arg(profile_file.path())
+            .arg("/bin/ls")
+            .arg(path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("run sandbox-exec")
+            .success()
+    };
+
+    assert!(can_read_under_profile(&text, &plugins.join("demo/secret")));
+    assert!(lists(&plugins.join("demo")));
+    assert!(!can_read_under_profile(
+        &text,
+        &plugins.join("other/secret")
+    ));
+    assert!(!lists(&plugins.join("other")));
+    assert!(!lists(&plugins));
+}

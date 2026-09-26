@@ -451,7 +451,14 @@ fn without_orbit_tools_no_orbit_store_is_opened() {
         .sandbox_profile(Some(Path::new("/srv/checkout")))
         .expect("profile");
     assert!(profile.write.is_empty() && profile.write_files.is_empty());
-    assert_eq!(profile.read, vec![PathBuf::from("/srv/plugins/demo")]);
+    assert_eq!(
+        profile.read,
+        vec![
+            PathBuf::from("/srv/plugins/demo"),
+            PathBuf::from("/srv/plugins/demo/state"),
+        ],
+        "the plugin root and its own state, nothing of Orbit's"
+    );
 }
 
 /// The seatbelt profile draws the same line as the Landlock one: the write
@@ -734,6 +741,7 @@ fn the_macos_profile_denies_callback_sessions_and_re_allows_the_childs_own_recor
     orbit_exec::append_macos_read_boundary(
         &mut profile_text,
         &profile.read_denies,
+        &profile.readable_denied_trees(),
         &profile.readable_denied_files(),
     );
 

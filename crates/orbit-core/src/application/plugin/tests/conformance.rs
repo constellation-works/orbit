@@ -565,6 +565,37 @@ fn template_writes_and_loopback_run_without_consent() {
     assert!(!report.requested_grants.contains("unsandboxed"));
 }
 
+/// A conformance run compiles the same profile a live call does, so the
+/// `state/plugins/` carve-out holds there too: a golden whose backend keeps
+/// and reads back its own state passes, and the tree that would hold another
+/// namespace's state is not listable from inside the run.
+#[cfg(unix)]
+#[test]
+fn a_golden_reads_its_own_state_and_cannot_list_the_state_tree() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "stateful", "world");
+    std::fs::write(
+        root.join("bin/backend.sh"),
+        r#"#!/bin/sh
+cat > /dev/null
+fail() { printf '{"ok":false,"error":{"code":"%s","message":"state boundary"}}\n' "$1"; exit 0; }
+echo kept > "$ORBIT_PLUGIN_STATE/token" 2>/dev/null || fail own_state_unwritable
+[ "$(cat "$ORBIT_PLUGIN_STATE/token" 2>/dev/null)" = kept ] || fail own_state_unreadable
+if ls "$(dirname "$ORBIT_PLUGIN_STATE")" >/dev/null 2>&1; then fail state_tree_listed; fi
+printf '{"ok":true,"output":{"subject":"world"}}\n'
+"#,
+    )
+    .expect("write stateful backend");
+    patch_manifest(
+        &root,
+        "",
+        "  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n",
+    );
+
+    let report = run(&fixture.runtime, &root).expect("own-state writes need no extra consent");
+    assert!(report.passed(), "{:?}", report.results);
+}
+
 #[cfg(unix)]
 #[test]
 fn accept_requested_keeps_the_certification_rule() {

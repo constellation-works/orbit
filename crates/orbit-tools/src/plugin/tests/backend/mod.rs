@@ -11,6 +11,7 @@ use orbit_types::plugin::{
 use serde_json::json;
 
 use super::super::backend::{PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec};
+use super::super::loader::physical_with_missing_tail;
 use super::support::{context, require_sandbox, scoped_spec, spec, stub_backend, tool};
 use crate::{Tool, ToolContext};
 
@@ -40,3 +41,4 @@ fn fs_state_permissions() -> PluginPermissions {
 
 mod confinement;
 mod grants;
+mod state_isolation;

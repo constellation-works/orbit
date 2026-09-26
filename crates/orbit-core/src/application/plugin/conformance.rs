@@ -139,8 +139,16 @@ pub fn test_plugin_dir(
     // declared, which is why that shape needs consent before this point.
     let sandbox_root = tempfile::tempdir()
         .map_err(|error| OrbitError::Io(format!("create the conformance workspace: {error}")))?;
-    let global_root = sandbox_root.path().join("global");
-    let workspace_root = sandbox_root.path().join("workspace");
+    // Resolved once, because `sandbox-exec` matches the resolved path: a
+    // macOS temp dir sits behind the `/var` -> `/private/var` alias, and a
+    // profile spelled through it would miss the state-tree deny and the
+    // write grants alike.
+    let sandbox_path = sandbox_root
+        .path()
+        .canonicalize()
+        .map_err(|error| OrbitError::Io(format!("resolve the conformance workspace: {error}")))?;
+    let global_root = sandbox_path.join("global");
+    let workspace_root = sandbox_path.join("workspace");
     let state_dir = global_root.join("state/plugins").join(plugin.namespace());
     for dir in [&global_root, &workspace_root, &state_dir] {
         std::fs::create_dir_all(dir)
