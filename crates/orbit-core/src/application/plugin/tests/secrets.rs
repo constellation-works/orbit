@@ -215,3 +215,72 @@ fn doctor_reports_each_declared_but_unset_secret() {
         "{secret_rows:?}"
     );
 }
+
+/// Per-call delivery from the host store (design §3, "Plugin secrets"): a
+/// plugin's call carries each of its own declared secrets that is set, with
+/// its stored version, and nothing else — not an unset one, not a stored
+/// name it no longer declares, not another plugin's secret of the same name.
+/// The call's audit row names what was delivered and holds no value.
+#[cfg(unix)]
+#[test]
+fn a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them() {
+    use serde_json::json;
+
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo").declaring_secrets(TWO_SECRETS),
+    );
+    install(
+        &fixture,
+        PluginSpecFixture::new("other", "other").declaring_secrets("    - name: api_key\n"),
+    );
+    for plugin in ["demo", "other"] {
+        enable_plugin(&fixture.runtime, plugin, &PluginEnableOptions::default()).expect("enable");
+    }
+    let status = set_plugin_secret(&fixture.runtime, "demo", "api_key", &value("demo-key-3e1"))
+        .expect("set a declared secret");
+    assert!(status.set);
+    // A stored value under a name the manifest does not declare — what an
+    // older manifest could have left — is never delivered.
+    PluginSecretStore::new(&fixture.global_root)
+        .put("demo", "stale_name", &value("stale-value-8d2"))
+        .expect("store an undeclared name directly");
+    let version = PluginSecretStore::new(&fixture.global_root)
+        .get("demo", "api_key")
+        .expect("read")
+        .expect("set")
+        .version;
+
+    let runtime = fixture.reopen();
+    let output = fixture.call(&runtime, "demo.hello").expect("demo call");
+    assert_eq!(
+        output["envelope"]["context"]["secrets"],
+        json!({ "api_key": { "value": "demo-key-3e1", "version": version } }),
+        "{output}"
+    );
+    let other = fixture.call(&runtime, "other.hello").expect("other call");
+    assert_eq!(
+        other["envelope"]["context"]["secrets"],
+        json!({}),
+        "another plugin's `api_key` is not this plugin's: {other}"
+    );
+
+    let rows = |tool: &str| {
+        runtime
+            .list_audit_events(None, Some(tool.to_string()), None, None, 10)
+            .expect("audit events")
+    };
+    let demo_rows = rows("demo.hello");
+    assert_eq!(demo_rows.len(), 1);
+    assert_eq!(demo_rows[0].plugin_secrets, vec!["api_key".to_string()]);
+    let other_rows = rows("other.hello");
+    assert!(other_rows[0].plugin_secrets.is_empty());
+    for row in demo_rows.iter().chain(&other_rows) {
+        let text = serde_json::to_string(row).expect("serialize audit row");
+        assert!(
+            !text.contains("demo-key-3e1") && !text.contains("stale-value-8d2"),
+            "an audit row holds no value: {text}"
+        );
+    }
+}

@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use super::sample_params;
 use crate::AuditEventFilter;
 use crate::AuditInvocationFields;
+use crate::contracts::AuditEventInsertParams;
 
 #[test]
 fn insert_then_read_round_trips_correlation_fields() {
@@ -56,6 +57,57 @@ fn insert_then_read_round_trips_correlation_fields() {
     assert_eq!(by_id.mcp_call_id.as_deref(), Some("mcall-abc"));
     assert_eq!(by_id.trace_id.as_deref(), Some("trace-test-1"));
     assert_eq!(by_id.caller_ip.as_deref(), Some("192.0.2.10"));
+}
+
+/// A plugin call's row names the secrets its request carried and nothing
+/// more; every other row reads back with none, and nothing is written for it.
+#[test]
+fn plugin_secret_names_round_trip_and_default_to_none() {
+    let store = Store::open_in_memory().expect("open store");
+    let delivered = vec!["api_key".to_string(), "refresh_token".to_string()];
+    store
+        .insert_audit_event_record_with_invocation(
+            &sample_params(),
+            AuditInvocationFields {
+                plugin_secrets: &delivered,
+                ..AuditInvocationFields::default()
+            },
+        )
+        .expect("insert plugin row");
+    store
+        .insert_audit_event_record_with_invocation(
+            &AuditEventInsertParams {
+                execution_id: "exec-test-plain".to_string(),
+                ..sample_params()
+            },
+            AuditInvocationFields::default(),
+        )
+        .expect("insert plain row");
+
+    let mut events = store
+        .list_audit_events(&AuditEventFilter::default())
+        .expect("list audit events");
+    events.sort_by_key(|event| event.id);
+    assert_eq!(events[0].plugin_secrets, delivered);
+    assert!(events[1].plugin_secrets.is_empty());
+    assert!(
+        serde_json::to_value(&events[1])
+            .expect("serialize")
+            .get("plugin_secrets")
+            .is_none(),
+        "a row that delivered nothing does not grow the field"
+    );
+    let stored: Option<String> = store
+        .conn
+        .lock()
+        .expect("conn")
+        .query_row(
+            "SELECT plugin_secrets FROM audit_events WHERE id = ?1",
+            [events[1].id],
+            |row| row.get(0),
+        )
+        .expect("read column");
+    assert!(stored.is_none());
 }
 
 #[test]

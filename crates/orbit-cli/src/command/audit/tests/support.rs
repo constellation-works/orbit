@@ -48,6 +48,7 @@ fn audit_list_json_projection_shape_is_stable() {
         step_index: Some(2),
         self_reported_actor: Some("claude-code".to_string()),
         plugin: None,
+        plugin_secrets: Vec::new(),
     };
 
     assert_eq!(
@@ -140,6 +141,7 @@ fn denied_event(id: i64, execution_id: &str) -> AuditEvent {
         step_index: None,
         self_reported_actor: None,
         plugin: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

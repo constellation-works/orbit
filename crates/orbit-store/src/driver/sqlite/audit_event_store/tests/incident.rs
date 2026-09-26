@@ -135,6 +135,7 @@ impl FailureFixture {
             step_index: None,
             self_reported_actor: None,
             plugin: None,
+            plugin_secrets: Vec::new(),
         }
     }
 }

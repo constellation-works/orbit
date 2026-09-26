@@ -56,6 +56,7 @@ fn backend_spec(
         program_paths: Default::default(),
         config: Default::default(),
         grants,
+        secrets: Default::default(),
     }
 }
 

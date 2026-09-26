@@ -81,6 +81,7 @@ pub(super) fn scoped_spec(
         program_paths: Default::default(),
         config: Default::default(),
         grants,
+        secrets: Default::default(),
     })
 }
 

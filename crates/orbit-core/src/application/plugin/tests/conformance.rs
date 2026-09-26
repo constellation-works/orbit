@@ -812,3 +812,101 @@ fn accept_requested_still_refuses_a_write_root_that_covers_the_global_root() {
     .expect_err("consent does not lift the global-root write refusal");
     assert!(error.to_string().contains("global root"), "{error}");
 }
+
+/// A plugin declaring `api_token`, whose backend reports which of two known
+/// values its request carried — the golden's fixture (at version `fixture`)
+/// or the host's stored one — without echoing either.
+fn write_secret_plugin(fixture: &PluginFixture, namespace: &str, golden: &str) -> PathBuf {
+    let root = fixture.sources.join(namespace);
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
+    std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\ninput=$(cat)\nfixture=false\nhost=false\ncase \"$input\" in \
+         *'\"api_token\":{\"value\":\"fixture-token-5a\",\"version\":\"fixture\"}'*) \
+         fixture=true;; esac\ncase \"$input\" in *host-token-9f*) host=true;; esac\n\
+         printf '{\"ok\":true,\"output\":{\"fixture\":%s,\"host\":%s}}\\n' \"$fixture\" \"$host\"\n",
+    )
+    .expect("write backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 1.0.0\n  \
+             description: Secret conformance fixture.\nspec:\n  backend:\n    type: exec\n    \
+             command: bin/backend.sh\n  tools:\n    - name: probe\n      description: Probe.\n      \
+             execution_kind: read_only\n      mcp_scope: workspace\n  secrets:\n    - name: \
+             api_token\n  tests: [tests/conformance/*.yaml]\n"
+        ),
+    )
+    .expect("write manifest");
+    std::fs::write(root.join("tests/conformance/probe.yaml"), golden).expect("write golden");
+    root
+}
+
+/// Goldens supply fixture secrets through the test file, and a conformance
+/// run delivers those — and never the host's stored value, even for the
+/// installed plugin of the same name.
+#[cfg(unix)]
+#[test]
+fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
+    let fixture = PluginFixture::new();
+    let root = write_secret_plugin(
+        &fixture,
+        "conformsecret",
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: with_fixture\n    tool: probe\n    \
+         secrets:\n      api_token: fixture-token-5a\n    expect:\n      output: { fixture: true, \
+         host: false }\n  - name: without_fixture\n    tool: probe\n    expect:\n      output: { \
+         fixture: false, host: false }\n",
+    );
+    install_plugin(
+        &fixture.runtime,
+        root.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install the fixture plugin");
+    crate::runtime::plugin::secrets::PluginSecretStore::new(&fixture.global_root)
+        .put(
+            "conformsecret",
+            "api_token",
+            &crate::runtime::plugin::secrets::PluginSecretValue::new("host-token-9f".to_string())
+                .expect("valid value"),
+        )
+        .expect("the host holds a real value for the installed plugin");
+
+    let report = run(&fixture.reopen(), &root).expect("run the conformance suite");
+
+    assert!(
+        report.passed(),
+        "the fixture reaches the case that supplies it, the next case gets none, and the host \
+         value reaches neither: {:?}",
+        report.results
+    );
+}
+
+/// A fixture for a name the manifest does not declare could never be
+/// delivered, so the suite refuses to load rather than certify a case that
+/// did not test what it says.
+#[test]
+fn a_golden_supplying_an_undeclared_secret_is_refused() {
+    let fixture = PluginFixture::new();
+    let root = write_secret_plugin(
+        &fixture,
+        "undeclaredsecret",
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: stray\n    tool: probe\n    \
+         secrets:\n      other_token: x\n    expect:\n      output: {}\n",
+    );
+
+    let error = run(&fixture.runtime, &root).expect_err("an undeclared fixture name");
+    assert!(
+        error.to_string().contains("supplies secret 'other_token'")
+            && error.to_string().contains("does not declare"),
+        "{error}"
+    );
+}

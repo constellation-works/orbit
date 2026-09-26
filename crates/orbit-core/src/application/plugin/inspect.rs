@@ -587,6 +587,8 @@ pub fn validate_plugin_dir_for_workspace(
             std::env::var_os("PATH").as_deref(),
         )
         .0,
+        // Validation never calls the backend, so nothing is read.
+        None,
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let rendered = workspace

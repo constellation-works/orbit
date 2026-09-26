@@ -279,12 +279,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_friction_rehome_target,
     },
+    // Plugin secrets: the names of the declared secrets a plugin call
+    // delivered, never their values.
+    Migration {
+        version: 30,
+        name: "audit_plugin_secrets",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_audit_plugin_secrets,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 29;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 30;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

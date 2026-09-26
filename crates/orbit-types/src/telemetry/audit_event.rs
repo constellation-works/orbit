@@ -139,6 +139,12 @@ pub struct AuditEvent {
     /// for every row written before the plugin standard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginProvenance>,
+    /// The names of the declared secrets this plugin call's request carried
+    /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
+    /// only — a value is never written to an audit row. Empty for every
+    /// other call and for rows written before secret delivery.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_secrets: Vec<String>,
 }
 
 impl AuditEvent {

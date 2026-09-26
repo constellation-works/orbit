@@ -6,10 +6,12 @@
 //! deliberately small: a tool, an input, and the output or error fields the
 //! plugin promises.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use super::manifest::PluginManifestError;
+use super::manifest::{PluginManifestError, is_valid_secret_name};
 use super::namespace::is_valid_verb;
 
 pub const TEST_FILE_SCHEMA_VERSION: u32 = 1;
@@ -36,8 +38,19 @@ pub struct PluginTestCase {
     pub tool: String,
     #[serde(default)]
     pub input: Value,
+    /// Fixture values for the plugin's declared `spec.secrets`, by name. A
+    /// conformance run delivers these — and only these — exactly as the host
+    /// delivers stored secrets, each at version [`FIXTURE_SECRET_VERSION`];
+    /// it never reads the host's secret store. A declared secret the case
+    /// leaves out is unset for that case.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, String>,
     pub expect: PluginTestExpectation,
 }
+
+/// The `version` every golden-supplied secret is delivered at, so a golden
+/// that echoes it is reproducible.
+pub const FIXTURE_SECRET_VERSION: &str = "fixture";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
@@ -109,6 +122,15 @@ impl PluginTestFile {
                     format!(
                         "test '{}' names tool '{}', which is not a valid tool verb",
                         case.name, case.tool
+                    ),
+                ));
+            }
+            if let Some(name) = case.secrets.keys().find(|name| !is_valid_secret_name(name)) {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!(
+                        "test '{}' supplies secret '{name}', which is not a valid secret name",
+                        case.name
                     ),
                 ));
             }

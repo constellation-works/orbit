@@ -872,6 +872,122 @@ fn an_mcp_backend_plugin_is_advertised_and_proxied() {
     drop(client);
 }
 
+/// A secret value distinctive enough that finding it anywhere is a leak.
+const MCP_SECRET: &str = "orbit-mcp-secret-2c8e41d7";
+/// SHA-256 of [`MCP_SECRET`]: the fixture server echoes each delivered
+/// secret as its digest, so the response proves delivery without holding it.
+const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31ceffa6acac7cc1cb53";
+
+/// An `mcp`-backend plugin that declares a secret receives it on every
+/// `tools/call` as `params._meta.orbit.secrets` once the operator sets it, and
+/// the value appears in no MCP response, no `plugin show` output, and no audit
+/// row — which records the delivered secret's name only.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::print_stderr)]
+fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it() {
+    if !python3_available() {
+        eprintln!("skipping: python3 is not available");
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let source = workspace.home.join("plugin-sources/mcpdemo");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
+        &source,
+    );
+    let manifest = source.join("plugin.yaml");
+    let declared = std::fs::read_to_string(&manifest).expect("read fixture manifest")
+        + "  secrets:\n    - name: api_token\n    - name: unset_token\n";
+    std::fs::write(&manifest, declared).expect("declare secrets");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("utf8 source"),
+            "--enable",
+        ],
+    );
+    let mut set = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["plugin", "secret", "set", "mcpdemo", "api_token"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn secret set");
+    set.stdin
+        .take()
+        .expect("stdin")
+        .write_all(MCP_SECRET.as_bytes())
+        .expect("pipe the value");
+    let set = set.wait_with_output().expect("secret set");
+    assert!(set.status.success(), "{set:?}");
+
+    let mut client = workspace.serve();
+    let result = client.call_tool("mcpdemo_echo", json!({ "message": "hi" }));
+    assert_eq!(result["isError"], false, "{result}");
+    let secrets = &result["structuredContent"]["meta"]["orbit"]["secrets"];
+    assert_eq!(
+        *secrets,
+        json!({
+            "api_token": {
+                "sha256": MCP_SECRET_SHA256,
+                "version": secrets["api_token"]["version"],
+                "in_env_or_argv": false,
+            }
+        }),
+        "the declared, set secret arrives in `_meta.orbit` and nowhere in the server's \
+         environment or argv; the unset one is omitted"
+    );
+    assert!(
+        secrets["api_token"]["version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
+    let listed = client.request("tools/list", Value::Null);
+    drop(client);
+
+    let shown = run_orbit(
+        &workspace,
+        &["plugin", "show", "mcpdemo", "--format", "json"],
+    );
+    for (surface, text) in [
+        ("tools/call response", result.to_string()),
+        ("tools/list response", listed.to_string()),
+        (
+            "plugin show",
+            String::from_utf8_lossy(&shown.stdout).into_owned(),
+        ),
+    ] {
+        assert!(
+            !text.contains(MCP_SECRET),
+            "{surface} holds the secret value"
+        );
+    }
+
+    let conn = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open audit db");
+    let delivered: Vec<Option<String>> = conn
+        .prepare("SELECT plugin_secrets FROM audit_events WHERE tool_name = 'mcpdemo.echo'")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(delivered, vec![Some("[\"api_token\"]".to_string())]);
+    let leaked: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE instr(COALESCE(arguments_json, '') || \
+             COALESCE(stdout_truncated, '') || COALESCE(stderr_truncated, '') || \
+             COALESCE(error_message, '') || COALESCE(plugin_secrets, ''), ?1) > 0",
+            [MCP_SECRET],
+            |row| row.get(0),
+        )
+        .expect("scan audit rows");
+    assert_eq!(leaked, 0, "no audit row holds the value");
+}
+
 fn python3_available() -> bool {
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .any(|dir| dir.join("python3").is_file())

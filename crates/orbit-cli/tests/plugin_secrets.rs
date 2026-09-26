@@ -122,13 +122,42 @@ impl Fixture {
 
 /// A plugin declaring one rotatable secret and one plain one.
 fn write_plugin(root: &Path, secrets: &str) {
+    write_plugin_named(root, "vault", secrets);
+}
+
+/// The backend every fixture plugin runs: it reports what its request carried
+/// and where else [`SECRET`] was visible to it, without ever echoing it — the
+/// tool's output is a surface the value must not reach.
+///
+/// - `delivered`: stdin held `refresh_token` as `{value: SECRET, version}`;
+/// - `version`: that entry's version;
+/// - `api_key`: stdin named the unset `api_key` at all;
+/// - `env_hits` / `argv_hits`: lines of the environment or argv holding it.
+///
+/// The script spells the value in two quoted halves, so the installed script
+/// is not itself a file the leak scan finds it in.
+fn probe_backend() -> String {
+    let (head, tail) = SECRET.split_at(SECRET.len() / 2);
+    format!(
+        "#!/bin/sh\n\
+         input=$(cat)\n\
+         needle='{head}''{tail}'\n\
+         delivered=false\n\
+         case \"$input\" in *\"\\\"refresh_token\\\":{{\\\"value\\\":\\\"$needle\\\",\\\"version\\\":\\\"\"*) delivered=true;; esac\n\
+         api_key=false\n\
+         case \"$input\" in *'\"api_key\"'*) api_key=true;; esac\n\
+         version=$(printf '%s' \"$input\" | sed -n 's/.*\"refresh_token\":{{\"value\":\"[^\"]*\",\"version\":\"\\([0-9a-f]*\\)\".*/\\1/p')\n\
+         env_hits=$(env | grep -c -F \"$needle\" || true)\n\
+         argv_hits=$(printf '%s\\n' \"$0\" \"$@\" | grep -c -F \"$needle\" || true)\n\
+         printf '{{\"ok\":true,\"output\":{{\"delivered\":%s,\"version\":\"%s\",\"api_key\":%s,\"env_hits\":%s,\"argv_hits\":%s}}}}\\n' \
+         \"$delivered\" \"$version\" \"$api_key\" \"$env_hits\" \"$argv_hits\"\n"
+    )
+}
+
+fn write_plugin_named(root: &Path, name: &str, secrets: &str) {
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
-    std::fs::write(
-        &backend,
-        "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
-    )
-    .expect("write backend");
+    std::fs::write(&backend, probe_backend()).expect("write backend");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -138,7 +167,7 @@ fn write_plugin(root: &Path, secrets: &str) {
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: vault\n  version: 0.1.0\n  \
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: 0.1.0\n  \
              description: Secret fixture.\nspec:\n  backend:\n    type: exec\n    command: \
              bin/backend.sh\n  tools:\n    - name: status\n      description: Report.\n      \
              execution_kind: read_only\n      mcp_scope: workspace\n  secrets:\n{secrets}"
@@ -324,5 +353,80 @@ fn remove_deletes_the_plugins_secrets_unless_record_only() {
     assert!(
         !fixture.secret_store().join("vault.json").exists(),
         "an ordinary remove deletes the plugin's secrets"
+    );
+}
+
+/// `orbit tool run` against a plugin whose declared secret the operator set:
+/// the backend finds it — value and version — under `context.secrets` on
+/// stdin, and nowhere in its environment or argv. The unset declared secret is
+/// omitted, and a second plugin declaring the same name receives nothing. The
+/// call's audit row names the delivered secret, and no printed output, log,
+/// audit row or record outside the store holds the value.
+#[cfg(unix)]
+#[test]
+fn a_set_secret_reaches_its_exec_backend_on_stdin_only() {
+    let fixture = Fixture::new();
+    write_plugin(&fixture.source(), TWO_SECRETS);
+    let other = fixture.home.join("plugin-sources/other");
+    write_plugin_named(&other, "other", TWO_SECRETS);
+    for source in [fixture.source(), other] {
+        fixture.run_ok(&["plugin", "add", source.to_str().expect("utf8"), "--enable"]);
+    }
+    fixture.run_ok_with_stdin(
+        &["plugin", "secret", "set", "vault", "refresh_token"],
+        Some(SECRET),
+    );
+
+    let output = fixture.run_ok(&["tool", "run", "vault.status", "--input", "{}"]);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("tool output JSON");
+    assert_eq!(report["delivered"], true, "{report}");
+    assert_eq!(
+        report["api_key"], false,
+        "an unset secret is omitted: {report}"
+    );
+    assert_eq!(report["env_hits"], 0, "not in the environment: {report}");
+    assert_eq!(report["argv_hits"], 0, "not in argv: {report}");
+    let stored: Value = serde_json::from_slice(
+        &std::fs::read(fixture.secret_store().join("vault.json")).expect("read the store"),
+    )
+    .expect("store JSON");
+    assert_eq!(
+        report["version"], stored["secrets"]["refresh_token"]["version"],
+        "the delivered version is the stored one"
+    );
+
+    let other = fixture.run_ok(&["tool", "run", "other.status", "--input", "{}"]);
+    let other: Value = serde_json::from_slice(&other.stdout).expect("tool output JSON");
+    assert_eq!(
+        other["delivered"], false,
+        "another plugin's secret of the same name is not delivered: {other}"
+    );
+
+    let conn = rusqlite::Connection::open(fixture.orbit_root().join("orbit.db"))
+        .expect("open the audit database");
+    let delivered = |tool: &str| -> Vec<Option<String>> {
+        conn.prepare("SELECT plugin_secrets FROM audit_events WHERE tool_name = ?1")
+            .expect("prepare")
+            .query_map([tool], |row| row.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    };
+    assert_eq!(
+        delivered("vault.status"),
+        vec![Some("[\"refresh_token\"]".to_string())]
+    );
+    assert_eq!(delivered("other.status"), vec![None]);
+
+    fixture.json(&["plugin", "show", "vault"]);
+    fixture.json(&["audit", "list"]);
+    assert!(
+        !fixture.printed.borrow().contains(SECRET),
+        "a command printed the secret value"
+    );
+    let leaks = files_holding_the_secret(&fixture.orbit_root(), &fixture.secret_store());
+    assert!(
+        leaks.is_empty(),
+        "the secret value reached files outside the store: {leaks:?}"
     );
 }

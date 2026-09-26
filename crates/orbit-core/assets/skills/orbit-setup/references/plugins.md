@@ -165,10 +165,13 @@ orbit plugin test ./demo --case status_reports_ready
 orbit plugin test ./demo --update-goldens
 ```
 
-`orbit plugin test` runs each `spec.tests` golden — `{name, tool, input, expect}` —
+`orbit plugin test` runs each `spec.tests` golden — `{name, tool, input, secrets, expect}` —
 in a temp workspace and compares `expect.output` exactly, or matches the backend code in
 `expect.error: {code: ...}`. String values in `input` and `expect.output` substitute
-`{{workspace}}` and `{{plugin_root}}` against that hermetic run. It exits non-zero when a
+`{{workspace}}` and `{{plugin_root}}` against that hermetic run. A case's optional
+`secrets: {<name>: <value>}` supplies fixture values for declared secrets, delivered like
+stored ones at version `fixture`; a declared secret the case leaves out is unset, and the
+host's real secrets are never read. It exits non-zero when a
 case fails, naming it. `--case <name>` runs one case without certifying the full suite;
 `--update-goldens` replaces mismatched output expectations with actual output. Manifest
 template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
@@ -295,14 +298,24 @@ orbit plugin secret rm <ns> refresh_token
   plugin backend can read that directory, its own file included; Orbit reads a
   value and hands it over. A secret value never appears in CLI output,
   `plugin show`, the dashboard, logs or audit rows.
+- Each call carries the plugin's own declared secrets that are set, in the
+  request itself: an `exec` backend reads `context.secrets` on stdin, an `mcp`
+  backend `params._meta.orbit.secrets` on `tools/call`. Each entry is
+  `{"value": …, "version": …}`, where `version` is opaque and changes on every
+  write. An unset secret is simply absent, so a backend must handle that
+  (`secrets` itself is present exactly when the manifest declares secrets).
+  Values are read per call, so a `secret set` reaches a running `mcp` server's
+  next call. Nothing goes into the backend's environment or argv, no grant is
+  needed, and a plugin never receives another plugin's secrets. The call's
+  audit row records which names were delivered, never values.
 - `orbit plugin enable` names every declared secret that is still unset, and
   `orbit plugin doctor` keeps reporting them. `upgrade` keeps the secrets the
   new manifest still declares; `remove` deletes the plugin's secrets unless
   `--record-only` is passed.
 - These are operator commands: a plugin backend calling them is refused
   `policy_denied`.
-- Delivery to the backend and backend-side rotation are not wired yet: a
-  backend cannot receive a secret in this release.
+- Backend-side rotation is not wired yet: a backend cannot replace a secret's
+  value in this release.
 
 ## Backends
 

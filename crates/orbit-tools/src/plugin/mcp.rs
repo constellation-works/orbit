@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
-use super::envelope::{call_context, plugin_error};
+use super::envelope::{CallSecrets, call_context, plugin_error};
 use crate::ToolContext;
 
 /// Lines the reader may queue ahead of the consumer before it blocks.
@@ -183,8 +183,11 @@ impl McpBackend {
         let key = self.session_key(ctx, tool_name)?;
         // A shared child cannot be told in its environment which caller the
         // call is for, so the context an `exec` backend reads from its stdin
-        // envelope rides the request (§4.2).
-        let params = tools_call_params(&self.spec, ctx, tool_name, verb, input);
+        // envelope rides the request (§4.2). So do the plugin's secrets, read
+        // for this call: a value set since the child started reaches it
+        // without a respawn, and none is ever in its environment.
+        let secrets = CallSecrets::resolve(&self.spec)?;
+        let params = tools_call_params(&self.spec, ctx, tool_name, verb, input, &secrets);
         // At most one retry: the session this call found may have been ended
         // by another caller's failure between the lookup and the lock, and
         // that caller's broken wire is not this one's error.
@@ -202,6 +205,7 @@ impl McpBackend {
                     self.retire(&key, &handle);
                     continue;
                 }
+                secrets.record_delivery();
                 session.request("tools/call", params.clone(), Instant::now() + timeout)
             };
             return match outcome {
@@ -406,18 +410,20 @@ fn child_cwd(ctx: &ToolContext, tool_name: &str) -> Result<String, OrbitError> {
 /// every tool of its plugin and every caller sharing its key, so
 /// `ORBIT_TOOL_NAME` is absent from its environment (§4.2) and
 /// `ORBIT_WORKSPACE_ROOT` names the workspace the session is bound to rather
-/// than this call's.
+/// than this call's. The plugin's declared secrets ride here too, as
+/// `_meta.orbit.secrets`.
 pub(crate) fn tools_call_params(
     spec: &PluginBackendSpec,
     ctx: &ToolContext,
     tool_name: &str,
     verb: &str,
     input: Value,
+    secrets: &CallSecrets,
 ) -> Value {
     json!({
         "name": verb,
         "arguments": input,
-        "_meta": { "orbit": call_context(spec, ctx, Some(tool_name)) },
+        "_meta": { "orbit": call_context(spec, ctx, Some(tool_name), secrets) },
     })
 }
 
