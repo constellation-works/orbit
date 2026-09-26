@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::job::JobRunListParams;
+use orbit_core::application::job::{JobRunListParams, run_error_step};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -100,7 +100,7 @@ pub(crate) fn run_history_payload(
     let mut table = Table::new(columns).empty_message("no runs recorded");
     for (run, state) in runs.iter().zip(states.iter()) {
         use comfy_table::Cell;
-        let last = run.steps.last();
+        let error_step = run_error_step(run);
         let mut row = vec![
             Cell::new(&run.run_id),
             Cell::new(format_history_role(
@@ -116,9 +116,13 @@ pub(crate) fn run_history_payload(
             crate::output::color::cell(&run.state.to_string(), Domain::JobState),
             Cell::new(format_timestamp(run.started_at)),
             Cell::new(format_timestamp(run.finished_at)),
-            Cell::new(last.and_then(|s| s.error_code.as_deref()).unwrap_or("-")),
+            Cell::new(
+                error_step
+                    .and_then(|s| s.error_code.as_deref())
+                    .unwrap_or("-"),
+            ),
             Cell::new(summarize_error_message(
-                last.and_then(|s| s.error_message.as_deref()),
+                error_step.and_then(|s| s.error_message.as_deref()),
             )),
         ]);
         table.add_row(row);

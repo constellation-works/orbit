@@ -139,6 +139,7 @@ impl Execute for AutoCommand {
             &complexity_crews,
             None,
             self.claim_token.as_deref(),
+            orbit_types::workflow::JobRunTrigger::cli(),
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: AUTO_WORKFLOW,

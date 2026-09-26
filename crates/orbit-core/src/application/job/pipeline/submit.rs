@@ -132,6 +132,9 @@ impl OrbitRuntime {
     /// carries no task ids at all. The claim check is keyed on neither, so both
     /// gaps close. `claim_token` is the holder's minted token; `None` falls back
     /// to [`CLAIM_TOKEN_ENV`](crate::runtime::workspace::claim::CLAIM_TOKEN_ENV).
+    ///
+    /// [ORB-13016] `trigger` is the submitting surface's provenance, recorded
+    /// on the run so dashboard and MCP launches are not reported as `cli`.
     // Existing public positional API; keep callers stable while submission is composed internally.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run(
@@ -143,6 +146,7 @@ impl OrbitRuntime {
         allowed_crews: &[String],
         actor: Option<&str>,
         claim_token: Option<&str>,
+        trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
         // [ORB-12500] Explicit shipment converges on the same admission
@@ -191,7 +195,7 @@ impl OrbitRuntime {
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
         }
-        self.submit_pipeline_run(workflow.job_id, input, None, actor)
+        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
     /// Submit one workspace drain (`workspace_auto_pipeline`).
     ///
@@ -213,6 +217,8 @@ impl OrbitRuntime {
     /// registry names are what gets persisted and forwarded. It gates what the
     /// drain may *start* — it does not touch workspace configuration, reassign
     /// a task's crew, or cancel work another invocation already has in flight.
+    ///
+    /// [ORB-13016] `trigger` is the submitting surface's provenance.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run(
         &self,
@@ -223,6 +229,7 @@ impl OrbitRuntime {
         complexity_crews: &orbit_config::ComplexityCrewPools,
         actor: Option<&str>,
         claim_token: Option<&str>,
+        trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
@@ -244,7 +251,7 @@ impl OrbitRuntime {
             &self.canonical_allowed_crews(allowed_crews)?,
         )?;
         Self::set_auto_crew_overrides(&mut input, complexity_crews);
-        self.submit_pipeline_run(workflow.job_id, input, None, actor)
+        self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
     /// Canonicalize an operator-supplied crew allowlist, rejecting blank or
     /// unconfigured names [ORB-11242].
@@ -325,7 +332,7 @@ impl OrbitRuntime {
     ) -> Result<PipelineInvokeResult, OrbitError> {
         let direct_path = Path::new(job_ref);
         if !direct_path.is_file() {
-            return self.submit_catalog_job_run(job_ref, input, actor);
+            return self.submit_catalog_job_run(job_ref, input, actor, JobRunTrigger::cli());
         }
 
         let (job_name, spec, yaml) = self.load_direct_job_definition(direct_path)?;
@@ -341,12 +348,14 @@ impl OrbitRuntime {
     }
     /// Submit a catalog job by id. This entry point never interprets the id as
     /// a path, so request surfaces can reject direct files while preserving the
-    /// same catalog validation and subroutine refusal as the CLI.
+    /// same catalog validation and subroutine refusal as the CLI. `trigger` is
+    /// the submitting surface's provenance [ORB-13016].
     pub fn submit_catalog_job_run(
         &self,
         job_id: &str,
         input: Value,
         actor: Option<&str>,
+        trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         let entry = self.show_job_catalog_entry(job_id)?;
         if entry.kind() == orbit_types::workflow::JobKind::Subroutine {
@@ -356,7 +365,7 @@ impl OrbitRuntime {
                 entry.path.display()
             )));
         }
-        self.submit_pipeline_run(&entry.job_id, input, None, actor)
+        self.submit_pipeline_run_with_trigger(&entry.job_id, input, None, actor, trigger)
     }
     /// Read and fully validate a direct-path job definition in the submitting
     /// process, so a broken asset is refused before any run is persisted.
@@ -374,16 +383,22 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
         Ok((asset.name, asset.spec, yaml))
     }
+    /// Submit an automation-admitted run under its idempotency `key`.
+    /// `trigger` names what admitted it [ORB-13016].
     pub(crate) fn submit_automation_pipeline_run(
         &self,
         job_name: &str,
         input: Value,
         key: &str,
+        trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
-            action_key: Some(key),
-            ..PipelineSubmission::catalog(job_name, input.clone(), Some("automation"))
-        });
+        let result = self.submit_persisted_pipeline_run(
+            PipelineSubmission {
+                action_key: Some(key),
+                ..PipelineSubmission::catalog(job_name, input.clone(), Some("automation"))
+            }
+            .with_trigger(trigger),
+        );
         self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
         result
     }

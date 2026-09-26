@@ -13,7 +13,7 @@ use orbit_store::contracts::TaskListFilter;
 use orbit_types::{
     task::TaskStatus,
     workflow::{
-        JobRunState, RoutineDefinition,
+        JobRunState, JobRunTrigger, RoutineDefinition,
         automation::{members::*, *},
     },
 };
@@ -66,7 +66,7 @@ pub(crate) fn evaluate(
 
     members::evaluate(
         runtime.automation_store()?.as_ref(),
-        &Host::new(runtime, &effective),
+        &Host::new(runtime, &definition.name, &effective),
         MemberEvaluation {
             consumer: &consumer,
             epoch: &epoch,
@@ -81,15 +81,23 @@ pub(crate) fn evaluate(
 
 pub(crate) struct Host<'a> {
     runtime: &'a OrbitRuntime,
+    /// The state routine this consumer serves; admitted runs name it as their
+    /// trigger [ORB-13016].
+    routine: &'a str,
     trigger: &'a StateTrigger,
     incidents: RefCell<super::incidents::IncidentSession>,
     instructions: RefCell<BTreeMap<String, InstructionSnapshot>>,
 }
 
 impl<'a> Host<'a> {
-    pub(crate) fn new(runtime: &'a OrbitRuntime, trigger: &'a StateTrigger) -> Self {
+    pub(crate) fn new(
+        runtime: &'a OrbitRuntime,
+        routine: &'a str,
+        trigger: &'a StateTrigger,
+    ) -> Self {
         Self {
             runtime,
+            routine,
             trigger,
             incidents: RefCell::new(super::incidents::IncidentSession::new()),
             instructions: RefCell::new(BTreeMap::new()),
@@ -388,6 +396,7 @@ impl MemberHost for Host<'_> {
                     "automation_origin": origin,
                 }),
                 &attempt.action_key,
+                JobRunTrigger::state_routine(self.routine, &attempt.consumer),
             )
             .map(|run| run.run_id)
             .map_err(Into::into)

@@ -43,6 +43,7 @@ fn ship_error(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
             &[],
             Some("test"),
             claim_token,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("this fixture deploys no job asset, so submission always ends in an error")
 }
@@ -139,6 +140,7 @@ fn a_discovery_mode_submission_carrying_no_task_ids_is_covered() {
             &[],
             Some("test"),
             None,
+            orbit_types::workflow::JobRunTrigger::cli(),
         )
         .expect_err("a discovery submission must be gated by the claim");
     assert!(
@@ -304,6 +306,7 @@ fn a_refused_dispatch_is_recorded_as_denied_without_the_holders_token() {
         &[],
         Some("test"),
         None,
+        orbit_types::workflow::JobRunTrigger::cli(),
     );
 
     let events = runtime

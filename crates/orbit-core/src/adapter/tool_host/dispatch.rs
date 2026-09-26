@@ -1,6 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
 use orbit_types::tool::ToolSessionContext;
+use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -16,6 +17,18 @@ pub(super) struct ToolCaller<'a> {
     pub(super) agent: Option<String>,
     pub(super) model: Option<String>,
     pub(super) reservation_owner: Option<ReservationOwnerContext>,
+}
+
+/// Provenance for a run this call submits [ORB-13016].
+///
+/// The MCP adapter mints an origin session id for every session it serves;
+/// `orbit tool run` and in-process callers carry none, so they stay `cli`.
+fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
+    if session_context.origin_session_id.is_some() {
+        JobRunTrigger::mcp()
+    } else {
+        JobRunTrigger::cli()
+    }
 }
 
 pub(super) fn execute(
@@ -79,9 +92,14 @@ pub(super) fn execute(
         OrbitBuiltinAction::Friction(verb) => {
             super::friction_tools::dispatch(runtime, verb, input, model)
         }
-        OrbitBuiltinAction::PipelineInvoke => {
-            super::pipeline_tools::invoke(runtime, input, agent, model, reservation_owner)
-        }
+        OrbitBuiltinAction::PipelineInvoke => super::pipeline_tools::invoke(
+            runtime,
+            input,
+            agent,
+            model,
+            reservation_owner,
+            submission_trigger(session_context),
+        ),
         OrbitBuiltinAction::PipelineWait => {
             super::pipeline_tools::wait(runtime, input, agent, model)
         }
@@ -110,9 +128,13 @@ pub(super) fn execute(
             reservation_owner,
             runtime.artifact_origin(session_context),
         ),
-        OrbitBuiltinAction::WorkflowShip => {
-            super::workflow_tools::ship(runtime, input, agent, model)
-        }
+        OrbitBuiltinAction::WorkflowShip => super::workflow_tools::ship(
+            runtime,
+            input,
+            agent,
+            model,
+            submission_trigger(session_context),
+        ),
         OrbitBuiltinAction::WorkflowRunShow => super::workflow_tools::show(runtime, input),
         OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
         OrbitBuiltinAction::WorkflowRunResume => {

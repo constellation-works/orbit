@@ -14,7 +14,8 @@ use orbit_store::{JobRunStepParams, TaskCreateParams, TaskReservationReleaseReas
 use orbit_types::{
     task::{TaskPriority, TaskStatus, TaskType},
     workflow::{
-        ChildDispatch, ChildDispatchPhase, JobRunState, JobTargetType, PipelineState,
+        ChildDispatch, ChildDispatchPhase, JobRunState, JobRunTriggerKind, JobTargetType,
+        PipelineState,
         automation::{
             AutomationState, SourceRevision,
             members::{
@@ -272,7 +273,7 @@ fn preparation_page_lists_instructions_once_for_all_eligible_tasks() {
 
     reset_ls_tree_invocations();
     let trigger = preparation_trigger();
-    let page = Host::new(&runtime, &trigger)
+    let page = Host::new(&runtime, "task-pilot", &trigger)
         .observe(None, Utc::now())
         .unwrap();
 
@@ -311,7 +312,7 @@ fn preparation_observe_stamps_stored_task_crew() {
         )
         .expect("assign sol");
 
-    let page = Host::new(&runtime, &preparation_trigger())
+    let page = Host::new(&runtime, "task-pilot", &preparation_trigger())
         .observe(None, Utc::now())
         .unwrap();
     let crew_of = |id: &str| {
@@ -349,7 +350,7 @@ fn execution_failed_observe_stamps_agreed_incident_crew() {
     }
 
     let trigger = trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     assert_eq!(page.candidates.len(), 1);
     let member = &page.candidates[0];
@@ -389,7 +390,7 @@ fn execution_failed_incident_with_mixed_crew_is_withheld() {
         .expect("assign sol");
 
     let trigger = trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     assert!(
         page.candidates.is_empty(),
@@ -410,7 +411,7 @@ fn preparation_admission_resolves_branch_head_once_per_call() {
     let (_root, runtime, repo) = test_runtime();
     let id = create_proposed_task(&runtime, &repo, "once");
     let trigger = preparation_trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     assert_eq!(page.candidates.len(), 1);
     let mut member = page.candidates[0].clone();
@@ -471,7 +472,7 @@ fn host_observes_admits_and_fingerprints_with_the_triggers_eligibility() {
     let now = Utc::now();
 
     let default_trigger = preparation_trigger();
-    let default_page = Host::new(&runtime, &default_trigger)
+    let default_page = Host::new(&runtime, "task-pilot", &default_trigger)
         .observe(None, now)
         .unwrap();
     let mut default_keys: Vec<_> = default_page
@@ -493,7 +494,7 @@ fn host_observes_admits_and_fingerprints_with_the_triggers_eligibility() {
         },
         ..preparation_trigger()
     };
-    let narrowed_host = Host::new(&runtime, &narrowed_trigger);
+    let narrowed_host = Host::new(&runtime, "task-pilot", &narrowed_trigger);
     let page = narrowed_host.observe(None, now).unwrap();
     assert!(
         page.candidates.is_empty(),
@@ -528,7 +529,7 @@ fn host_observes_admits_and_fingerprints_with_the_triggers_eligibility() {
     ));
 
     // Same task, same revision, different predicate: different material.
-    let default_member = Host::new(&runtime, &default_trigger)
+    let default_member = Host::new(&runtime, "task-pilot", &default_trigger)
         .observe(None, now)
         .unwrap()
         .candidates
@@ -560,7 +561,7 @@ fn stale_membership_between_observe_and_admission_is_retired() {
     couple_parent_to_child(&runtime, &parent_task, &child, dead_pid());
 
     let trigger = trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     assert_eq!(page.candidates.len(), 1);
     let member = page.candidates[0].clone();
@@ -589,7 +590,7 @@ fn stale_recovery_cannot_authorize_and_material_changed_still_fires() {
     let run_id = fail_pipeline_attempt(&runtime, &task, None, dead_pid());
 
     let trigger = trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     let member = page.candidates[0].clone();
     assert!(matches!(
@@ -630,7 +631,7 @@ fn multi_candidate_admission_reuses_inventory_after_freshness_check() {
     }
 
     let trigger = trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     assert_eq!(page.candidates.len(), 3);
     let after_observe = host.incident_work_stats();
@@ -704,7 +705,7 @@ fn live_owner_keeps_incomplete_cohort_from_certifying_coverage() {
     couple_parent_to_child(&runtime, &parent_task, &child, std::process::id());
 
     let trigger = trigger();
-    let host = Host::new(&runtime, &trigger);
+    let host = Host::new(&runtime, "task-pilot", &trigger);
     let page = host.observe(None, Utc::now()).unwrap();
     assert!(
         page.candidates.is_empty(),
@@ -967,4 +968,56 @@ fn expired_exhausted_or_mismatched_preparation_claims_are_still_refused() {
             );
         }
     }
+}
+
+/// Clears the thread's pipeline worker override when the test ends.
+struct IdleWorker;
+
+impl IdleWorker {
+    fn install() -> Self {
+        crate::application::job::pipeline::worker_command_override::set(["sh", "-c", "sleep 1"]);
+        Self
+    }
+}
+
+impl Drop for IdleWorker {
+    fn drop(&mut self) {
+        crate::application::job::pipeline::worker_command_override::clear();
+    }
+}
+
+/// [ORB-13016] A run the state consumer admits names its routine and consumer
+/// as the trigger instead of reading as a CLI launch.
+#[test]
+fn admitted_state_run_records_its_routine_and_consumer_as_trigger() {
+    let (_root, runtime, repo) = test_runtime();
+    let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(
+        jobs_dir.join("task_pilot_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pilot_pipeline\nspec:\n  \
+         state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      spec:\n        \
+         type: deterministic\n        action: sleep\n        config: {}\n",
+    )
+    .unwrap();
+    let _worker = IdleWorker::install();
+    let attempt = preparation_claim(&runtime, &repo, &["file:sample.txt"], Stored::Live);
+    let trigger = preparation_trigger();
+
+    let run_id = Host::new(&runtime, "pilot", &trigger)
+        .admit(&attempt)
+        .expect("admit the claimed attempt");
+
+    let recorded = runtime
+        .read_run_state(&run_id)
+        .unwrap()
+        .and_then(|state| state.trigger)
+        .expect("trigger recorded");
+    assert_eq!(recorded.kind, JobRunTriggerKind::Routine);
+    assert_eq!(recorded.routine.as_deref(), Some("pilot"));
+    assert_eq!(
+        recorded.consumer.as_deref(),
+        Some(attempt.consumer.as_str())
+    );
+    assert_eq!(recorded.slot, None);
 }

@@ -231,7 +231,7 @@ impl OrbitRuntime {
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
-            self.record_run_crew_from_input(&run.run_id, &input)?;
+            self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
 
             self.record_event(OrbitEvent::JobRunStarted {
                 job_id: run.job_id.clone(),

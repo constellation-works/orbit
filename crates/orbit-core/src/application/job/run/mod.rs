@@ -44,6 +44,7 @@ pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
     ActivityInvocationEvidence, job_run_to_json, job_run_to_json_with_activity_provenance,
+    run_error_step,
 };
 #[cfg(test)]
 pub(crate) use query::job_run_get_counter;

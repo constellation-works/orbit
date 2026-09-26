@@ -15,6 +15,7 @@ use orbit_core::application::job::{
 };
 use orbit_core::runtime::audit::run::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
 use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
+use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
 use super::routines::{authorization_denied, authorized_caller};
@@ -95,6 +96,7 @@ pub(super) async fn ship_workflow_action(
             &[],
             Some("dashboard"),
             body.claim_token.as_deref(),
+            JobRunTrigger::dashboard(),
         )
     })
     .await
@@ -208,6 +210,7 @@ pub(super) async fn auto_drain_workflow_action(
             &Default::default(),
             Some("dashboard"),
             body.claim_token.as_deref(),
+            JobRunTrigger::dashboard(),
         )
     })
     .await

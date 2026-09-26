@@ -266,6 +266,10 @@ impl DeliveryHost for Host<'_> {
                     definition.target.job_name(),
                     serde_json::json!({"automation":attempt}),
                     &attempt.action_key,
+                    orbit_types::workflow::JobRunTrigger::state_routine(
+                        &definition.name,
+                        &attempt.batch.consumer,
+                    ),
                 )
                 .map(|run| run.run_id)
                 .map_err(Into::into),

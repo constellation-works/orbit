@@ -156,6 +156,7 @@ impl OrbitRuntime {
             LANDING_JOB,
             json!({ "handoff_id": handoff_id, "task_id": attempt.task_id }),
             &format!("landing:{handoff_id}:{}", attempt.attempt),
+            orbit_types::workflow::JobRunTrigger::cli(),
         )?;
         if attempt.job_run_id.as_deref() != Some(result.run_id.as_str()) {
             self.attach_landing_job(handoff_id, &result.run_id)?;

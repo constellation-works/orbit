@@ -4,7 +4,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::normalize_optional_attribution_label;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 
 use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
@@ -25,6 +25,7 @@ pub(super) fn ship(
     input: Value,
     agent: Option<String>,
     model: Option<String>,
+    trigger: JobRunTrigger,
 ) -> Result<Value, OrbitError> {
     let task_ids = parse_string_array_field(&input, "task_ids")?;
     let unique = task_ids.iter().collect::<BTreeSet<_>>();
@@ -53,6 +54,7 @@ pub(super) fn ship(
         &allowed_crews,
         Some(&actor),
         claim_token.as_deref(),
+        trigger,
     )?;
     Ok(json!({
         "workflow": "ship",

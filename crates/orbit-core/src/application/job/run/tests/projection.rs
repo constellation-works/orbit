@@ -206,3 +206,70 @@ fn run_projection_exposes_recorded_location_without_input_inference() {
         "trusted-machine"
     );
 }
+
+fn finished_step(
+    step_index: u32,
+    target_id: &str,
+    state: JobRunState,
+    error: Option<(&str, &str)>,
+) -> JobRunStep {
+    JobRunStep {
+        step_index,
+        target_type: JobTargetType::Activity,
+        target_id: target_id.to_string(),
+        state,
+        started_at: Some(Utc::now()),
+        finished_at: Some(Utc::now()),
+        duration_ms: Some(1),
+        exit_code: None,
+        agent_response_json: None,
+        error_code: error.map(|(code, _)| code.to_string()),
+        error_message: error.map(|(_, message)| message.to_string()),
+    }
+}
+
+const WHEN_SKIP: &str = "when:{{ steps.admissible.output.idle }} == true => false";
+
+#[test]
+fn successful_run_reports_no_error_while_skip_reason_stays_on_its_step() {
+    let mut run = test_run(JobRunState::Success);
+    run.steps = vec![
+        finished_step(0, "window", JobRunState::Success, None),
+        finished_step(
+            1,
+            "ship",
+            JobRunState::Skipped,
+            Some(("step_skipped", WHEN_SKIP)),
+        ),
+    ];
+
+    let value = job_run_to_json(&run, None);
+
+    assert_eq!(value["error_code"], Value::Null);
+    assert_eq!(value["error_message"], Value::Null);
+    assert_eq!(value["steps"][1]["error_message"], json!(WHEN_SKIP));
+}
+
+#[test]
+fn failed_run_reports_the_failing_step_not_a_later_skip() {
+    let mut run = test_run(JobRunState::Failed);
+    run.steps = vec![
+        finished_step(
+            0,
+            "reap",
+            JobRunState::Failed,
+            Some(("execution_error", "reap failed")),
+        ),
+        finished_step(
+            1,
+            "report",
+            JobRunState::Skipped,
+            Some(("step_skipped", WHEN_SKIP)),
+        ),
+    ];
+
+    let value = job_run_to_json(&run, None);
+
+    assert_eq!(value["error_code"], json!("execution_error"));
+    assert_eq!(value["error_message"], json!("reap failed"));
+}
