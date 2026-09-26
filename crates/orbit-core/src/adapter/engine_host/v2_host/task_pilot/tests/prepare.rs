@@ -1,7 +1,8 @@
 //! Task-pilot discovery, readiness and explicit-mode preparation.
 
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
+use std::process::Command;
 
 use super::super::{apply, member_ready, prepare};
 use super::apply::{
@@ -12,6 +13,29 @@ use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_non_git_workspace_layout as runtime_with_workspace_layout, write_workspace_file,
 };
 use crate::application::task::TaskUpdateParams;
+
+fn no_target_assessment(task: &Task, disposition: &str) -> Value {
+    json!({
+        "task_id": task.id,
+        "context_files_before": [],
+        "context_files_after": [],
+        "disposition": disposition,
+        "evidence": "The target is outside this workspace.",
+        "recommended_crew": "luna",
+        "recommended_complexity": "low",
+        "assessment_rationale": "No repository target exists in this workspace.",
+        "confidence": "high",
+        "evidence_gaps": [],
+        "validation_approach": "Inspect the external target.",
+        "reassessment_triggers": ["task material changes"],
+        "blocked_by": [],
+        "duplicate_of": null,
+        "already_landed": null,
+        "adr_conflicts": [],
+        "utility_warnings": [],
+        "surface_warnings": [],
+    })
+}
 
 #[test]
 fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
@@ -148,6 +172,163 @@ fn automatic_discovery_excludes_no_diff_tasks_regardless_of_mint_provenance() {
     assert!(excluded.iter().any(|entry| {
         entry["task_id"] == scoped.id && entry["reason"] == "context_files_not_empty"
     }));
+}
+
+#[test]
+fn applied_no_target_assessment_is_skipped_until_task_material_changes() {
+    let (_root, runtime, repo_root) =
+        crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&repo_root)
+            .output()
+            .expect("run fixture git command");
+        assert!(
+            output.status.success(),
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--quiet"]);
+    git(&["checkout", "-b", "main"]);
+    write_workspace_file(&repo_root, "src/existing.rs");
+    std::fs::write(repo_root.join(".gitignore"), ".orbit/\n").expect("ignore fixture state");
+    git(&["add", ".gitignore", "src/existing.rs"]);
+    git(&[
+        "-c",
+        "user.name=Orbit Test",
+        "-c",
+        "user.email=orbit-test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "fixture",
+    ]);
+
+    let task = seed_task(&runtime, "external target", TaskStatus::Proposed, &[], &[]);
+    let discover = || {
+        prepare(
+            &runtime,
+            "prepare_task_pilot",
+            &json!({ "workspace_path": repo_root, "base_branch": "main" }),
+        )
+        .expect("discover task-pilot candidates")
+    };
+    let apply_no_target = |prepared: Value, disposition: &str| {
+        let assessment = no_target_assessment(&task, disposition);
+        let output = apply(
+            &runtime,
+            "apply_task_pilot_results",
+            &json!({
+                "prepared": prepared,
+                "results": [partition_result(0, std::slice::from_ref(&task.id), vec![assessment])],
+                "workspace_path": repo_root,
+            }),
+        )
+        .expect("apply no-target assessment");
+        assert_eq!(output["status"], "succeeded", "{output}");
+    };
+
+    let first = discover();
+    assert_eq!(first["task_ids"], json!([task.id]));
+    apply_no_target(first, "host_operational");
+    let unchanged = discover();
+    assert_eq!(unchanged["task_ids"], json!([]));
+    assert_eq!(
+        unchanged["excluded_by_reason"]["no_target_assessment_fresh"],
+        1
+    );
+    assert_eq!(
+        prepared(&runtime, &repo_root, std::slice::from_ref(&task.id))["task_ids"],
+        json!([task.id]),
+        "explicit audit remains available"
+    );
+
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                description: Some("The external target has changed.".to_string()),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("edit description");
+    let after_description = discover();
+    assert_eq!(after_description["task_ids"], json!([task.id]));
+    apply_no_target(after_description, "verified_no_diff");
+    assert_eq!(discover()["task_ids"], json!([]));
+
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                acceptance_criteria: Some(vec!["The external result is verified.".to_string()]),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("edit acceptance criteria");
+    let after_criteria = discover();
+    assert_eq!(after_criteria["task_ids"], json!([task.id]));
+    apply_no_target(after_criteria, "host_operational");
+    assert_eq!(discover()["task_ids"], json!([]));
+
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("approve task");
+    assert_eq!(discover()["task_ids"], json!([task.id]));
+}
+
+#[test]
+fn no_target_assessment_is_fresh_without_a_git_source() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let task = seed_task(&runtime, "external target", TaskStatus::Proposed, &[], &[]);
+    let discover = || {
+        prepare(
+            &runtime,
+            "prepare_task_pilot",
+            &json!({ "workspace_path": repo_root }),
+        )
+        .expect("discover in a non-Git workspace")
+    };
+    let first = discover();
+    assert_eq!(first["task_ids"], json!([task.id]));
+    assert!(first["source"]["source_revision"].is_null());
+    let result = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": first,
+            "results": [partition_result(
+                0,
+                std::slice::from_ref(&task.id),
+                vec![no_target_assessment(&task, "host_operational")],
+            )],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("apply no-source assessment");
+    assert_eq!(result["status"], "succeeded");
+    assert_eq!(discover()["task_ids"], json!([]));
+
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                description: Some("External requirements changed.".to_string()),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("edit description");
+    assert_eq!(discover()["task_ids"], json!([task.id]));
 }
 
 #[test]

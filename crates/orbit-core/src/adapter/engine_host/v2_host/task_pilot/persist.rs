@@ -101,6 +101,30 @@ pub(super) fn apply_task(
             } else {
                 snapshot.status
             };
+            let mut history_summary = assessment_history_summary(&task.assessment);
+            if task.after.is_empty() {
+                // Record the meaning *after* the atomic write. A marker made
+                // from the prepared task would immediately be stale when the
+                // pilot changes its complexity or status.
+                let mut assessed = current.clone();
+                assessed.context_files = task.after.clone();
+                assessed.complexity = Some(task.complexity);
+                assessed.status = target_status;
+                let fingerprint = crate::application::automation::preparation::pilot_fingerprint(
+                    runtime,
+                    &assessed,
+                    snapshot
+                        .material
+                        .as_ref()
+                        .map(|(_, revision)| revision.as_str()),
+                    eligibility,
+                )
+                .map_err(orbit_automation::automation_error_to_orbit)?;
+                history_summary.push_str(&format!(
+                    " [no-target-assessed:{}:{fingerprint}]",
+                    target_status.cli_name()
+                ));
+            }
             let mutation_params = AtomicTaskMutationParams {
                 actor: "task-pilot".to_string(),
                 operation_id: task.operation_id.clone(),
@@ -112,7 +136,7 @@ pub(super) fn apply_task(
                 complexity: task.complexity,
                 event_type: "task_pilot_applied".to_string(),
                 event_note: "task-pilot atomic application".to_string(),
-                history_summary: assessment_history_summary(&task.assessment),
+                history_summary,
                 audit_note: serde_json::to_string(&json!({
                     "assessment": task.assessment,
                     "context_files_before": snapshot.context_files,
@@ -170,6 +194,19 @@ pub(super) fn apply_task(
     Err(OrbitError::Execution(
         "task-pilot status retry loop did not settle".to_string(),
     ))
+}
+
+/// Only applied no-target assessments carry this marker. The status is kept
+/// separately because the shared material hash treats proposed and backlog
+/// as equally eligible under the default predicate.
+pub(super) fn no_target_assessment_marker(note: &str) -> Option<(TaskStatus, &str)> {
+    let (_, marker) = note.split_once(" [no-target-assessed:")?;
+    let (marker, _) = marker.split_once(']')?;
+    let (status, fingerprint) = marker.split_once(':')?;
+    if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((status.parse().ok()?, fingerprint))
 }
 
 fn assessment_history_summary(assessment: &Value) -> String {

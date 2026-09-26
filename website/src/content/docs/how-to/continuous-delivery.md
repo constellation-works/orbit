@@ -18,6 +18,11 @@ Start with the zero-input pilot. It discovers `proposed` and `backlog` tasks
 whose `context_files` is empty or whose complexity is unassessed, then prepares
 bounded pilot groups.
 
+When an applied pilot found no in-workspace targets, zero-input discovery skips
+that task while the assessment remains fresh. Changes to its description,
+criteria, status, or source make it eligible again; an explicit task ID still
+requests a new audit.
+
 ```bash
 orbit run task-pilot --wait
 ```

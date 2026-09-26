@@ -80,6 +80,22 @@ pub(crate) fn fingerprint(
     fingerprint_with_instructions(runtime, task, revision, &instructions, eligibility)
 }
 
+/// Task-pilot can assess a local workspace without a Git source snapshot.
+/// Keep its no-target freshness check on the same material contract while
+/// recording explicitly that no immutable source or instructions were pinned.
+pub(crate) fn pilot_fingerprint(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: Option<&str>,
+    eligibility: &PreparationEligibility,
+) -> Result<String, AutomationError> {
+    if let Some(revision) = revision {
+        return fingerprint(runtime, task, revision, eligibility);
+    }
+    let dependencies = dependency_evidence(runtime, task)?;
+    preparation::fingerprint(task, "no_git_source", &dependencies, "[]", eligibility)
+}
+
 pub(crate) fn instructions(
     runtime: &OrbitRuntime,
     revision: &str,
