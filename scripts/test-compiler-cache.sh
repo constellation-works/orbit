@@ -108,7 +108,9 @@ rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_ENV" "$FAKE_SCCACHE_CWD" "$FAKE_RUSTC_L
 "$WRAPPER" "$TMP/bin/rustc" --crate-name cached
 [[ -f "$FAKE_SCCACHE_LOG" ]] || fail "writable cache did not exec sccache"
 [[ -f "$FAKE_RUSTC_LOG" ]] || fail "sccache did not exec rustc"
-head -n 1 "$FAKE_SCCACHE_LOG" | grep -Fq "$TMP/bin/rustc" || fail "sccache first arg should be rustc"
+sccache_rustc="$(head -n 1 "$FAKE_SCCACHE_LOG")"
+[[ -x "$sccache_rustc" ]] || fail "sccache first arg should resolve to rustc"
+assert_eq "$(file_id "$sccache_rustc")" "$(file_id "$TMP/bin/rustc")" "sccache first arg should be the fake rustc"
 grep -E -q '^SCCACHE_DIR=/.+' "$FAKE_SCCACHE_ENV" || fail "wrapper must export SCCACHE_DIR"
 grep -E -q '^SCCACHE_CLIENT_SIDE=1$' "$FAKE_SCCACHE_ENV" || fail "wrapper must default SCCACHE_CLIENT_SIDE=1"
 grep -E -q '^SCCACHE_SERVER_UDS=/tmp/orbit-sccache.sock$' "$FAKE_SCCACHE_ENV" || fail "wrapper must default a private /tmp UDS"
@@ -125,6 +127,15 @@ stable_src="$TMP/orbit-workspace"
 stable_tgt="$TMP/orbit-build"
 mkdir -p "$fake_tgt" "$stable_src"
 ln -s "$ROOT/Cargo.toml" "$stable_src/Cargo.toml"
+# If TMPDIR is inside the checkout, rewritten fixture paths under TMP need to
+# resolve through this test alias just as they do through the managed bind.
+case "$TMP" in
+  "$ROOT"/*)
+    tmp_rel="${TMP#"$ROOT"/}"
+    mkdir -p "$stable_src/$(dirname "$tmp_rel")"
+    ln -s "$TMP" "$stable_src/$tmp_rel"
+    ;;
+esac
 ln -s "$fake_tgt" "$stable_tgt"
 export ORBIT_COMPILER_CACHE_STABLE_SRC="$stable_src"
 export ORBIT_COMPILER_CACHE_STABLE_TGT="$stable_tgt"
@@ -142,6 +153,14 @@ assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$stable_src" "stable-mount rustc cwd"
 # Environment values are read without splitting, and only paths rooted at the
 # checkout or target directory are rewritten. Keep expected files in TMP so
 # this remains fully disposable under Bash 3.2 and current Linux Bash.
+source_rewrite_expected() {
+  local path="$1" stable_source="${2:-$stable_src}"
+  if [[ "$path" == "$ROOT" || "$path" == "$ROOT/"* ]]; then
+    printf '%s%s' "$stable_source" "${path#"$ROOT"}"
+  else
+    printf '%s' "$path"
+  fi
+}
 export CACHE_ENV_SPACES='value with spaces = preserved'
 export CACHE_ENV_EQUALS='left=middle=right'
 export CACHE_ENV_MULTILINE="$fake_tgt/debug
@@ -159,10 +178,10 @@ printf '%s' "$CACHE_ENV_SPACES" > "$TMP/env-spaces.expected"
 printf '%s' "$CACHE_ENV_EQUALS" > "$TMP/env-equals.expected"
 printf '%s\nlast line' "$stable_tgt/debug" > "$TMP/env-multiline.expected"
 : > "$TMP/env-empty.expected"
-printf '%s' "$CACHE_ENV_BOUNDARY" > "$TMP/env-boundary.expected"
+printf '%s' "$(source_rewrite_expected "$CACHE_ENV_BOUNDARY")" > "$TMP/env-boundary.expected"
 printf '%s' "$CACHE_ENV_SOURCE_BOUNDARY" > "$TMP/env-source-boundary.expected"
 "$WRAPPER" "$TMP/bin/rustc" --out-dir "$fake_tgt/debug" "$ROOT/crates/orbit-types/src/lib.rs" "$fake_tgt-sibling" "$ROOT-sibling"
-grep -Fq "$fake_tgt-sibling" "$FAKE_SCCACHE_LOG" || fail "target path-prefix boundary should remain unchanged in argv"
+grep -Fxq "$(source_rewrite_expected "$fake_tgt-sibling")" "$FAKE_SCCACHE_LOG" || fail "target path-prefix boundary should not be rewritten as a target path"
 grep -Fq "$ROOT-sibling" "$FAKE_SCCACHE_LOG" || fail "source path-prefix boundary should remain unchanged in argv"
 cmp "$TMP/env-spaces.expected" "$FAKE_SCCACHE_SPACES" || fail "spaces in environment value were not preserved"
 cmp "$TMP/env-equals.expected" "$FAKE_SCCACHE_EQUALS" || fail "equals signs in environment value were not preserved"
@@ -199,20 +218,26 @@ grep -Fq "$ROOT/crates/orbit-types/src/lib.rs" "$FAKE_SCCACHE_LOG" && fail "nest
 assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$stable_src/crates/orbit-types" "nested member rustc cwd"
 
 # cwd outside the checkout is left alone even when the stable source mount aliases.
-mkdir -p "$TMP/external-cwd"
+external_cwd="$TMP/external-cwd"
+if [[ "$external_cwd" == "$ROOT" || "$external_cwd" == "$ROOT/"* ]]; then
+  external_cwd="/"
+else
+  mkdir -p "$external_cwd"
+fi
 export FAKE_SCCACHE_LOG="$TMP/sccache-external-cwd.log"
 export FAKE_SCCACHE_CWD="$TMP/sccache-external-cwd.cwd"
 rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_CWD"
 (
-  cd "$TMP/external-cwd"
+  cd "$external_cwd"
   "$WRAPPER" "$TMP/bin/rustc" --crate-name external src/lib.rs
 )
-assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$TMP/external-cwd" "external cwd must not move to the repo root"
+assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$external_cwd" "external cwd must not move to the repo root"
 
 # 7. Custom CARGO_TARGET_DIR that is not aliased to STABLE_TGT still rewrites
 # source paths and cwd. Silently skipping all rewriting was the measured miss.
 custom_tgt="$TMP/custom-target"
 mkdir -p "$custom_tgt"
+expected_custom_tgt="$(source_rewrite_expected "$custom_tgt")"
 export CARGO_TARGET_DIR="$custom_tgt"
 export FAKE_SCCACHE_LOG="$TMP/sccache-custom-tgt.log"
 export FAKE_SCCACHE_ENV="$TMP/sccache-custom-tgt.env"
@@ -220,9 +245,9 @@ export FAKE_SCCACHE_CWD="$TMP/sccache-custom-tgt.cwd"
 rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_ENV" "$FAKE_SCCACHE_CWD"
 "$WRAPPER" "$TMP/bin/rustc" --out-dir "$custom_tgt/debug" "$ROOT/crates/orbit-types/src/lib.rs"
 grep -Fq "$stable_src/crates/orbit-types/src/lib.rs" "$FAKE_SCCACHE_LOG" || fail "custom target must not prevent source rewrite"
-grep -Fq "$custom_tgt/debug" "$FAKE_SCCACHE_LOG" || fail "custom --out-dir should stay in the private target"
-grep -Fq "$stable_tgt/debug" "$FAKE_SCCACHE_LOG" && fail "unaliased custom target must not rewrite onto STABLE_TGT"
-grep -E -q "^CARGO_TARGET_DIR=${custom_tgt}$" "$FAKE_SCCACHE_ENV" || fail "unaliased CARGO_TARGET_DIR must not be rewritten"
+grep -Fxq "$expected_custom_tgt/debug" "$FAKE_SCCACHE_LOG" || fail "custom --out-dir should stay in the private target"
+grep -Fxq "$stable_tgt/debug" "$FAKE_SCCACHE_LOG" && fail "unaliased custom target must not rewrite onto STABLE_TGT"
+grep -Fxq "CARGO_TARGET_DIR=${expected_custom_tgt}" "$FAKE_SCCACHE_ENV" || fail "unaliased CARGO_TARGET_DIR must not be rewritten onto STABLE_TGT"
 assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$stable_src" "custom-target rustc cwd still normalizes"
 
 # 8. Explicit daemon overrides are preserved (shared-daemon regression setup).
@@ -268,6 +293,7 @@ if [[ -e /tmp/orbit-workspace/Cargo.toml && -e "$ROOT/Cargo.toml" ]] \
   && [[ "$(file_id /tmp/orbit-workspace/Cargo.toml)" == "$(file_id "$ROOT/Cargo.toml")" ]]; then
   real_custom="$TMP/real-custom-target"
   mkdir -p "$real_custom"
+  expected_real_custom="$(source_rewrite_expected "$real_custom" /tmp/orbit-workspace)"
   unset ORBIT_COMPILER_CACHE_STABLE_SRC ORBIT_COMPILER_CACHE_STABLE_TGT
   export CARGO_TARGET_DIR="$real_custom"
   export FAKE_SCCACHE_LOG="$TMP/sccache-real-mount.log"
@@ -280,12 +306,12 @@ if [[ -e /tmp/orbit-workspace/Cargo.toml && -e "$ROOT/Cargo.toml" ]] \
   )
   grep -Fq "/tmp/orbit-workspace/crates/orbit-types/src/lib.rs" "$FAKE_SCCACHE_LOG" \
     || fail "real stable source mount should rewrite the input path"
-  grep -Fq "$real_custom/debug" "$FAKE_SCCACHE_LOG" \
+  grep -Fxq "$expected_real_custom/debug" "$FAKE_SCCACHE_LOG" \
     || fail "real-mount custom --out-dir should remain private"
   grep -Fq "/tmp/orbit-build/debug" "$FAKE_SCCACHE_LOG" \
     && fail "custom target must not silently alias onto /tmp/orbit-build"
-  grep -E -q "^CARGO_TARGET_DIR=${real_custom}$" "$FAKE_SCCACHE_ENV" \
-    || fail "real-mount custom CARGO_TARGET_DIR must stay unaliased"
+  grep -Fxq "CARGO_TARGET_DIR=${expected_real_custom}" "$FAKE_SCCACHE_ENV" \
+    || fail "real-mount custom CARGO_TARGET_DIR must not map onto the stable target"
   assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "/tmp/orbit-workspace" "real stable-mount rustc cwd"
   export FAKE_SCCACHE_LOG="$TMP/sccache-real-nested.log"
   export FAKE_SCCACHE_CWD="$TMP/sccache-real-nested.cwd"
