@@ -1258,7 +1258,6 @@ fn copy_tree(from: &Path, to: &Path) {
 /// dependency came from the wheel inside the plugin tree and not an index.
 #[cfg(unix)]
 #[test]
-#[ignore = "live: needs `uv` on PATH; CI installs a pinned uv and selects it explicitly"]
 fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade() {
     let fixture = Fixture::new();
     let source = fixture.source("uvdemo");

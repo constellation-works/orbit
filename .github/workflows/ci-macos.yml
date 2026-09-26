@@ -130,7 +130,7 @@ jobs:
           uv --version | grep -F "${UV_VERSION}"
 
       - name: Run uv-locked Python plugin fixture test
-        run: cargo test --no-fail-fast -p orbit-cli --locked a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test plugin_cli_group -- --ignored --exact
+        run: cargo test --no-fail-fast -p orbit-cli --locked a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade --test plugin_cli_group -- --exact
 
       # This runs only after every required macOS command above succeeds. The
       # report records the physical checkout HEAD rather than github.sha, which

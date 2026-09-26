@@ -283,8 +283,8 @@ jobs:
       # descriptor-contract tests, which need a host that enforces Landlock
       # for the same reason the plugin-sandbox tests do. It runs over the same
       # artifact set as the line above it so neither leg triggers a rebuild.
-      # [ORB-13017] It also selects the uv-locked Python plugin fixture test,
-      # ignored in the portable suite because it needs uv on PATH.
+      # The uv-locked Python plugin fixture runs in the portable suite above:
+      # the pinned uv binary is installed before Run CI guardrails.
       # A prior failure in this job (including `Run CI guardrails`) skips this
       # gate; if this step is missing, the gate did not pass.
       - name: Linux sandbox/policy enforcement gate
@@ -293,7 +293,7 @@ jobs:
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
           cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
             --run-ignored only \
-            -E 'test(/plugin::tests::(backend|mcp|tool)::/) | test(/linux_landlock::ruleset::tests::/) | (binary_id(orbit-cli::plugin_cli_group) & test(/uv_locked/))'
+            -E 'test(/plugin::tests::(backend|mcp|tool)::/) | test(/linux_landlock::ruleset::tests::/)'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
