@@ -69,7 +69,7 @@ orbit.task.show and orbit.task.artifact.get are the ID-resolved exceptions to th
 
 OrbitToolServer holds one context for its stdio session. Initialize may replace the workspace selector and the untrusted self-reported actor claim. For every tools/call, the adapter clones the session context and mints one fresh trace_id without writing it back.
 
-tools/list is derived from the authoritative host and its validated result is cached per session/selector. Each definition carries a ToolSchema and one McpToolScope: Global or WorkspaceRequired. Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
+tools/list is derived from the authoritative host and its validated result is cached per session/selector. Each definition carries a ToolSchema, one McpToolScope (Global or WorkspaceRequired) and, for a plugin tool that declares one, its own input schema, which is advertised as written instead of the schema derived from the ToolSchema parameters ([plugins §4.2](../plugins/1_scope.md#42-execution-protocol)). Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
 
 Workspace-bound schema decoration follows the same session selector. In particular, the `orbit.friction.add` and `orbit.friction.update` tag schemas enumerate the bound workspace's operator-owned taxonomy with descriptions. Before a workspace is bound, the schema falls back to the shipped taxonomy and explicitly notes that `.orbit/frictions/tags.yaml` may extend it. The tools-list cache key includes the normalized session selector so re-initializing a connection for another workspace cannot retain the previous workspace's vocabulary.
 

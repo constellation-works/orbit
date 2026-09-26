@@ -299,6 +299,11 @@ impl std::fmt::Debug for ToolContext {
 
 pub trait Tool: Send + Sync {
     fn schema(&self) -> ToolSchema;
+    /// The tool's own JSON Schema for its input, when it declares one richer
+    /// than [`ToolSchema::parameters`]; MCP advertises it as written.
+    fn input_schema(&self) -> Option<Value> {
+        None
+    }
     /// Whether a successful invocation can have externally visible side effects.
     ///
     /// The conservative default keeps audit persistence fail-closed for every

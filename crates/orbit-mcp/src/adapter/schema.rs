@@ -21,6 +21,16 @@ pub(super) fn schema_to_tool(schema: ToolSchema, input_schema: JsonObject) -> To
 /// Canonical name of the authoritative server's workspace selector.
 pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 
+/// A tool's own declared input schema, as advertised before the host adds its
+/// selector: every keyword verbatim except the root `type`, which is always
+/// `"object"` — MCP's `inputSchema` must describe an object and `tools/call`
+/// arguments always are one (design §4.2).
+pub(super) fn declared_input_schema(declared: &JsonObject) -> JsonObject {
+    let mut schema = declared.clone();
+    schema.insert("type".to_string(), json!("object"));
+    schema
+}
+
 /// Whether the session being served already carries a workspace selector.
 ///
 /// The two states are advertised differently because they place different
@@ -109,7 +119,7 @@ fn ensure_authoritative_selector(
     if definition.schema.name == "orbit.task.show" {
         return;
     }
-    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+    let Some(properties) = selector_properties(schema) else {
         return;
     };
     if !properties.contains_key(WORKSPACE_SELECTOR_PARAM) {
@@ -127,7 +137,7 @@ fn ensure_authoritative_selector(
 }
 
 fn ensure_federated_selector(schema: &mut JsonObject) {
-    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+    let Some(properties) = selector_properties(schema) else {
         return;
     };
     // Replace any v1 local wording a tool declared itself — including
@@ -141,6 +151,15 @@ fn ensure_federated_selector(schema: &mut JsonObject) {
         }),
     );
     require_property(schema, WORKSPACE_SELECTOR_PARAM);
+}
+
+/// The `properties` map the selector joins. A declared schema may name no
+/// properties at all; it still needs the selector to be callable.
+fn selector_properties(schema: &mut JsonObject) -> Option<&mut JsonObject> {
+    schema
+        .entry("properties")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
 }
 
 fn require_property(schema: &mut JsonObject, property: &str) {

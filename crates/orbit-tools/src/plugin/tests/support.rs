@@ -90,6 +90,7 @@ pub(super) fn tool(spec: Arc<PluginBackendSpec>, output_schema: Option<Value>) -
         verb: "hello".into(),
         description: "demo".into(),
         parameters: vec![],
+        input_schema: None,
         execution_kind: PluginExecutionKind::ReadOnly,
         output_schema: output_schema
             .map(|schema| CompiledSchema::compile(schema).expect("compile output_schema")),

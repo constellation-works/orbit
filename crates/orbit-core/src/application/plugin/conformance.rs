@@ -323,6 +323,9 @@ fn run_case(
         verb: resolved.verb.clone(),
         description: resolved.description.clone(),
         parameters: resolved.parameters.clone(),
+        input_schema: resolved
+            .input_schema_declared
+            .then(|| resolved.input_schema.clone()),
         execution_kind: resolved.execution_kind,
         output_schema: resolved.output_schema.clone(),
         binding,

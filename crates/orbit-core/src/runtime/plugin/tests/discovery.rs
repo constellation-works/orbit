@@ -210,3 +210,62 @@ fn a_global_scope_tool_renders_config_from_the_global_section_over_the_manifest_
         entry_without_config.config_values
     );
 }
+
+/// A tool's declared `input_schema` reaches its MCP definition as the
+/// resolved document, so `tools/list` can advertise its `enum`, `default` and
+/// bounds; a tool that declares none keeps the parameter-derived schema.
+#[test]
+fn a_declared_input_schema_reaches_the_mcp_definition_resolved() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let root = plugin_install_path(&global_root, "graph", "1.0.0");
+    write_plugin_with_config(&root, "graph", false, Some(".index"));
+    let recommend = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "level": { "type": "string", "enum": ["file", "symbol"], "default": "file" },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+        },
+        "additionalProperties": false
+    });
+    std::fs::write(
+        root.join("schemas/recommend.request.json"),
+        serde_json::to_vec(&recommend).expect("serialize schema"),
+    )
+    .expect("write request schema");
+    std::fs::write(
+        root.join("plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: graph\n  version: 1.0.0\nspec:\n  \
+         backend:\n    type: exec\n    command: bin/backend.sh\n  config:\n    schema: \
+         schemas/config.json\n    defaults: { index_dir: \".index\" }\n  tools:\n    - name: \
+         recommend\n      execution_kind: read_only\n      mcp_scope: workspace\n      \
+         input_schema: { $ref: schemas/recommend.request.json }\n    - name: hello\n      \
+         execution_kind: read_only\n      mcp_scope: workspace\n",
+    )
+    .expect("write manifest");
+
+    let audit_db = global_root.join("orbit.db");
+    {
+        let store = Store::open(&audit_db).expect("open store");
+        store
+            .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, "graph")))
+            .expect("record the install");
+    }
+
+    let (registry, load) =
+        host_plugin_registry(&global_root, &audit_db, &std::collections::BTreeMap::new())
+            .expect("registry loads");
+    assert!(load.is_active("graph"), "{:?}", load.diagnostics);
+    let definitions = registry.mcp_tool_definitions().expect("mcp definitions");
+    let input_schema = |name: &str| {
+        definitions
+            .iter()
+            .find(|definition| definition.schema.name == name)
+            .unwrap_or_else(|| panic!("{name} is listed: {definitions:?}"))
+            .input_schema
+            .clone()
+    };
+
+    assert_eq!(input_schema("graph.recommend"), Some(recommend));
+    assert_eq!(input_schema("graph.hello"), None);
+}
