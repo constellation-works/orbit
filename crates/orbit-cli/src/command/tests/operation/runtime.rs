@@ -85,6 +85,25 @@ fn observation_commands_use_the_read_only_runtime() {
 }
 
 #[test]
+fn plugin_inspection_uses_host_fallback_runtime() {
+    let commands: &[&[&str]] = &[
+        &["orbit", "plugin", "list"],
+        &["orbit", "plugin", "show", "demo"],
+        &["orbit", "plugin", "doctor"],
+        &["orbit", "plugin", "validate", "./demo"],
+        &["orbit", "plugin", "validate", "./demo", "--render"],
+        &["orbit", "plugin", "scaffold", "demo"],
+    ];
+    for args in commands {
+        assert_eq!(
+            operation_for(args).runtime_need,
+            RuntimeNeed::PluginReadOnly,
+            "{args:?} must use the plugin inspection runtime"
+        );
+    }
+}
+
+#[test]
 fn migrate_only_bootstraps_the_applying_form() {
     assert_eq!(
         operation_for(&["orbit", "migrate"]).runtime_need,

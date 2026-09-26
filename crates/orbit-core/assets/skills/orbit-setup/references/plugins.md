@@ -157,8 +157,9 @@ restarting `orbit web serve`.
 ## Certifying a plugin for this Orbit
 
 ```bash
-orbit plugin scaffold demo            # a starter plugin: backend, tool, panel, skill, goldens
-orbit plugin validate ./demo --render # manifest plus effective profile/env for this workspace
+orbit plugin scaffold demo            # creates ./demo with backend, tool, panel, skill, goldens
+orbit plugin scaffold demo --dir /path/to/demo # choose an explicit output directory
+orbit plugin validate ./demo --render # manifest plus effective profile/env
 orbit plugin test ./demo              # run its goldens through the real protocol
 orbit plugin test ./demo --case status_reports_ready
 orbit plugin test ./demo --update-goldens
@@ -188,10 +189,16 @@ A passing run records this Orbit's version on the installed plugin, and `orbit p
 The record is only written when the directory tested is the installed one (same manifest
 digest); reinstalling a changed manifest drops the claim.
 
+`orbit plugin scaffold <namespace>` creates `./<namespace>` in the current directory;
+`--dir <path>` creates the plugin at that path instead. Plugin installation refuses
+sources inside a workspace repository, so move the scaffold outside the repository
+or give `--dir` an external path before installing it.
+
 `orbit plugin validate <dir> --render` uses the same profile and child-environment builders
-as a real call, but starts no backend. Its read/write roots, network mode and environment
-are rendered for the current workspace; pass the global `--workspace <selector>` option to
-inspect another registered checkout.
+as a real call, but starts no backend. In a registered workspace it renders for that
+workspace. From an unregistered directory it uses host-level config and does not
+initialize a workspace there. Pass the global `--workspace <selector>` option when
+rendering needs workspace config or to inspect another registered checkout.
 
 `orbit tool scaffold` still writes the older executable-plus-sidecar form for one more
 release and prints a deprecation pointing here.

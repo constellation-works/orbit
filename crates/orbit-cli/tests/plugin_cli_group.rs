@@ -509,6 +509,98 @@ fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
         .stderr(predicate::str::contains("plugin(s) need attention"));
 }
 
+#[test]
+fn plugin_inspection_from_unregistered_cwd_creates_no_files() {
+    let fixture = Fixture::new();
+    let scratch = fixture._temp.path().join("scratch");
+    std::fs::create_dir(&scratch).expect("create unregistered cwd");
+    let source = fixture.source("sample");
+    write_status_plugin(&source, "sample", "");
+    let source_arg = source.to_str().expect("utf8 source");
+    fixture
+        .orbit()
+        .args(["plugin", "add", source_arg, "--enable"])
+        .assert()
+        .success();
+
+    for args in [
+        vec!["plugin", "list"],
+        vec!["plugin", "validate", source_arg],
+        vec!["plugin", "show", "sample"],
+        vec!["plugin", "doctor"],
+    ] {
+        fixture
+            .orbit()
+            .current_dir(&scratch)
+            .args(&args)
+            .assert()
+            .success();
+        assert_eq!(
+            std::fs::read_dir(&scratch)
+                .expect("inspect unregistered cwd")
+                .count(),
+            0,
+            "{args:?} created files in an unregistered cwd"
+        );
+    }
+
+    let rendered = fixture
+        .orbit()
+        .current_dir(&scratch)
+        .args([
+            "plugin", "validate", source_arg, "--render", "--format", "json",
+        ])
+        .output()
+        .expect("render plugin from unregistered cwd");
+    assert!(rendered.status.success(), "{rendered:?}");
+    let rendered = stdout_json(&rendered);
+    assert_eq!(
+        rendered["rendered"]["workspace"],
+        fixture.home.join(".orbit").to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        std::fs::read_dir(&scratch)
+            .expect("inspect unregistered cwd")
+            .count(),
+        0,
+        "plugin validate --render created files in an unregistered cwd"
+    );
+}
+
+#[test]
+fn scaffold_defaults_to_the_current_directory_and_honors_explicit_dir() {
+    let fixture = Fixture::new();
+    let scratch = fixture._temp.path().join("scratch");
+    std::fs::create_dir(&scratch).expect("create unregistered cwd");
+
+    fixture
+        .orbit()
+        .current_dir(&scratch)
+        .args(["plugin", "scaffold", "local"])
+        .assert()
+        .success();
+    assert!(scratch.join("local/plugin.yaml").is_file());
+    assert!(!scratch.join(".orbit").exists());
+    assert!(!fixture.home.join(".orbit/scaffold/local").exists());
+
+    let explicit = fixture.source("explicit");
+    fixture
+        .orbit()
+        .current_dir(&scratch)
+        .args([
+            "plugin",
+            "scaffold",
+            "explicit",
+            "--dir",
+            explicit.to_str().expect("utf8 destination"),
+        ])
+        .assert()
+        .success();
+    assert!(explicit.join("plugin.yaml").is_file());
+    assert!(!scratch.join("explicit").exists());
+    assert!(!scratch.join(".orbit").exists());
+}
+
 /// `orbit plugin scaffold` tells operators to run `add <dir> --enable`; that
 /// one-step path used to report only the install summary and drop the seeded
 /// auto-task, skill link and warnings `orbit plugin enable` reports for the
@@ -561,21 +653,20 @@ fn add_enable_renders_the_seeded_skill_and_warning_report_like_enable() {
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
     let fixture = Fixture::new();
-    let root = fixture.home.join(".orbit/scaffold/demo");
+    // Installation refuses sources inside a workspace repository, so this
+    // end-to-end install exercises the explicit external destination.
+    let root = fixture.source("demo");
     let root_arg = root.to_str().expect("utf8 path").to_string();
 
     let scaffold = fixture
         .orbit()
-        .args(["plugin", "scaffold", "demo"])
+        .args(["plugin", "scaffold", "demo", "--dir", &root_arg])
         .output()
         .expect("scaffold plugin");
     assert!(scaffold.status.success(), "{scaffold:?}");
     let scaffold_stdout = String::from_utf8_lossy(&scaffold.stdout);
     assert!(scaffold_stdout.contains("plugin.yaml"), "{scaffold_stdout}");
-    assert!(
-        !root.starts_with(&fixture.work),
-        "the default scaffold source must be outside the workspace repository"
-    );
+    assert!(root.join("plugin.yaml").is_file());
 
     let rendered = fixture
         .orbit()
