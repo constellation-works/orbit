@@ -89,6 +89,7 @@ fn identical_friction_ids_in_two_workspaces_stay_distinct() {
             title: None,
             body: None,
             resolved_by_task: None,
+            rehome_to: None,
             updated_at: at(5, 9),
         },
     )
@@ -139,6 +140,7 @@ fn a_fixed_size_page_decodes_only_the_requested_rows() {
                         title: None,
                         body: None,
                         resolved_by_task: None,
+                        rehome_to: None,
                         updated_at: at(2, 0),
                     },
                 )
@@ -336,6 +338,7 @@ fn update_sets_and_clears_the_stored_title() {
                 title: Some(Some("Queued runs never reach a worker".to_string())),
                 body: None,
                 resolved_by_task: None,
+                rehome_to: None,
                 updated_at: at(2, 0),
             },
         )
@@ -354,6 +357,7 @@ fn update_sets_and_clears_the_stored_title() {
                 title: Some(None),
                 body: None,
                 resolved_by_task: None,
+                rehome_to: None,
                 updated_at: at(3, 0),
             },
         )
@@ -399,6 +403,7 @@ fn resolution_records_the_resolving_task_and_reopening_clears_it() {
                 title: None,
                 body: None,
                 resolved_by_task: None,
+                rehome_to: None,
                 updated_at: at(3, 0),
             },
         )
@@ -547,6 +552,7 @@ fn stats_report_status_counts_and_family_rates() {
                 title: None,
                 body: None,
                 resolved_by_task: None,
+                rehome_to: None,
                 updated_at: at(2, 0),
             },
         )

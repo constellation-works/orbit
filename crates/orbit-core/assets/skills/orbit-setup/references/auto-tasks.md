@@ -202,7 +202,9 @@ plugin being removed.
   to revert a tracked file when `git checkout --` cannot take `index.lock`.
 - **`friction-curation`** (`medium`) — daily. Deduplicates the open friction corpus against
   task history, verifies each survivor still reproduces, resolves the ones that
-  don't, and files fix tasks for the ones that do. → [friction.md](../../orbit/references/friction.md)
+  don't, and files fix tasks for the ones that do. A survivor owned by another
+  workspace is re-homed there, or marked `rehome_to` when that workspace is not
+  reachable, instead of blocking the run. → [friction.md](../../orbit/references/friction.md)
 - **`security-review`** (`hard`) — weekly. Reviews applicable application code,
   dependencies, secret handling, and configuration with evidence; files a
   durable Orbit task for each non-duplicate finding with severity and impact; a

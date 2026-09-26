@@ -27,8 +27,9 @@ pub(crate) fn upsert_record(
     conn.execute(
         "INSERT INTO friction_records (
              workspace_id, friction_id, month, seq, title, model, status, created_at,
-             resolved_at, during_task, resolved_by_task, tags_json, body, legacy_path
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             resolved_at, during_task, resolved_by_task, tags_json, body, legacy_path,
+             rehome_to
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(workspace_id, friction_id) DO UPDATE SET
              title = excluded.title,
              model = excluded.model,
@@ -38,7 +39,8 @@ pub(crate) fn upsert_record(
              during_task = excluded.during_task,
              resolved_by_task = excluded.resolved_by_task,
              tags_json = excluded.tags_json,
-             body = excluded.body",
+             body = excluded.body,
+             rehome_to = excluded.rehome_to",
         rusqlite::params![
             workspace_id,
             record.id,
@@ -54,6 +56,7 @@ pub(crate) fn upsert_record(
             tags_json,
             record.body,
             legacy_path,
+            record.rehome_to,
         ],
     )
     .map_err(|error| OrbitError::Store(format!("write friction record {}: {error}", record.id)))?;
@@ -133,6 +136,7 @@ pub(crate) fn add_in_transaction(
         resolved_at: None,
         during_task: params.during_task.clone(),
         resolved_by_task: None,
+        rehome_to: None,
         body: params.body.clone(),
     };
     upsert_record(conn, workspace_id, &record, &month, seq, None)?;

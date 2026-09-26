@@ -38,6 +38,8 @@ pub enum FrictionVerb {
     Update,
     /// Mark a record resolved.
     Resolve,
+    /// Move a record into the workspace that owns it.
+    Rehome,
 }
 
 /// A friction operation specification.
@@ -57,6 +59,7 @@ impl FrictionVerb {
             FrictionVerb::Tags => &TAGS,
             FrictionVerb::Update => &UPDATE,
             FrictionVerb::Resolve => &RESOLVE,
+            FrictionVerb::Rehome => &REHOME,
         }
     }
 
@@ -78,7 +81,7 @@ impl FrictionVerb {
 /// subcommands. Within a spec, parameter order is the order both `--help` and
 /// the MCP tool schema list parameters.
 pub const FRICTION_OPERATIONS: &[FrictionOperation] =
-    &[ADD, LIST, SHOW, STATS, TAGS, UPDATE, RESOLVE];
+    &[ADD, LIST, SHOW, STATS, TAGS, UPDATE, RESOLVE, REHOME];
 
 const ADD: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Add,
@@ -273,6 +276,16 @@ const UPDATE: FrictionOperation = FrictionOperation {
         },
         text_param("body", "Optional replacement markdown body"),
         ParamSpec {
+            name: "rehome_to",
+            param_type: ParamType::String,
+            required: false,
+            mcp_description: Some(REHOME_TO_HELP),
+            cli: Some(CliBinding {
+                kind: flag("rehome-to"),
+                help: REHOME_TO_HELP,
+            }),
+        },
+        ParamSpec {
             name: "title",
             param_type: ParamType::String,
             required: false,
@@ -303,6 +316,40 @@ const RESOLVE: FrictionOperation = FrictionOperation {
     cli_render: CliRender::Record,
 };
 
+const REHOME: FrictionOperation = FrictionOperation {
+    verb: FrictionVerb::Rehome,
+    name: "rehome",
+    tool_name: "orbit.friction.rehome",
+    tool_description: "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
+    cli_about: "Move a friction record into the registered workspace that owns it",
+    params: &[
+        ParamSpec {
+            name: "id",
+            param_type: ParamType::String,
+            required: true,
+            mcp_description: Some(FRICTION_ID_HELP),
+            cli: Some(CliBinding {
+                kind: CliArgKind::Positional,
+                help: FRICTION_ID_HELP,
+            }),
+        },
+        ParamSpec {
+            name: "to_workspace",
+            param_type: ParamType::String,
+            required: true,
+            mcp_description: Some(TO_WORKSPACE_HELP),
+            cli: Some(CliBinding {
+                kind: flag("to-workspace"),
+                help: TO_WORKSPACE_HELP,
+            }),
+        },
+    ],
+    rejects_agent_field: false,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    cli_json_flag: true,
+    cli_render: CliRender::Record,
+};
+
 /// Borrow the whole registry.
 pub fn friction_operations() -> &'static [FrictionOperation] {
     FRICTION_OPERATIONS
@@ -322,6 +369,11 @@ const ADD_TITLE_HELP: Description = Description::Computed(add_title_description)
 const ADD_TITLE_CLI_HELP: Description = Description::Computed(add_title_cli_help);
 const UPDATE_TITLE_HELP: Description = Description::Computed(update_title_description);
 const UPDATE_TITLE_CLI_HELP: Description = Description::Computed(update_title_cli_help);
+const REHOME_TO_HELP: Description = Description::Static(
+    "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it",
+);
+const TO_WORKSPACE_HELP: Description =
+    Description::Static("Registered name or ID of the workspace that owns this friction");
 const DURING_TASK_HELP: Description =
     Description::Static("Optional task ID being worked on when friction occurred");
 

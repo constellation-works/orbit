@@ -107,7 +107,7 @@ orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged","m
 orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"resolved","model":"<agent-family>"}'
 ```
 
-`update` also accepts `tags` and `body`. Over MCP, use `orbit_friction_update`
+`update` also accepts `tags`, `body`, and `rehome_to`. Over MCP, use `orbit_friction_update`
 with `status: resolved`; the separate CLI resolve operation is not an advertised
 MCP tool. Include the selected `workspace` in every MCP example here.
 
@@ -128,6 +128,45 @@ operator CLI path; an agent instead runs `orbit tool run orbit.friction.update
 --input '{"id":"<id>","status":"resolved"}'`, which stamps the same resolution
 metadata — or land a covering task there. Do not count a foreign `resolves`
 edge as coverage.
+
+## Re-homing a friction to its owning workspace
+
+A friction is sometimes filed in the wrong workspace: a product workspace's
+agent hits an Orbit or tooling defect, and the fix belongs to the workspace that
+owns that code. A task filed in the reporting workspace would be wrong-lane, and
+a `resolves` edge from the owning workspace cannot reach the record.
+
+**Record the owner.** When you know which workspace owns the fix but cannot
+move the record from here, set `rehome_to`. This is the `rehome_required`
+disposition. The record stays open, and curation counts it as dispositioned,
+not as uncovered. An empty string clears it.
+
+```bash
+orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-workspace>","model":"<agent-family>"}'
+```
+
+**Move it.** When the owning workspace is registered on this host, move the
+record:
+
+```bash
+orbit friction rehome <ID> --to-workspace <name-or-ws-id>
+orbit tool run orbit.friction.rehome --input '{"id":"<ID>","to_workspace":"<name-or-ws-id>"}'
+```
+
+Over MCP, use `orbit_friction_rehome` with the source `workspace`. The move is
+one transaction:
+
+- The owning workspace gets a copy under an ID it allocates. The copy keeps the
+  title, reporter, creation time, task, triage status, and body, and adds a note
+  naming the source record.
+- The source is resolved. Its `rehome_to` names the owner, and a note in its
+  body gives the new ID.
+
+Tags the owning taxonomy does not define are dropped and listed in
+`dropped_tags`. The move is refused when the record is already resolved, when
+the target is the current workspace or is not registered, or when either
+checkout is a replica that refuses coordination writes. A refused move writes
+nothing.
 
 ## Reading the corpus
 

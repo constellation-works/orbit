@@ -19,7 +19,7 @@ use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
 
 /// Columns every record read selects, in decode order.
 const RECORD_COLUMNS: &str = "friction_id, title, model, status, created_at, resolved_at, \
-     during_task, resolved_by_task, tags_json, body, legacy_path";
+     during_task, resolved_by_task, tags_json, body, legacy_path, rehome_to";
 
 // Counts rows this process decoded into a `StoredFrictionRecord`.
 //
@@ -251,6 +251,7 @@ fn decode_record(row: &Row<'_>) -> Result<StoredFrictionRecord, OrbitError> {
             resolved_at,
             during_task: get_optional(6)?,
             resolved_by_task: get_optional(7)?,
+            rehome_to: get_optional(11)?,
             body: get_text(9)?,
         },
         path: get_optional(10)?.map(PathBuf::from),

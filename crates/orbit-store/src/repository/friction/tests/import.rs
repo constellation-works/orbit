@@ -332,6 +332,7 @@ fn import_leaves_legacy_files_untouched_and_export_re_materializes_them() {
                 title: None,
                 body: None,
                 resolved_by_task: None,
+                rehome_to: None,
                 updated_at: at(12, 0),
             },
         )

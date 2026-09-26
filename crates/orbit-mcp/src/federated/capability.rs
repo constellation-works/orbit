@@ -51,6 +51,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_friction_add"
         | "orbit_friction_list"
         | "orbit_friction_update"
+        | "orbit_friction_rehome"
         | "orbit_auto_task_list"
         | "orbit_auto_task_mint"
         | "orbit_auto_task_add"

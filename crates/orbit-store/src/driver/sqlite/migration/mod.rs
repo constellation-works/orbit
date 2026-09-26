@@ -30,7 +30,7 @@ use audit_events::{
 };
 use baseline::apply_baseline_schema;
 use feature::apply_feature_schema_ledger;
-use friction::apply_friction_records_schema;
+use friction::{apply_friction_records_schema, apply_friction_rehome_target};
 use host_registry::{
     apply_host_registry_core, apply_hub_registry_metadata, apply_workspace_coordination_projections,
 };

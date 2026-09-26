@@ -510,6 +510,77 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     );
 }
 
+/// [ORB-13024] A friction filed in the wrong workspace moves into its
+/// registered owner over the real transport and registry: the owner holds the
+/// copy with the original body, and the source is resolved with a pointer.
+#[test]
+fn mcp_friction_rehome_moves_a_record_into_its_registered_owner() {
+    let workspace = McpWorkspace::init();
+    let owner = workspace.home.join("owner");
+    std::fs::create_dir_all(&owner).expect("create the owning checkout");
+    let output = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&owner)
+        .output()
+        .expect("initialize the owning Git checkout");
+    assert!(output.status.success(), "git init failed: {output:?}");
+    let output = orbit_ok(McpWorkspace::orbit_command(&owner, &workspace.home).args([
+        "workspace",
+        "init",
+        "--name",
+        "mcp-owner",
+    ]));
+    assert!(output.status.success());
+
+    let body = "gh auth status cannot read its config under the sandbox.";
+    let mut client = workspace.serve();
+    let added = client.call_tool_ok(
+        "orbit_friction_add",
+        json!({ "body": body, "tags": ["policy"], "model": "codex" }),
+    );
+    let id = added["id"].as_str().expect("friction id").to_string();
+
+    let moved = client.call_tool_ok(
+        "orbit_friction_rehome",
+        json!({ "id": id, "to_workspace": "mcp-owner" }),
+    );
+    assert_eq!(moved["status"], "resolved", "{moved}");
+    assert_eq!(moved["rehome_to"], "ws_mcp-owner", "{moved}");
+    let new_id = moved["rehomed_as"]["id"]
+        .as_str()
+        .expect("the copy's id")
+        .to_string();
+
+    let again = client.call_tool_err(
+        "orbit_friction_rehome",
+        json!({ "id": id, "to_workspace": "mcp-owner" }),
+    );
+    assert!(
+        again["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("already resolved")),
+        "a moved record cannot be moved twice: {again}"
+    );
+    drop(client);
+
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&owner, &workspace.home).args(["friction", "list", "--json"]),
+    );
+    let owned: Value = serde_json::from_slice(&output.stdout).expect("owner friction list JSON");
+    let owned = owned.as_array().expect("record array");
+    assert_eq!(owned.len(), 1, "{owned:?}");
+    assert_eq!(owned[0]["id"], new_id.as_str());
+    assert_eq!(owned[0]["status"], "open");
+    assert_eq!(owned[0]["created_at"], added["created_at"]);
+    assert!(
+        owned[0]["body"]
+            .as_str()
+            .is_some_and(|moved_body| moved_body.starts_with(body)),
+        "the owner keeps the original body: {}",
+        owned[0]
+    );
+}
+
 #[test]
 fn mcp_search_without_query_or_tag_keeps_its_refusal_message() {
     let workspace = McpWorkspace::init();

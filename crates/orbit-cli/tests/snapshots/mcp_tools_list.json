@@ -518,6 +518,32 @@
     "name": "orbit_friction_list"
   },
   {
+    "description": "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "description": "Friction record ID, e.g. FYYYY-MM-NNN",
+          "type": "string"
+        },
+        "to_workspace": {
+          "description": "Registered name or ID of the workspace that owns this friction",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "to_workspace"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_friction_rehome"
+  },
+  {
     "description": "Update triage metadata for a friction record",
     "inputSchema": {
       "additionalProperties": true,
@@ -528,6 +554,10 @@
         },
         "id": {
           "description": "Friction record ID, e.g. FYYYY-MM-NNN",
+          "type": "string"
+        },
+        "rehome_to": {
+          "description": "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it",
           "type": "string"
         },
         "status": {

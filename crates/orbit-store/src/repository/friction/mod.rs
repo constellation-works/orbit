@@ -39,8 +39,8 @@ pub(crate) mod queries;
 mod stats;
 
 pub use crate::contracts::{
-    FrictionAddParams, FrictionListFilter, FrictionReportedCount, FrictionUpdateParams,
-    StoredFrictionRecord,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
+    FrictionReportedCount, FrictionUpdateParams, StoredFrictionRecord,
 };
 
 #[cfg(test)]
@@ -112,6 +112,7 @@ impl FrictionStore {
                     resolved_at: None,
                     during_task: params.during_task,
                     resolved_by_task: None,
+                    rehome_to: None,
                     body: params.body,
                 };
                 queries::upsert_record(conn, &self.workspace_id, &record, &month, seq, None)?;
@@ -191,6 +192,9 @@ impl FrictionStore {
                 if let Some(resolved_by_task) = params.resolved_by_task.clone() {
                     stored.record.resolved_by_task = Some(resolved_by_task);
                 }
+                if let Some(rehome_to) = params.rehome_to.clone() {
+                    stored.record.rehome_to = rehome_to;
+                }
                 queries::upsert_record(
                     conn,
                     &self.workspace_id,
@@ -207,6 +211,117 @@ impl FrictionStore {
             })
     }
 
+    /// Move `id` into the workspace that owns it.
+    ///
+    /// One transaction: the owning workspace gains a copy under an ID it
+    /// allocates — same title, reporter, creation time, task, triage status,
+    /// and body, plus a provenance note — and the source is resolved with
+    /// `rehome_to` set and a forwarding note naming the new ID. Tags the
+    /// owning taxonomy does not define are dropped and reported, never
+    /// invented. A resolved record has nothing left to move.
+    pub fn rehome(
+        &self,
+        id: &str,
+        params: FrictionRehomeParams,
+    ) -> Result<FrictionRehomeOutcome, OrbitError> {
+        validate_friction_id(id)?;
+        validate_workspace_id(&params.target_workspace_id)?;
+        if params.target_workspace_id == self.workspace_id {
+            return Err(OrbitError::InvalidInput(format!(
+                "friction {id} already belongs to workspace '{}'; re-home needs another workspace",
+                params.target_label
+            )));
+        }
+        let (month, seq) = split_friction_id(id)
+            .ok_or_else(|| OrbitError::InvalidInput(format!("malformed friction id: {id}")))?;
+        // Taxonomy load is file I/O; keep it outside the write transaction.
+        let target_taxonomy = load_tag_taxonomy(&params.target_files_root)?;
+        let at = params.rehomed_at;
+        let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                let conn = tx.connection();
+                let mut source =
+                    queries::show_record(conn, &self.workspace_id, id)?.ok_or_else(|| {
+                        OrbitError::InvalidInput(format!("friction record not found: {id}"))
+                    })?;
+                if source.record.status == FrictionStatus::Resolved {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "friction {id} is already resolved; there is nothing to re-home"
+                    )));
+                }
+
+                let (kept, dropped_tags): (Vec<String>, Vec<String>) = source
+                    .record
+                    .tags
+                    .iter()
+                    .cloned()
+                    .partition(|tag| target_taxonomy.contains(tag));
+                let tags = normalize_and_validate_tags(kept, &target_taxonomy)?;
+                let target_month = source.record.created_at.format("%Y-%m").to_string();
+                let target_seq =
+                    queries::next_month_seq(conn, &params.target_workspace_id, &target_month)?;
+                let target_id = format!("F{target_month}-{target_seq:03}");
+                let target = FrictionRecord {
+                    id: target_id.clone(),
+                    title: source.record.title.clone(),
+                    model: source.record.model.clone(),
+                    created_at: source.record.created_at,
+                    status: source.record.status,
+                    tags,
+                    resolved_at: None,
+                    during_task: source.record.during_task.clone(),
+                    resolved_by_task: None,
+                    rehome_to: None,
+                    body: format!(
+                        "{}\n\n---\n\nRe-homed from workspace `{}` friction `{id}` on {stamp}.",
+                        source.record.body.trim_end(),
+                        params.source_label,
+                    ),
+                };
+                queries::upsert_record(
+                    conn,
+                    &params.target_workspace_id,
+                    &target,
+                    &target_month,
+                    target_seq,
+                    None,
+                )?;
+
+                source.record.body = format!(
+                    "{}\n\n---\n\nRe-homed to workspace `{}` as friction `{target_id}` on {stamp}; \
+                     track it there.",
+                    source.record.body.trim_end(),
+                    params.target_label,
+                );
+                source.record.status = FrictionStatus::Resolved;
+                source.record.resolved_at = Some(at);
+                source.record.rehome_to = Some(params.target_label.clone());
+                queries::upsert_record(
+                    conn,
+                    &self.workspace_id,
+                    &source.record,
+                    &month,
+                    seq,
+                    source
+                        .path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy())
+                        .as_deref(),
+                )?;
+
+                Ok(FrictionRehomeOutcome {
+                    source,
+                    target: StoredFrictionRecord {
+                        record: target,
+                        path: None,
+                    },
+                    dropped_tags,
+                })
+            })
+    }
+
     pub fn resolve(
         &self,
         id: &str,
@@ -220,6 +335,7 @@ impl FrictionStore {
                 title: None,
                 body: None,
                 resolved_by_task: None,
+                rehome_to: None,
                 updated_at: resolved_at,
             },
         )
@@ -239,6 +355,7 @@ impl FrictionStore {
                 title: None,
                 body: None,
                 resolved_by_task: Some(task_id.to_string()),
+                rehome_to: None,
                 updated_at: resolved_at,
             },
         )
@@ -407,6 +524,14 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
         params: FrictionUpdateParams,
     ) -> Result<StoredFrictionRecord, OrbitError> {
         Self::update(self, id, params)
+    }
+
+    fn rehome(
+        &self,
+        id: &str,
+        params: FrictionRehomeParams,
+    ) -> Result<FrictionRehomeOutcome, OrbitError> {
+        Self::rehome(self, id, params)
     }
 
     fn resolve(

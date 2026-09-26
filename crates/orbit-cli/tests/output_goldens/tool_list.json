@@ -575,6 +575,28 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
+    "enabled": true,
+    "name": "orbit.friction.rehome",
+    "parameters": [
+      {
+        "description": "Friction record ID, e.g. FYYYY-MM-NNN",
+        "name": "id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Registered name or ID of the workspace that owns this friction",
+        "name": "to_workspace",
+        "param_type": "string",
+        "required": true
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "Update triage metadata for a friction record",
     "enabled": true,
     "name": "orbit.friction.update",
@@ -600,6 +622,12 @@
       {
         "description": "Optional replacement markdown body",
         "name": "body",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it",
+        "name": "rehome_to",
         "param_type": "string",
         "required": false
       },

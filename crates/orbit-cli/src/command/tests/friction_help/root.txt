@@ -10,6 +10,7 @@ Commands:
   tags     List configured friction taxonomy tags
   update   Update triage metadata for a friction record
   resolve  Mark a friction record as resolved
+  rehome   Move a friction record into the registered workspace that owns it
 
 Options:
       --root <ROOT>           Override the Orbit root directory (highest precedence)
