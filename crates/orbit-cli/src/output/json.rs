@@ -56,12 +56,23 @@ pub fn error_payload(error: &OrbitError) -> Value {
     payload
 }
 
+/// The error object for an argv clap rejected, in the same shape as
+/// [`error_payload`]. There is no `OrbitError` behind it: parsing failed
+/// before any command existed to return one.
+pub fn usage_error_payload(message: &str) -> Value {
+    json!({
+        "error": message,
+        "code": "usage_error",
+    })
+}
+
 fn error_code(error: &OrbitError) -> &str {
     match error {
         OrbitError::PolicyDenied(_) => "policy_denied",
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task => "task_not_found",
+            NotFoundKind::Friction => "friction_not_found",
             NotFoundKind::Artifact => "task_artifact_not_found",
             NotFoundKind::Skill => "skill_not_found",
             NotFoundKind::Job => "job_not_found",

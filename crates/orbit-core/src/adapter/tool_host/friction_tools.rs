@@ -10,7 +10,6 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, TimeZone, Utc};
-use orbit_common::OrbitError;
 use orbit_common::governance::friction::{
     FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb, effective_title,
     normalize_friction_tag_aliases, normalize_title,
@@ -18,6 +17,7 @@ use orbit_common::governance::friction::{
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
 };
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
     FrictionAddParams, FrictionListFilter, FrictionStoreBackend, FrictionUpdateParams,
     StoredFrictionRecord,
@@ -171,9 +171,7 @@ fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 fn show_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let Some(stored) = store.show(&id)? else {
-        return Err(OrbitError::InvalidInput(format!(
-            "friction record not found: {id}"
-        )));
+        return Err(OrbitError::not_found(NotFoundKind::Friction, id));
     };
     record_to_json(stored)
 }

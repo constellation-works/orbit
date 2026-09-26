@@ -546,3 +546,23 @@ fn rehome_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
             .expect("list product");
     assert_eq!(untouched.as_array().map(Vec::len), Some(1));
 }
+
+/// A missing record is a not-found error, as a missing task is — not a
+/// malformed request — so every surface reports it with its not-found code.
+#[test]
+fn show_of_a_missing_record_is_not_found() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.show",
+        json!({ "id": "F2099-01-001" }),
+    )
+    .expect_err("no such record");
+    assert!(
+        matches!(
+            &error,
+            OrbitError::NotFound { kind: orbit_common::NotFoundKind::Friction, id } if id == "F2099-01-001"
+        ),
+        "{error:?}"
+    );
+}

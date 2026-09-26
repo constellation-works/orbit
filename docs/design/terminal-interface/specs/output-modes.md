@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-09-24
+last_validated: 2026-09-26
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -64,7 +64,8 @@ Precedence, first match wins:
 
 - **stdout carries the payload and nothing else.** Progress, warnings, counts, empty-state prose, and diagnostics go to stderr, in every mode.
 - **Errors go to stderr.** In `json`/`ndjson` modes an error is a single JSON object on stderr using the existing `error_payload` shape (`error`, `code`, and the optional `did_you_mean` / `artifact_origin` / task-bundle fields); in other modes it is a plain message. Implemented in [ORB-10570]; the payload previously went to stdout, which is a **breaking change** for a script that parsed it there.
-- **Exit codes are load-bearing.** `0` success, `1` command failure, `2` usage error. A command that printed an error object must not exit `0`.
+- **Usage errors follow the same rule.** An argv clap rejects is reported before any matches exist, so the mode is resolved from argv lexically: the last `--format <mode>` / `--format=<mode>` whose value is a mode (rung 1), any `--json`/`--ops` token (rung 2), then `ORBIT_FORMAT` and the sink as usual; nothing after a bare `--` counts. In `json`/`ndjson` the error is `{"error": <clap's message>, "code": "usage_error"}` on stderr. A `--format` value that is not a mode — the invalid value being reported, or `audit export`'s own `--format csv` — is not a request, so it falls through to `ORBIT_FORMAT`. Help and version output, including the help clap prints in place of a missing subcommand, are never rewritten.
+- **Exit codes are load-bearing.** `0` success, `1` command failure (a missing record included — a missing task and a missing friction record are both `*_not_found`), `2` usage error. A command that printed an error object must not exit `0`.
 - **A broken pipe is not an error.** `EPIPE` on stdout exits `0` silently — `orbit task list | head` must not print a panic.
 
 ## 6. Progress

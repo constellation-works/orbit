@@ -37,6 +37,7 @@ mod command;
 mod output;
 mod parse;
 mod plugin_cli;
+mod usage_error;
 
 use clap::{Arg, ArgMatches, Command, CommandFactory, FromArgMatches};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
@@ -264,10 +265,13 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
     }
 }
 
-/// Parse argv into the derived CLI plus the two inputs to mode resolution.
-fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
-    let groups = plugin_cli_groups();
-    let root = plugin_cli::augment(command::Cli::command(), &groups);
+/// The command tree `orbit` parses argv against: the derived CLI, the given
+/// plugin groups, and the global `--format`.
+///
+/// `main` and the help goldens both build it here, so a golden pins the help
+/// the binary prints rather than the bare derive.
+fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Command {
+    let root = plugin_cli::augment(command::Cli::command(), groups);
     let root = if groups.is_empty() {
         root
     } else {
@@ -276,12 +280,22 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
         // `orbit --help` entirely.
         root.help_template(command::ROOT_HELP_TEMPLATE.replace(
             "\nOptions:",
-            &format!("{}\nOptions:", plugin_cli::help_section(&groups)),
+            &format!("{}\nOptions:", plugin_cli::help_section(groups)),
         ))
     };
-    let matches = install_format_arg(root)
-        .try_get_matches_from(std::env::args_os())
-        .unwrap_or_else(|err| repair_crew_flag_suggestion(err).exit());
+    install_format_arg(root)
+}
+
+/// Parse argv into the derived CLI plus the two inputs to mode resolution.
+fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
+    let groups = plugin_cli_groups();
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let matches = cli_command(&groups)
+        .try_get_matches_from(&args)
+        .unwrap_or_else(|err| {
+            let (requested, legacy) = usage_error::pre_parse_format(&args);
+            usage_error::exit(repair_crew_flag_suggestion(err), requested, legacy)
+        });
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);
     let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
@@ -293,7 +307,8 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
             workspace: matches.get_one::<String>("workspace").cloned(),
             command: command::Commands::PluginGroup(Box::new(invocation)),
         },
-        None => command::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit()),
+        None => command::Cli::from_arg_matches(&matches)
+            .unwrap_or_else(|err| usage_error::exit(err, requested, legacy)),
     };
     (cli, requested, legacy)
 }

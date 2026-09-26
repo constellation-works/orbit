@@ -3,15 +3,42 @@ Update triage metadata for a friction record
 Usage: orbit friction update [OPTIONS] <ID>
 
 Arguments:
-  <ID>  Friction record ID, e.g. FYYYY-MM-NNN
+  <ID>
+          Friction record ID, e.g. FYYYY-MM-NNN
 
 Options:
-      --root <ROOT>            Override the Orbit root directory (highest precedence)
-      --status <STATUS>        Optional status: open, triaged, or resolved
-      --tag <TAGS>             Optional replacement taxonomy tag; repeat or comma-separate for multiple tags
-      --workspace <SELECTOR>   Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
-      --body <BODY>            Optional replacement markdown body
-      --rehome-to <REHOME_TO>  Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it
-      --title <TITLE>          Optional replacement title, max 120 chars; empty restores derivation
-      --json                   Output as JSON
-  -h, --help                   Print help
+      --root <ROOT>
+          Override the Orbit root directory (highest precedence)
+
+      --status <STATUS>
+          Optional status: open, triaged, or resolved
+
+      --tag <TAGS>
+          Optional replacement taxonomy tag; repeat or comma-separate for multiple tags
+
+      --workspace <SELECTOR>
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+
+      --body <BODY>
+          Optional replacement markdown body
+
+      --rehome-to <REHOME_TO>
+          Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it
+
+      --title <TITLE>
+          Optional replacement title, max 120 chars; empty restores derivation
+
+      --json
+          Output as JSON
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')
