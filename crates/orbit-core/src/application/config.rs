@@ -105,6 +105,10 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
     let global_file = config_layer_file(&runtime.global_root())?;
     let workspace_file = config_layer_file(&runtime.shared_root())?;
     let workspace_file_exists = workspace_file.exists;
+    // A workspace file holding only `[plugin_enablement]` is not a policy
+    // layer, so the security exception is not in force for it either.
+    let execution_not_inherited = runtime.shared_root() != runtime.global_root()
+        && orbit_config::workspace_config_sets_policy(&workspace_file.path);
 
     let sections = effective_sections(values);
     Ok(json!({
@@ -114,9 +118,9 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
             "global": global_file.json(),
             "workspace": workspace_file.json(),
             // The security exception is only in force once a workspace file
-            // exists; before that, global values still apply and warning about
-            // them would be wrong.
-            "execution_not_inherited": workspace_file_exists,
+            // sets policy; before that, global values still apply and warning
+            // about them would be wrong.
+            "execution_not_inherited": execution_not_inherited,
             "not_inherited_keys": not_inherited_keys(values),
         },
         "workspace_binding": workspace_binding_json(runtime, values),

@@ -273,6 +273,7 @@ pub(super) fn unset_secret_rows(
             Ok(unset) => unset,
             Err(error) => {
                 rows.push(PluginDoctorResult {
+                    intentional: false,
                     plugin: installed.name.clone(),
                     status: PluginStatus::Inactive,
                     message: format!(
@@ -289,6 +290,7 @@ pub(super) fn unset_secret_rows(
             .unwrap_or(PluginStatus::Disabled);
         for name in unset {
             rows.push(PluginDoctorResult {
+                intentional: false,
                 plugin: installed.name.clone(),
                 status: plugin_status,
                 message: format!(

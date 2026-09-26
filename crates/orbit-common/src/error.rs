@@ -174,6 +174,23 @@ pub enum OrbitError {
     ToolNotOnThisHost(String),
     #[error("destination capability refused: {0}")]
     CapabilityRefused(String),
+    /// A plugin tool or `orbit <ns>` verb was refused because the plugin is
+    /// switched off in the workspace the call resolved to, although the host
+    /// still has it enabled. The tool never ran; `workspace` names the
+    /// workspace for a human reader.
+    #[error(
+        "plugin '{plugin}' is disabled in workspace '{workspace}'; turn it back on from that \
+         workspace with `orbit plugin enable {plugin} --scope workspace`"
+    )]
+    PluginDisabledInWorkspace { plugin: String, workspace: String },
+    /// A workspace toggle tried to switch on a plugin the host has disabled.
+    /// A toggle can only narrow host state and never grants permissions, so
+    /// the host enable (the consent step) has to come first.
+    #[error(
+        "plugin '{plugin}' is disabled on this host, and a workspace toggle cannot switch it on; \
+         enable it on the host first with `orbit plugin enable {plugin} --grant …`"
+    )]
+    PluginDisabledOnHost { plugin: String },
     #[error("Invalid ADR status transition: {0}")]
     AdrInvalidTransition(String),
     #[error("{kind} artifact unavailable for {id}")]

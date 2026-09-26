@@ -1,5 +1,47 @@
+use clap::ValueEnum;
 use orbit_core::adapter::command::{PluginSeedOutcome, PluginSkillLink, PluginSummary};
+use orbit_types::plugin::{PluginDisabledLayer, PluginStatus};
 use serde_json::{Value, json};
+
+/// Which enable state `orbit plugin enable|disable` writes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum PluginScope {
+    /// The host row every workspace on this machine inherits.
+    #[default]
+    Host,
+    /// Only the selected workspace's toggle; the host row is untouched.
+    Workspace,
+}
+
+/// Why a plugin is not active in the selected workspace, in the words
+/// `list` and `show` print. `None` for an active plugin.
+pub(super) fn state_reason(summary: &PluginSummary) -> Option<String> {
+    match summary.status {
+        PluginStatus::Active => None,
+        PluginStatus::Disabled => Some(match summary.disabled_by {
+            Some(PluginDisabledLayer::Workspace) => "disabled in this workspace".to_string(),
+            _ => "disabled on host".to_string(),
+        }),
+        PluginStatus::Missing | PluginStatus::Inactive => Some(
+            summary
+                .diagnostic
+                .clone()
+                .unwrap_or_else(|| match summary.status {
+                    PluginStatus::Missing => "not installed on this host".to_string(),
+                    _ => "refused at load".to_string(),
+                }),
+        ),
+    }
+}
+
+/// The host row's state as `list` and `show` print it.
+pub(super) fn host_state(summary: &PluginSummary) -> &'static str {
+    match (summary.status, summary.host_enabled) {
+        (PluginStatus::Missing, _) => "-",
+        (_, true) => "enabled",
+        (_, false) => "disabled",
+    }
+}
 
 /// JSON projection shared by `list` and `show`.
 pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
@@ -14,6 +56,9 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
         "description": summary.description,
         "first_party": summary.first_party,
         "pinned": summary.pinned,
+        "host_enabled": summary.host_enabled,
+        "workspace_toggle": summary.workspace_toggle,
+        "disabled_by": summary.disabled_by.map(PluginDisabledLayer::as_str),
         "permissions": summary
             .permissions
             .iter()

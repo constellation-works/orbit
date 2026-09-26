@@ -57,7 +57,8 @@ impl AutoTaskDispatch for OrbitRuntime {
 impl OrbitRuntime {
     /// Why an auto-task definition is skipped this pass, when it is.
     ///
-    /// A definition a plugin seeded fires only while that plugin is enabled:
+    /// A definition a plugin seeded fires only while that plugin is enabled,
+    /// on the host and in this workspace:
     /// its template belongs to the plugin, and firing it after a disable would
     /// mint chores nothing on this host can carry out (design §4.5). The file
     /// is left exactly where it is, edits and all.
@@ -69,6 +70,14 @@ impl OrbitRuntime {
         let (namespace, version) = crate::application::plugin::read_definition_provenance(&path)?;
         if self.plugin_load().is_active(&namespace) {
             return None;
+        }
+        if self.plugin_load().is_disabled_in_workspace(&namespace) {
+            return Some(format!(
+                "seeded by plugin:{namespace}@{version}, which is switched off in this \
+                 workspace; run `orbit plugin enable {namespace} --scope workspace` to fire it \
+                 again, or delete '{}'",
+                path.display()
+            ));
         }
         Some(format!(
             "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \

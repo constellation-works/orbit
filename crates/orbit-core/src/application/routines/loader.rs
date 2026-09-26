@@ -41,49 +41,91 @@ pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineColl
             orbit_dir: runtime.shared_root(),
         })
         .collect::<Vec<_>>();
-    let active_plugins = active_plugin_namespaces(workspaces);
+    let plugin_states = workspace_plugin_states(workspaces);
     let mut collection =
         collect_from_sources(&sources, &job_names_by_root, &move |path, _definition| {
-            inactive_plugin_skip(path, &active_plugins)
+            inactive_plugin_skip(path, &plugin_states)
         });
     narrow_retired_advice(&sources, &mut collection);
     collection
 }
 
-/// Every plugin namespace active on any discovered workspace's runtime.
-///
-/// Plugin installs are host-local, so one workspace's view is the host's, but
-/// discovery may open several and a plugin enabled for any of them is active
-/// for the host.
-fn active_plugin_namespaces(workspaces: &[(Workspace, OrbitRuntime)]) -> BTreeSet<String> {
+/// One discovered workspace's plugin surface, keyed by its routines
+/// directory so a seeded file is judged by the workspace it lives in.
+struct WorkspacePluginState {
+    workspace: String,
+    routines_dir: PathBuf,
+    active: BTreeSet<String>,
+    /// Host-enabled plugins this workspace's toggle switched off.
+    switched_off: BTreeSet<String>,
+}
+
+/// Plugin installs are host-local, but each workspace narrows them with its
+/// own `[plugin_enablement]` toggles, so the active set is per workspace.
+fn workspace_plugin_states(workspaces: &[(Workspace, OrbitRuntime)]) -> Vec<WorkspacePluginState> {
     workspaces
         .iter()
-        .flat_map(|(_, runtime)| {
-            runtime
-                .plugin_load()
-                .active()
-                .map(|plugin| plugin.namespace().to_string())
-                .collect::<Vec<_>>()
+        .map(|(workspace, runtime)| {
+            let load = runtime.plugin_load();
+            WorkspacePluginState {
+                workspace: workspace.name.clone(),
+                routines_dir: runtime.shared_root().join(ROUTINES_DIR),
+                active: load
+                    .active()
+                    .map(|plugin| plugin.namespace().to_string())
+                    .collect(),
+                switched_off: load
+                    .registered
+                    .iter()
+                    .filter(|entry| load.is_disabled_in_workspace(&entry.name))
+                    .map(|entry| entry.name.clone())
+                    .collect(),
+            }
         })
         .collect()
 }
 
-/// Skip a definition a plugin seeded while that plugin is disabled or removed.
+/// Skip a definition a plugin seeded while that plugin is disabled, removed,
+/// or switched off in the workspace the definition lives in.
 ///
 /// The seeded file stays on disk with the operator's edits; it simply does not
 /// fire, and the reason names the plugin (design §4.5). This is deliberately
 /// not a load error: a disabled plugin is an ordinary operator state, not a
 /// broken workspace.
-fn inactive_plugin_skip(path: &Path, active: &BTreeSet<String>) -> Option<String> {
+fn inactive_plugin_skip(path: &Path, states: &[WorkspacePluginState]) -> Option<String> {
     let (namespace, version) = crate::application::plugin::read_definition_provenance(path)?;
-    if active.contains(&namespace) {
+    let Some(state) = states
+        .iter()
+        .find(|state| path.starts_with(&state.routines_dir))
+    else {
+        // Every collected routine comes from one of the discovered sources;
+        // a path outside them all is judged by the host-wide view.
+        if states.iter().any(|state| state.active.contains(&namespace)) {
+            return None;
+        }
+        return Some(not_enabled_on_host(&namespace, &version, path));
+    };
+    if state.active.contains(&namespace) {
         return None;
     }
-    Some(format!(
+    if state.switched_off.contains(&namespace) {
+        return Some(format!(
+            "seeded by plugin:{namespace}@{version}, which is switched off in workspace '{}'; \
+             run `orbit plugin enable {namespace} --scope workspace` there to fire it again, or \
+             delete '{}'",
+            state.workspace,
+            path.display()
+        ));
+    }
+    Some(not_enabled_on_host(&namespace, &version, path))
+}
+
+fn not_enabled_on_host(namespace: &str, version: &str, path: &Path) -> String {
+    format!(
         "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
          `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
         path.display()
-    ))
+    )
 }
 
 /// Discovery states the synchronization step for every retired definition

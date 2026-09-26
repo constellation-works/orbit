@@ -188,6 +188,64 @@ fn an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not()
     );
 }
 
+/// Add a `mcp_scope: global` tool beside the fixture's workspace-scoped one.
+fn add_global_tool(source: &Path) {
+    let manifest = source.join("plugin.yaml");
+    let mut body = std::fs::read_to_string(&manifest).expect("read plugin manifest");
+    body.push_str(
+        "    - name: ping\n      description: Answer from the host.\n      \
+         execution_kind: read_only\n      mcp_scope: global\n      input_schema:\n        \
+         type: object\n",
+    );
+    std::fs::write(&manifest, body).expect("write plugin manifest");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host() {
+    let workspace = McpWorkspace::init();
+    let source = write_plugin(&workspace.home, "toggled");
+    add_global_tool(&source);
+    let source = source.to_str().expect("utf8 plugin source");
+    run_orbit(&workspace, &["plugin", "add", source, "--enable"]);
+
+    // One server for the whole test: every change below must show without a
+    // restart, through the cached workspace runtime and tools/list cache.
+    let mut client = workspace.serve();
+    let names = advertised_tool_names(&mut client);
+    assert!(names.iter().any(|name| name == "toggled_echo"), "{names:?}");
+    assert!(names.iter().any(|name| name == "toggled_ping"), "{names:?}");
+    client.call_tool_ok("toggled_echo", json!({}));
+
+    run_orbit(
+        &workspace,
+        &["plugin", "disable", "toggled", "--scope", "workspace"],
+    );
+    let names = advertised_tool_names(&mut client);
+    assert!(
+        !names.iter().any(|name| name == "toggled_echo"),
+        "the bound workspace switched the plugin off: {names:?}"
+    );
+    let refused = client.call_tool_err("toggled_echo", json!({}));
+    assert_eq!(refused["code"], "plugin_disabled_in_workspace", "{refused}");
+    // A global-scope tool has no workspace to be switched off in.
+    assert!(names.iter().any(|name| name == "toggled_ping"), "{names:?}");
+    client.call_tool_ok("toggled_ping", json!({}));
+
+    run_orbit(
+        &workspace,
+        &["plugin", "enable", "toggled", "--scope", "workspace"],
+    );
+    let names = advertised_tool_names(&mut client);
+    assert!(names.iter().any(|name| name == "toggled_echo"), "{names:?}");
+    client.call_tool_ok("toggled_echo", json!({}));
+
+    // A host disable reaches the same live session: both scopes refuse.
+    run_orbit(&workspace, &["plugin", "disable", "toggled"]);
+    client.call_tool_err("toggled_echo", json!({}));
+    client.call_tool_err("toggled_ping", json!({}));
+}
+
 /// `(plugin_name, plugin_version, plugin_manifest_digest)` per audit row.
 fn audit_rows_for_tool(
     workspace: &McpWorkspace,

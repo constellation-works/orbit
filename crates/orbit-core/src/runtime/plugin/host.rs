@@ -22,7 +22,8 @@ use orbit_tools::plugin::{
     validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, PluginMcpScope, PluginProvenance, PluginStatus, parse_stored_grants,
+    InstalledPlugin, PluginDisabledLayer, PluginMcpScope, PluginProvenance, PluginStatus,
+    parse_stored_grants,
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::McpToolScope;
@@ -93,6 +94,11 @@ pub struct RegisteredPlugin {
     /// manifest's `{{config.<key>}}` templates see it. Retained so a dashboard
     /// link tile renders the same value the plugin itself runs with (§4.7).
     pub config_values: BTreeMap<String, String>,
+    /// For a [`PluginStatus::Disabled`] plugin, the layer that switched it
+    /// off. A workspace-disabled plugin keeps its manifest in `loaded` and
+    /// its canonical names in `tools`, so the surfaces can say what is off
+    /// and why, but none of those tools is registered.
+    pub disabled_by: Option<PluginDisabledLayer>,
 }
 
 /// Outcome of a host plugin load pass.
@@ -102,6 +108,9 @@ pub struct PluginHostLoad {
     /// this snapshot to notice a later lifecycle write and rebuild the tool
     /// surface before serving another plugin request.
     pub(crate) installed: Vec<InstalledPlugin>,
+    /// The workspace `[plugin_enablement]` toggles this pass applied, kept
+    /// beside `installed` so a toggle change also triggers a rebuild.
+    pub(crate) workspace_toggles: BTreeMap<String, bool>,
     pub registered: Vec<RegisteredPlugin>,
     pub diagnostics: Vec<PluginDiagnostic>,
 }
@@ -118,6 +127,25 @@ impl PluginHostLoad {
     /// Whether a plugin of this namespace is active on the host.
     pub fn is_active(&self, namespace: &str) -> bool {
         self.active().any(|plugin| plugin.namespace() == namespace)
+    }
+
+    /// Whether this workspace's toggle switched off a plugin the host has
+    /// enabled.
+    pub fn is_disabled_in_workspace(&self, namespace: &str) -> bool {
+        self.workspace_disabled()
+            .any(|entry| entry.name == namespace)
+    }
+
+    /// The workspace-disabled plugin that owns a canonical tool name.
+    pub fn workspace_disabled_owner(&self, tool: &str) -> Option<&RegisteredPlugin> {
+        self.workspace_disabled()
+            .find(|entry| entry.tools.iter().any(|name| name == tool))
+    }
+
+    fn workspace_disabled(&self) -> impl Iterator<Item = &RegisteredPlugin> {
+        self.registered
+            .iter()
+            .filter(|entry| entry.disabled_by == Some(PluginDisabledLayer::Workspace))
     }
 }
 
@@ -184,7 +212,37 @@ pub fn load_host_plugins(
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
 ) -> PluginHostLoad {
-    load_host_plugins_with_audit(global_root, orbit_dir, store, registry, plugin_config, true)
+    load_workspace_plugins(
+        global_root,
+        orbit_dir,
+        store,
+        registry,
+        plugin_config,
+        &BTreeMap::new(),
+    )
+}
+
+/// [`load_host_plugins`] narrowed by one workspace's `[plugin_enablement]`
+/// toggles: a host-enabled plugin toggled `false` registers no tools and
+/// contributes nothing, and reports [`PluginDisabledLayer::Workspace`]. A
+/// toggle never enables a plugin the host has not.
+pub fn load_workspace_plugins(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+    workspace_toggles: &BTreeMap<String, bool>,
+) -> PluginHostLoad {
+    load_host_plugins_with_audit(
+        global_root,
+        orbit_dir,
+        store,
+        registry,
+        plugin_config,
+        workspace_toggles,
+        true,
+    )
 }
 
 /// Load plugins while deliberately avoiding refusal-audit writes.
@@ -207,6 +265,7 @@ pub(super) fn load_host_plugins_without_refusal_audit(
         store,
         registry,
         plugin_config,
+        &BTreeMap::new(),
         false,
     )
 }
@@ -217,6 +276,7 @@ fn load_host_plugins_with_audit(
     store: &Store,
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
+    workspace_toggles: &BTreeMap<String, bool>,
     audit_refusals: bool,
 ) -> PluginHostLoad {
     let installed = match store.list_plugins() {
@@ -224,6 +284,7 @@ fn load_host_plugins_with_audit(
         Err(error) => {
             return PluginHostLoad {
                 installed: Vec::new(),
+                workspace_toggles: workspace_toggles.clone(),
                 registered: Vec::new(),
                 diagnostics: vec![PluginDiagnostic {
                     plugin: String::new(),
@@ -236,6 +297,7 @@ fn load_host_plugins_with_audit(
 
     let mut load = PluginHostLoad {
         installed: installed.clone(),
+        workspace_toggles: workspace_toggles.clone(),
         ..PluginHostLoad::default()
     };
     let mut active_definition_owners = ActiveDefinitionOwners::default();
@@ -272,7 +334,14 @@ fn load_host_plugins_with_audit(
                 grants_authorized: false,
                 loaded: None,
                 config_values: BTreeMap::new(),
+                disabled_by: None,
             });
+            continue;
+        }
+        // The workspace toggle only narrows: it is consulted after the row is
+        // verified, and only for a row the host has enabled.
+        if plugin.enabled && workspace_toggles.get(&plugin.name) == Some(&false) {
+            load.registered.push(workspace_disabled_plugin(plugin));
             continue;
         }
         let registered = register_installed_plugin(
@@ -440,6 +509,7 @@ fn register_installed_plugin(
             grants_authorized: true,
             loaded,
             config_values: BTreeMap::new(),
+            disabled_by: None,
         }
     };
 
@@ -453,6 +523,7 @@ fn register_installed_plugin(
             grants_authorized: true,
             loaded: None,
             config_values: BTreeMap::new(),
+            disabled_by: Some(PluginDisabledLayer::Host),
         };
     }
 
@@ -540,6 +611,36 @@ fn register_installed_plugin(
         grants_authorized: true,
         config_values: backend.spec().config_values(),
         loaded: Some(plugin),
+        disabled_by: None,
+    }
+}
+
+/// A host-enabled plugin this workspace switched off. Nothing is registered;
+/// the manifest is read only so the surfaces can name the tools that are off.
+/// A manifest that no longer loads is reported by the workspaces that use the
+/// plugin, not here, so it is simply omitted.
+fn workspace_disabled_plugin(installed: &InstalledPlugin) -> RegisteredPlugin {
+    let loaded = load_installed_plugin(installed).ok();
+    let tools = loaded
+        .as_ref()
+        .map(|plugin| {
+            plugin
+                .tools
+                .iter()
+                .map(|tool| registered_plugin_tool_name(plugin, &tool.verb))
+                .collect()
+        })
+        .unwrap_or_default();
+    RegisteredPlugin {
+        name: installed.name.clone(),
+        version: installed.version.clone(),
+        status: PluginStatus::Disabled,
+        tools,
+        diagnostic: None,
+        grants_authorized: true,
+        loaded,
+        config_values: BTreeMap::new(),
+        disabled_by: Some(PluginDisabledLayer::Workspace),
     }
 }
 
@@ -638,6 +739,7 @@ fn register_inactive_tools(
         grants_authorized: true,
         loaded: None,
         config_values: BTreeMap::new(),
+        disabled_by: None,
     }
 }
 

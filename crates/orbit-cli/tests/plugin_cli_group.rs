@@ -611,6 +611,121 @@ fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
         .stderr(predicate::str::contains("plugin(s) need attention"));
 }
 
+/// `--scope workspace` switches the plugin off here only: list/show/doctor
+/// report the host state beside the effective one, doctor treats it as a
+/// choice rather than a finding, and the derived group refuses with the
+/// typed code instead of "unknown command".
+#[cfg(unix)]
+#[test]
+fn a_workspace_disable_is_reported_beside_the_host_state_and_refuses_the_derived_group() {
+    let fixture = Fixture::new();
+    let source = fixture.source("switch");
+    write_status_plugin(&source, "switch", "");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "add",
+            source.to_str().expect("utf8 source"),
+            "--enable",
+        ])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "disable", "switch", "--scope", "workspace"])
+        .assert()
+        .success();
+
+    let listed = stdout_json(
+        &fixture
+            .orbit()
+            .args(["plugin", "list", "--format", "json"])
+            .output()
+            .expect("run plugin list"),
+    );
+    let shown = stdout_json(
+        &fixture
+            .orbit()
+            .args(["plugin", "show", "switch", "--format", "json"])
+            .output()
+            .expect("run plugin show"),
+    );
+    let row = listed
+        .as_array()
+        .expect("plugin rows")
+        .iter()
+        .find(|row| row["name"] == "switch")
+        .expect("the plugin's row")
+        .clone();
+    for record in [&row, &shown] {
+        assert_eq!(record["status"], "disabled", "{record}");
+        assert_eq!(record["host_enabled"], true, "{record}");
+        assert_eq!(record["workspace_toggle"], false, "{record}");
+        assert_eq!(record["disabled_by"], "workspace", "{record}");
+    }
+
+    let doctor = fixture
+        .orbit()
+        .args(["plugin", "doctor", "--format", "json"])
+        .output()
+        .expect("run plugin doctor");
+    assert!(
+        doctor.status.success(),
+        "a switched-off plugin is not a finding: {doctor:?}"
+    );
+    let doctor = stdout_json(&doctor);
+    let finding = doctor
+        .as_array()
+        .expect("doctor rows")
+        .iter()
+        .find(|row| row["plugin"] == "switch")
+        .expect("a doctor row for the plugin");
+    assert_eq!(finding["intentional"], true, "{finding}");
+
+    let refused = fixture
+        .orbit_as_operator()
+        .args(["--format", "json", "switch", "status"])
+        .output()
+        .expect("run the derived group");
+    assert!(!refused.status.success(), "{refused:?}");
+    let error: Value = serde_json::from_slice(&refused.stderr).unwrap_or_else(|parse_error| {
+        panic!(
+            "JSON error on stderr ({parse_error}): {}",
+            String::from_utf8_lossy(&refused.stderr)
+        )
+    });
+    assert_eq!(error["code"], "plugin_disabled_in_workspace", "{error}");
+
+    // A host disable leaves nothing for a workspace enable to widen.
+    fixture
+        .orbit()
+        .args(["plugin", "disable", "switch"])
+        .assert()
+        .success();
+    let refused = fixture
+        .orbit()
+        .args([
+            "--format",
+            "json",
+            "plugin",
+            "enable",
+            "switch",
+            "--scope",
+            "workspace",
+        ])
+        .output()
+        .expect("run plugin enable");
+    assert!(!refused.status.success(), "{refused:?}");
+    let error: Value = serde_json::from_slice(&refused.stderr).unwrap_or_else(|parse_error| {
+        panic!(
+            "JSON error on stderr ({parse_error}): {}",
+            String::from_utf8_lossy(&refused.stderr)
+        )
+    });
+    assert_eq!(error["code"], "plugin_disabled_on_host", "{error}");
+}
+
 #[test]
 fn plugin_inspection_from_unregistered_cwd_creates_no_files() {
     let fixture = Fixture::new();

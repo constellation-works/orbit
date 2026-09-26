@@ -148,6 +148,15 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
         OrbitError::ToolNotOnThisHost(m) => {
             OrbitError::ToolNotOnThisHost(redact_sensitive_env_text(&m))
         }
+        OrbitError::PluginDisabledInWorkspace { plugin, workspace } => {
+            OrbitError::PluginDisabledInWorkspace {
+                plugin: redact_sensitive_env_text(&plugin),
+                workspace: redact_sensitive_env_text(&workspace),
+            }
+        }
+        OrbitError::PluginDisabledOnHost { plugin } => OrbitError::PluginDisabledOnHost {
+            plugin: redact_sensitive_env_text(&plugin),
+        },
         OrbitError::CapabilityRefused(m) => {
             OrbitError::CapabilityRefused(redact_sensitive_env_text(&m))
         }
@@ -326,6 +335,15 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
         OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact_all(&m)),
         OrbitError::UnhealthyCheckout(m) => OrbitError::UnhealthyCheckout(redact_all(&m)),
         OrbitError::ToolNotOnThisHost(m) => OrbitError::ToolNotOnThisHost(redact_all(&m)),
+        OrbitError::PluginDisabledInWorkspace { plugin, workspace } => {
+            OrbitError::PluginDisabledInWorkspace {
+                plugin: redact_all(&plugin),
+                workspace: redact_all(&workspace),
+            }
+        }
+        OrbitError::PluginDisabledOnHost { plugin } => OrbitError::PluginDisabledOnHost {
+            plugin: redact_all(&plugin),
+        },
         OrbitError::CapabilityRefused(m) => OrbitError::CapabilityRefused(redact_all(&m)),
         OrbitError::AdrInvalidTransition(m) => OrbitError::AdrInvalidTransition(redact_all(&m)),
         OrbitError::RemoteArtifactUnavailable {

@@ -131,6 +131,26 @@ impl OrbitToolServer {
         }
     }
 
+    /// Drop the tools the host hides for this session. Applied after the
+    /// response cache, which holds the full surface, so a toggle flipped
+    /// mid-session shows on the next `tools/list`.
+    fn without_hidden_tools(
+        &self,
+        mut result: ListToolsResult,
+    ) -> Result<ListToolsResult, McpError> {
+        let hidden = self.host.hidden_tool_names(&self.session_context());
+        if hidden.is_empty() {
+            return Ok(result);
+        }
+        let name_map = self.name_map()?;
+        result.tools.retain(|tool| {
+            name_map
+                .get(tool.name.as_ref())
+                .is_none_or(|canonical| !hidden.contains(canonical))
+        });
+        Ok(result)
+    }
+
     fn session_workspace_binding(&self) -> WorkspaceBinding {
         if self.session_context().workspace.is_some() {
             WorkspaceBinding::Bound
@@ -327,7 +347,7 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(cache) = self.list_tools_cache.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
-            return Ok((**cached).clone());
+            return self.without_hidden_tools((**cached).clone());
         }
 
         // Build and validate the map on the same first pass as the list. This
@@ -353,7 +373,7 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(mut cache) = self.list_tools_cache.lock() {
             cache.insert(cache_key, Arc::new(result.clone()));
         }
-        Ok(result)
+        self.without_hidden_tools(result)
     }
 
     async fn call_tool(

@@ -13,9 +13,9 @@ use orbit_tools::plugin::{
     refuse_covering_fs_write_roots, resolve_declared_programs, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginGrantSet, PluginProvenance,
-    PluginSandbox, PluginStatus, SemverRange, Version, parse_archive_digest, parse_stored_grants,
-    plugin_tool_name, remote_archive_source,
+    InstalledPlugin, PluginDisabledLayer, PluginExecutionKind, PluginGrant, PluginGrantSet,
+    PluginProvenance, PluginSandbox, PluginStatus, SemverRange, Version, parse_archive_digest,
+    parse_stored_grants, plugin_tool_name, remote_archive_source,
 };
 
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
@@ -93,6 +93,15 @@ pub struct PluginSummary {
     pub diagnostic: Option<String>,
     /// Whether `.orbit/plugins.yaml` pins this plugin.
     pub pinned: bool,
+    /// The host row's enable state (`orbit plugin enable|disable`). False
+    /// for a plugin this host has not installed.
+    pub host_enabled: bool,
+    /// This workspace's `[plugin_enablement]` toggle, when it sets one. An
+    /// absent toggle inherits the host state.
+    pub workspace_toggle: Option<bool>,
+    /// For a [`PluginStatus::Disabled`] plugin, the layer that switched it
+    /// off — the reason the effective state is what it is.
+    pub disabled_by: Option<PluginDisabledLayer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +110,10 @@ pub struct PluginDoctorResult {
     pub status: PluginStatus,
     /// The step an operator has to take, or empty when there is none.
     pub message: String,
+    /// The row reports an operator's deliberate choice — a plugin switched
+    /// off in this workspace — not a problem. It carries a message so the
+    /// state stays visible, but is not a finding.
+    pub intentional: bool,
 }
 
 /// What `orbit plugin validate <dir>` found.
@@ -180,6 +193,9 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
             certified_orbit_version: None,
             diagnostic: runtime_diagnostic(runtime, &name),
             pinned: true,
+            host_enabled: false,
+            workspace_toggle: runtime.plugin_load().workspace_toggles.get(&name).copied(),
+            disabled_by: None,
         });
     }
     summaries.sort_by(|left, right| left.name.cmp(&right.name));
@@ -204,6 +220,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let invalid_pin_file = read_pin_file(&runtime.paths().local_dir)
         .err()
         .map(|error| PluginDoctorResult {
+            intentional: false,
             plugin: "pin file".to_string(),
             status: PluginStatus::Inactive,
             message: error.to_string(),
@@ -227,6 +244,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
             Path::new(&summary.install_path),
         ) {
             dangling.push(PluginDoctorResult {
+                intentional: false,
                 plugin: summary.name.clone(),
                 status: summary.status,
                 message: format!(
@@ -253,6 +271,16 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
                     summary.name
                 ),
                     PluginStatus::Active => String::new(),
+                    PluginStatus::Disabled
+                        if summary.disabled_by == Some(PluginDisabledLayer::Workspace) =>
+                    {
+                        format!(
+                            "plugin '{}' is enabled on this host but switched off in this \
+                             workspace; run `orbit plugin enable {} --scope workspace` to turn \
+                             it back on here",
+                            summary.name, summary.name
+                        )
+                    }
                     PluginStatus::Disabled => format!(
                         "plugin '{}' is installed but disabled; run `orbit plugin enable {}`",
                         summary.name, summary.name
@@ -268,6 +296,8 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
                 ),
                 });
             PluginDoctorResult {
+                intentional: summary.status == PluginStatus::Disabled
+                    && summary.disabled_by == Some(PluginDisabledLayer::Workspace),
                 plugin: summary.name,
                 status: summary.status,
                 message,
@@ -301,6 +331,7 @@ fn ungranted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult
             summary.programs.iter().filter_map(|program| {
                 let problem = program.problem.as_deref()?;
                 Some(PluginDoctorResult {
+                    intentional: false,
                     plugin: summary.name.clone(),
                     status: summary.status,
                     message: format!(
@@ -327,6 +358,7 @@ fn host_api_deprecation_rows(runtime: &OrbitRuntime) -> Vec<PluginDoctorResult> 
             let plugin = entry.loaded.as_deref()?;
             let message = host_api_deprecation(plugin)?;
             Some(PluginDoctorResult {
+                intentional: false,
                 plugin: entry.name.clone(),
                 status: entry.status,
                 message,
@@ -372,6 +404,7 @@ fn scoped_out_fs_root_rows(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorRes
         let backend = plugin_backend(&runtime.global_root(), &installed, plugin, &config.plugins);
         for root in backend.spec().dropped_fs_roots(Some(&workspace_root)) {
             rows.push(PluginDoctorResult {
+                intentional: false,
                 plugin: entry.name.clone(),
                 status: entry.status,
                 message: format!(
@@ -441,6 +474,7 @@ fn archive_digest_drift_rows(
             ),
         };
         rows.push(PluginDoctorResult {
+            intentional: false,
             plugin: name.clone(),
             status: status_of
                 .get(name.as_str())
@@ -519,6 +553,7 @@ fn stale_seeded_definition_rows(
                 .collect::<Vec<_>>()
                 .join(", ");
             Some(PluginDoctorResult {
+                intentional: false,
                 plugin: name.to_string(),
                 status: summary.status,
                 message: format!(
@@ -799,6 +834,14 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
         .and_then(|entry| entry.loaded.as_deref())
         .or(disabled.as_deref());
     let mut summary = summary_for_installed(installed, loaded, status, &runtime.global_root());
+    summary.workspace_toggle = runtime
+        .plugin_load()
+        .workspace_toggles
+        .get(&installed.name)
+        .copied();
+    if let Some(entry) = registered.filter(|entry| entry.status == PluginStatus::Disabled) {
+        summary.disabled_by = entry.disabled_by;
+    }
     // Panels and links are the *active* surface, so they are projected from
     // the load pass that built it — including the effective `[plugins.<ns>]`
     // values a link template reads — rather than from the manifest alone.
@@ -913,6 +956,10 @@ pub(super) fn summary_for_installed(
         certified_orbit_version: installed.certified_orbit_version.clone(),
         diagnostic: None,
         pinned: false,
+        host_enabled: installed.enabled,
+        workspace_toggle: None,
+        disabled_by: (status == PluginStatus::Disabled && !installed.enabled)
+            .then_some(PluginDisabledLayer::Host),
     }
 }
 

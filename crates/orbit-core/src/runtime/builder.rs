@@ -184,20 +184,44 @@ pub(crate) fn build_context_from_roots(
     load_external_tools(&store, &mut registry)?;
     // Plugins register after the builtins so a namespace collision is caught
     // against the real surface, and each plugin fails closed on its own.
-    let plugin_load = crate::runtime::plugin::host::load_host_plugins(
+    // The workspace `[plugin_enablement]` toggles narrow the host state for
+    // this runtime only; every surface below reads the narrowed load.
+    let plugin_load = crate::runtime::plugin::host::load_workspace_plugins(
         global_root,
         &paths.orbit_dir,
         &store,
         &mut registry,
         &runtime_config.plugins,
+        &runtime_config.plugin_enablement,
     );
+    for namespace in runtime_config.plugin_enablement.keys() {
+        if !plugin_load
+            .registered
+            .iter()
+            .any(|entry| &entry.name == namespace)
+        {
+            tracing::warn!(
+                target: "orbit.core.plugin",
+                plugin = %namespace,
+                "[plugin_enablement] names plugin '{namespace}', which is not installed on this \
+                 host; the toggle is ignored"
+            );
+        }
+    }
     // Config admission needs the installed plugins' schemas to tell a declared
     // `plugins.<ns>.<key>` from a typo, and a `[plugins.<ns>]` section with no
-    // plugin behind it is a warning, never a failed build (§3).
+    // plugin behind it is a warning, never a failed build (§3). A plugin
+    // switched off in this workspace still owns its section.
     crate::runtime::plugin::config::publish_plugin_config_contracts(
         &plugin_load
-            .active()
-            .map(std::sync::Arc::as_ref)
+            .registered
+            .iter()
+            .filter(|entry| {
+                entry.status == orbit_types::plugin::PluginStatus::Active
+                    || entry.disabled_by
+                        == Some(orbit_types::plugin::PluginDisabledLayer::Workspace)
+            })
+            .filter_map(|entry| entry.loaded.as_deref())
             .collect::<Vec<_>>(),
         &runtime_config.plugins,
     );

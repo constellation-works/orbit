@@ -479,6 +479,13 @@ where
             1,
             Some(redact_sensitive_env_text(msg)),
         ),
+        // A plugin switched off in this workspace is an operator decision,
+        // refused before the tool ran, not a failed call.
+        Err(err @ OrbitError::PluginDisabledInWorkspace { .. }) => (
+            AuditEventStatus::Denied,
+            1,
+            Some(redact_sensitive_env_text(&err.to_string())),
+        ),
         Err(
             err @ OrbitError::NotFound {
                 kind: NotFoundKind::Tool,

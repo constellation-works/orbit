@@ -45,10 +45,11 @@ pub use install::{
     PluginAddOptions, PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult,
     install_plugin, upgrade_plugin,
 };
+pub(crate) use lifecycle::workspace_plugin_toggles;
 pub use lifecycle::{
     PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginRemoveOptions,
-    PluginSyncOutcome, disable_plugin, enable_plugin, migrate_plugin_sidecars, remove_plugin,
-    sync_plugins,
+    PluginSyncOutcome, disable_plugin, disable_plugin_in_workspace, enable_plugin,
+    enable_plugin_in_workspace, migrate_plugin_sidecars, remove_plugin, sync_plugins,
 };
 pub use panels::{
     PluginLinkSummary, PluginPanelSummary, plugin_panel_refresh_ms, read_plugin_panel,

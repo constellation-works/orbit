@@ -6,13 +6,14 @@ use std::path::{Path, PathBuf};
 use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
+use orbit_config::{ConfigScope, ConfigStore};
 use orbit_tools::plugin::{
     LoadedPlugin, load_plugin_dir, load_sidecar_manifest, migrate_sidecars,
     resolve_declared_programs,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, MANIFEST_FILE_NAME, PluginGrantEntry, PluginGrantSet, PluginStatus,
-    is_valid_namespace, parse_grants, parse_stored_grants, resolve_grant_selection,
+    InstalledPlugin, MANIFEST_FILE_NAME, PluginDisabledLayer, PluginGrantEntry, PluginGrantSet,
+    PluginStatus, is_valid_namespace, parse_grants, parse_stored_grants, resolve_grant_selection,
 };
 use orbit_types::record::OrbitEvent;
 
@@ -223,6 +224,120 @@ pub struct PluginEnableResult {
     pub warnings: Vec<String>,
 }
 
+/// Switch a host-enabled plugin back on in this workspace only: write its
+/// `[plugin_enablement]` toggle and seed this workspace's routines and
+/// auto-tasks.
+///
+/// A toggle only narrows the host state and never grants anything, so a
+/// plugin the host has disabled is refused with a typed error naming the
+/// host enable, and nothing is written.
+pub fn enable_plugin_in_workspace(
+    runtime: &OrbitRuntime,
+    name: &str,
+    force: bool,
+) -> Result<PluginEnableResult, OrbitError> {
+    let workspace_config = workspace_config_path(runtime)?;
+    let installed = installed_plugin(runtime, name)?;
+    if !installed.enabled {
+        return Err(OrbitError::PluginDisabledOnHost {
+            plugin: name.to_string(),
+        });
+    }
+    let install_path = verified_install_path(runtime, &installed)?;
+    // Load before any write, so a manifest that no longer loads fails closed
+    // with the toggle untouched.
+    let plugin = load_plugin_dir(&install_path)?;
+    write_workspace_toggle(&workspace_config, name, true)?;
+    let contributions = apply_enabled_contributions(runtime, &install_path, force)?;
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
+        runtime.global_root(),
+    ))?;
+    let projection = projected_status(&installed, &plugin, &runtime.global_root(), &config.plugins);
+    let mut summary = summary_for_installed(
+        &installed,
+        Some(&plugin),
+        projection.status,
+        &runtime.global_root(),
+    );
+    summary.diagnostic = projection.diagnostic;
+    summary.workspace_toggle = Some(true);
+    Ok(PluginEnableResult {
+        summary,
+        seeded: contributions.seeded,
+        skills: contributions.skills,
+        warnings: contributions.warnings,
+    })
+}
+
+/// Switch a plugin off in this workspace only, by writing `false` to its
+/// `[plugin_enablement]` toggle. The host row, other workspaces, skill links
+/// (host-level provider discovery) and seeded files are untouched; the clock
+/// tick skips this workspace's seeded definitions while the toggle is off.
+pub fn disable_plugin_in_workspace(
+    runtime: &OrbitRuntime,
+    name: &str,
+) -> Result<PluginSummary, OrbitError> {
+    let workspace_config = workspace_config_path(runtime)?;
+    let installed = installed_plugin(runtime, name)?;
+    write_workspace_toggle(&workspace_config, name, false)?;
+    let plugin = verified_install_path(runtime, &installed)
+        .ok()
+        .and_then(|path| load_plugin_dir(&path).ok());
+    let mut summary = summary_for_installed(
+        &installed,
+        plugin.as_ref(),
+        PluginStatus::Disabled,
+        &runtime.global_root(),
+    );
+    summary.workspace_toggle = Some(false);
+    summary.disabled_by = Some(if installed.enabled {
+        PluginDisabledLayer::Workspace
+    } else {
+        PluginDisabledLayer::Host
+    });
+    Ok(summary)
+}
+
+/// The workspace `config.toml` a toggle is written to. A runtime with no
+/// workspace layer (its workspace root is the global root) has no workspace
+/// to scope to.
+fn workspace_config_path(runtime: &OrbitRuntime) -> Result<PathBuf, OrbitError> {
+    if runtime.shared_root() == runtime.global_root() {
+        return Err(OrbitError::InvalidInput(
+            "`--scope workspace` needs a workspace: run it inside one, or select one with \
+             `--workspace`"
+                .to_string(),
+        ));
+    }
+    Ok(runtime.shared_root().join("config.toml"))
+}
+
+/// Write one `[plugin_enablement]` entry, preserving the rest of the file.
+///
+/// Creating the file for a toggle is safe: a file holding only the toggle
+/// table is not a policy layer, so the replace-only security settings keep
+/// inheriting from global.
+fn write_workspace_toggle(path: &Path, name: &str, enabled: bool) -> Result<(), OrbitError> {
+    let mut store = ConfigStore::open(ConfigScope::Workspace, path)?;
+    store.set_document_value(
+        &orbit_config::plugin_enablement_key(name),
+        if enabled { "true" } else { "false" },
+    )?;
+    store.validate()?;
+    store.save()
+}
+
+/// This workspace's toggles as they are on disk now, for the long-lived
+/// hosts that compare them against a cached runtime's.
+pub(crate) fn workspace_plugin_toggles(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, bool>, OrbitError> {
+    orbit_config::load_workspace_plugin_enablement(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))
+}
+
 /// Take the plugin off the surface: its tools stop registering, its seeded
 /// definitions are skipped with a warning by the clock tick, and its skills
 /// are unlinked from provider discovery.
@@ -319,6 +434,7 @@ fn set_enabled(
             &runtime.global_root(),
         );
         summary.diagnostic = projection.diagnostic;
+        apply_workspace_toggle(runtime, &mut summary)?;
         return Ok(summary);
     }
     // The live runtime built its registry before this write, so report the
@@ -341,7 +457,26 @@ fn set_enabled(
     }
     summary.granted = grants;
     summary.diagnostic = None;
+    summary.disabled_by = (!enabled).then_some(PluginDisabledLayer::Host);
+    apply_workspace_toggle(runtime, &mut summary)?;
     Ok(summary)
+}
+
+/// Report a host lifecycle result as this workspace will see it: a host
+/// enable does not override a `false` workspace toggle.
+fn apply_workspace_toggle(
+    runtime: &OrbitRuntime,
+    summary: &mut PluginSummary,
+) -> Result<(), OrbitError> {
+    summary.host_enabled = summary.status != PluginStatus::Disabled;
+    summary.workspace_toggle = workspace_plugin_toggles(runtime)?
+        .get(&summary.name)
+        .copied();
+    if summary.host_enabled && summary.workspace_toggle == Some(false) {
+        summary.status = PluginStatus::Disabled;
+        summary.disabled_by = Some(PluginDisabledLayer::Workspace);
+    }
+    Ok(())
 }
 
 pub(super) fn unrequested_grant_warnings(
@@ -529,9 +664,14 @@ pub struct PluginSyncOutcome {
     pub message: String,
 }
 
-/// Read `.orbit/plugins.yaml` and converge the host enable state plus the
-/// current workspace's enabled contributions. A grant-requesting plugin is
-/// enabled only when this invocation supplies explicit grant consent.
+/// Read `.orbit/plugins.yaml` and converge the current workspace on it.
+///
+/// A pin's `enabled:` applies to this workspace's `[plugin_enablement]`
+/// toggle: `false` switches the plugin off here and never touches the host
+/// row or another workspace; `true` clears a `false` toggle. `true` for a
+/// plugin the host has disabled still takes the grant-reviewed host enable —
+/// a grant-requesting plugin is enabled only when this invocation supplies
+/// explicit grant consent.
 pub fn sync_plugins(
     runtime: &OrbitRuntime,
     dry_run: bool,
@@ -543,6 +683,9 @@ pub fn sync_plugins(
     let Some(pins) = read_pin_file(&runtime.shared_root())? else {
         return Ok(Vec::new());
     };
+    // Pins act on this workspace's toggles; read them once, as they are on
+    // disk, rather than from the runtime's build-time snapshot.
+    let toggles = workspace_plugin_toggles(runtime)?;
     let mut outcomes = Vec::new();
     for pin in &pins.plugins {
         let installed = runtime.stores().plugins().get_plugin(&pin.name)?;
@@ -561,46 +704,73 @@ pub fn sync_plugins(
                         pin.source.clone().unwrap_or_else(|| "<source>".to_string())
                     )
                 });
+                let toggle = toggles.get(&pin.name).copied();
                 let (status, action_message) = if dry_run {
-                    let message = match (pin.enabled, installed.enabled) {
-                        (false, true) => "would disable".to_string(),
-                        (true, false) => "would enable after grant review".to_string(),
-                        (true, true) => "would reconcile workspace contributions".to_string(),
-                        (false, false) => format!("installed v{}", installed.version),
+                    let message = match (pin.enabled, installed.enabled, toggle) {
+                        (false, _, Some(false)) => "switched off in this workspace".to_string(),
+                        (false, _, _) => "would switch off in this workspace".to_string(),
+                        (true, false, _) => "would enable after grant review".to_string(),
+                        (true, true, Some(false)) => "would switch back on in this workspace \
+                                                      and reconcile workspace contributions"
+                            .to_string(),
+                        (true, true, _) => "would reconcile workspace contributions".to_string(),
                     };
                     (
-                        if installed.enabled {
+                        if installed.enabled && toggle != Some(false) {
                             PluginStatus::Active
                         } else {
                             PluginStatus::Disabled
                         },
                         message,
                     )
-                } else if !pin.enabled && installed.enabled {
-                    match disable_plugin(runtime, &pin.name) {
-                        Ok(_) => (
-                            PluginStatus::Disabled,
-                            "disabled by workspace pin".to_string(),
-                        ),
-                        Err(error) => (
-                            PluginStatus::Active,
-                            format!("cannot disable to match workspace pin: {error}"),
-                        ),
-                    }
                 } else if !pin.enabled {
-                    (
-                        PluginStatus::Disabled,
-                        format!("installed v{} (disabled)", installed.version),
-                    )
+                    // A pin is workspace content, so `enabled: false` switches
+                    // the plugin off here and nowhere else: never the host
+                    // row, never another workspace.
+                    if toggle == Some(false) {
+                        (
+                            PluginStatus::Disabled,
+                            format!(
+                                "installed v{} (switched off in this workspace)",
+                                installed.version
+                            ),
+                        )
+                    } else {
+                        match disable_plugin_in_workspace(runtime, &pin.name) {
+                            Ok(_) => (
+                                PluginStatus::Disabled,
+                                "switched off in this workspace by the pin".to_string(),
+                            ),
+                            Err(error) => (
+                                if installed.enabled {
+                                    PluginStatus::Active
+                                } else {
+                                    PluginStatus::Disabled
+                                },
+                                format!(
+                                    "cannot switch off in this workspace to match the pin: \
+                                     {error}"
+                                ),
+                            ),
+                        }
+                    }
                 } else if !installed.enabled {
                     match enable_for_sync(runtime, &pin.name, &grants) {
-                        Ok(SyncEnable::Enabled(result)) => (
-                            result.summary.status,
-                            describe_seeded(
-                                format!("enabled installed v{}", installed.version),
-                                &result.seeded,
-                            ),
-                        ),
+                        Ok(SyncEnable::Enabled(result)) => {
+                            let (status, reopened) = reopen_workspace_toggle(
+                                runtime,
+                                &pin.name,
+                                toggle,
+                                result.summary.status,
+                            );
+                            (
+                                status,
+                                describe_seeded(
+                                    format!("enabled installed v{}{reopened}", installed.version),
+                                    &result.seeded,
+                                ),
+                            )
+                        }
                         Ok(SyncEnable::NeedsGrant(names)) => (
                             PluginStatus::Disabled,
                             format!(
@@ -611,6 +781,27 @@ pub fn sync_plugins(
                         Err(error) => (
                             PluginStatus::Disabled,
                             format!("installed but could not be enabled: {error}"),
+                        ),
+                    }
+                } else if toggle == Some(false) {
+                    match enable_plugin_in_workspace(runtime, &pin.name, false) {
+                        Ok(result) => (
+                            result.summary.status,
+                            describe_seeded(
+                                format!(
+                                    "installed v{}; switched back on in this workspace",
+                                    installed.version
+                                ),
+                                &result.seeded,
+                            ),
+                        ),
+                        Err(error) => (
+                            PluginStatus::Disabled,
+                            format!(
+                                "installed v{}, but could not be switched back on in this \
+                                 workspace: {error}",
+                                installed.version
+                            ),
                         ),
                     }
                 } else {
@@ -683,13 +874,24 @@ pub fn sync_plugins(
                 ) {
                     Ok(summary) if pin.enabled => {
                         let (status, message) = match enable_for_sync(runtime, &pin.name, &grants) {
-                            Ok(SyncEnable::Enabled(result)) => (
-                                result.summary.status,
-                                describe_seeded(
-                                    format!("installed v{} from {source}", summary.version),
-                                    &result.seeded,
-                                ),
-                            ),
+                            Ok(SyncEnable::Enabled(result)) => {
+                                let (status, reopened) = reopen_workspace_toggle(
+                                    runtime,
+                                    &pin.name,
+                                    toggles.get(&pin.name).copied(),
+                                    result.summary.status,
+                                );
+                                (
+                                    status,
+                                    describe_seeded(
+                                        format!(
+                                            "installed v{} from {source}{reopened}",
+                                            summary.version
+                                        ),
+                                        &result.seeded,
+                                    ),
+                                )
+                            }
                             Ok(SyncEnable::NeedsGrant(names)) => (
                                 PluginStatus::Disabled,
                                 format!(
@@ -713,14 +915,28 @@ pub fn sync_plugins(
                             message,
                         });
                     }
-                    Ok(summary) => outcomes.push(PluginSyncOutcome {
-                        name: pin.name.clone(),
-                        status: PluginStatus::Disabled,
-                        message: format!(
-                            "installed v{} from {source} (disabled by workspace pin)",
-                            summary.version
-                        ),
-                    }),
+                    Ok(summary) => {
+                        // Installed disabled on the host; the pin's `false`
+                        // is also recorded as this workspace's toggle, so a
+                        // later host enable does not switch it on here.
+                        let message = match disable_plugin_in_workspace(runtime, &pin.name) {
+                            Ok(_) => format!(
+                                "installed v{} from {source} (switched off in this workspace by \
+                                 the pin)",
+                                summary.version
+                            ),
+                            Err(error) => format!(
+                                "installed v{} from {source} (disabled), but the pin could not \
+                                 switch it off in this workspace: {error}",
+                                summary.version
+                            ),
+                        };
+                        outcomes.push(PluginSyncOutcome {
+                            name: pin.name.clone(),
+                            status: PluginStatus::Disabled,
+                            message,
+                        });
+                    }
                     // One pin's failure must not stop the rest: a host that
                     // cannot reach one source still converges on the others.
                     Err(error) => outcomes.push(PluginSyncOutcome {
@@ -733,6 +949,35 @@ pub fn sync_plugins(
         }
     }
     Ok(outcomes)
+}
+
+/// After sync enabled the host row for a pin that says `enabled: true`, clear
+/// a `false` workspace toggle too, so the pin's intent holds here. Returns the
+/// status as this workspace sees it and a note for the outcome message.
+fn reopen_workspace_toggle(
+    runtime: &OrbitRuntime,
+    name: &str,
+    toggle: Option<bool>,
+    status: PluginStatus,
+) -> (PluginStatus, &'static str) {
+    if toggle != Some(false) {
+        return (status, "");
+    }
+    let path = runtime.shared_root().join("config.toml");
+    match write_workspace_toggle(&path, name, true) {
+        Ok(()) => (status, "; switched back on in this workspace"),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.plugin",
+                plugin = %name,
+                "sync could not switch the plugin back on in this workspace: {error}"
+            );
+            (
+                PluginStatus::Disabled,
+                "; still switched off in this workspace (the toggle could not be written)",
+            )
+        }
+    }
 }
 
 enum SyncEnable {

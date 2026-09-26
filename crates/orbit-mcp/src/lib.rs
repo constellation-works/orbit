@@ -24,6 +24,7 @@ pub mod federated;
 mod listener;
 mod remote;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
@@ -57,6 +58,15 @@ pub trait McpHost: Send + Sync + 'static {
         _session_context: &ToolSessionContext,
     ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
         Ok(None)
+    }
+
+    /// Canonical names to leave out of this session's `tools/list`: tools the
+    /// host serves but that are switched off wherever this session's calls
+    /// would land (a plugin disabled in the bound workspace). Advisory and
+    /// read on every `tools/list`, so a toggle change shows without a new
+    /// session; `tools/call` enforces the same state on its own.
+    fn hidden_tool_names(&self, _session_context: &ToolSessionContext) -> BTreeSet<String> {
+        BTreeSet::new()
     }
 
     fn call_tool(
