@@ -32,7 +32,7 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use regex::Regex;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir};
+use tempfile::{TempDir, tempdir, tempdir_in};
 
 const UPDATE_ENV: &str = "ORBIT_UPDATE_OUTPUT_GOLDENS";
 
@@ -102,12 +102,29 @@ impl Fixture {
     /// the host has installed, so a developer box with `claude` on `PATH`
     /// would render a default crew that a CI runner never sees.
     fn new() -> Self {
-        let temp = tempdir().expect("tempdir");
+        Self::new_with_tempdir(tempdir().expect("tempdir"))
+    }
+
+    fn new_in(parent: impl AsRef<Path>) -> Self {
+        Self::new_with_tempdir(tempdir_in(parent).expect("tempdir in parent"))
+    }
+
+    fn new_with_tempdir(temp: TempDir) -> Self {
         let home = temp.path().join("home");
         let work = home.join("work");
         let empty_path = temp.path().join("empty-path");
         std::fs::create_dir_all(&home).expect("create home");
-        std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+        std::fs::create_dir_all(&work).expect("create work repo");
+        let git_init = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&work)
+            .output()
+            .expect("initialize work repo");
+        assert!(
+            git_init.status.success(),
+            "git init failed in fixture workspace: {}",
+            String::from_utf8_lossy(&git_init.stderr)
+        );
         std::fs::create_dir_all(&empty_path).expect("create empty PATH");
         let fixture = Self {
             _temp: temp,
@@ -181,6 +198,16 @@ impl Fixture {
     fn redact(&self, text: &str) -> String {
         redact(text, &self.home)
     }
+}
+
+#[test]
+fn fixture_does_not_inherit_config_when_tempdir_is_nested_in_checkout() {
+    let fixture = Fixture::new_in(env!("CARGO_MANIFEST_DIR"));
+    let tasks = parse_json_stdout(&fixture.run(&["task", "list", "--json"], &[]), "task list");
+    assert_eq!(
+        tasks.as_array().expect("fixture task list").len(),
+        SEED_TASKS.len()
+    );
 }
 
 /// Replace the two sources of run-to-run non-determinism a fresh workspace
