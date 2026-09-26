@@ -154,6 +154,17 @@ External installers do not hold Orbit's admission across their file operations;
 they must quiesce clients before replacement. A preflight alone does not make an
 external installer race-free.
 
+`orbit update` does not signal live drain workers. It requires exclusive
+generation admission before replacing the executable and refuses while any
+worker holds a shared pin. An external binary copy bypasses that admission and
+can run while drains are live; an external installer or service restart may
+signal them independently. A new writing `orbit clock tick` then refuses while
+the old generation stays pinned, and logs one dated hold summary when it can
+run again. A claimed worker terminated without a recorded cancellation is
+`interrupted` with `worker_terminated` whether its supervisor observes SIGTERM
+or stale-owner reconciliation sees the dead process first. The reconciler
+cannot determine which signal or installer killed an already-gone process.
+
 Every participating CLI process pins its executable generation before runtime
 bootstrap and retains that pin until exit. This includes ordinary/ operator MCP
 stdio, the TCP listener, the local part of a federated mux, destination-side SSH

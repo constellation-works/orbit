@@ -288,6 +288,57 @@ fn unrequested_signal_exit_is_not_treated_as_a_cancellation() {
     assert!(fixture.audits(&run.run_id).is_empty());
 }
 
+/// An actual SIGTERM after claim must leave the same terminal vocabulary as
+/// the stale-owner reconciler, even when the observer wins the race.
+#[cfg(unix)]
+#[test]
+fn claimed_ship_worker_sigterm_observer_first_is_interrupted() {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    use crate::application::job::pipeline::worker::log::configure_pipeline_worker_stdio;
+    use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
+
+    let fixture = Fixture::new();
+    let run = fixture.pending_run("workspace_ship_pipeline");
+    let logs = fixture._root.path().join("logs");
+    let mut command = Command::new("sleep");
+    command.arg("30");
+    let worker_log =
+        configure_pipeline_worker_stdio(&mut command, &logs, &run.run_id).expect("worker log");
+    let pid = fixture
+        .supervisor
+        .spawn_process(&run.run_id, None, command, worker_log)
+        .expect("spawn worker");
+    fixture
+        .runs
+        .mark_job_run_running(&run.run_id, Utc::now(), pid)
+        .expect("claim worker");
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let stored = loop {
+        let stored = fixture
+            .runs
+            .get_job_run(&run.run_id)
+            .expect("read run")
+            .expect("run");
+        if stored.state.is_terminal() {
+            break stored;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "observer did not settle signalled worker"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(stored.state, JobRunState::Interrupted);
+    assert!(stored.steps.iter().any(|step| {
+        step.state == JobRunState::Interrupted
+            && step.error_code.as_deref() == Some(WORKER_TERMINATED_ERROR_CODE)
+    }));
+}
+
 /// [ORB-12903] Live containment against the host's systemd user manager: a
 /// worker that forks without bound under a tight `TasksMax` settles its own
 /// run with `worker_resource_limit`, while a sibling worker in its own scope

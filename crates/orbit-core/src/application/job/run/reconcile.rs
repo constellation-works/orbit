@@ -9,9 +9,13 @@ use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
 
+use super::WORKER_TERMINATED_ERROR_CODE;
+#[cfg(unix)]
+use super::owner::OwnerIdentity;
 use super::owner::{
-    owner_identity_error_code, pending_run_stale_reason, running_run_owner_is_stale,
-    running_run_owner_stale_reason, stale_job_run_message, stale_pending_run_message,
+    PendingStaleReason, owner_identity_error_code, pending_run_stale_reason,
+    running_run_owner_is_stale, running_run_owner_stale_reason, stale_job_run_message,
+    stale_pending_run_message,
 };
 
 /// Call-scoped reuse of healthy owner classifications.
@@ -499,14 +503,29 @@ fn stale_job_run_diagnostic(run: &JobRun) -> Option<(String, String)> {
     // never claimed past the grace window) finalize exactly like orphaned
     // running runs. Each diagnostic is built from one classification result.
     if let Some(reason) = pending_run_stale_reason(run) {
-        return Some((
-            reason.error_code().to_string(),
-            stale_pending_run_message(run, reason),
-        ));
+        let code = match reason {
+            #[cfg(unix)]
+            PendingStaleReason::Owner(OwnerIdentity::Missing | OwnerIdentity::Mismatch) => {
+                WORKER_TERMINATED_ERROR_CODE
+            }
+            _ => reason.error_code(),
+        };
+        return Some((code.to_string(), stale_pending_run_message(run, reason)));
     }
     let stale_reason = running_run_owner_stale_reason(run)?;
+    #[cfg(unix)]
+    let code = if matches!(
+        stale_reason,
+        OwnerIdentity::Missing | OwnerIdentity::Mismatch
+    ) {
+        WORKER_TERMINATED_ERROR_CODE
+    } else {
+        owner_identity_error_code(Some(stale_reason))
+    };
+    #[cfg(not(unix))]
+    let code = owner_identity_error_code(Some(stale_reason));
     Some((
-        owner_identity_error_code(Some(stale_reason)).to_string(),
+        code.to_string(),
         stale_job_run_message(run, Some(stale_reason)),
     ))
 }
