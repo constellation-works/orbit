@@ -105,17 +105,27 @@ impl PluginSandboxProfile {
             read: self
                 .read
                 .iter()
-                .map(|path| format!("{}/**", path.display()))
+                .map(|path| {
+                    format!(
+                        "{}/**",
+                        orbit_exec::physical_with_missing_tail(path).display()
+                    )
+                })
                 .collect(),
             modify: self
                 .write
                 .iter()
-                .map(|path| format!("{}/**", path.display()))
-                .chain(
-                    self.write_files
-                        .iter()
-                        .map(|path| path.display().to_string()),
-                )
+                .map(|path| {
+                    format!(
+                        "{}/**",
+                        orbit_exec::physical_with_missing_tail(path).display()
+                    )
+                })
+                .chain(self.write_files.iter().map(|path| {
+                    orbit_exec::physical_with_missing_tail(path)
+                        .display()
+                        .to_string()
+                }))
                 .collect(),
         }
     }
@@ -130,6 +140,10 @@ impl Sandbox for PluginSandboxProfile {
     /// `sandbox-exec` on macOS. Anywhere else the only way to run is the
     /// `unsandboxed` grant; there is no unconfined fallback (§4.9).
     fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+        // A plugin's state is host-owned and always readable to that plugin,
+        // even without an fs.write grant. Materialize it before any backend
+        // launch so its parent never has to be created inside the sandbox.
+        materialize_write_directory(&self.state_dir, &self.materialization_roots)?;
         // A granted write directory beneath a host-materialization root — the
         // selected workspace, this plugin's state tree, or one of the Orbit
         // stores the host itself granted for `orbit_tools` — is materialised

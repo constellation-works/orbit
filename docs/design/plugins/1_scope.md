@@ -609,11 +609,16 @@ beneath exactly three prefixes:
 | Host-materialized prefix | Present when |
 | --- | --- |
 | the selected workspace root (`{{workspace}}`) | a workspace is selected |
-| the plugin's own state tree (`{{plugin_state}}`) | always |
+| the plugin's own state tree (`{{plugin_state}}`) | always, before every backend launch |
 | the `orbit_tools` write directories above | `orbit_tools` is granted |
 
 The third row *is* the `orbit_tools` inventory, so one list decides both what is writable and
 what may be created [ORB-12872]; `<global_root>/state` itself is not a prefix.
+Orbit creates the plugin's state tree even when the manifest has no `fs.write` grant; creation
+does not grant writes. The macOS profile uses the physical path of each grant and read carve-out,
+including `/private/var` when a temporary root is spelled through `/var`. A backend creating a
+child under `{{plugin_state}}` need only create that child, since a recursive `mkdir -p` can probe
+the denied `state/plugins/` parent on macOS.
 
 - Creation never follows links: an escaping `..` root stays absent, a symlinked prefix is
   refused, and a missing tail is created one component at a time, refusing a link or identity

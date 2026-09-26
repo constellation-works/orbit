@@ -13,7 +13,11 @@ export UV_PYTHON_BIN_DIR="$state/uv-python/bin"
 unset PYTHONPYCACHEPREFIX
 export PYTHONDONTWRITEBYTECODE=1
 export TMPDIR="$state/tmp"
-mkdir -p "$TMPDIR"
+# Orbit creates $state before launch. Create only the child we own: macOS
+# mkdir -p probes each ancestor, including the denied state/plugins tree.
+if [ ! -d "$TMPDIR" ]; then
+  mkdir "$TMPDIR"
+fi
 # --frozen installs what uv.lock pins and never rewrites it; --exact also removes
 # anything the lock no longer names. After `orbit plugin upgrade` changes the
 # lock, the next call re-syncs the environment to it. Keeping bytecode out of a

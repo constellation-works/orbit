@@ -150,7 +150,9 @@ pub fn test_plugin_dir(
     let global_root = sandbox_path.join("global");
     let workspace_root = sandbox_path.join("workspace");
     let state_dir = global_root.join("state/plugins").join(plugin.namespace());
-    for dir in [&global_root, &workspace_root, &state_dir] {
+    // The shared backend spawn creates state_dir before confinement, just as
+    // it does for installed plugins. Keep this scratch root fresh until then.
+    for dir in [&global_root, &workspace_root] {
         std::fs::create_dir_all(dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     }
