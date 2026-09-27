@@ -10,7 +10,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
@@ -76,10 +75,25 @@ impl Fixture {
     fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         run_orbit(&self.work, &self.home, args, env)
     }
+
+    #[cfg(unix)]
+    fn run_closed_stdout(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        run_orbit_with_closed_stdout(&self.work, &self.home, args, env)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_full_stdout(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        run_orbit_with_full_stdout(&self.work, &self.home, args, env)
+    }
 }
 
-fn run_orbit(cwd: &Path, home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
-    let mut command = cargo_bin_cmd!("orbit");
+fn orbit_command(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Command {
+    let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
@@ -94,7 +108,58 @@ fn run_orbit(cwd: &Path, home: &Path, args: &[&str], env: &[(&str, &str)]) -> Ou
     for (key, value) in env {
         command.env(key, value);
     }
-    command.args(args).output().expect("run orbit")
+    command.args(args);
+    command
+}
+
+fn run_orbit(cwd: &Path, home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    orbit_command(cwd, home, args, env)
+        .output()
+        .expect("run orbit")
+}
+
+#[cfg(unix)]
+fn run_orbit_with_closed_stdout(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Output {
+    use std::os::fd::FromRawFd;
+    use std::process::Stdio;
+
+    let mut command = orbit_command(cwd, home, args, env);
+    let mut fds = [0i32; 2];
+    let res = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    assert_eq!(res, 0, "pipe creation failed");
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+    unsafe {
+        libc::close(read_fd);
+    }
+    let stdout = unsafe { Stdio::from_raw_fd(write_fd) };
+    command.stdout(stdout).stderr(Stdio::piped());
+    let child = command.spawn().expect("spawn orbit");
+    child.wait_with_output().expect("wait with output")
+}
+
+#[cfg(target_os = "linux")]
+fn run_orbit_with_full_stdout(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Output {
+    use std::fs::OpenOptions;
+    use std::process::Stdio;
+
+    let dev_full = OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+    let mut command = orbit_command(cwd, home, args, env);
+    command.stdout(Stdio::from(dev_full)).stderr(Stdio::piped());
+    let child = command.spawn().expect("spawn orbit");
+    child.wait_with_output().expect("wait with output")
 }
 
 fn describe(args: &[&str], output: &Output) -> String {
@@ -323,5 +388,79 @@ fn help_in_json_mode_is_still_help_on_stdout() {
         serde_json::from_slice::<Value>(&output.stdout).is_err(),
         "help stays help: {}",
         describe(&args, &output)
+    );
+}
+
+/// A closed stdout pipe in `ndjson` mode is an early exit, not a command
+/// failure (spec §5): exit 0 without a Broken pipe diagnostic on stderr.
+/// Existing JSON and plain output modes also preserve exit 0 on closed stdout.
+#[test]
+#[cfg(unix)]
+fn closed_stdout_pipe_in_ndjson_mode_exits_0_silently() {
+    let fixture = Fixture::workspace();
+    let init_task = fixture.run(
+        &[
+            "task",
+            "add",
+            "--title",
+            "Example task",
+            "--complexity",
+            "low",
+            "--json",
+        ],
+        &[],
+    );
+    assert!(
+        init_task.status.success(),
+        "task add failed: {}",
+        describe(&["task", "add"], &init_task)
+    );
+
+    for args in [
+        vec!["task", "list", "--format", "ndjson"],
+        vec!["tool", "list", "--format", "ndjson"],
+        vec!["tool", "list", "--format", "json"],
+        vec!["tool", "list"],
+    ] {
+        let output = fixture.run_closed_stdout(&args, &[]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "command must exit 0 when stdout pipe is closed early: {}",
+            describe(&args, &output)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "stderr must stay empty (no Broken pipe diagnostic): {}",
+            describe(&args, &output)
+        );
+    }
+}
+
+/// A command failure still reports its error and exits nonzero even when
+/// stdout is a closed pipe.
+#[test]
+#[cfg(unix)]
+fn failing_command_with_closed_stdout_preserves_failure_exit_semantics() {
+    let fixture = Fixture::workspace();
+    let args = ["task", "show", MISSING_TASK, "--format", "ndjson"];
+    let output = fixture.run_closed_stdout(&args, &[]);
+    let error = json_failure(&args, &output, 1);
+    assert_eq!(error["code"], "task_not_found", "{args:?}: {error}");
+}
+
+/// Non-EPIPE stdout write or flush failures remain failures and report on stderr.
+#[test]
+#[cfg(target_os = "linux")]
+fn non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure() {
+    let fixture = Fixture::bare();
+    let args = ["tool", "list", "--format", "ndjson"];
+    let output = fixture.run_full_stdout(&args, &[]);
+    let error = json_failure(&args, &output, 1);
+    assert_eq!(error["code"], "execution_failed", "{args:?}: {error}");
+    let message = error["error"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("No space left on device") || message.contains("os error 28"),
+        "error message should report the underlying write failure: {message}"
     );
 }
