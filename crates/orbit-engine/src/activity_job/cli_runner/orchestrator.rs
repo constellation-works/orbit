@@ -68,6 +68,12 @@ use crate::context::RuntimeHost;
 /// `ORBIT_ACTIVITY_TOOLS` as unrestricted.
 const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
 
+/// Process-policy envelope stamped for the current activity and removed from
+/// anything the outer process forwarded. [ORB-13427]
+const PROC_ALLOWED_PROGRAMS_ENV: &str = "ORBIT_PROC_ALLOWED_PROGRAMS";
+const PROC_PROGRAM_POLICY_ENV: &str = "ORBIT_PROC_PROGRAM_POLICY";
+const PROC_DISALLOWED_PROGRAMS_ENV: &str = "ORBIT_PROC_DISALLOWED_PROGRAMS";
+
 /// Last pre-migration shipped program lists. An older MCP server understands
 /// only `ORBIT_PROC_ALLOWED_PROGRAMS`, so these preserve the old bound while
 /// a new orchestrator and an old server coexist. Custom deny-mode activities
@@ -498,26 +504,20 @@ pub fn run_cli_backend(
         &activity_tools.effective_tools,
     ));
     if let Some(programs) = spec.proc_allowed_programs.as_deref() {
-        dispatch_env.push((
-            "ORBIT_PROC_ALLOWED_PROGRAMS".to_string(),
-            programs.join(","),
-        ));
+        dispatch_env.push((PROC_ALLOWED_PROGRAMS_ENV.to_string(), programs.join(",")));
     }
     if let Some(programs) = spec.proc_disallowed_programs.as_deref() {
         // An older nested MCP server ignores the deny marker and still reads
         // only this allowlist. Preserve each shipped activity's last legacy
         // bound during a mixed-version deploy; a new server uses deny mode.
         dispatch_env.push((
-            "ORBIT_PROC_ALLOWED_PROGRAMS".to_string(),
+            PROC_ALLOWED_PROGRAMS_ENV.to_string(),
             legacy_program_allowlist_for_mcp(activity_name, programs)
                 .unwrap_or_default()
                 .to_string(),
         ));
-        dispatch_env.push(("ORBIT_PROC_PROGRAM_POLICY".to_string(), "deny".to_string()));
-        dispatch_env.push((
-            "ORBIT_PROC_DISALLOWED_PROGRAMS".to_string(),
-            programs.join(","),
-        ));
+        dispatch_env.push((PROC_PROGRAM_POLICY_ENV.to_string(), "deny".to_string()));
+        dispatch_env.push((PROC_DISALLOWED_PROGRAMS_ENV.to_string(), programs.join(",")));
     }
     dispatch_env.push((
         "ORBIT_ACTIVITY_FS_PROFILE".to_string(),
@@ -585,15 +585,22 @@ pub fn run_cli_backend(
         // above supersedes it for this execution envelope. [ORB-11066]
         child_env.retain(|(key, _)| key != "ORBIT_ROOT");
     }
-    // The envelope prefix forwards an outer run's `ORBIT_ACTIVITY_*` names.
-    // An allowlist-mode run stamps no deny-mode names of its own, so an
-    // inherited deny marker would otherwise swap this run's allowlist for the
-    // outer activity's disallow list. [ORB-13315]
+    // The envelope allowlist forwards an outer run's activity and process
+    // policy names. An allowlist-mode run stamps no deny-mode names of its
+    // own, so an inherited tool-deny marker would swap this run's tool
+    // allowlist for the outer disallow list [ORB-13315], and an inherited
+    // program-deny marker would make `proc.spawn` admit programs outside this
+    // run's allowlist [ORB-13427]. Drop those inherited names, then stamp this
+    // activity's envelope. A deny-mode activity restamps its marker, its list
+    // (including an explicit empty list), and the legacy MCP allowlist.
     child_env.retain(|(key, _)| {
         ![
             ACTIVITY_TOOL_POLICY_ENV,
             ACTIVITY_TOOLS_DENY_ENV,
             ACTIVITY_NAME_ENV,
+            PROC_ALLOWED_PROGRAMS_ENV,
+            PROC_PROGRAM_POLICY_ENV,
+            PROC_DISALLOWED_PROGRAMS_ENV,
         ]
         .contains(&key.as_str())
     });
