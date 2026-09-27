@@ -105,18 +105,31 @@ impl PullDrain<'_> {
     ///
     /// Returns false when an earlier unanswered request turned out idle: the
     /// owner has nothing ready, so this pass allocates nothing new.
+    ///
+    /// One admission that cannot move forward does not hold the others back:
+    /// every record is carried as far as it goes, and the first error is
+    /// returned afterwards, so it still prevents fresh admission this pass.
     pub(crate) fn reconcile_pending(
         &self,
         destination: &PullDestination,
     ) -> Result<bool, OrbitError> {
         let mut may_allocate = true;
+        let mut first_error = None;
         for record in self.jobs.local_pull_admissions()? {
             if record.destination != *destination {
                 continue;
             }
-            may_allocate &= self.reconcile(record)?;
+            match self.reconcile(record) {
+                Ok(allocate) => may_allocate &= allocate,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        Ok(may_allocate)
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(may_allocate),
+        }
     }
 
     /// Admissions for `destination` that still hold a slot: not idle, refused
@@ -220,8 +233,7 @@ impl PullDrain<'_> {
                         });
                         record =
                             self.update(&record, LocalPullMutation::Settle(Box::new(settlement)))?;
-                        self.peer.settle(&record)?;
-                        self.update(&record, LocalPullMutation::Settled)?;
+                        self.deliver(&record)?;
                         return Err(error);
                     }
                     self.update(&record, LocalPullMutation::Launched)?
@@ -255,10 +267,7 @@ impl PullDrain<'_> {
                         }))),
                     )?
                 }
-                LocalPullPhase::Settling => {
-                    self.peer.settle(&record)?;
-                    self.update(&record, LocalPullMutation::Settled)?
-                }
+                LocalPullPhase::Settling => self.deliver(&record)?,
                 LocalPullPhase::Settled | LocalPullPhase::Refused => return Ok(true),
                 LocalPullPhase::Idle => return Ok(false),
             };
@@ -275,8 +284,54 @@ impl PullDrain<'_> {
         settlement: ClaimMutation,
     ) -> Result<(), OrbitError> {
         let pending = self.update(record, LocalPullMutation::Settle(Box::new(settlement)))?;
-        self.peer.settle(&pending)?;
-        self.update(&pending, LocalPullMutation::Settled)?;
+        self.deliver(&pending)?;
         Ok(())
+    }
+
+    /// Deliver a persisted settlement to the owner.
+    ///
+    /// An owner refusal is reconciled against the owner's receipt, the way a
+    /// refused request is: when the owner has already ended the claim — an
+    /// operator revoked it, or it failed or landed — no settlement can ever be
+    /// accepted for it, so the record settles locally with the refusal and
+    /// releases its slot. Retrying it would refuse forever, and every pass
+    /// would report that error instead of admitting new work. A claim the
+    /// owner still holds keeps its settlement pending, as does a lost or
+    /// uncertain delivery.
+    fn deliver(&self, record: &LocalPullAdmission) -> Result<LocalPullAdmission, OrbitError> {
+        let refusal = match self.peer.settle(record) {
+            Ok(()) => return self.update(record, LocalPullMutation::Settled),
+            Err(error) if is_owner_refusal(&error) => error,
+            Err(error) => return Err(error),
+        };
+        let ended = match self
+            .peer
+            .lookup(&record.destination, &record.request.request_id)?
+        {
+            AdmissionLookup::Found {
+                current_claim: Some(claim),
+                ..
+            } if claim.phase.is_unsettled() => return Err(refusal),
+            AdmissionLookup::Found {
+                current_claim: Some(claim),
+                ..
+            } => format!("the owner already ended this claim as {:?}", claim.phase),
+            AdmissionLookup::Found {
+                current_claim: None,
+                ..
+            } => "the owner no longer holds this claim".to_string(),
+            AdmissionLookup::Expired | AdmissionLookup::NotFound => {
+                "the owner no longer holds this admission".to_string()
+            }
+        };
+        let reason = format!("settlement refused ({refusal}); {ended}");
+        tracing::warn!(
+            target: "orbit.core.pull",
+            request_id = %record.request.request_id,
+            leaf = record.leaf_run_id.as_deref().unwrap_or("-"),
+            %reason,
+            "closing an undeliverable pull settlement",
+        );
+        self.update(record, LocalPullMutation::SettleObsolete(reason))
     }
 }

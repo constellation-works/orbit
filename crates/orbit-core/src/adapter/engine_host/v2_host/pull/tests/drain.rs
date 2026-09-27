@@ -23,6 +23,9 @@ struct Peer {
     /// receipt already exists — the way an upgraded owner refuses a replay.
     refuse: RefCell<Option<String>>,
     lookups: Cell<usize>,
+    /// Claims whose settlement the owner refuses as `stale_claim`, with the
+    /// phase its receipt lookup then reports for each.
+    ended: RefCell<BTreeMap<String, ExecutionClaimPhase>>,
 }
 impl PullPeer for Peer {
     fn request(
@@ -102,6 +105,18 @@ impl PullPeer for Peer {
         if self.disconnected.get() {
             return Err(OrbitError::Execution("disconnected".into()));
         }
+        let claim = admission
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.claim.as_ref())
+            .expect("claim");
+        if self.ended.borrow().contains_key(&claim.claim_id) {
+            return Err(OrbitError::RemoteTool {
+                code: "invalid_input".into(),
+                message: "owner: invalid input: stale_claim".into(),
+                payload: serde_json::Value::Null,
+            });
+        }
         self.settlements.set(self.settlements.get() + 1);
         Ok(())
     }
@@ -114,7 +129,13 @@ impl PullPeer for Peer {
         Ok(match self.receipts.borrow().get(request_id) {
             Some(receipt) => AdmissionLookup::Found {
                 receipt: Box::new(receipt.clone()),
-                current_claim: None,
+                current_claim: receipt.claim.as_ref().and_then(|claim| {
+                    let phase = *self.ended.borrow().get(&claim.claim_id)?;
+                    Some(Box::new(ExecutionClaim {
+                        phase,
+                        ..claim.clone()
+                    }))
+                }),
             },
             None => AdmissionLookup::NotFound,
         })
@@ -630,4 +651,153 @@ fn pull_breaker_counts_this_drains_consecutive_failed_settlements() {
         consecutive_failed_settlements(&runtime, &destination, "another-drain").expect("count"),
         0
     );
+}
+
+/// Admit `count` claims, then end every leaf, so the next pass settles each.
+fn admitted_ended_leaves(
+    jobs: &dyn JobRunStoreBackend,
+    drain: &PullDrain<'_>,
+    destination: &PullDestination,
+    template: &AdmissionRequest,
+    count: usize,
+) -> Vec<LocalPullAdmission> {
+    assert_eq!(
+        drain.refill(destination, template, count).expect("admit"),
+        count
+    );
+    let records = jobs.local_pull_admissions().expect("records");
+    for record in &records {
+        jobs.finalize_job_run(
+            record.leaf_run_id.as_deref().expect("leaf"),
+            orbit_types::workflow::JobRunState::Cancelled,
+            Utc::now(),
+            None,
+        )
+        .expect("leaf ended");
+    }
+    records
+}
+
+fn claim_id(record: &LocalPullAdmission) -> String {
+    record
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.as_ref())
+        .expect("claim")
+        .claim_id
+        .clone()
+}
+
+/// [ORB-13639] A settlement for a claim the owner already ended — an operator revoked it
+/// while the drain that ran it was down — can never be accepted. The owner's
+/// receipt confirms the claim is over, so the record settles locally with the
+/// refusal, frees its slot, and the same pass admits new work instead of
+/// retrying that settlement forever.
+#[test]
+fn pull_settlement_for_a_claim_the_owner_ended_closes_locally_and_frees_its_slot() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_settlement_for_a_claim_the_owner_ended_closes_locally_and_frees_its_slot",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let revoked = admitted_ended_leaves(jobs, &drain, &destination, &template, 1).remove(0);
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&revoked), ExecutionClaimPhase::Revoked);
+
+    assert_eq!(
+        drain.refill(&destination, &template, 1).expect("admits"),
+        1,
+        "the closed settlement no longer holds the only slot"
+    );
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].phase, LocalPullPhase::Settled);
+    assert!(matches!(
+        records[0].settlement,
+        Some(ClaimMutation::Fail(_))
+    ));
+    let refusal = records[0].refusal.as_deref().unwrap_or_default();
+    assert!(
+        refusal.contains("stale_claim") && refusal.contains("Revoked"),
+        "{refusal}"
+    );
+    assert_eq!(peer.settlements.get(), 0, "nothing reached the owner");
+    assert_eq!(launcher.launches.get(), 2);
+}
+
+/// A refused settlement for a claim the owner still holds is not obsolete:
+/// it stays pending for the next pass, and the pass reports the refusal.
+#[test]
+fn pull_refused_settlement_for_a_claim_the_owner_still_holds_stays_pending() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_refused_settlement_for_a_claim_the_owner_still_holds_stays_pending",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let live = admitted_ended_leaves(jobs, &drain, &destination, &template, 1).remove(0);
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&live), ExecutionClaimPhase::Running);
+
+    let error = drain
+        .refill(&destination, &template, 1)
+        .expect_err("refusal reported");
+    assert!(error.to_string().contains("stale_claim"), "{error}");
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), 1, "a pass that failed admits nothing new");
+    assert_eq!(records[0].phase, LocalPullPhase::Settling);
+    assert_eq!(records[0].refusal, None);
+    assert_eq!(drain.unsettled(&destination).expect("unsettled"), 1);
+}
+
+/// One settlement that cannot be delivered does not hold back the others:
+/// each record is carried forward, and the error is reported afterwards.
+#[test]
+fn pull_one_stuck_settlement_does_not_hold_back_the_others() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_one_stuck_settlement_does_not_hold_back_the_others",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let records = admitted_ended_leaves(jobs, &drain, &destination, &template, 2);
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&records[0]), ExecutionClaimPhase::Running);
+
+    assert!(drain.reconcile_pending(&destination).is_err());
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records[0].phase, LocalPullPhase::Settling);
+    assert_eq!(records[1].phase, LocalPullPhase::Settled);
+    assert_eq!(peer.settlements.get(), 1);
 }
