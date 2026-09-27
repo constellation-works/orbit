@@ -618,3 +618,67 @@ fn invalid_yaml_and_unsupported_bundle_schema_leave_destination_unpublished() {
         assert!(!destination.exists());
     }
 }
+
+/// Attachment deny globs share the policy compiler. A recursive pattern has to
+/// reject a path whose segment contains a newline, and leave a non-matching
+/// newline path publishable.
+#[test]
+fn publication_deny_patterns_match_newline_segments() {
+    fn publish(workspace_id: &str, path: &str, deny: &str) -> Result<(), String> {
+        let root = TempDir::new().unwrap();
+        let registry = open_registry(root.path());
+        let binding = bind(&registry, root.path(), workspace_id);
+        let store = bundle_store(&registry, &binding);
+        seed_artifacts(
+            &store,
+            &registry,
+            workspace_id,
+            "ORB-00001",
+            &[(path, b"n")],
+        );
+        let mut attachment_policy = policy(AttachmentPolicyKind::Include);
+        attachment_policy.deny_patterns = vec![deny.to_string()];
+        let destination = root.path().join("published");
+        match build_publication_snapshot(
+            &registry,
+            &destination,
+            metadata(workspace_id),
+            &attachment_policy,
+            Some(&ClearScanner),
+        ) {
+            Ok(outcome) => {
+                assert_eq!(outcome.included_attachment_bytes, 1, "{path:?}");
+                let published = read_bundle_at(
+                    &destination
+                        .join(PUBLICATION_TASKS_DIR_NAME)
+                        .join("ORB-00001"),
+                )
+                .unwrap();
+                let paths: Vec<_> = published
+                    .artifact_manifest
+                    .unwrap()
+                    .files
+                    .into_iter()
+                    .map(|file| file.path)
+                    .collect();
+                assert_eq!(paths, vec![path.to_string()]);
+                Ok(())
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    for (workspace_id, path, deny) in [
+        ("ws_pub_nl_secret", "secrets/a\nb", "secrets/**"),
+        ("ws_pub_nl_sibling", "secrets/ab", "secrets/**"),
+        ("ws_pub_nl_leaf", "a\nb/leaf", "**/leaf"),
+    ] {
+        let error = publish(workspace_id, path, deny).expect_err(path);
+        assert!(
+            error.contains("deny pattern"),
+            "{path:?} against `{deny}`: {error}"
+        );
+    }
+
+    publish("ws_pub_nl_notes", "notes/a\nb", "secrets/**").expect("non-matching newline path");
+}

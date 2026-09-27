@@ -152,6 +152,84 @@ fn star_depth_matrix() {
     ]);
 }
 
+/// Request decisions for a filename that contains a newline. A recursive deny
+/// appended after a single-star grant has to win, and `**` / `**/` / trailing
+/// `/**` have to allow the same name when they are the matching grant.
+#[test]
+fn newline_segment_request_matrix() {
+    let newline = "secrets/a\nb";
+    let sibling = "secrets/ab";
+    let denied = engine(&["secrets/**"], &[], &["secrets/*"], &[]);
+
+    let newline_decision = denied
+        .check("p", FsOperation::Read, newline)
+        .expect("newline name");
+    let sibling_decision = denied
+        .check("p", FsOperation::Read, sibling)
+        .expect("ordinary sibling");
+    assert!(!newline_decision.allowed, "{newline_decision:?}");
+    assert!(!sibling_decision.allowed, "{sibling_decision:?}");
+    assert_eq!(newline_decision.matched_rule, "secrets/**");
+    assert_eq!(sibling_decision.matched_rule, newline_decision.matched_rule);
+
+    let outside = denied
+        .check("p", FsOperation::Read, "notes/a\nb")
+        .expect("outside the grant");
+    assert!(!outside.allowed, "{outside:?}");
+    assert_eq!(outside.matched_rule, "<no matching rule>");
+
+    run_read_cases(&[
+        Case {
+            rules: &["**"],
+            path: "a\nb/c",
+            allowed: true,
+            note: "** matches a newline inside a segment",
+        },
+        Case {
+            rules: &["**/leaf"],
+            path: "a\nb/leaf",
+            allowed: true,
+            note: "**/ matches a newline inside a directory segment",
+        },
+        Case {
+            rules: &["**/leaf"],
+            path: "a\nbleaf",
+            allowed: false,
+            note: "**/ still requires the slash before the literal",
+        },
+        Case {
+            rules: &["secrets/**"],
+            path: "secrets/a\nb",
+            allowed: true,
+            note: "trailing /** matches a newline inside the filename",
+        },
+        Case {
+            rules: &["secrets/**"],
+            path: "secrets/a\nb/c",
+            allowed: true,
+            note: "trailing /** matches a newline at any depth",
+        },
+        Case {
+            rules: &["secrets/*"],
+            path: "secrets/a\nb/c",
+            allowed: false,
+            note: "* still stops at / when the segment contains a newline",
+        },
+        Case {
+            rules: &["a?b"],
+            path: "a\nb",
+            allowed: true,
+            note: "? matches one newline",
+        },
+        Case {
+            rules: &["a?b"],
+            path: "a/b",
+            allowed: false,
+            note: "? still does not match /",
+        },
+    ]);
+}
+
 // --- Hidden files and character classes ---
 
 #[test]

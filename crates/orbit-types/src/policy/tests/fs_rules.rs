@@ -91,6 +91,81 @@ fn both_spellings_of_a_workspace_relative_path_decide_the_same() {
     assert!(compiled.allows(".").expect("workspace root"));
 }
 
+/// Positive and negative `**`, `**/`, and trailing `/**` rules decide a name
+/// that contains a newline the same way they decide an ordinary sibling.
+/// `*` and `?` still match that newline and still stop at `/`.
+#[test]
+fn recursive_rules_treat_an_embedded_newline_as_part_of_the_segment() {
+    let file = "secrets/a\nb";
+    let sibling = "secrets/ab";
+
+    let granted = rules(&["**"]);
+    assert!(granted.allows("a\nb").expect("bare **"));
+    assert!(granted.allows("a\nb/c").expect("bare ** nested"));
+
+    let bare_deny = rules(&["docs/*", "!**"]);
+    assert!(!bare_deny.allows("docs/a\nb").expect("negated **"));
+    assert_eq!(
+        bare_deny
+            .evaluate("docs/a\nb")
+            .expect("evaluate")
+            .matched_rule,
+        "**"
+    );
+
+    let leading = rules(&["**/leaf"]);
+    assert!(leading.allows("a\nb/leaf").expect("leading **/"));
+    assert!(leading.allows("dir/a\nb/leaf").expect("leading **/ nested"));
+    assert!(!leading.allows("a\nbleaf").expect("**/ keeps the slash"));
+
+    let leading_deny = rules(&["**", "!**/leaf"]);
+    assert!(!leading_deny.allows("a\nb/leaf").expect("negated **/"));
+    assert!(leading_deny.allows("a\nb/other").expect("outside **/ deny"));
+    assert_eq!(
+        leading_deny
+            .evaluate("a\nb/leaf")
+            .expect("evaluate")
+            .matched_rule,
+        "**/leaf"
+    );
+
+    let trailing = rules(&["secrets/**"]);
+    assert!(trailing.allows(file).expect("trailing /**"));
+    assert!(
+        trailing
+            .allows("secrets/a\nb/c")
+            .expect("trailing /** nested")
+    );
+    assert!(trailing.allows(sibling).expect("ordinary sibling"));
+    assert!(!trailing.allows("other/a\nb").expect("outside prefix"));
+
+    let trailing_deny = rules(&["secrets/*", "!secrets/**"]);
+    assert!(!trailing_deny.allows(file).expect("newline name denied"));
+    assert!(!trailing_deny.allows(sibling).expect("sibling denied"));
+    assert_eq!(
+        trailing_deny.evaluate(file).expect("evaluate").matched_rule,
+        "secrets/**"
+    );
+    assert_eq!(
+        trailing_deny
+            .evaluate(sibling)
+            .expect("evaluate")
+            .matched_rule,
+        "secrets/**"
+    );
+
+    let star = rules(&["secrets/*"]);
+    assert!(star.allows(file).expect("* matches a newline"));
+    assert!(!star.allows("secrets/a\nb/c").expect("* stops at /"));
+    assert!(!star.allows("secrets/a/b").expect("* stops at /"));
+
+    let question = rules(&["a?b"]);
+    assert!(question.allows("a\nb").expect("? matches a newline"));
+    assert!(!question.allows("a/b").expect("? stops at /"));
+    assert!(!question.allows("ab").expect("? is one character"));
+    assert!(!question.allows("a\n\nb").expect("? is one character"));
+}
+
 #[test]
 fn a_resolved_profile_compiles_the_rule_set_for_the_requested_operation() {
     let profile = ResolvedFsProfile {

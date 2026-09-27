@@ -158,6 +158,54 @@ fn only_a_directory_crossing_wildcard_leaves_the_reach_unbounded() {
     }
 }
 
+/// A newline is a legal filename character and not a path separator. Recursive
+/// wildcards have to accept it inside a segment, and `*` / `?` still stop at `/`.
+#[test]
+fn recursive_globs_match_a_newline_inside_a_segment() {
+    let newline = "secrets/a\nb";
+    assert_eq!(normalize_glob_path(newline).expect("normalize"), newline);
+
+    for (rule, path) in [
+        ("**", "a\nb"),
+        ("**", "a\nb/c"),
+        ("**/leaf", "a\nb/leaf"),
+        ("**/leaf", "dir/a\nb/leaf"),
+        ("**/leaf", "leaf"),
+        ("secrets/**", newline),
+        ("secrets/**", "secrets/a\nb/c"),
+        ("secrets/**", "secrets"),
+        ("*", "a\nb"),
+        ("secrets/*", newline),
+        ("a?b", "a\nb"),
+    ] {
+        let normalized = normalize_glob_path(path).expect("normalize");
+        assert!(
+            match_glob(rule, &normalized).expect("match"),
+            "`{rule}` should match {path:?}"
+        );
+    }
+
+    for (rule, path) in [
+        ("**/leaf", "a\nbleaf"),
+        ("**/leaf", "a\nb/leaf/extra"),
+        ("secrets/**", "other/a\nb"),
+        ("secrets/**", "secretsX/a\nb"),
+        ("*", "a/b"),
+        ("*", "a\nb/c"),
+        ("secrets/*", "secrets/a\nb/c"),
+        ("secrets/*", "secrets/a/b"),
+        ("a?b", "a/b"),
+        ("a?b", "ab"),
+        ("a?b", "a\n\nb"),
+    ] {
+        let normalized = normalize_glob_path(path).expect("normalize");
+        assert!(
+            !match_glob(rule, &normalized).expect("match"),
+            "`{rule}` should not match {path:?}"
+        );
+    }
+}
+
 /// A trailing `**` covers every depth beneath its prefix, so every directory
 /// inside that subtree can still gain a denied name.
 #[test]
