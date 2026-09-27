@@ -115,6 +115,7 @@ fn kernel_descriptor_mount_never_writes_the_replacement_object() {
             destination: target.clone(),
             source: std::sync::Arc::new(source),
         }],
+        None,
     )
     .expect("compile descriptor plan");
 

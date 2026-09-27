@@ -58,7 +58,11 @@ impl Fixture {
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
-        for name in ["ORBIT_TASK_ACTOR_KIND", "ORBIT_ACTIVITY_TOOLS"] {
+        for name in [
+            "ORBIT_TASK_ACTOR_KIND",
+            "ORBIT_ACTIVITY_TOOLS",
+            "ORBIT_PLUGIN_BROKER",
+        ] {
             command.env_remove(name);
         }
         command
@@ -429,4 +433,97 @@ fn a_set_secret_reaches_its_exec_backend_on_stdin_only() {
         leaks.is_empty(),
         "the secret value reached files outside the store: {leaks:?}"
     );
+}
+
+/// Every operator command run from inside a masked agent sandbox, where the
+/// Linux sentinel stands in for both plugin trees and no broker is exported:
+/// the secret verbs and removal refuse with the reason and change nothing,
+/// `show` and `doctor` say the state is not visible, and a plugin call is
+/// refused instead of running with no secrets.
+#[test]
+fn a_masked_agent_sandbox_sees_no_plugin_state_and_changes_none() {
+    let fixture = Fixture::new();
+    write_plugin(&fixture.source(), TWO_SECRETS);
+    fixture.run_ok(&[
+        "plugin",
+        "add",
+        fixture.source().to_str().expect("utf8"),
+        "--enable",
+    ]);
+    fixture.run_ok_with_stdin(
+        &["plugin", "secret", "set", "vault", "refresh_token"],
+        Some(SECRET),
+    );
+    assert_eq!(
+        fixture.json(&["plugin", "show", "vault"])["state_and_secrets_visible"],
+        true
+    );
+    let sentinels: Vec<PathBuf> = ["state/plugins", "state/plugin-secrets"]
+        .iter()
+        .map(|tree| {
+            let tree = fixture.orbit_root().join(tree);
+            std::fs::create_dir_all(&tree).expect("tree");
+            let sentinel = tree.join(".orbit-brokered");
+            std::fs::write(&sentinel, b"masked").expect("sentinel");
+            sentinel
+        })
+        .collect();
+
+    for (args, stdin) in [
+        (&["plugin", "secret", "list", "vault"][..], None),
+        (
+            &["plugin", "secret", "set", "vault", "api_key"][..],
+            Some("typed"),
+        ),
+        (
+            &["plugin", "secret", "rm", "vault", "refresh_token"][..],
+            None,
+        ),
+        (&["plugin", "remove", "vault", "--yes"][..], None),
+        (
+            &["plugin", "remove", "vault", "--yes", "--purge-state"][..],
+            None,
+        ),
+    ] {
+        let output = fixture.run(args, stdin);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "`orbit {}` must refuse",
+            args.join(" ")
+        );
+        assert!(
+            stderr.contains("not visible from an agent sandbox"),
+            "`orbit {}` names why: {stderr}",
+            args.join(" ")
+        );
+    }
+    let shown = fixture.json(&["plugin", "show", "vault"]);
+    assert_eq!(shown["state_and_secrets_visible"], false, "{shown}");
+    let doctor = fixture.run(&["plugin", "doctor"], None);
+    let doctor_text = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        doctor_text.contains("not visible from an agent sandbox")
+            && !doctor_text.contains("declares secret"),
+        "{doctor_text}"
+    );
+    let call = fixture.run(&["tool", "run", "vault.status", "--input", "{}"], None);
+    let call_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&call.stdout),
+        String::from_utf8_lossy(&call.stderr)
+    );
+    assert!(!call.status.success(), "{call_text}");
+    assert!(
+        call_text.contains("plugin_broker_unavailable") && !call_text.contains("delivered"),
+        "the call is refused before the backend runs: {call_text}"
+    );
+
+    for sentinel in &sentinels {
+        std::fs::remove_file(sentinel).expect("lift the mask");
+    }
+    let listed = fixture.json(&["plugin", "secret", "list", "vault"]);
+    assert_eq!(listed[0]["name"], "refresh_token", "{listed}");
+    assert_eq!(listed[0]["set"], true, "nothing was removed: {listed}");
+    assert_eq!(listed[1]["set"], false, "nothing was set: {listed}");
 }

@@ -192,6 +192,7 @@ impl Scratch {
                 allow_fallback: false,
                 managed_worktree: false,
                 runtime_write_authority: Vec::new(),
+                mask: None,
             },
             sockets: Mutex::new(Vec::new()),
         }

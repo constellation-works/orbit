@@ -1557,3 +1557,97 @@ fn read_boundary_keeps_a_sibling_state_namespace_unreadable_under_sandbox_exec()
     assert!(!lists(&plugins.join("other")));
     assert!(!lists(&plugins));
 }
+
+/// The agent mask's denies come last, after the modify grant that covers the
+/// masked trees, so SBPL's last-match-wins leaves them denied.
+#[test]
+fn subpath_mask_denies_reads_and_writes_as_the_final_rules() {
+    let resolved = profile("agent", &["/srv/orbit"], &["/srv/orbit/**"]);
+    let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    let before = text.len();
+    super::super::append_macos_subpath_mask(
+        &mut text,
+        &[
+            std::path::PathBuf::from("/srv/orbit/state/plugins"),
+            std::path::PathBuf::from("/srv/orbit/state/plugin-secrets"),
+        ],
+    );
+
+    assert_eq!(
+        &text[before..],
+        "(deny file-read* file-write* (subpath \"/srv/orbit/state/plugins\"))\n\
+         (deny file-read* file-write* (subpath \"/srv/orbit/state/plugin-secrets\"))\n"
+    );
+    let grant = text
+        .find("(allow file-write* (subpath \"/srv/orbit\"))")
+        .expect("modify grant over the masked trees");
+    assert!(grant < before, "the mask must follow the grant: {text}");
+}
+
+/// Kernel-level half: under a profile that grants writes to the whole global
+/// root, the masked trees still refuse reads, listings and writes.
+#[cfg(target_os = "macos")]
+#[test]
+fn subpath_mask_hides_the_tree_from_a_sandboxed_child() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    let parent = sandbox_test_parent("plugin-mask");
+    let _cleanup = ScopeGuard(parent.clone());
+    let global = parent.join("global");
+    let masked = global.join("state/plugins");
+    let visible = global.join("state/other");
+    std::fs::create_dir_all(&masked).expect("masked tree");
+    std::fs::create_dir_all(&visible).expect("visible tree");
+    std::fs::write(masked.join("secret"), b"hidden").expect("masked file");
+    std::fs::write(visible.join("note"), b"shown").expect("visible file");
+    let global_text = global.display().to_string();
+    let resolved = ResolvedFsProfile {
+        name: "agent".to_string(),
+        read: vec![global_text.clone()],
+        modify: vec![format!("{global_text}/**")],
+    };
+    let mut text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    super::super::append_macos_subpath_mask(&mut text, std::slice::from_ref(&masked));
+
+    assert!(can_read_under_profile(&text, &visible.join("note")));
+    assert!(!can_read_under_profile(&text, &masked.join("secret")));
+    for probe in [
+        format!("ls {}", shell_escape(&masked)),
+        format!("echo x > {}", shell_escape(&masked.join("planted"))),
+    ] {
+        assert!(
+            !shell_succeeds_under_profile(&text, &probe),
+            "`{probe}` must fail under the mask"
+        );
+    }
+    assert!(!masked.join("planted").exists());
+}
+
+#[cfg(target_os = "macos")]
+fn shell_succeeds_under_profile(profile_text: &str, script: &str) -> bool {
+    use std::io::Write;
+
+    let mut profile_file = tempfile::Builder::new()
+        .prefix("orbit-sandbox-mask-")
+        .suffix(".sb")
+        .tempfile()
+        .expect("tempfile");
+    profile_file
+        .write_all(profile_text.as_bytes())
+        .expect("write profile");
+    profile_file.flush().expect("flush");
+    std::process::Command::new(sandbox_exec_path_for_test())
+        .arg("-f")
+        .arg(profile_file.path())
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("run sandbox-exec")
+        .success()
+}

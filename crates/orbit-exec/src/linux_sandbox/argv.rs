@@ -24,6 +24,17 @@ pub fn compile_linux_bwrap_argv(
     cwd: Option<&Path>,
     managed_worktree: bool,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
+    compile_plan(profile, program, args, cwd, managed_worktree, None)
+}
+
+fn compile_plan(
+    profile: &ResolvedFsProfile,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    managed_worktree: bool,
+    mask: Option<&LinuxBwrapMask>,
+) -> Result<LinuxBwrapPlan, OrbitError> {
     let compiled = CompiledModifyRules::compile(profile)?;
     let expanded = expand_each_rule(
         profile
@@ -123,11 +134,21 @@ pub fn compile_linux_bwrap_argv(
         }
     }
 
+    let cwd = cwd
+        .map(|cwd| canonical_existing(cwd, "sandbox cwd"))
+        .transpose()?;
+    if let Some(cwd) = &cwd
+        && managed_worktree
+        && cwd_is_writable_root(cwd, &writable_roots)
+    {
+        append_stable_toolchain_mounts(&mut out, cwd)?;
+    }
+    // After every policy mount and alias bind, so none of them can expose a
+    // masked directory again.
+    if let Some(mask) = mask {
+        append_mask_mounts(&mut out, mask)?;
+    }
     if let Some(cwd) = cwd {
-        let cwd = canonical_existing(cwd, "sandbox cwd")?;
-        if managed_worktree && cwd_is_writable_root(&cwd, &writable_roots) {
-            append_stable_toolchain_mounts(&mut out, &cwd)?;
-        }
         // Keep the provider agent on the real worktree path. rustc cache-key
         // cwd normalization belongs in scripts/rustc-compiler-cache.sh, which
         // chdirs onto LINUX_STABLE_WORKSPACE_MOUNT only for compiler invocations.
@@ -162,6 +183,10 @@ pub fn compile_linux_bwrap_argv(
 /// paths are subsequently replaced. Bubblewrap receives only inherited
 /// `--bind-fd` sources for those grants; a missing matching bind fails
 /// closed because the runtime authority would otherwise be silently unused.
+///
+/// `mask`, when given, is mounted after every other mount of the plan; a
+/// masked directory the child could also reach through another path refuses
+/// the plan (see [`LinuxBwrapMask`]).
 pub fn compile_linux_bwrap_argv_with_authority(
     profile: &ResolvedFsProfile,
     program: &str,
@@ -169,8 +194,9 @@ pub fn compile_linux_bwrap_argv_with_authority(
     cwd: Option<&Path>,
     managed_worktree: bool,
     authority: Vec<LinuxBwrapMountAuthority>,
+    mask: Option<&LinuxBwrapMask>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
-    let mut plan = compile_linux_bwrap_argv(profile, program, args, cwd, managed_worktree)?;
+    let mut plan = compile_plan(profile, program, args, cwd, managed_worktree, mask)?;
     for grant in authority {
         let source = prepare_mount_source(grant.source)?;
         #[cfg(unix)]

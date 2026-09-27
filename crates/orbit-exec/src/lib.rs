@@ -62,7 +62,7 @@ pub use linux_landlock::{
     probe_landlock, spawn_under_linux_landlock, spawn_under_linux_landlock_boundary,
 };
 pub use linux_sandbox::{
-    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
+    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
     LinuxBwrapSpawnRequest, PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind,
     WriteGrant, bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message,
@@ -72,10 +72,11 @@ pub use linux_sandbox::{
 };
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
-    append_macos_network_access, append_macos_read_boundary, claude_state_dir_from_env,
-    compile_macos_sandbox_profile, default_credential_read_denies, grok_state_dir_from_env,
-    macos_login_keychain_access, sandbox_exec_available, sandbox_exec_path,
-    sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
+    append_macos_network_access, append_macos_read_boundary, append_macos_subpath_mask,
+    claude_state_dir_from_env, compile_macos_sandbox_profile, default_credential_read_denies,
+    grok_state_dir_from_env, macos_login_keychain_access, sandbox_exec_available,
+    sandbox_exec_path, sandbox_exec_program_for_audit, sandbox_exec_unavailable_message,
+    spawn_under_macos_sandbox,
 };
 pub use path_identity::{create_write_root, lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};

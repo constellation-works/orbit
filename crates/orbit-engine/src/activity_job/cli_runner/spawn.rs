@@ -3,11 +3,12 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
 use orbit_exec::{
-    BwrapProbeOutcome, LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
-    LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest, UnsatisfiedWriteGrant,
-    compile_linux_bwrap_argv_with_authority, compile_macos_sandbox_profile,
-    prepare_linux_bwrap_write_grants, probe_bwrap, sandbox_exec_available,
-    sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
+    BwrapProbeOutcome, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
+    LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest, MacosSandboxSpawnRequest,
+    UnsatisfiedWriteGrant, append_macos_subpath_mask, compile_linux_bwrap_argv_with_authority,
+    compile_macos_sandbox_profile, prepare_linux_bwrap_write_grants, probe_bwrap,
+    sandbox_exec_available, sandbox_exec_unavailable_message, spawn_under_linux_bwrap,
+    spawn_under_macos_sandbox,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
 use tempfile::NamedTempFile;
@@ -266,6 +267,7 @@ fn spawn_linux_bwrap(
         report_unsatisfied_grants(&prepared.unsatisfied);
     }
     let authority = linux_bwrap_mount_authority(sandbox);
+    let mask = linux_bwrap_mask(sandbox);
     let plan = compile_linux_bwrap_argv_with_authority(
         &sandbox.fs_profile,
         program,
@@ -273,6 +275,7 @@ fn spawn_linux_bwrap(
         cwd,
         sandbox.managed_worktree,
         authority,
+        mask.as_ref(),
     )
     .map_err(|error| SpawnError::permanent(error.to_string()))?;
     reject_unsatisfiable_managed_grants(sandbox.managed_worktree, &plan.dropped_grants)?;
@@ -307,6 +310,14 @@ pub(crate) fn linux_bwrap_mount_authority(
             source: Arc::clone(&grant.handle),
         })
         .collect()
+}
+
+/// The host's mask as Bubblewrap mounts it: its sentinel over each target.
+pub(crate) fn linux_bwrap_mask(sandbox: &ResolvedSandbox) -> Option<LinuxBwrapMask> {
+    sandbox.mask.as_ref().map(|mask| LinuxBwrapMask {
+        sentinel: mask.sentinel.clone(),
+        targets: mask.targets.clone(),
+    })
 }
 
 /// Inside a managed worktree, preparation should have satisfied every grant.
@@ -456,8 +467,12 @@ pub(crate) fn spawn_macos_sandboxed_with(
     // `provider` reaches the compiler because the credential denylist has a
     // provider-scoped exception: the confined CLI's own credential store.
     // See `orbit_exec::macos_login_keychain_access`. [ORB-10929] [ORB-12261]
-    let profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
+    let mut profile_text = compile_macos_sandbox_profile(&sandbox.fs_profile, provider)
         .map_err(|err| SpawnError::permanent(err.to_string()))?;
+    // Last, so the host's mask outranks every allow compiled above.
+    if let Some(mask) = &sandbox.mask {
+        append_macos_subpath_mask(&mut profile_text, &mask.targets);
+    }
     let child_env = prepare_macos_codex_ca_environment_with(
         provider,
         env,

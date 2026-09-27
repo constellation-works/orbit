@@ -221,3 +221,59 @@ fn a_symlinked_store_directory_is_refused() {
         "nothing is written through the link"
     );
 }
+
+fn assert_not_visible<T: std::fmt::Debug>(result: Result<T, orbit_common::OrbitError>) {
+    match result {
+        Err(orbit_common::OrbitError::PolicyDenied(message)) => assert!(
+            message.contains("not visible from an agent sandbox"),
+            "{message}"
+        ),
+        other => panic!("expected the masked store to be refused, got {other:?}"),
+    }
+}
+
+/// Inside the Linux mask the store directory is the sentinel. A store that
+/// read it as empty would tell a backend its secret was never set.
+#[test]
+fn a_masked_store_is_refused_rather_than_read_as_empty() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let store = PluginSecretStore::new(root.path());
+    store.put("demo", "token", &value("host")).expect("put");
+    std::fs::write(
+        plugin_secret_store_dir(root.path()).join(".orbit-brokered"),
+        b"masked",
+    )
+    .expect("sentinel");
+
+    assert_not_visible(store.get("demo", "token"));
+    assert_not_visible(store.list("demo"));
+    assert_not_visible(store.put("demo", "token", &value("agent")));
+    assert_not_visible(store.remove("demo", "token"));
+}
+
+/// A store file the process may not open is refused, not read as unset.
+#[cfg(unix)]
+#[test]
+fn a_permission_denied_store_file_is_refused_rather_than_read_as_empty() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // SAFETY: `geteuid` only reads the calling process's credentials.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = tempfile::tempdir().expect("tempdir");
+    let store = PluginSecretStore::new(root.path());
+    store.put("demo", "token", &value("host")).expect("put");
+    let files: Vec<_> = std::fs::read_dir(plugin_secret_store_dir(root.path()))
+        .expect("store dir")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    assert_eq!(files.len(), 1, "one plugin's file: {files:?}");
+    std::fs::set_permissions(&files[0], std::fs::Permissions::from_mode(0o000)).expect("chmod");
+
+    let result = store.get("demo", "token");
+
+    std::fs::set_permissions(&files[0], std::fs::Permissions::from_mode(0o600)).expect("restore");
+    assert_not_visible(result);
+}

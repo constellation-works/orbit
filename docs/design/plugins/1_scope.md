@@ -262,10 +262,12 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   single lock.
 - **Unreadable to plugins.** `state/plugin-secrets/` is on the plugin sandbox's unreadable list
   with nothing granted back, not even a plugin's own file (§4.3); the host reads a value and
-  hands it over. It is *not* denied to agent sandboxes: a nested `orbit` inside an agent
-  sandbox must still be able to deliver a secret to its backend, so until the host-side broker
-  lands an agent sandbox can read the global root, this tree included. The broker and the
-  agent-side deny are designed in [2_agent_call_broker.md](./2_agent_call_broker.md) [ORB-13038].
+  hands it over. Agent sandboxes cannot read or write it either: every sandboxed agent run
+  masks `state/plugins/` and `state/plugin-secrets/`, and an agent's plugin calls reach the
+  backend through the run's host-side broker, which reads the store on the host
+  ([2_agent_call_broker.md](./2_agent_call_broker.md) §6). Inside the mask the store refuses
+  with "not visible from an agent sandbox" rather than reading as unset, and so do
+  `plugin secret`, the secret rows of `plugin doctor` and `plugin remove`.
 - **Delivery.** Each backend call carries the plugin's declared secrets in the request itself:
   `context.secrets` on the `exec` stdin envelope, `params._meta.orbit.secrets` on an `mcp`
   `tools/call` (§4.2). The object maps each declared name that is set to
@@ -515,9 +517,11 @@ Trust level: host-attested for in-process calls and authenticated for brokered c
 in-process nested call reads process environment, which an agent with a shell can change.
 When `ORBIT_PLUGIN_BROKER` is set, nested CLI and MCP plugin calls instead reach the run's
 broker. It authenticates the sandbox peer and supplies the run and task identity from its
-own dispatch record, independent of the nested process's `ORBIT_*` variables. Until the
-sandbox mask is deployed, a nested process without the broker variable still uses the
-in-process path and retains its host-attested trust level.
+own dispatch record, independent of the nested process's `ORBIT_*` variables. Inside a
+sandboxed agent run a nested process without the broker variable has no in-process path: the
+sandbox masks plugin state and secrets, so the call is refused `plugin_broker_unavailable`
+before any backend spawns. Unsandboxed runs and hosts without a broker keep the in-process
+path and its host-attested trust level.
 
 No routine or auto-task id is sent. The run's trigger records the routine host-side, but
 neither the dispatcher's activity context nor the managed-run envelope carries it, so Orbit has
@@ -733,10 +737,12 @@ credential a plugin keeps in `{{plugin_state}}` is readable by that plugin alone
 dropped from the profile with a warning; no grant re-allows it. Writing `{{plugin_state}}`
 still needs an `fs.write` root there and the `fs` grant (§4.1 admission is unchanged). This is the inventory the agent sandbox grants a nested Orbit
 (`append_linux_runtime_write_roots` in `orbit-core`); widening it is a security decision
-[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes do not yet deny `state/plugins/`
-or `state/plugin-secrets/`: a backend spawned by a nested Orbit inherits the agent's restrictions,
-so the deny waits for the host-side broker in [2_agent_call_broker.md](./2_agent_call_broker.md)
-[ORB-13038]. The witness under `plugins/` stays read-only
+[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes also deny `state/plugins/`
+and `state/plugin-secrets/` for reads and writes: on Linux a read-only sentinel directory is
+bound over each tree, on macOS the profile ends with a deny for both. A backend an agent calls
+is spawned by the run's broker on the host, outside that mask
+([2_agent_call_broker.md](./2_agent_call_broker.md) §6). `plugins/`, `plugins/.grants/` and
+`state/plugin-callbacks/` are not masked. The witness under `plugins/` stays read-only
 only because both grant paths compose: the inventory omits `plugins/`, and `fs.write`
 admission refuses global-root descendants outside `{{plugin_state}}` [ORB-12778].
 

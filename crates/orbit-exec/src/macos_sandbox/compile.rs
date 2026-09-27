@@ -626,6 +626,23 @@ pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAcc
     }
 }
 
+/// Deny every read and write beneath `subpaths` in a compiled profile.
+///
+/// Appended after everything else the profile allows, so under SBPL's
+/// last-match-wins the denial is final: no earlier `modify` grant, runtime
+/// re-allow or provider carve-out reaches back into these trees. Each path is
+/// resolved physically first, because Seatbelt matches the kernel's
+/// `/private/var` path even when a caller supplied `/var`.
+pub fn append_macos_subpath_mask(profile: &mut String, subpaths: &[PathBuf]) {
+    for path in subpaths {
+        let physical = crate::physical_with_missing_tail(path);
+        profile.push_str(&format!(
+            "(deny file-read* file-write* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&physical.display().to_string())
+        ));
+    }
+}
+
 /// Append a plugin's read carve-outs to a compiled profile.
 ///
 /// [`compile_macos_sandbox_profile`] allows reads broadly, which is right for

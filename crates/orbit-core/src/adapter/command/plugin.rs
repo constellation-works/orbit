@@ -156,6 +156,17 @@ impl OrbitRuntime {
         plugin::plugin_doctor(self)
     }
 
+    /// Refuse, naming why, when this process runs inside an agent sandbox
+    /// that masks plugin state and the plugin secret store.
+    pub fn ensure_plugin_state_visible(&self) -> Result<(), OrbitError> {
+        if crate::runtime::plugin::sandbox_mask::plugin_trees_masked(&self.global_root()) {
+            return Err(crate::runtime::plugin::sandbox_mask::not_visible(
+                "plugin state and secrets",
+            ));
+        }
+        Ok(())
+    }
+
     /// Count callback records that no longer name a live plugin backend.
     pub fn stale_plugin_callback_session_count(&self) -> Result<usize, OrbitError> {
         stale_plugin_callback_session_count(&self.global_root())

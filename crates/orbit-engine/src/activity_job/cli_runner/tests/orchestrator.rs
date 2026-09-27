@@ -361,6 +361,7 @@ fn linux_bwrap_failed_invocation_names_ungranted_write_path_and_deny() {
             allow_fallback: false,
             managed_worktree: true,
             runtime_write_authority: Vec::new(),
+            mask: None,
         })
         .task_context(serde_json::json!({
             "workspace_path": workspace.display().to_string()
@@ -419,6 +420,7 @@ fn linux_bwrap_exit_zero_without_an_envelope_still_names_the_denied_write() {
             allow_fallback: false,
             managed_worktree: true,
             runtime_write_authority: Vec::new(),
+            mask: None,
         })
         .task_context(serde_json::json!({
             "workspace_path": workspace.display().to_string()

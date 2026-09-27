@@ -81,6 +81,9 @@ impl Execute for PluginSecretSetArgs {
                 self.plugin, self.name
             )));
         }
+        // Before the prompt: a value typed into a sandbox that cannot store it
+        // would only be thrown away.
+        runtime.ensure_plugin_state_visible()?;
         let value = read_secret_value(&self.plugin, &self.name)?;
         let status = runtime.set_plugin_secret(&self.plugin, &self.name, &value)?;
         let text = format!("Set secret '{}' for plugin '{}'.", status.name, self.plugin);

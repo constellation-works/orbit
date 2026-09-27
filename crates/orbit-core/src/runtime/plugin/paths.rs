@@ -24,9 +24,14 @@ pub fn plugin_install_path(global_root: &Path, name: &str, version: &str) -> Pat
     plugin_namespace_dir(global_root, name).join(version)
 }
 
+/// The tree holding every plugin's state directory.
+pub fn plugin_state_root(global_root: &Path) -> PathBuf {
+    global_root.join("state").join("plugins")
+}
+
 /// Per-plugin state directory handed to the backend as `ORBIT_PLUGIN_STATE`.
 pub fn plugin_state_dir(global_root: &Path, name: &str) -> PathBuf {
-    global_root.join("state").join("plugins").join(name)
+    plugin_state_root(global_root).join(name)
 }
 
 /// The host-owned secret store (`runtime::plugin::secrets`). No plugin child

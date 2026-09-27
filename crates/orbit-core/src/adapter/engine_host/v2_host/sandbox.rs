@@ -49,6 +49,7 @@ pub(crate) fn resolve_executor_sandbox(
             allow_fallback: false,
             managed_worktree: false,
             runtime_write_authority: Vec::new(),
+            mask: None,
         })),
         ExecutorSandboxKind::MacosSandboxExec => {
             #[cfg(not(target_os = "macos"))]
@@ -87,6 +88,7 @@ pub(crate) fn resolve_executor_sandbox(
                     allow_fallback: executor.allow_fallback,
                     managed_worktree: false,
                     runtime_write_authority: Vec::new(),
+                    mask: Some(agent_plugin_mask(runtime)?),
                 }))
             }
         }
@@ -150,10 +152,31 @@ pub(crate) fn resolve_executor_sandbox(
                     allow_fallback: executor.allow_fallback,
                     managed_worktree,
                     runtime_write_authority,
+                    mask: Some(agent_plugin_mask(runtime)?),
                 }))
             }
         }
     }
+}
+
+/// Hide plugin state and the plugin secret store from the sandboxed process
+/// (design `docs/design/plugins/2_agent_call_broker.md` §6).
+///
+/// Every sandboxed launch gets the mask, whether or not its run's broker then
+/// binds: a broker that fails costs the run its plugin calls, never the mask.
+/// A host that cannot lay the mask refuses the launch rather than start the
+/// agent with the trees readable.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn agent_plugin_mask(
+    runtime: &OrbitRuntime,
+) -> Result<orbit_engine::SandboxMask, DispatchError> {
+    let prepared =
+        crate::runtime::plugin::sandbox_mask::prepare_plugin_mask(&runtime.global_root())
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    Ok(orbit_engine::SandboxMask {
+        sentinel: prepared.sentinel,
+        targets: prepared.trees,
+    })
 }
 
 /// Resolve the activity's fsProfile against the active policy, then expand

@@ -22,7 +22,7 @@ pub use audit_writer::V2AuditWriter;
 pub use crew::{ResolvedAgentSettings, inject_system_crew_input, resolve_crew_settings};
 pub use dispatcher::{
     DispatchError, DispatchOutcome, LinuxRuntimeWriteAuthority, ResolvedCliExecutor,
-    ResolvedSandbox, ResolvedShellExecutor, V2DispatchInput, dispatch_error_to_orbit,
+    ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2DispatchInput, dispatch_error_to_orbit,
     dispatch_v2_activity,
 };
 pub use job_executor::{

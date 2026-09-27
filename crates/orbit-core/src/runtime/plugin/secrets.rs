@@ -29,6 +29,7 @@ use orbit_types::plugin::{is_valid_namespace, is_valid_secret_name};
 use serde::{Deserialize, Serialize};
 
 use super::paths::plugin_secret_store_dir;
+use super::sandbox_mask::{not_visible, tree_masked};
 
 const SECRET_FILE_SCHEMA_VERSION: u32 = 1;
 
@@ -276,14 +277,17 @@ impl PluginSecretStore {
 
     fn lock(&self, plugin: &str) -> Result<FileLockGuard, OrbitError> {
         let path = self.file_path(plugin)?.with_extension("lock");
-        self.refuse_symlinked_dir()?;
+        self.refuse_unusable_dir()?;
         acquire_exclusive_file_lock(&path, "plugin secrets", FileLockOptions::default())
             .map_err(|error| OrbitError::Io(format!("lock {}: {error}", path.display())))
     }
 
+    /// Only a file that does not exist reads as "nothing set". A masked or
+    /// permission-denied store is refused: an empty `context.secrets` would
+    /// send a backend into its "not configured" path.
     fn read(&self, plugin: &str) -> Result<SecretFile, OrbitError> {
         let path = self.file_path(plugin)?;
-        self.refuse_symlinked_dir()?;
+        self.refuse_unusable_dir()?;
         let mut handle = match open_read_only_no_follow(&path) {
             Ok(handle) => handle,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -292,6 +296,9 @@ impl PluginSecretStore {
                     plugin: plugin.to_string(),
                     secrets: BTreeMap::new(),
                 });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(not_visible("the plugin secret store"));
             }
             Err(error) => {
                 return Err(OrbitError::Io(format!("open {}: {error}", path.display())));
@@ -356,8 +363,12 @@ impl PluginSecretStore {
     }
 
     /// The store directory is host-owned; a link there would send every value
-    /// wherever it points.
-    fn refuse_symlinked_dir(&self) -> Result<(), OrbitError> {
+    /// wherever it points. Inside an agent sandbox the directory is masked,
+    /// and nothing may be read or written through it.
+    fn refuse_unusable_dir(&self) -> Result<(), OrbitError> {
+        if tree_masked(&self.dir) {
+            return Err(not_visible("the plugin secret store"));
+        }
         match std::fs::symlink_metadata(&self.dir) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
                 Err(OrbitError::PolicyDenied(format!(

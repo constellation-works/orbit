@@ -403,3 +403,88 @@ fn a_backend_rotation_is_stored_and_audited_by_name_and_outcome_only() {
         );
     }
 }
+
+/// What an operator command sees from inside an agent sandbox: the Linux
+/// sentinel standing in for the secret store.
+fn mask_secret_store(fixture: &PluginFixture) -> std::path::PathBuf {
+    let sentinel = crate::runtime::plugin::paths::plugin_secret_store_dir(&fixture.global_root)
+        .join(crate::runtime::plugin::sandbox_mask::PLUGIN_MASK_SENTINEL_FILE);
+    std::fs::create_dir_all(sentinel.parent().expect("store dir")).expect("store dir");
+    std::fs::write(&sentinel, b"masked").expect("sentinel");
+    sentinel
+}
+
+fn assert_not_visible<T: std::fmt::Debug>(result: Result<T, orbit_common::OrbitError>) {
+    match result {
+        Err(orbit_common::OrbitError::PolicyDenied(message)) => assert!(
+            message.contains("not visible from an agent sandbox"),
+            "{message}"
+        ),
+        other => panic!("expected a masked-sandbox refusal, got {other:?}"),
+    }
+}
+
+/// Inside a masked sandbox the secret verbs and every removal that would
+/// delete secrets or state refuse, and change nothing a host run would see.
+#[test]
+fn a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo").declaring_secrets(TWO_SECRETS),
+    );
+    set_plugin_secret(&fixture.runtime, "demo", "api_key", &value("x")).expect("set");
+    let sentinel = mask_secret_store(&fixture);
+
+    assert_not_visible(list_plugin_secrets(&fixture.runtime, "demo"));
+    assert_not_visible(set_plugin_secret(
+        &fixture.runtime,
+        "demo",
+        "refresh_token",
+        &value("y"),
+    ));
+    assert_not_visible(remove_plugin_secret(&fixture.runtime, "demo", "api_key"));
+    for options in [
+        PluginRemoveOptions::default(),
+        PluginRemoveOptions {
+            purge_state: true,
+            ..PluginRemoveOptions::default()
+        },
+    ] {
+        assert_not_visible(remove_plugin(&fixture.runtime, "demo", &options));
+    }
+
+    std::fs::remove_file(&sentinel).expect("lift the mask");
+    assert_eq!(stored_names(&fixture), ["api_key"]);
+    assert!(
+        super::super::show_plugin(&fixture.reopen(), "demo").is_ok(),
+        "the plugin is still installed"
+    );
+}
+
+/// Doctor inside a masked sandbox says the store is not visible once, and
+/// never reports a declared secret as unset.
+#[test]
+fn doctor_in_a_masked_sandbox_reports_the_mask_instead_of_unset_secrets() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo").declaring_secrets(TWO_SECRETS),
+    );
+    mask_secret_store(&fixture);
+
+    let rows = plugin_doctor(&fixture.reopen()).expect("doctor");
+
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.message.contains("declares secret")),
+        "{rows:?}"
+    );
+    let masked: Vec<_> = rows
+        .iter()
+        .filter(|row| row.message.contains("not visible from an agent sandbox"))
+        .collect();
+    assert_eq!(masked.len(), 1, "{rows:?}");
+    assert!(masked[0].intentional, "the mask is not a fault: {rows:?}");
+}

@@ -83,6 +83,8 @@ impl Fixture {
             ),
             (orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV, None),
             (orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_FD_ENV, None),
+            ("ORBIT_PLUGIN_BROKER", None),
+            ("ORBIT_ACTIVITY_TOOLS", None),
         ]);
         let worktree = worktree.canonicalize().expect("canonical worktree");
         Self {
@@ -580,3 +582,51 @@ for line in sys.stdin:
         continue
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
 "#;
+
+/// Inside a masked agent sandbox with no broker exported, a plugin call is
+/// refused before the local audit boundary and before any backend spawns;
+/// the same call on an unmasked host still runs in-process.
+#[test]
+fn a_masked_process_without_a_broker_refuses_plugin_calls() {
+    let fixture = Fixture::new();
+    fixture.plugin("demo", ECHO_BACKEND, None);
+    let runtime = fixture.runtime();
+    let call = |runtime: &OrbitRuntime| {
+        runtime.execute_tool_command_dispatch_with_session_context(
+            "demo.hello",
+            json!({"subject": "host"}),
+            None,
+            None,
+            super::super::execute::ToolEntryPoint::Cli,
+            orbit_types::tool::ToolSessionContext::default(),
+        )
+    };
+
+    let unmasked = call(&runtime).expect("an unmasked host runs the call in-process");
+    assert!(unmasked.audit_recorded, "{:?}", unmasked.value);
+    let rows_before = runtime
+        .list_audit_events(None, Some("demo.hello".to_string()), None, None, 100)
+        .expect("audit rows")
+        .len();
+
+    // What the nested orbit sees through the Linux mask.
+    let state = fixture.global_root.join("state/plugins");
+    std::fs::create_dir_all(&state).expect("state tree");
+    std::fs::write(
+        state.join(crate::runtime::plugin::sandbox_mask::PLUGIN_MASK_SENTINEL_FILE),
+        b"masked",
+    )
+    .expect("sentinel");
+    let error = call(&runtime).expect_err("a masked call without a broker is refused");
+
+    let orbit_common::OrbitError::RemoteTool { code, payload, .. } = &error else {
+        panic!("the refusal must be structured: {error:?}");
+    };
+    assert_eq!(code, "plugin_broker_unavailable");
+    assert_eq!(payload["retryable"], false);
+    let rows_after = runtime
+        .list_audit_events(None, Some("demo.hello".to_string()), None, None, 100)
+        .expect("audit rows")
+        .len();
+    assert_eq!(rows_after, rows_before, "nothing was dispatched locally");
+}

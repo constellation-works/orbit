@@ -14,8 +14,8 @@ use orbit_common::fs::generation::{GenerationGuard, executable_generation};
 use orbit_engine::RuntimeHost;
 #[cfg(target_os = "macos")]
 use orbit_exec::{
-    MacosSandboxSpawnRequest, compile_macos_sandbox_profile, sandbox_exec_available,
-    sandbox_exec_path, spawn_under_macos_sandbox,
+    MacosSandboxSpawnRequest, append_macos_subpath_mask, compile_macos_sandbox_profile,
+    sandbox_exec_available, sandbox_exec_path, spawn_under_macos_sandbox,
 };
 #[cfg(target_os = "macos")]
 use serde_json::Value;
@@ -234,8 +234,14 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
     );
 
     let _env = orbit_common::test_env::scoped([("HOME", Some(home_str.as_str()))]);
-    let profile_text = compile_macos_sandbox_profile(&resolved.fs_profile, "gemini")
+    let mut profile_text = compile_macos_sandbox_profile(&resolved.fs_profile, "gemini")
         .expect("compile nested orbit sandbox profile");
+    // As the engine's launcher does: the host's plugin mask comes last.
+    let mask = resolved
+        .mask
+        .as_ref()
+        .expect("sandboxed agents carry the mask");
+    append_macos_subpath_mask(&mut profile_text, &mask.targets);
     let (_, implement_yaml) = DEFAULT_ACTIVITY_FILES
         .iter()
         .find(|(name, _)| *name == "agent_implement")
