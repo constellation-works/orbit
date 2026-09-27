@@ -4,6 +4,7 @@ use super::loader::{AutoTaskLoadError, collect_auto_tasks};
 use super::schedule::{AutoTaskDueDecision, decide_due};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_store::compose::auto_task::{
     CursorSession, cursor_state_path, load_cursor_state, with_cursor_lock,
 };
@@ -11,7 +12,7 @@ use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord, DedupePolicy,
     SkipIfUnchanged,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use std::sync::{Arc, Barrier};
@@ -133,21 +134,21 @@ pub fn run_auto_task_scheduler_at(
     let state_path = cursor_state_path(&host.state_dir());
 
     let collection = collect_auto_tasks(&definition_root);
+    #[cfg(test)]
+    wait_after_load();
 
     let mut reports = Vec::new();
     for loaded in &collection.definitions {
         let definition = &loaded.definition;
-        let report =
-            fire_definition(host, definition, &state_path, now, options).unwrap_or_else(|error| {
-                AutoTaskFireReport {
-                    name: definition.name.clone(),
-                    action: "error",
-                    reason: Some(error.to_string()),
-                    slot: None,
-                    task_id: None,
-                    blocking_task_id: None,
-                    automation: None,
-                }
+        let report = fire_definition(host, definition, &loaded.path, &state_path, now, options)
+            .unwrap_or_else(|error| AutoTaskFireReport {
+                name: definition.name.clone(),
+                action: "error",
+                reason: Some(error.to_string()),
+                slot: None,
+                task_id: None,
+                blocking_task_id: None,
+                automation: None,
             });
         reports.push(report);
     }
@@ -161,13 +162,12 @@ pub fn run_auto_task_scheduler_at(
 fn fire_definition(
     host: &dyn AutoTaskDispatch,
     definition: &AutoTaskDefinition,
+    definition_path: &Path,
     state_path: &std::path::Path,
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskFireReport, OrbitError> {
-    // Checked before anything else, including the delivery evaluator: a
-    // definition whose source is gone must not mint, baseline, or consume a
-    // slot, and the reason has to reach `auto-task list` rather than a log.
+    // A plugin-seeded definition whose plugin is inactive cannot admit work.
     if let Some(reason) = host.skip_reason(definition) {
         tracing::warn!(
             target: "orbit.automation.auto_tasks",
@@ -177,43 +177,92 @@ fn fire_definition(
         );
         return Ok(skipped(definition, &reason));
     }
-    if matches!(
-        definition.schedule,
-        orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }
-    ) {
-        let diagnostic = host.evaluate_delivery(definition, options.dry_run, now)?;
-        let task_id = diagnostic
-            .state
-            .as_ref()
-            .and_then(|state| state.active.as_ref())
-            .and_then(|attempt| attempt.action_id.clone());
 
-        return Ok(AutoTaskFireReport {
-            name: definition.name.clone(),
-            action: "delivery",
-            reason: Some(diagnostic.reason.clone()),
-            slot: None,
-            task_id,
-            blocking_task_id: None,
-            automation: Some(diagnostic),
-        });
-    }
-
+    // Dry runs leave no cursor state or lock file behind. They perform no
+    // admission, so the locked boundary below is only needed for live passes.
     if options.dry_run {
+        if let Some(report) = source_skip(definition, definition_path)? {
+            return Ok(report);
+        }
+        if matches!(
+            definition.schedule,
+            orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }
+        ) {
+            return fire_delivery(host, definition, true, now);
+        }
         return dry_run_definition(host, definition, state_path, now);
     }
 
     #[cfg(test)]
     wait_for_admission_overlap();
+    // Discovery happens before admission. A delete may have removed this
+    // definition while the pass waited for the shared cursor lock.
+    if matches!(
+        definition.schedule,
+        orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }
+    ) {
+        // Delivery consumers share deletion's lock but do not use cursor
+        // contents. A malformed cursor must not stop an unrelated delivery.
+        return with_exclusive_file_lock(state_path, "auto-task cursor", || {
+            if let Some(report) = source_skip(definition, definition_path)? {
+                return Ok(report);
+            }
+            fire_delivery(host, definition, false, now)
+        });
+    }
     with_cursor_lock(state_path, |session| {
+        if let Some(report) = source_skip(definition, definition_path)? {
+            return Ok(report);
+        }
         fire_locked(host, definition, session, now)
+    })
+}
+
+fn source_skip(
+    definition: &AutoTaskDefinition,
+    definition_path: &Path,
+) -> Result<Option<AutoTaskFireReport>, OrbitError> {
+    match std::fs::symlink_metadata(definition_path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(None),
+        Ok(_) => Ok(Some(skipped(definition, "definition_unavailable"))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Some(skipped(definition, "definition_removed")))
+        }
+        Err(error) => Err(OrbitError::Io(format!(
+            "inspect auto-task definition {}: {error}",
+            definition_path.display()
+        ))),
+    }
+}
+
+fn fire_delivery(
+    host: &dyn AutoTaskDispatch,
+    definition: &AutoTaskDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutoTaskFireReport, OrbitError> {
+    let diagnostic = host.evaluate_delivery(definition, dry_run, now)?;
+    let task_id = diagnostic
+        .state
+        .as_ref()
+        .and_then(|state| state.active.as_ref())
+        .and_then(|attempt| attempt.action_id.clone());
+
+    Ok(AutoTaskFireReport {
+        name: definition.name.clone(),
+        action: "delivery",
+        reason: Some(diagnostic.reason.clone()),
+        slot: None,
+        task_id,
+        blocking_task_id: None,
+        automation: Some(diagnostic),
     })
 }
 
 fn dry_run_definition(
     host: &dyn AutoTaskDispatch,
     definition: &AutoTaskDefinition,
-    state_path: &std::path::Path,
+    state_path: &Path,
     now: DateTime<Utc>,
 ) -> Result<AutoTaskFireReport, OrbitError> {
     if !definition.enabled {
@@ -628,6 +677,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static ADMISSION_BARRIER: std::cell::RefCell<Option<Arc<Barrier>>> =
         const { std::cell::RefCell::new(None) };
+    static AFTER_LOAD_BARRIERS: std::cell::RefCell<Option<(Arc<Barrier>, Arc<Barrier>)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -638,6 +689,20 @@ pub(crate) fn inject_scheduler_fault(fault: Option<SchedulerFault>) {
 #[cfg(test)]
 pub(crate) fn set_admission_overlap_barrier(barrier: Option<Arc<Barrier>>) {
     ADMISSION_BARRIER.with(|cell| *cell.borrow_mut() = barrier);
+}
+
+#[cfg(test)]
+pub(crate) fn set_after_load_barriers(barriers: Option<(Arc<Barrier>, Arc<Barrier>)>) {
+    AFTER_LOAD_BARRIERS.with(|cell| *cell.borrow_mut() = barriers);
+}
+
+#[cfg(test)]
+fn wait_after_load() {
+    let barriers = AFTER_LOAD_BARRIERS.with(|cell| cell.borrow().clone());
+    if let Some((loaded, resume)) = barriers {
+        loaded.wait();
+        resume.wait();
+    }
 }
 
 fn fail_if_injected(_fault: SchedulerFault) -> Result<(), OrbitError> {

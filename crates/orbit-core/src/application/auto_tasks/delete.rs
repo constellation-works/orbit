@@ -10,6 +10,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(test)]
+use std::sync::{Arc, Barrier};
+
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
@@ -82,7 +85,6 @@ impl OrbitRuntime {
         params: AutoTaskDeleteParams,
     ) -> Result<AutoTaskDeleteReport, OrbitError> {
         let name = params.name.as_str();
-        let definition = self.require_validated_auto_task(name)?;
         let path = definition_path(&self.paths().local_dir, name);
         let reason = params
             .reason
@@ -93,41 +95,45 @@ impl OrbitRuntime {
         let actor = self.actor().resolve_write_label(None, None)?;
         let now = Utc::now();
 
-        let open_tasks = open_auto_task_instances(self, name)?;
-        if !open_tasks.is_empty() && !params.force {
-            return Err(OrbitError::InvalidInput(format!(
-                "auto-task '{name}' still has open minted tasks: {}; close them, or pass --force to delete anyway",
-                open_tasks.join(", ")
-            )));
-        }
-        let refusals = consumer_teardown_refusals(self, &definition, params.force, now)?;
-        if !refusals.is_empty() {
-            return Err(OrbitError::InvalidInput(format!(
-                "auto-task '{name}' has delivery consumer state its reset refuses to drop ({}); preview it with `orbit auto-task reset {name}`, or pass --force to abandon an executing action",
-                refusals.join(", ")
-            )));
-        }
-
-        let original = std::fs::read_to_string(&path)
-            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-        // The scheduler admits slots under this lock, so no pass sees the
-        // definition gone while its cursor still exists.
-        let cursor_removed =
-            with_cursor_lock(&cursor_state_path(&self.paths().state_dir), |session| {
+        #[cfg(test)]
+        wait_before_delete_lock();
+        // Scheduler admission, including delivery evaluation, holds this lock.
+        // Check refusals here so a task minted by a preceding pass is visible.
+        let (definition, open_tasks, original, cursor_removed) = with_cursor_lock(
+            &cursor_state_path(&self.paths().state_dir),
+            |session| {
+                let definition = self.require_validated_auto_task(name)?;
+                let open_tasks = open_auto_task_instances(self, name)?;
+                if !open_tasks.is_empty() && !params.force {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "auto-task '{name}' still has open minted tasks: {}; close them, or pass --force to delete anyway",
+                        open_tasks.join(", ")
+                    )));
+                }
+                let refusals = consumer_teardown_refusals(self, &definition, params.force, now)?;
+                if !refusals.is_empty() {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "auto-task '{name}' has delivery consumer state its reset refuses to drop ({}); preview it with `orbit auto-task reset {name}`, or pass --force to abandon an executing action",
+                        refusals.join(", ")
+                    )));
+                }
+                let original = std::fs::read_to_string(&path)
+                    .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
                 std::fs::remove_file(&path).map_err(|error| {
                     OrbitError::Io(format!(
                         "delete auto-task '{name}' at {}: {error}",
                         path.display()
                     ))
                 })?;
-                if session.state.definitions.remove(name).is_none() {
-                    return Ok(false);
+                let cursor_removed = session.state.definitions.remove(name).is_some();
+                if cursor_removed {
+                    session
+                        .save()
+                        .map_err(|error| restore_after_failure(&path, &original, error))?;
                 }
-                session
-                    .save()
-                    .map_err(|error| restore_after_failure(&path, &original, error))?;
-                Ok(true)
-            })?;
+                Ok((definition, open_tasks, original, cursor_removed))
+            },
+        )?;
 
         let finish = || -> Result<(Option<ConsumerTeardown>, bool), OrbitError> {
             let consumer = tear_down_auto_task_consumer(
@@ -293,5 +299,24 @@ fn restore_after_failure(path: &std::path::Path, original: &str, error: OrbitErr
             "{error}; restoring auto-task definition {} also failed: {restore_error}",
             path.display()
         )),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static DELETE_BEFORE_LOCK_BARRIER: std::cell::RefCell<Option<Arc<Barrier>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_delete_before_lock_barrier(barrier: Option<Arc<Barrier>>) {
+    DELETE_BEFORE_LOCK_BARRIER.with(|cell| *cell.borrow_mut() = barrier);
+}
+
+#[cfg(test)]
+fn wait_before_delete_lock() {
+    let barrier = DELETE_BEFORE_LOCK_BARRIER.with(|cell| cell.borrow().clone());
+    if let Some(barrier) = barrier {
+        barrier.wait();
     }
 }

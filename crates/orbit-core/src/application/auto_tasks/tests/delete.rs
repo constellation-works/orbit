@@ -3,13 +3,23 @@
 //! pass, and restore brings back the shipped content.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier, mpsc};
+use std::thread;
 
+use chrono::{DateTime, Duration, Utc};
+use orbit_automation::auto_tasks::scheduler::{
+    AutoTaskDispatch, ChangeProbe, SchedulerOptions, run_auto_task_scheduler_at,
+};
+use orbit_common::OrbitError;
 use orbit_store::compose::auto_task::{load_cursor_state, upsert_cursor};
-use orbit_types::workflow::AutoTaskCursor;
+use orbit_types::workflow::automation::AutomationDiagnostic;
+use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition, SkipIfUnchanged};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::delete::AutoTaskDeleteParams;
+use crate::application::auto_tasks::delete::{
+    AutoTaskDeleteParams, set_delete_before_lock_barrier,
+};
 use crate::application::auto_tasks::{
     DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, cursor_state_path, definition_path,
     render_default_auto_task,
@@ -270,6 +280,171 @@ fn delete_refuses_while_a_minted_task_is_open_unless_forced() {
         runtime.get_task(&minted.id).is_ok(),
         "a forced delete leaves the open task itself alone"
     );
+}
+
+struct PausedDispatch<'a> {
+    runtime: &'a OrbitRuntime,
+    mint: Option<(Arc<Barrier>, Arc<Barrier>)>,
+    admission: Option<(Arc<Barrier>, Arc<Barrier>)>,
+}
+
+impl AutoTaskDispatch for PausedDispatch<'_> {
+    fn evaluate_delivery(
+        &self,
+        definition: &AutoTaskDefinition,
+        dry_run: bool,
+        now: DateTime<Utc>,
+    ) -> Result<AutomationDiagnostic, OrbitError> {
+        self.runtime.evaluate_delivery(definition, dry_run, now)
+    }
+
+    fn definition_root(&self) -> PathBuf {
+        self.runtime.definition_root()
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        self.runtime.state_dir()
+    }
+
+    fn has_open_instance(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        self.runtime.has_open_instance(definition)
+    }
+
+    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
+        if let Some((reached, resume)) = &self.mint {
+            reached.wait();
+            resume.wait();
+        }
+        self.runtime.mint_task(definition)
+    }
+
+    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
+        if let Some((reached, resume)) = &self.admission {
+            reached.wait();
+            resume.wait();
+        }
+        self.runtime.skip_reason(definition)
+    }
+
+    fn probe_change_since_last_sweep(
+        &self,
+        definition: &AutoTaskDefinition,
+        precondition: &SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError> {
+        self.runtime
+            .probe_change_since_last_sweep(definition, precondition)
+    }
+}
+
+#[test]
+fn scheduler_mint_winning_delete_lock_refuses_non_force_delete() {
+    let runtime = OrbitRuntime::in_memory().expect("in-memory runtime");
+    let name = "racy-chore";
+    runtime
+        .auto_task_add(interval_params(name, 60))
+        .expect("add definition");
+    seed_cursor(&runtime, name);
+    let mint_reached = Arc::new(Barrier::new(2));
+    let mint_resume = Arc::new(Barrier::new(2));
+    let delete_reached = Arc::new(Barrier::new(2));
+    let dispatch = PausedDispatch {
+        runtime: &runtime,
+        mint: Some((Arc::clone(&mint_reached), Arc::clone(&mint_resume))),
+        admission: None,
+    };
+
+    thread::scope(|scope| {
+        let scheduler = scope.spawn(|| {
+            run_auto_task_scheduler_at(
+                &dispatch,
+                Utc::now() + Duration::minutes(65),
+                SchedulerOptions::default(),
+            )
+            .expect("scheduler pass")
+        });
+        mint_reached.wait(); // The scheduler holds the cursor lock at mint.
+        let delete_barrier = Arc::clone(&delete_reached);
+        let deletion = scope.spawn(|| {
+            set_delete_before_lock_barrier(Some(delete_barrier));
+            let result = runtime.auto_task_delete(delete(name));
+            set_delete_before_lock_barrier(None);
+            result
+        });
+        delete_reached.wait(); // Delete has reached its lock boundary.
+        mint_resume.wait();
+
+        let outcome = scheduler.join().expect("scheduler thread");
+        assert_eq!(outcome.reports[0].action, "fired");
+        let minted = outcome.reports[0].task_id.as_deref().expect("minted task");
+        let error = deletion
+            .join()
+            .expect("deletion thread")
+            .expect_err("open mint must refuse non-force deletion");
+        assert!(error.to_string().contains(minted), "{error}");
+        assert!(runtime.auto_task_show(name).unwrap().is_some());
+        let state = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir))
+            .expect("cursor state");
+        assert_eq!(
+            state.definitions[name].last_task_id.as_deref(),
+            Some(minted)
+        );
+    });
+}
+
+#[test]
+fn preloaded_scheduler_cannot_recreate_cursor_after_real_delete() {
+    let runtime = OrbitRuntime::in_memory().expect("in-memory runtime");
+    let name = "deleted-before-admission";
+    runtime
+        .auto_task_add(interval_params(name, 60))
+        .expect("add definition");
+    seed_cursor(&runtime, name);
+    let loaded = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let dispatch = PausedDispatch {
+        runtime: &runtime,
+        mint: None,
+        admission: Some((Arc::clone(&loaded), Arc::clone(&resume))),
+    };
+
+    thread::scope(|scope| {
+        let scheduler = scope.spawn(|| {
+            run_auto_task_scheduler_at(
+                &dispatch,
+                Utc::now() + Duration::minutes(65),
+                SchedulerOptions::default(),
+            )
+            .expect("scheduler pass")
+        });
+        loaded.wait(); // A validated definition was loaded before deletion.
+        let (sender, receiver) = mpsc::channel();
+        let runtime_ref = &runtime;
+        let deletion = scope.spawn(move || {
+            sender
+                .send(runtime_ref.auto_task_delete(delete(name)))
+                .expect("send delete result");
+        });
+        let deleted = receiver.recv_timeout(std::time::Duration::from_secs(20));
+        resume.wait();
+        deleted
+            .expect("delete must finish before the preloaded scheduler resumes")
+            .expect("delete succeeds");
+        deletion.join().expect("deletion thread");
+
+        let outcome = scheduler.join().expect("scheduler thread");
+        assert_eq!(outcome.reports.len(), 1, "definition was preloaded");
+        assert_eq!(outcome.reports[0].action, "skipped");
+        assert_eq!(
+            outcome.reports[0].reason.as_deref(),
+            Some("definition_removed")
+        );
+        assert!(runtime.auto_task_show(name).unwrap().is_none());
+        assert!(!cursor_names(&runtime).contains(&name.to_string()));
+        assert!(runtime.list_tasks().expect("minted tasks").is_empty());
+    });
 }
 
 #[test]
