@@ -656,7 +656,7 @@ reliability view.
 |---|---|---|---|
 | (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the same table as activity-scoped `proc.spawn`; the unreadable trees below get no grant | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
-| `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only | `(allow file-write* (subpath …))`, same admission |
+| `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only. The plugin write boundary handles standalone truncate and requires Landlock ABI 3 even if no write path is granted; older kernels refuse the spawn | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
 | `network: loopback` | `network` | TCP left open (Landlock has no address filter) | `(deny network*)` then loopback re-allows |
 | `network: any` | `network` | TCP left open | `(allow network*)` stands |

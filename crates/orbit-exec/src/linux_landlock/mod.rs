@@ -76,6 +76,11 @@ pub use host::HOST_READ_ENV_VARS;
 /// enforced with a known hole.
 pub const MINIMUM_LANDLOCK_ABI: i64 = 2;
 
+/// First Landlock ABI that can confine standalone `truncate(2)` and `O_TRUNC`.
+/// A plugin write boundary must handle this right even when it grants no
+/// writable path, or a child could truncate files outside its write roots.
+pub const WRITE_LANDLOCK_ABI: i64 = 3;
+
 /// First Landlock ABI (Linux 6.7) that can refuse TCP bind and connect, which
 /// is what holds a plugin's `network: none` at the kernel.
 pub const NETWORK_LANDLOCK_ABI: i64 = 4;
@@ -172,6 +177,24 @@ pub(crate) struct RulesetScope {
     pub(crate) confine_writes: bool,
     /// Handle TCP bind and connect with no rules, refusing every endpoint.
     pub(crate) deny_tcp: bool,
+}
+
+impl RulesetScope {
+    fn require_abi(self, abi: i64) -> Result<(), OrbitError> {
+        if self.confine_writes && abi < WRITE_LANDLOCK_ABI {
+            return Err(OrbitError::PolicyDenied(format!(
+                "confining plugin writes requires Landlock ABI {WRITE_LANDLOCK_ABI} or later \
+                 to enforce truncate; this kernel supports ABI {abi}"
+            )));
+        }
+        if self.deny_tcp && abi < NETWORK_LANDLOCK_ABI {
+            return Err(OrbitError::PolicyDenied(format!(
+                "refusing TCP at the process boundary requires Landlock ABI \
+                 {NETWORK_LANDLOCK_ABI} or later; this kernel supports ABI {abi}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// An explicit confinement: the roots a child may read, the roots it may
@@ -344,8 +367,8 @@ fn read_exclusion_paths(
 /// Spawn `req` confined to an explicit boundary.
 ///
 /// Fails closed like [`spawn_under_linux_landlock`]: no Landlock, or a
-/// `deny_tcp` the kernel cannot hold, is a capability error and never an
-/// unconfined child.
+/// write or TCP right the kernel cannot hold, is a capability error and never
+/// an unconfined child.
 ///
 /// `inherited_fds` are descriptors the parent hands the child at fixed
 /// numbers — the plugin callback credential — mapped between `fork` and
@@ -356,22 +379,29 @@ pub fn spawn_under_linux_landlock_boundary(
     inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
     let probe = probe_landlock();
+    let scope = plugin_scope(&probe, boundary)?;
+    let grants = linux_landlock_boundary_grants(req, boundary)?;
+    spawn_restricted(req, &grants, scope, inherited_fds)
+}
+
+/// Validate requested plugin rights before compiling grants, which can create
+/// a missing write root, and before attempting to spawn the child.
+fn plugin_scope(
+    probe: &LandlockProbeOutcome,
+    boundary: &LandlockBoundary,
+) -> Result<RulesetScope, OrbitError> {
     if !probe.available {
         return Err(OrbitError::PolicyDenied(format!(
             "the plugin sandbox requires Linux Landlock ABI {MINIMUM_LANDLOCK_ABI} or later ({})",
             probe.detail
         )));
     }
-    let grants = linux_landlock_boundary_grants(req, boundary)?;
-    spawn_restricted(
-        req,
-        &grants,
-        RulesetScope {
-            confine_writes: true,
-            deny_tcp: boundary.deny_tcp,
-        },
-        inherited_fds,
-    )
+    let scope = RulesetScope {
+        confine_writes: true,
+        deny_tcp: boundary.deny_tcp,
+    };
+    scope.require_abi(probe.abi)?;
+    Ok(scope)
 }
 
 /// A read root that is absent grants nothing; the caller's diagnostic names

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_exec::{
     EnvironmentMode, ExecRequest, LandlockBoundary, NETWORK_LANDLOCK_ABI, StdinMode,
-    linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
+    WRITE_LANDLOCK_ABI, linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
     spawn_under_linux_landlock_boundary,
 };
 use orbit_types::policy::ResolvedFsProfile;
@@ -744,6 +744,57 @@ fn a_bounded_child_writes_only_inside_its_granted_roots() {
     fs::write(&secret, "HOST_SENTINEL").expect("write host sentinel");
     spawn_bounded(&fixture, &boundary, &format!("cat {}", secret.display()))
         .assert_withheld("HOST_SENTINEL");
+}
+
+#[test]
+fn a_bounded_child_cannot_standalone_truncate_outside_write_roots() {
+    let probe = probe_landlock();
+    if probe.abi < WRITE_LANDLOCK_ABI {
+        println!("skipping standalone truncate check: {}", probe.detail);
+        return;
+    }
+    let fixture = Fixture::new();
+    assert!(
+        on_path("python3", &fixture.environment),
+        "python3 is required for os.truncate"
+    );
+    let sentinel = fixture.write("sentinel.txt", "OUTSIDE_SENTINEL");
+    let state = fixture.host_root().join("state");
+    fs::create_dir(&state).expect("create granted write root");
+    let allowed = state.join("allowed.txt");
+    fs::write(&allowed, "BEFORE").expect("write allowed file");
+    let fixture = fixture
+        .with_env("SENTINEL", &sentinel)
+        .with_env("ALLOWED", &allowed);
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        write: vec![state],
+        ..LandlockBoundary::default()
+    };
+
+    // Python's pathname form of os.truncate issues truncate(2), without
+    // opening the file for writing. O_TRUNC coverage alone cannot pass this.
+    let refused = spawn_bounded(
+        &fixture,
+        &boundary,
+        "if python3 -c 'import os; os.truncate(os.environ[\"SENTINEL\"], 0)'; \
+         then echo TRUNCATED; else echo TRUNCATE_REFUSED; fi",
+    );
+    refused.assert_returned("TRUNCATE_REFUSED");
+    refused.assert_withheld("TRUNCATED");
+    assert_eq!(
+        fs::read(&sentinel).expect("read sentinel"),
+        b"OUTSIDE_SENTINEL"
+    );
+
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        "python3 -c 'import os; os.truncate(os.environ[\"ALLOWED\"], 0)' \
+         && printf RESTORED > \"$ALLOWED\" && echo ALLOWED_WRITE",
+    )
+    .assert_returned("ALLOWED_WRITE");
+    assert_eq!(fs::read(&allowed).expect("read allowed file"), b"RESTORED");
 }
 
 #[test]

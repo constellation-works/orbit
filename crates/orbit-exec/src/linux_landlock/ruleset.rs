@@ -10,7 +10,7 @@ use std::process::Child;
 
 use orbit_common::OrbitError;
 
-use super::{LandlockGrant, LandlockPathGrant, NETWORK_LANDLOCK_ABI, RulesetScope};
+use super::{LandlockGrant, LandlockPathGrant, RulesetScope};
 use crate::runner::ExecRequest;
 
 const ACCESS_FS_EXECUTE: u64 = 1 << 0;
@@ -37,8 +37,8 @@ const HANDLED_FS_ACCESS: u64 =
     ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_READ_DIR | ACCESS_FS_REFER;
 
 /// Every write-side right the plugin boundary takes over from the kernel's
-/// default allow. `TRUNCATE` is masked off below ABI 3, where the kernel does
-/// not know it.
+/// default allow. A write-confining scope requires ABI 3 so `TRUNCATE` is
+/// always part of this set.
 const HANDLED_FS_WRITE_ACCESS: u64 = ACCESS_FS_WRITE_FILE
     | ACCESS_FS_REMOVE_DIR
     | ACCESS_FS_REMOVE_FILE
@@ -55,9 +55,6 @@ const HANDLED_FS_WRITE_ACCESS: u64 = ACCESS_FS_WRITE_FILE
 /// TCP endpoint, which is how `network: none` is held at the kernel.
 const ACCESS_NET_BIND_TCP: u64 = 1 << 0;
 const ACCESS_NET_CONNECT_TCP: u64 = 1 << 1;
-
-/// First ABI that knows `TRUNCATE`.
-const TRUNCATE_ABI: i64 = 3;
 
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1 << 0;
 const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
@@ -166,20 +163,12 @@ struct Ruleset {
 
 impl Ruleset {
     fn create(scope: RulesetScope, abi: i64) -> Result<Self, OrbitError> {
+        scope.require_abi(abi)?;
         let mut handled_fs = HANDLED_FS_ACCESS;
         if scope.confine_writes {
             handled_fs |= HANDLED_FS_WRITE_ACCESS;
-            if abi < TRUNCATE_ABI {
-                handled_fs &= !ACCESS_FS_TRUNCATE;
-            }
         }
         let handled_access_net = if scope.deny_tcp {
-            if abi < NETWORK_LANDLOCK_ABI {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "refusing TCP at the process boundary requires Landlock ABI \
-                     {NETWORK_LANDLOCK_ABI} or later; this kernel supports ABI {abi}"
-                )));
-            }
             ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP
         } else {
             0
