@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use chrono::{DateTime, Duration, Utc};
 use orbit_core::{AuditEventInsertParams, AuditEventStatus, OrbitRuntime};
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::Value;
@@ -1043,4 +1044,140 @@ async fn audit_summary_applies_denial_threshold_after_memo_hit() {
     assert_eq!(second["denial_threshold"].as_i64(), Some(3));
     assert_eq!(first["events"], second["events"]);
     assert_eq!(state.audit_summary_memo().compute_count(), 1);
+}
+
+/// Inclusive hourly buckets for a window of `days` exact UTC days.
+fn summary_buckets_for_days(days: usize) -> usize {
+    days * 24 + 1
+}
+
+fn assert_hourly_sparkline(body: &Value, expected_len: usize) -> Vec<i64> {
+    let sparkline = body["sparkline"].as_array().expect("sparkline");
+    assert_eq!(
+        sparkline.len(),
+        expected_len,
+        "generated hourly bucket count"
+    );
+    let mut previous: Option<DateTime<Utc>> = None;
+    let mut counts = Vec::with_capacity(sparkline.len());
+    for bucket in sparkline {
+        let ts = bucket["ts"].as_str().expect("bucket ts");
+        let parsed = DateTime::parse_from_rfc3339(ts)
+            .expect("bucket timestamp")
+            .with_timezone(&Utc);
+        assert_eq!(
+            parsed.format("%Y-%m-%dT%H:00:00Z").to_string(),
+            ts,
+            "bucket timestamp is an hour start"
+        );
+        if let Some(prev) = previous {
+            assert_eq!(
+                parsed.signed_duration_since(prev),
+                Duration::hours(1),
+                "buckets are contiguous and ascending"
+            );
+        }
+        counts.push(bucket["count"].as_i64().expect("bucket count"));
+        previous = Some(parsed);
+    }
+    counts
+}
+
+/// ORB-13477: an extreme but parseable `since` is a JSON 400. The summary
+/// scan and sparkline builder do not run, so the response is not one row
+/// per historical hour.
+#[tokio::test]
+async fn audit_summary_rejects_excessive_since_without_building_buckets() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+    let maximum = summary_buckets_for_days(30);
+
+    for since in ["0001-01-01T00:00:00Z", "10000d", "721h"] {
+        let response =
+            request_audit_on(state.clone(), &format!("/audit/summary?since={since}")).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{since}");
+        let body = body_json(response).await;
+        assert!(
+            body["error"].as_str().is_some_and(|message| {
+                !message.is_empty() && message.contains(&maximum.to_string())
+            }),
+            "excessive since must return a JSON error that includes the {maximum}-bucket ceiling: {body}"
+        );
+        assert!(
+            body.get("sparkline").is_none(),
+            "rejected window must not carry a sparkline: {body}"
+        );
+    }
+
+    let response = request_audit_on(state.clone(), "/audit/summary?since=not-a-time").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty())
+    );
+    assert!(body.get("sparkline").is_none());
+    assert_eq!(
+        state.audit_summary_memo().compute_count(),
+        0,
+        "rejected windows must not scan or build a sparkline"
+    );
+}
+
+/// ORB-13477: 24h and the longer dashboard windows keep counts, ascending
+/// hourly order, and zero-fill. `30d` is the maximum generated bucket count;
+/// one hour past it is rejected above.
+#[tokio::test]
+async fn audit_summary_sparkline_preserves_supported_windows_and_bucket_cap() {
+    let empty = OrbitRuntime::in_memory().expect("build runtime");
+    let windows = [
+        ("1h", 24usize),
+        ("24h", 24 + 1),
+        ("7d", summary_buckets_for_days(7)),
+        ("30d", summary_buckets_for_days(30)),
+    ];
+    for (window, buckets) in windows {
+        let body = body_json(
+            request_audit(empty.clone(), &format!("/audit/summary?since={window}")).await,
+        )
+        .await;
+        assert_eq!(body["window"], window);
+        assert_eq!(body["events"].as_u64(), Some(0));
+        let counts = assert_hourly_sparkline(&body, buckets);
+        assert!(
+            counts.iter().all(|count| *count == 0),
+            "{window} zero-fills hours with no events: {counts:?}"
+        );
+    }
+
+    let seeded = OrbitRuntime::in_memory().expect("build runtime");
+    for index in 0..3 {
+        seed_audit_event(
+            &seeded,
+            &format!("exec-spark-{index}"),
+            "orbit.search",
+            AuditEventStatus::Success,
+            "actor-one",
+            None,
+        );
+    }
+    for (window, buckets) in [
+        ("24h", 24 + 1),
+        ("7d", summary_buckets_for_days(7)),
+        ("30d", summary_buckets_for_days(30)),
+    ] {
+        let body = body_json(
+            request_audit(seeded.clone(), &format!("/audit/summary?since={window}")).await,
+        )
+        .await;
+        assert_eq!(body["events"].as_u64(), Some(3), "{window} event count");
+        let counts = assert_hourly_sparkline(&body, buckets);
+        let summed: i64 = counts.iter().sum();
+        assert_eq!(summed, 3, "{window} sparkline counts match stored events");
+        assert!(
+            counts.iter().filter(|count| **count > 0).count() <= 2,
+            "{window} only hours that contain events are non-zero"
+        );
+    }
 }
