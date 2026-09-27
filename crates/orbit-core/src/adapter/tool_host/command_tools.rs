@@ -60,7 +60,6 @@ fn required_argv(input: &Value) -> Result<Vec<String>, OrbitError> {
                 .iter()
                 .map(|item| {
                     item.as_str()
-                        .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .map(str::to_string)
                         .ok_or_else(|| {

@@ -56,6 +56,81 @@ fn claim_holder_executes_and_receives_stdout_stderr_and_exit_status() {
 }
 
 #[test]
+fn argv_with_leading_and_trailing_spaces_preserves_exact_bytes() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    let result = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["printf", "<%s>", "  leading and trailing spaces  "],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect("the claim holder must be able to execute a command with spaces in argv");
+
+    assert_eq!(result["success"], json!(true));
+    assert_eq!(result["exit_code"], json!(0));
+    assert_eq!(
+        result["stdout"].as_str().expect("stdout is a string"),
+        "<  leading and trailing spaces  >",
+        "leading and trailing spaces must reach the child process intact"
+    );
+
+    let result_spaces_only = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["printf", "<%s>", "   "],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect("whitespace-only string argument must execute");
+
+    assert_eq!(result_spaces_only["success"], json!(true));
+    assert_eq!(result_spaces_only["exit_code"], json!(0));
+    assert_eq!(
+        result_spaces_only["stdout"]
+            .as_str()
+            .expect("stdout is a string"),
+        "<   >",
+        "whitespace-only argument must reach the child process intact"
+    );
+}
+
+#[test]
+fn argv_entries_are_not_shell_interpolated() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    let result = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["echo", "$PATH; `whoami` && echo hello"],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect("the command must execute without shell expansion");
+
+    assert_eq!(result["success"], json!(true));
+    let stdout = result["stdout"].as_str().expect("stdout is a string");
+    assert!(
+        stdout.contains("$PATH; `whoami` && echo hello"),
+        "raw shell syntax must be preserved as literal text: {stdout}"
+    );
+}
+
+#[test]
 fn operator_without_the_claim_is_refused() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
@@ -121,6 +196,61 @@ fn empty_argv_is_rejected() {
     .expect_err("an empty argv names no program to run");
 
     assert!(matches!(error, OrbitError::InvalidInput(_)), "{error:?}");
+}
+
+#[test]
+fn invalid_argv_entries_are_rejected() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+
+    for invalid_argv in [
+        json!(["echo", ""]),
+        json!(["echo", 42]),
+        json!(["echo", true]),
+        json!(["echo", null]),
+        json!(["echo", ["nested"]]),
+        json!(["echo", {"key": "val"}]),
+    ] {
+        let error = run_tool_as_operator(
+            &runtime,
+            "orbit.command.exec",
+            json!({
+                "argv": invalid_argv,
+                "working_directory": repo_root.display().to_string(),
+                "model": "codex",
+            }),
+        )
+        .expect_err("non-string or empty argv entries must be rejected");
+
+        let OrbitError::InvalidInput(message) = &error else {
+            panic!("expected InvalidInput for {invalid_argv}, got {error:?}");
+        };
+        assert!(
+            message.contains("`argv` entries must be non-empty strings"),
+            "unexpected message for {invalid_argv}: {message}"
+        );
+    }
+}
+
+#[test]
+fn missing_program_fails_spawn() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["definitely-nonexistent-command-orbit-test"],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect_err("missing program must fail execution");
+
+    assert!(matches!(error, OrbitError::Execution(_)), "{error:?}");
 }
 
 #[test]
