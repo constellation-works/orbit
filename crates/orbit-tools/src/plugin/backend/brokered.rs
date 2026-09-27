@@ -6,7 +6,9 @@
 //! compiled from both sides: the plugin profile [`PluginBackendSpec::sandbox_profile`]
 //! builds, narrowed by the calling run's resolved filesystem profile. The
 //! plugin's own `{{plugin_state}}` is the single path that may exceed the
-//! agent profile. The non-brokered profile is untouched.
+//! agent profile. A backend granted `unsandboxed` is refused here: it would
+//! run with no confinement to carry the caller's restrictions. The
+//! non-brokered profile is untouched.
 
 use regex::Regex;
 
@@ -57,6 +59,10 @@ impl PluginBackendSpec {
     ///   credential locations are denied beneath every root that remains.
     /// - Every declared program must be on the caller's `proc.spawn`
     ///   allowlist.
+    /// - A backend that runs unsandboxed (`backend.sandbox: none` with the
+    ///   `unsandboxed` grant) is refused: nothing would enforce the caller's
+    ///   profile on it. The operator's grant waives the plugin's own
+    ///   sandbox, not the calling agent's.
     ///
     /// A rule the caller's profile negates is treated as a deny even where a
     /// later rule re-allows part of it: that costs the backend access, never
@@ -70,6 +76,13 @@ impl PluginBackendSpec {
         self.enforce_programs(&ctx, &self.provenance.name)?;
 
         let mut profile = self.sandbox_profile(Some(&caller.worktree))?;
+        if profile.unsandboxed {
+            return Err(OrbitError::PolicyDenied(format!(
+                "plugin '{}' runs unsandboxed (`backend.sandbox: none`), so the host cannot hold \
+                 it to the calling agent's sandbox; an agent cannot call it through the broker",
+                self.provenance.name
+            )));
+        }
         let worktree = physical_with_missing_tail(&caller.worktree);
         let read_rules = CallerRules::anchor(&worktree, &caller.fs_profile.read)?;
         let modify_rules = CallerRules::anchor(&worktree, &caller.fs_profile.modify)?;

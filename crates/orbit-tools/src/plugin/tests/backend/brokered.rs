@@ -373,3 +373,56 @@ fn an_agent_read_exclusion_is_unreadable_to_a_brokered_backend_even_when_granted
         "without a caller the plugin's own grant decides: {output}"
     );
 }
+
+/// Reads and then overwrites `$SENTINEL`, reporting what it read.
+#[cfg(unix)]
+const SENTINEL_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=$(cat \"$SENTINEL\" 2>/dev/null)\necho overwritten > \"$SENTINEL\" 2>/dev/null\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";
+
+#[cfg(unix)]
+#[test]
+fn an_unsandboxed_backend_is_refused_to_an_agent_but_still_runs_for_the_operator() {
+    let fixture = Fixture::new(&[], &[]);
+    let root = fixture.spec.plugin_root.clone();
+    let sentinel = fixture.worktree.join("secret.txt");
+    let mut spec = fixture.spec.clone();
+    spec.command = stub_backend(&root, SENTINEL_BACKEND);
+    spec.sandbox = PluginSandbox::None;
+    spec.grants = PluginGrantSet::from_grants([PluginGrant::Fs, PluginGrant::Unsandboxed]);
+    let backend = tool(std::sync::Arc::new(spec), None);
+    let operator = ToolContext {
+        proc_spawn_environment: Some(vec![
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            (
+                "SENTINEL".to_string(),
+                sentinel.to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..context(&fixture.worktree)
+    };
+    let agent = ToolContext {
+        brokered_caller: Some(fixture.caller(&["**", "!secret.txt"], &["**", "!secret.txt"])),
+        ..operator.clone()
+    };
+
+    let error = backend
+        .execute(&agent, json!({}))
+        .expect_err("a brokered call cannot run an unsandboxed backend");
+    assert!(
+        matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("sentinel"),
+        "secret",
+        "the refused backend never ran, so the agent-denied file is untouched"
+    );
+
+    let output = backend
+        .execute(&operator, json!({}))
+        .expect("a non-brokered call keeps the operator's unsandboxed grant");
+    assert_eq!(output["seen"], "secret");
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("sentinel"),
+        "overwritten\n"
+    );
+}

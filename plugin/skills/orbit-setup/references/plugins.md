@@ -263,7 +263,7 @@ grants the user authorizes.
 | `network` | `permissions.network: loopback\|any` | Lets the backend reach the network; without it, TCP is refused. |
 | `env_pass` | `permissions.env_pass` | Copies those variables from Orbit's environment into the child. `ORBIT_*` names are reserved for Orbit's own envelope: `validate_structure` refuses a manifest that names one, and the privilege-bearing ones (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never reach the child even so. |
 | `orbit_tools` | `permissions.orbit_tools` | Lets the backend call those Orbit tools back through `orbit tool run`, and nothing else. |
-| `unsandboxed` | `backend.sandbox: none` | Runs the backend with no confinement at all. |
+| `unsandboxed` | `backend.sandbox: none` | Runs the backend with no confinement at all. Agents in a sandboxed run cannot call it; the broker refuses the call. |
 
 A plugin that requests a grant the host has not given registers its tools
 **inactive**: a call is refused with a diagnostic naming the grant and the
