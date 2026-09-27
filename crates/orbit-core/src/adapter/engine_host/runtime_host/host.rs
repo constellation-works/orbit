@@ -643,6 +643,15 @@ impl RuntimeHost for OrbitRuntime {
         activity_tools::resolve_activity_tools(self, task_ids, baseline_tools)
     }
 
+    fn resolve_activity_tool_denials(
+        &self,
+        task_ids: &[String],
+        activity: &str,
+        disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError> {
+        activity_tools::resolve_activity_tool_denials(self, task_ids, activity, disallow_list)
+    }
+
     fn checkpoint_step(
         &self,
         run_id: &str,

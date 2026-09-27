@@ -6,12 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::AuditSink;
-use orbit_types::workflow::activity_job::V2AuditEventKind;
+use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, V2AuditEventKind};
 use tempfile::tempdir;
 
 use crate::context::{ProvenanceEnv, provenance_env};
 
 use super::super::super::audit_writer::V2AuditWriter;
+use super::super::orchestrator::activity_tool_policy_env;
 use super::super::run_cli_backend;
 use super::test_support::{RecordingSink, TestHost, test_agent_loop_spec_for, write_executable};
 
@@ -535,4 +536,222 @@ fn run_cli_backend_omits_agent_model_and_task_env_vars_when_unknown() {
     )));
     assert!(!vars.iter().any(|(key, _)| key == "AGENT_MODEL"));
     assert!(!vars.iter().any(|(key, _)| key == "AGENT_TASK"));
+}
+
+fn policy_test_host(script: &std::path::Path, required_tools: &[&str]) -> TestHost {
+    TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: None,
+        task_context: Some(serde_json::json!({
+            "id": "ORB-13315",
+            "required_tools": required_tools,
+        })),
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    }
+}
+
+/// A grok stand-in that fails with `$code` unless every shell `checks` holds.
+fn policy_checking_script(dir: &std::path::Path, checks: &str) -> std::path::PathBuf {
+    let script = dir.join("grok");
+    write_executable(
+        &script,
+        &format!(
+            r#"#!/bin/sh
+cat > /dev/null
+fail() {{
+  printf '%s\n' "{{\"schemaVersion\":1,\"status\":\"failed\",\"error\":{{\"code\":\"$1\",\"message\":\"$1\",\"details\":null}}}}"
+  exit 1
+}}
+{checks}
+printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"policy":"ok"}},"error":null}}'
+"#
+        ),
+    );
+    script
+}
+
+fn delegated_policy(
+    audit: &V2AuditWriter,
+) -> (
+    Vec<String>,
+    Option<ActivityToolPolicyMode>,
+    Option<Vec<String>>,
+) {
+    audit
+        .events_snapshot()
+        .expect("audit snapshot")
+        .into_iter()
+        .find_map(|event| match event.kind {
+            V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                effective_tools,
+                tool_policy,
+                tool_disallow_list,
+                ..
+            } => Some((effective_tools, tool_policy, tool_disallow_list)),
+            _ => None,
+        })
+        .expect("tool allowlist audit event")
+}
+
+/// [ORB-13315] A deny-mode activity stamps its policy marker, disallow list,
+/// and name, plus the concrete callable set as the legacy allowlist an older
+/// MCP server would enforce, and the harness event records mode and list.
+#[test]
+fn run_cli_backend_stamps_deny_mode_policy_for_the_managed_child() {
+    let temp = tempdir().expect("tempdir");
+    let script = policy_checking_script(
+        temp.path(),
+        r#"[ "$ORBIT_TASK_ACTOR_KIND" = "agent" ] || fail actor_kind_missing
+[ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,proc.*" ] || fail disallow_list_missing
+[ "$ORBIT_ACTIVITY_NAME" = "custom_agent" ] || fail activity_name_missing
+[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,github.run.list" ] || fail concrete_allowlist_missing"#,
+    );
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-deny-mode",
+        "grok:grok-build",
+        Arc::new(RecordingSink::default()) as Arc<dyn AuditSink>,
+    ));
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tool_disallow_list = Some(vec![
+        "orbit.workflow.ship".to_string(),
+        "proc.*".to_string(),
+    ]);
+
+    let outcome = run_cli_backend(
+        &policy_test_host(&script, &["github.run.list"]),
+        &spec,
+        "custom_agent",
+        "job-deny-mode",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi", "task_id": "ORB-13315"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(
+        outcome.success,
+        "child rejected its policy env: {:?}",
+        outcome.output
+    );
+    let (effective_tools, tool_policy, tool_disallow_list) = delegated_policy(&audit);
+    assert_eq!(
+        effective_tools,
+        ["orbit.task.show", "orbit.search", "github.run.list"]
+    );
+    assert_eq!(tool_policy, Some(ActivityToolPolicyMode::Deny));
+    assert_eq!(
+        tool_disallow_list.as_deref(),
+        Some(["orbit.workflow.ship".to_string(), "proc.*".to_string()].as_slice())
+    );
+}
+
+/// [ORB-13315] A task requirement never overrides a disallow entry: the run
+/// is refused before any provider launch.
+#[test]
+fn run_cli_backend_refuses_a_disallowed_task_requirement_before_launch() {
+    let temp = tempdir().expect("tempdir");
+    let script = policy_checking_script(temp.path(), "fail must_not_launch");
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-deny-required",
+        "grok:grok-build",
+        Arc::new(RecordingSink::default()) as Arc<dyn AuditSink>,
+    ));
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tool_disallow_list = Some(vec!["github.run.list".to_string()]);
+
+    let error = run_cli_backend(
+        &policy_test_host(&script, &["github.run.list"]),
+        &spec,
+        "custom_agent",
+        "job-deny-required",
+        audit,
+        &serde_json::json!({"prompt": "hi", "task_id": "ORB-13315"}),
+        None,
+    )
+    .expect_err("a disallowed requirement must refuse dispatch");
+
+    let message = error.to_string();
+    assert!(message.contains("`github.run.list`"), "{message}");
+    assert!(message.contains("(custom_agent)"), "{message}");
+}
+
+/// [ORB-13315] An allowlist-mode run keeps today's envelope exactly, even
+/// when its dispatching process itself runs under a deny-mode envelope: the
+/// inherited deny names must not replace this run's allowlist.
+#[test]
+fn run_cli_backend_allowlist_mode_drops_an_inherited_deny_envelope() {
+    let temp = tempdir().expect("tempdir");
+    let script = policy_checking_script(
+        temp.path(),
+        r#"[ -z "${ORBIT_ACTIVITY_TOOL_POLICY+x}" ] || fail inherited_policy_marker
+[ -z "${ORBIT_ACTIVITY_TOOLS_DENY+x}" ] || fail inherited_disallow_list
+[ -z "${ORBIT_ACTIVITY_NAME+x}" ] || fail inherited_activity_name
+[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,github.run.list" ] || fail allowlist_changed"#,
+    );
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-allow-nested",
+        "grok:grok-build",
+        Arc::new(RecordingSink::default()) as Arc<dyn AuditSink>,
+    ));
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tools = vec!["orbit.task.show".to_string()];
+    let _outer = orbit_common::test_env::scoped([
+        ("ORBIT_ACTIVITY_TOOL_POLICY", Some("deny")),
+        ("ORBIT_ACTIVITY_TOOLS_DENY", Some("")),
+        ("ORBIT_ACTIVITY_NAME", Some("outer_activity")),
+    ]);
+
+    let outcome = run_cli_backend(
+        &policy_test_host(&script, &["github.run.list"]),
+        &spec,
+        "custom_agent",
+        "job-allow-nested",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi", "task_id": "ORB-13315"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(
+        outcome.success,
+        "child saw a deny envelope: {:?}",
+        outcome.output
+    );
+    let (effective_tools, tool_policy, tool_disallow_list) = delegated_policy(&audit);
+    assert_eq!(effective_tools, ["orbit.task.show", "github.run.list"]);
+    assert_eq!(tool_policy, Some(ActivityToolPolicyMode::Allow));
+    assert_eq!(tool_disallow_list, None);
+}
+
+/// A deny list covering every registered tool must not stamp an empty
+/// legacy allowlist, which an older MCP server reads as unrestricted.
+#[test]
+fn deny_mode_with_no_callable_tool_stamps_a_non_empty_legacy_allowlist() {
+    let disallow = vec!["orbit.task.*".to_string()];
+    let env = activity_tool_policy_env("custom_agent", Some(&disallow), &[]);
+    let allowlist = env
+        .iter()
+        .find(|(name, _)| name == "ORBIT_ACTIVITY_TOOLS")
+        .map(|(_, value)| value.as_str())
+        .expect("legacy allowlist stamped");
+    assert!(!allowlist.is_empty());
+    assert!(!orbit_types::workflow::tool_allowed(
+        "orbit.task.show",
+        &[allowlist.to_string()]
+    ));
+
+    let tools = vec!["orbit.task.show".to_string()];
+    assert_eq!(
+        activity_tool_policy_env("custom_agent", None, &tools),
+        [(
+            "ORBIT_ACTIVITY_TOOLS".to_string(),
+            "orbit.task.show".to_string()
+        )],
+        "allowlist mode stamps exactly the legacy allowlist"
+    );
 }

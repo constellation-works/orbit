@@ -413,3 +413,32 @@ fn concurrent_exec_rotations_from_one_version_apply_exactly_one() {
     );
     assert_ne!(store.stored("refresh_token").expect("stored").1, "v1");
 }
+
+/// [ORB-13315] A deny-mode caller has no allowlist, so its disallow list is
+/// what bounds a plugin callback: the ceiling never reaches a tool the
+/// caller's activity refuses.
+#[test]
+fn a_deny_mode_callers_disallow_list_narrows_the_callback_ceiling() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let command = stub_backend(temp.path(), ECHO_BACKEND);
+    let backend = spec(
+        command,
+        temp.path(),
+        orbit_tools_permissions(),
+        &[PluginGrant::OrbitTools],
+    );
+    let ctx = ToolContext {
+        tool_deny_policy: Some(orbit_types::workflow::ActivityToolDenyPolicy {
+            activity: "custom_agent".to_string(),
+            disallow_list: vec!["orbit.task.*".to_string()],
+        }),
+        ..context(temp.path())
+    };
+
+    assert_eq!(backend.allowed_tools(&ctx), ["orbit.search"]);
+    assert_eq!(
+        backend.allowed_tools(&context(temp.path())),
+        ["orbit.task.show", "orbit.search"],
+        "without a deny policy the ceiling is unchanged"
+    );
+}

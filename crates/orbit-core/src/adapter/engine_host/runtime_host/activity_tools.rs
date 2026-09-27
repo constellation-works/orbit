@@ -4,6 +4,7 @@ use orbit_engine::{DispatchError, ResolvedActivityTools};
 use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::tool::{ToolSessionContext, is_exact_canonical_tool_name};
+use orbit_types::workflow::{ActivityToolDenyPolicy, tools_allowed_by_disallow_list};
 
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::build_orbit_tool_host;
@@ -13,12 +14,59 @@ pub(super) fn resolve_activity_tools(
     task_ids: &[String],
     baseline_tools: &[String],
 ) -> Result<ResolvedActivityTools, DispatchError> {
-    if task_ids.is_empty() {
+    let requested_tools = admit_required_tools(runtime, task_ids, None)?;
+    if requested_tools.is_empty() {
         return Ok(ResolvedActivityTools {
-            requested_tools: Vec::new(),
+            requested_tools,
             effective_tools: baseline_tools.to_vec(),
         });
     }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut effective_tools = Vec::with_capacity(baseline_tools.len() + requested_tools.len());
+    for tool in baseline_tools.iter().chain(requested_tools.iter()) {
+        if seen.insert(tool.clone()) {
+            effective_tools.push(tool.clone());
+        }
+    }
+    Ok(ResolvedActivityTools {
+        requested_tools,
+        effective_tools,
+    })
+}
+
+/// Deny mode: every registered agent-facing tool the disallow list does not
+/// cover. A task requirement is already inside that set unless the list
+/// covers it, and a requirement never overrides the activity's disallow list.
+pub(super) fn resolve_activity_tool_denials(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    activity: &str,
+    disallow_list: &[String],
+) -> Result<ResolvedActivityTools, DispatchError> {
+    let deny_policy = ActivityToolDenyPolicy {
+        activity: activity.to_string(),
+        disallow_list: disallow_list.to_vec(),
+    };
+    let requested_tools = admit_required_tools(runtime, task_ids, Some(&deny_policy))?;
+    let registered_tools = runtime.allowlist_known_tool_names();
+    Ok(ResolvedActivityTools {
+        requested_tools,
+        effective_tools: tools_allowed_by_disallow_list(
+            disallow_list,
+            registered_tools.iter().map(String::as_str),
+        ),
+    })
+}
+
+/// Admit every selected task's `required_tools`: exact canonical names of
+/// registered, agent-facing, enabled tools that a deny-mode activity's
+/// disallow list does not cover. Returns them sorted and deduped.
+fn admit_required_tools(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+    deny_policy: Option<&ActivityToolDenyPolicy>,
+) -> Result<Vec<String>, DispatchError> {
     let mut requested_tools = std::collections::BTreeSet::new();
     for task_id in task_ids {
         let task = runtime.get_task(task_id).map_err(|error| {
@@ -47,6 +95,11 @@ pub(super) fn resolve_activity_tools(
                     })?
                     .filter(|tool| !tool.enabled)
                     .map(|_| "tool is inactive".to_string())
+                    .or_else(|| {
+                        deny_policy
+                            .filter(|policy| policy.denies(&tool_name))
+                            .map(|policy| policy.denial_message(&tool_name))
+                    })
             };
             if let Some(reason) = reason {
                 return Err(DispatchError::RequiredToolAdmission {
@@ -58,26 +111,7 @@ pub(super) fn resolve_activity_tools(
             requested_tools.insert(tool_name);
         }
     }
-    let requested_tools = requested_tools.into_iter().collect::<Vec<_>>();
-
-    if requested_tools.is_empty() {
-        return Ok(ResolvedActivityTools {
-            requested_tools,
-            effective_tools: baseline_tools.to_vec(),
-        });
-    }
-
-    let mut seen = std::collections::BTreeSet::new();
-    let mut effective_tools = Vec::with_capacity(baseline_tools.len() + requested_tools.len());
-    for tool in baseline_tools.iter().chain(requested_tools.iter()) {
-        if seen.insert(tool.clone()) {
-            effective_tools.push(tool.clone());
-        }
-    }
-    Ok(ResolvedActivityTools {
-        requested_tools,
-        effective_tools,
-    })
+    Ok(requested_tools.into_iter().collect())
 }
 
 pub(super) fn tool_context_for_activity(

@@ -145,3 +145,76 @@ fn invalid_task_requirements_fail_structured_admission_before_dispatch() {
             && reason.contains("inactive")
     ));
 }
+
+/// [ORB-13315] Deny mode makes every registered agent-facing tool callable
+/// except the disallowed ones, and admits an allowed task requirement as it
+/// always has.
+#[test]
+fn deny_mode_resolves_every_registered_tool_except_the_disallow_list() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task_id = add_task(&runtime, "Needs GitHub reads", &["github.run.list"]);
+    let disallow = vec!["orbit.task.*".to_string(), "proc.spawn".to_string()];
+
+    let resolved = RuntimeHost::resolve_activity_tool_denials(
+        &runtime,
+        std::slice::from_ref(&task_id),
+        "custom_agent",
+        &disallow,
+    )
+    .expect("resolve deny-mode tools");
+
+    assert_eq!(resolved.requested_tools, vec!["github.run.list"]);
+    let registered = runtime.allowlist_known_tool_names();
+    let expected: Vec<&String> = registered
+        .iter()
+        .filter(|tool| !tool.starts_with("orbit.task.") && *tool != "proc.spawn")
+        .collect();
+    assert_eq!(
+        resolved.effective_tools.iter().collect::<Vec<_>>(),
+        expected
+    );
+    assert!(
+        resolved
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.search")
+    );
+    assert!(
+        resolved
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "github.run.list")
+    );
+}
+
+/// [ORB-13315] A task's `required_tools` cannot override a disallow entry:
+/// dispatch refuses before launch, naming the tool and the activity.
+#[test]
+fn deny_mode_refuses_a_disallowed_task_requirement() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task_id = add_task(&runtime, "Wants a disallowed tool", &["github.run.list"]);
+
+    let error = RuntimeHost::resolve_activity_tool_denials(
+        &runtime,
+        std::slice::from_ref(&task_id),
+        "custom_agent",
+        &["github.run.list".to_string()],
+    )
+    .expect_err("a disallowed requirement must refuse dispatch");
+
+    match error {
+        DispatchError::RequiredToolAdmission {
+            task_id: actual_task_id,
+            tool_name,
+            reason,
+        } => {
+            assert_eq!(actual_task_id, task_id);
+            assert_eq!(tool_name, "github.run.list");
+            assert_eq!(
+                reason,
+                "tool 'github.run.list' is in the activity disallow list (custom_agent)"
+            );
+        }
+        other => panic!("unexpected admission error: {other}"),
+    }
+}

@@ -1,0 +1,9 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: custom_empty_tools
+spec:
+  type: agent_loop
+  description: Custom activity that declares an empty tool allowlist.
+  instruction: Summarize the input.
+  tools: []

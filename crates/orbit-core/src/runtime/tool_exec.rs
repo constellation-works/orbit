@@ -52,17 +52,17 @@ impl OrbitRuntime {
         if !tool_context.allowed_tools.is_empty()
             && !tool_allowed(name, &tool_context.allowed_tools)
         {
-            self.with_mutation(|| {
-                Ok((
-                    (),
-                    OrbitEvent::PolicyDenied {
-                        tool: name.to_string(),
-                    },
-                ))
-            })?;
-            return Err(OrbitError::PolicyDenied(format!(
-                "tool '{name}' is not in the activity allowlist"
-            )));
+            return Err(self.deny_activity_tool(
+                name,
+                format!("tool '{name}' is not in the activity allowlist"),
+            ));
+        }
+        if let Some(policy) = tool_context
+            .tool_deny_policy
+            .as_ref()
+            .filter(|policy| policy.denies(name))
+        {
+            return Err(self.deny_activity_tool(name, policy.denial_message(name)));
         }
 
         if self.worker_invocation().is_some()
@@ -119,6 +119,22 @@ impl OrbitRuntime {
         })?;
 
         Ok(output)
+    }
+
+    /// Record an activity tool-policy refusal and build its error. An audit
+    /// write failure surfaces instead, so a refusal is never unrecorded.
+    fn deny_activity_tool(&self, name: &str, reason: String) -> OrbitError {
+        match self.with_mutation(|| {
+            Ok((
+                (),
+                OrbitEvent::PolicyDenied {
+                    tool: name.to_string(),
+                },
+            ))
+        }) {
+            Ok(()) => OrbitError::PolicyDenied(reason),
+            Err(error) => error,
+        }
     }
 
     pub fn run_tool_dry_run(&self, name: &str, input: &Value) -> Result<DryRunResult, OrbitError> {

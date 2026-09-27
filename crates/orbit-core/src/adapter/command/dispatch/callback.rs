@@ -5,12 +5,16 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::security::child_env::{
+    ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+};
 use orbit_store::Store;
 use orbit_store::contracts::PluginStoreBackend;
 use orbit_tools::plugin::{
     CallbackResolution, PluginCallbackIdentity, load_plugin_dir, resolve_plugin_callback_session,
 };
 use orbit_types::plugin::{InstalledPlugin, PluginGrant, PluginProvenance};
+use orbit_types::workflow::{ActivityToolDenyPolicy, ActivityToolPolicyMode};
 
 use crate::runtime::plugin::grants::verify_install_path;
 
@@ -21,7 +25,16 @@ thread_local! {
 
 #[cfg(test)]
 thread_local! {
-    static TEST_ACTIVITY_TOOLS: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    static TEST_ACTIVITY_TOOLS: RefCell<Option<ActivityToolPolicyEnv>> = const { RefCell::new(None) };
+}
+
+/// A managed agent's activity tool policy, as its inherited envelope states it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ActivityToolPolicyEnv {
+    /// Legacy `ORBIT_ACTIVITY_TOOLS` allowlist; empty means unrestricted.
+    pub(crate) allowed_tools: Vec<String>,
+    /// Deny-mode disallow list; `None` in allowlist mode.
+    pub(crate) deny_policy: Option<ActivityToolDenyPolicy>,
 }
 
 /// Restores a test-local activity-tool override when dropped.
@@ -31,7 +44,7 @@ thread_local! {
 /// managed executor's inherited activity allowlist.
 #[cfg(test)]
 pub(crate) struct TestActivityToolsGuard {
-    previous: Option<Vec<String>>,
+    previous: Option<ActivityToolPolicyEnv>,
 }
 
 #[cfg(test)]
@@ -49,8 +62,18 @@ impl Drop for TestActivityToolsGuard {
 pub(crate) fn override_activity_tools_for_test(
     allowed_tools: impl IntoIterator<Item = impl Into<String>>,
 ) -> TestActivityToolsGuard {
-    let allowed_tools = allowed_tools.into_iter().map(Into::into).collect();
-    let previous = TEST_ACTIVITY_TOOLS.with(|tools| tools.replace(Some(allowed_tools)));
+    override_activity_tool_policy_for_test(ActivityToolPolicyEnv {
+        allowed_tools: allowed_tools.into_iter().map(Into::into).collect(),
+        deny_policy: None,
+    })
+}
+
+/// Override the managed-agent activity tool policy for this test thread.
+#[cfg(test)]
+pub(crate) fn override_activity_tool_policy_for_test(
+    policy: ActivityToolPolicyEnv,
+) -> TestActivityToolsGuard {
+    let previous = TEST_ACTIVITY_TOOLS.with(|tools| tools.replace(Some(policy)));
     TestActivityToolsGuard { previous }
 }
 
@@ -334,33 +357,66 @@ fn recorded_orbit_tools(
 pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {
     std::env::var("ORBIT_PROC_ALLOWED_PROGRAMS")
         .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
+        .map(|raw| split_env_list(&raw))
         .unwrap_or_default()
 }
 
-pub(super) fn read_activity_tools_from_env() -> Vec<String> {
+pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
     #[cfg(test)]
-    if let Some(allowed_tools) = TEST_ACTIVITY_TOOLS.with(|tools| tools.borrow().clone()) {
-        return allowed_tools;
+    if let Some(policy) = TEST_ACTIVITY_TOOLS.with(|tools| tools.borrow().clone()) {
+        return policy;
     }
 
     if std::env::var("ORBIT_TASK_ACTOR_KIND").ok().as_deref() != Some("agent") {
-        return Vec::new();
+        return ActivityToolPolicyEnv::default();
     }
-    std::env::var("ORBIT_ACTIVITY_TOOLS")
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default()
+    let env = |name: &str| std::env::var(name).ok();
+    activity_tool_policy_from_env_values(
+        env(ACTIVITY_TOOL_POLICY_ENV).as_deref(),
+        env(ACTIVITY_TOOLS_DENY_ENV).as_deref(),
+        env(ACTIVITY_NAME_ENV).as_deref(),
+        env("ORBIT_ACTIVITY_TOOLS").as_deref(),
+    )
+}
+
+/// Resolve a managed agent's tool policy from its envelope values.
+///
+/// Only an explicit `deny` marker *with* its disallow list selects deny mode.
+/// Every other shape — no marker (an allowlist activity, or a run dispatched
+/// before deny mode existed), an unknown marker, or a marker whose list did
+/// not arrive — keeps the legacy `ORBIT_ACTIVITY_TOOLS` allowlist with its
+/// exact historical semantics. A deny-mode dispatcher stamps that allowlist
+/// as the concrete callable set, so falling back to it never widens access.
+pub(crate) fn activity_tool_policy_from_env_values(
+    policy: Option<&str>,
+    disallow_list: Option<&str>,
+    activity: Option<&str>,
+    allowed_tools: Option<&str>,
+) -> ActivityToolPolicyEnv {
+    let deny_mode = policy.map(str::trim) == Some(ActivityToolPolicyMode::Deny.as_str());
+    match disallow_list.filter(|_| deny_mode) {
+        Some(raw) => ActivityToolPolicyEnv {
+            allowed_tools: Vec::new(),
+            deny_policy: Some(ActivityToolDenyPolicy {
+                activity: activity
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("unnamed activity")
+                    .to_string(),
+                disallow_list: split_env_list(raw),
+            }),
+        },
+        None => ActivityToolPolicyEnv {
+            allowed_tools: allowed_tools.map(split_env_list).unwrap_or_default(),
+            deny_policy: None,
+        },
+    }
+}
+
+fn split_env_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }

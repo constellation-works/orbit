@@ -9,9 +9,12 @@ pub use audit::{
     AuditContext, audit_role_label, audit_role_label_for_entry_point, trusted_mcp_audit_context,
 };
 pub(crate) use callback::legacy_callback_identity_enabled;
-#[cfg(test)]
-pub(crate) use callback::override_activity_tools_for_test;
 pub use callback::refuse_plugin_child_cli_command;
+#[cfg(test)]
+pub(crate) use callback::{
+    ActivityToolPolicyEnv, activity_tool_policy_from_env_values,
+    override_activity_tool_policy_for_test, override_activity_tools_for_test,
+};
 pub(super) use execute::execute_global_plugin_dispatch;
 pub use execute::{
     ToolDispatchOutcome, ToolEntryPoint, execute_global_in_process_tool_dispatch,

@@ -32,7 +32,9 @@ use std::collections::BTreeSet;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_types::task::Task;
 use orbit_types::tool::McpCapability;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, tool_allowed};
+use orbit_types::workflow::activity_job::{
+    ActivityV2Spec, tool_allowed, tools_allowed_by_disallow_list,
+};
 
 use crate::OrbitRuntime;
 
@@ -80,9 +82,13 @@ pub(super) struct ImplementationLane {
     /// Canonical MCP-advertised names, or `None` when the definition set is
     /// invalid.
     mcp_exposed: Option<BTreeSet<String>>,
-    /// The implementation activity's declared allowlist, or `None` when the
+    /// The implementation activity's declared allowlist — in deny mode, every
+    /// registered tool its disallow list leaves callable — or `None` when the
     /// activity catalog is unavailable.
     baseline: Option<Vec<String>>,
+    /// A deny-mode implementation activity's disallow list, which a task's
+    /// `required_tools` cannot override.
+    disallow_list: Vec<String>,
 }
 
 impl ImplementationLane {
@@ -99,17 +105,31 @@ impl ImplementationLane {
                     .collect()
             });
 
-        let baseline = runtime.v2_activity_catalog().ok().and_then(|catalog| {
+        let policy = runtime.v2_activity_catalog().ok().and_then(|catalog| {
             match &catalog.get(IMPLEMENTATION_ACTIVITY)?.spec {
-                ActivityV2Spec::AgentLoop(spec) => Some(spec.tools.clone()),
+                ActivityV2Spec::AgentLoop(spec) => Some(match &spec.tool_disallow_list {
+                    Some(disallow_list) => (
+                        tools_allowed_by_disallow_list(
+                            disallow_list,
+                            registered.iter().map(String::as_str),
+                        ),
+                        disallow_list.clone(),
+                    ),
+                    None => (spec.tools.clone(), Vec::new()),
+                }),
                 ActivityV2Spec::Deterministic(_) => None,
             }
         });
+        let (baseline, disallow_list) = match policy {
+            Some((baseline, disallow_list)) => (Some(baseline), disallow_list),
+            None => (None, Vec::new()),
+        };
 
         Self {
             registered,
             mcp_exposed,
             baseline,
+            disallow_list,
         }
     }
 
@@ -123,7 +143,11 @@ impl ImplementationLane {
         let granted = self.baseline.as_ref().map(|baseline| {
             baseline
                 .iter()
-                .chain(task.required_tools.iter())
+                .chain(
+                    task.required_tools
+                        .iter()
+                        .filter(|tool| !tool_allowed(tool, &self.disallow_list)),
+                )
                 .cloned()
                 .collect::<Vec<_>>()
         });

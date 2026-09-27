@@ -412,6 +412,7 @@ fn repo_root() -> PathBuf {
 
 fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: "cli smoke".to_string(),
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
         on_denial: OnDenial::Terminate,
@@ -510,6 +511,7 @@ fn synthetic_loop_session_job() -> JobV2 {
         resolved_recovery_activity: None,
         body: JobV2StepBody::Target(TargetStep {
             spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
+                tool_disallow_list: None,
                 instruction: String::new(),
                 tools: vec![],
                 on_denial: OnDenial::Terminate,

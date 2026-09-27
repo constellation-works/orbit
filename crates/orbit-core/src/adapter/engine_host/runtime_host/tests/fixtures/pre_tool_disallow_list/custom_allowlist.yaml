@@ -1,0 +1,15 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_invoke
+spec:
+  type: agent_loop
+  description: Workspace override that narrows agent_invoke to task reads.
+  instruction: Read the selected task and report what it asks for.
+  tools:
+    - orbit.task.show
+    - orbit.search
+    - proc.spawn
+  proc_allowed_programs:
+    - git
+    - uv

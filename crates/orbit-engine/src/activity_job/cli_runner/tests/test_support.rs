@@ -415,6 +415,44 @@ impl RuntimeHost for TestHost {
         })
     }
 
+    /// Deny mode over a fixed registry, refusing a disallowed task
+    /// requirement the way the production host does.
+    fn resolve_activity_tool_denials(
+        &self,
+        _task_ids: &[String],
+        activity: &str,
+        disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError> {
+        let policy = orbit_types::workflow::ActivityToolDenyPolicy {
+            activity: activity.to_string(),
+            disallow_list: disallow_list.to_vec(),
+        };
+        let requested_tools = self
+            .task_context
+            .as_ref()
+            .and_then(|task| task.get("required_tools"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if let Some(tool_name) = requested_tools.iter().find(|tool| policy.denies(tool)) {
+            return Err(DispatchError::RequiredToolAdmission {
+                task_id: String::new(),
+                tool_name: tool_name.clone(),
+                reason: policy.denial_message(tool_name),
+            });
+        }
+        Ok(ResolvedActivityTools {
+            requested_tools,
+            effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
+                disallow_list,
+                TEST_REGISTERED_TOOLS.iter().copied(),
+            ),
+        })
+    }
+
     fn agent_crew_config_for_input(
         &self,
         input: &Value,
@@ -476,6 +514,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec(
     timeout: Duration,
 ) -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: String::new(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
@@ -492,6 +531,15 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec(
     }
 }
 
+/// The registry [`TestHost::resolve_activity_tool_denials`] resolves against.
+pub(in crate::activity_job::cli_runner) const TEST_REGISTERED_TOOLS: &[&str] = &[
+    "orbit.task.show",
+    "orbit.search",
+    "orbit.workflow.ship",
+    "proc.spawn",
+    "github.run.list",
+];
+
 pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
     provider: &str,
     timeout: Duration,
@@ -505,6 +553,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         other => panic!("unsupported provider for test: {other}"),
     };
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: String::new(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,

@@ -1,0 +1,37 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_loop_cli_reference
+spec:
+  type: agent_loop
+  description: >
+    Reference for the CLI agent dispatch path. This
+    activity is executed through `orbit-agent`'s retained `claude_cli.rs`
+    runtime (or a substitutable CLI in smoke runs) with Orbit emitting §7.6
+    `cli.invocation.*` envelope events and the §6
+    `tool_allowlist.harness_delegated` advisory.
+  input_schema_json:
+    type: object
+    required: [prompt]
+    properties:
+      prompt:
+        type: string
+  output_schema_json:
+    type: object
+    properties:
+      stdout_text:
+        type: string
+      exit_code: {}
+      provider:
+        type: string
+  instruction: |
+    v2 CLI agent reference. The real `claude` CLI would read the embedded
+    envelope from stdin and reply with a plan; in smokes the substitute
+    binary simply echoes a canned JSON payload so the envelope events can be
+    inspected deterministically.
+  tools:
+    - orbit.task.show
+  on_denial: terminate
+  max_iterations: 1
+  provider: claude
+  wall_clock_timeout_seconds: 30

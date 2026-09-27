@@ -14,7 +14,10 @@ mod registry;
 /// sibling test module does not import a private dispatch item directly.
 #[cfg(test)]
 pub(crate) mod dispatch_test_support {
-    pub(crate) use super::dispatch::override_activity_tools_for_test;
+    pub(crate) use super::dispatch::{
+        ActivityToolPolicyEnv, activity_tool_policy_from_env_values,
+        override_activity_tool_policy_for_test, override_activity_tools_for_test,
+    };
 }
 
 #[cfg(test)]

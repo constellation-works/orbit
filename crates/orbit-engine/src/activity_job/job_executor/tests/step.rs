@@ -281,6 +281,7 @@ use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
 /// step-completion contract can catch a stalled agent.
 pub(super) fn agent_implement_shaped_step(id: &str, retry: Option<RetrySpec>) -> JobV2Step {
     let spec = AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: "implement the task".to_string(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,

@@ -1,0 +1,191 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pr_conflict_recovery
+spec:
+  type: agent_loop
+  description: >
+    Leaf recovery for a typed task-PR rebase conflict, including one discovered
+    after PR publication during authorized completion. It uses the configured
+    system crew to repair only the live conflict files. The host executor then
+    validates, stages, continues the stopped rebase, and carries the candidate
+    onto the current base tip before one retry.
+  input_schema_json:
+    type: object
+    additionalProperties: false
+    required:
+      - failed_step_id
+      - activity_name
+      - error_message
+      - attempt
+      - max_attempts
+      - recovery_kind
+      - operation
+      - original_base_sha
+      - target_base_sha
+      - conflicting_paths
+      - diagnostic
+    properties:
+      run_id:
+        type: string
+      task_id:
+        type: string
+      task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      repo_root:
+        type: string
+      failed_step_input:
+        type: object
+      crew:
+        type: string
+      crew_config_key:
+        const: workflow.system_crew
+      failed_step_id:
+        type: string
+      activity_name:
+        type: string
+      error_message:
+        type: string
+      attempt:
+        type: integer
+        minimum: 1
+      max_attempts:
+        type: integer
+        minimum: 1
+      recovery_kind:
+        const: vcs_conflict
+      operation:
+        const: git_rebase
+      original_base_sha:
+        type: string
+      target_base_sha:
+        type: string
+      conflicting_paths:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      diagnostic:
+        type: string
+      system_crew:
+        type: boolean
+  # Advisory only. Neither this result nor any agent-returned flag authorizes
+  # Git mutation; the host boundary and deterministic retry judge recovery.
+  # Gate outcomes are reported here, never used as a stop condition.
+  output_schema_json:
+    type: object
+    properties:
+      summary:
+        type: string
+      validations:
+        type: array
+        items:
+          type: string
+      gates:
+        type: array
+        items:
+          type: object
+          properties:
+            command:
+              type: string
+            status:
+              type: string
+              enum:
+                - passed
+                - failed
+                - not_run
+            involves_resolved_paths:
+              type: boolean
+            detail:
+              type: string
+  instruction: |
+    You are Orbit's task-PR merge-conflict recovery leaf.
+
+    The executor has already proved that its existing `git_rebase` boundary
+    stopped on actual unmerged index entries. The failed step is either
+    `git_rebase` itself or `pr_complete`, which invokes that same boundary for a
+    published PR only under retained `completion: done` authorization. It will
+    retry that same failed deterministic step exactly once after you return
+    success. You repair only; you do not restart implementation, dispatch or
+    resume a job, create another task or branch, open another PR, push, merge,
+    or change lifecycle status. The executor owns the lease-checked push and
+    reuses the existing PR after a completion conflict.
+
+    Your job is to resolve the conflict. A base that moved on is expected on a
+    busy integration branch and is never a reason to stop; neither is a red
+    repository gate on paths you did not touch. Resolve, then report.
+
+    1. Read the supplied conflict evidence and `failed_step_input`, which
+       retains the candidate branch and pre-rewrite checkpoint. Work only in
+       the supplied matching `workspace_path` and `repo_root`. Inspect the run
+       through `orbit run show "$ORBIT_RUN_ID" --json`, its task, and its
+       checkpointed worktree. The only identity and safety checks that stop
+       you before editing are:
+       - the run is cancelled;
+       - the task refuses writes (terminal, or `orbit.task.update` rejects);
+       - the checked-out branch is not `failed_step_input.head`, or the
+         stopped rebase's pre-rewrite HEAD (`git rev-parse ORIG_HEAD`) is not
+         `failed_step_input.head_sha` / `published_head_sha`;
+       - for `pr_complete`, the retained `completion: done` authorization or
+         `pr_number` is missing.
+       `target_base_sha` no longer being the tip of `origin/<base>` is NOT a
+       stop condition. The stopped rebase is pinned to `target_base_sha`; the
+       host continues it there and then carries the candidate onto the current
+       base tip itself. Do not fetch, and do not refuse because the base
+       advanced.
+    2. Resolve every supplied conflicting path using the task description,
+       acceptance criteria, candidate changes, and both sides of the conflict
+       as the stopped rebase presents them (the `target_base_sha` side is the
+       upstream side). Preserve the candidate intent and the target-base
+       changes. Read the current `origin/<base>` tip for the same paths (for
+       example `git show origin/<base>:<path>`) so the resolution stays
+       compatible with where the host will land the candidate, but do not
+       pre-apply that newer base content: the host rebases the continued
+       candidate onto the current tip afterward. Do not take a whole-file side
+       merely to make the index clean.
+    3. Do not stage, commit, continue, abort, or restart the rebase, and do not
+       write any Git metadata. The managed sandbox intentionally keeps the
+       linked-worktree Git directory read-only. After your successful terminal
+       response, Orbit's host boundary revalidates live run/task/worktree,
+       branch, original HEAD, stopped-rebase metadata, and conflict-path
+       identity; it then stages exactly the supplied conflict paths, continues
+       the existing rebase onto `target_base_sha`, and, when `origin/<base>`
+       has advanced past that pin, rebases the continued candidate onto the
+       current tip.
+    4. Confirm every supplied conflict file is fully repaired (no conflict
+       markers) and no unrelated path changed. Run focused tests for the
+       crates or modules that own the resolved paths. Then run the
+       repository's `make ci-fast` and `make ci-lint` gates as advisory
+       checks: record each command, its outcome, and whether any failure
+       involves a resolved path in the `gates` field of your result. A gate
+       failure on paths you did not touch is baseline state, not evidence
+       about your resolution; report it and still return success. Only a
+       failure that involves a resolved path is yours to fix before returning.
+       For a completion conflict, do not push or merge; the retried completion
+       step verifies the host-owned rewrite, uses the existing remote lease,
+       and reuses the same PR.
+    5. Return success once every supplied conflict path is resolved. Return
+       failed only on a step 1 stop condition, or when the conflict is
+       genuinely ambiguous or the resolution is exhausted; then preserve the
+       current evidence and say which. The job's existing failure handoff will
+       abort the stopped rebase, reuse the same candidate branch/PR, and block
+       the task with the original evidence.
+
+    Return exactly one Orbit response envelope. Result fields are advisory;
+    durable Git state and the executor's host-owned continuation plus
+    deterministic retry decide recovery.
+  tools:
+    - orbit.task.*
+    - proc.spawn
+  proc_allowed_programs:
+    - cargo
+    - git
+    - make
+    - orbit
+    - rg
+  on_denial: terminate
+  wall_clock_timeout_seconds: 3600

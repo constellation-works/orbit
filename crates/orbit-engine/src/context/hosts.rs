@@ -62,6 +62,7 @@ pub struct TaskActivityUpdate {
 }
 
 /// Task requirements and the resulting activity allowlist fixed at admission.
+/// In deny mode `effective_tools` is the concrete callable set.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedActivityTools {
     pub requested_tools: Vec<String>,
@@ -756,6 +757,24 @@ pub trait RuntimeHost: Send + Sync {
     /// without leaking store or task-query details into orbit-engine.
     fn task_context_for_agent_input(&self, _input: &Value) -> Result<Option<Value>, DispatchError> {
         Ok(None)
+    }
+
+    /// Resolve a deny-mode activity's callable tools for one agent launch.
+    ///
+    /// `effective_tools` is every registered agent-facing tool the disallow
+    /// list does not cover. Selected tasks' `required_tools` are admitted as
+    /// in allowlist mode, and one the disallow list covers refuses dispatch
+    /// naming the tool and `activity`. A host without a tool registry cannot
+    /// compute the set, so it refuses rather than guessing.
+    fn resolve_activity_tool_denials(
+        &self,
+        _task_ids: &[String],
+        _activity: &str,
+        _disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError> {
+        Err(unsupported_dispatch_capability(
+            "resolve_activity_tool_denials",
+        ))
     }
 
     /// Compose and validate the exact task-scoped tools for one agent launch.

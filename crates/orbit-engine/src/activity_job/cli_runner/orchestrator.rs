@@ -9,11 +9,16 @@ use orbit_agent::{
     provider_invocation_diagnostic,
 };
 use orbit_common::process::identity::process_start_identity_token;
-use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
+use orbit_common::security::child_env::{
+    ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
+};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::ExecutorSandboxKind;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{
+    ActivityToolPolicyMode, AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind,
+};
 use serde_json::Value;
 
 use crate::context::{ProvenanceEnv, provenance_env};
@@ -54,6 +59,45 @@ use super::supervisor::{
     spawn_for_supervision, spawn_with_timeout,
 };
 use crate::context::RuntimeHost;
+
+/// Legacy-allowlist entry a deny-mode run stamps when its disallow list covers
+/// every registered tool. It names no tool, so an MCP server that predates
+/// deny mode refuses every call instead of reading an empty
+/// `ORBIT_ACTIVITY_TOOLS` as unrestricted.
+const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
+
+/// The activity tool policy envelope for one managed agent.
+///
+/// Allowlist mode stamps only `ORBIT_ACTIVITY_TOOLS`, byte-for-byte what it
+/// always has. Deny mode adds the policy marker, its disallow list, and the
+/// activity name, and still stamps `ORBIT_ACTIVITY_TOOLS` as the concrete
+/// callable set so an older MCP server enforces an equivalent allowlist.
+pub fn activity_tool_policy_env(
+    activity_name: &str,
+    disallow_list: Option<&[String]>,
+    effective_tools: &[String],
+) -> Vec<(String, String)> {
+    let Some(disallow_list) = disallow_list else {
+        return vec![(
+            "ORBIT_ACTIVITY_TOOLS".to_string(),
+            effective_tools.join(","),
+        )];
+    };
+    let allowlist = if effective_tools.is_empty() {
+        NO_CALLABLE_TOOLS_ENTRY.to_string()
+    } else {
+        effective_tools.join(",")
+    };
+    vec![
+        ("ORBIT_ACTIVITY_TOOLS".to_string(), allowlist),
+        (
+            ACTIVITY_TOOL_POLICY_ENV.to_string(),
+            ActivityToolPolicyMode::Deny.as_str().to_string(),
+        ),
+        (ACTIVITY_TOOLS_DENY_ENV.to_string(), disallow_list.join(",")),
+        (ACTIVITY_NAME_ENV.to_string(), activity_name.to_string()),
+    ]
+}
 
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
@@ -120,7 +164,13 @@ pub fn run_cli_backend(
                 .to_string(),
         ));
     }
-    let activity_tools = host.resolve_activity_tools(&task_ids, &spec.tools)?;
+    let tool_policy = spec.tool_policy_mode();
+    let activity_tools = match spec.tool_disallow_list.as_deref() {
+        Some(disallow_list) => {
+            host.resolve_activity_tool_denials(&task_ids, activity_name, disallow_list)?
+        }
+        None => host.resolve_activity_tools(&task_ids, &spec.tools)?,
+    };
 
     // §6 allowlist-advisory event — emitted once per invocation before the
     // subprocess starts so a reviewer can see the enforcement gap at a glance.
@@ -131,6 +181,8 @@ pub fn run_cli_backend(
         requested_tools: activity_tools.requested_tools.clone(),
         effective_tools: activity_tools.effective_tools.clone(),
         tools: activity_tools.effective_tools.clone(),
+        tool_policy: Some(tool_policy),
+        tool_disallow_list: spec.tool_disallow_list.clone(),
     });
 
     let task_ctx = host.task_context_for_agent_input(input)?;
@@ -381,9 +433,10 @@ pub fn run_cli_backend(
         agent_task_id: task_id,
     });
     dispatch_env.push(("ORBIT_TASK_ACTOR_KIND".to_string(), "agent".to_string()));
-    dispatch_env.push((
-        "ORBIT_ACTIVITY_TOOLS".to_string(),
-        activity_tools.effective_tools.join(","),
+    dispatch_env.extend(activity_tool_policy_env(
+        activity_name,
+        spec.tool_disallow_list.as_deref(),
+        &activity_tools.effective_tools,
     ));
     if let Some(programs) = spec.proc_allowed_programs.as_deref() {
         dispatch_env.push((
@@ -457,6 +510,18 @@ pub fn run_cli_backend(
         // above supersedes it for this execution envelope. [ORB-11066]
         child_env.retain(|(key, _)| key != "ORBIT_ROOT");
     }
+    // The envelope prefix forwards an outer run's `ORBIT_ACTIVITY_*` names.
+    // An allowlist-mode run stamps no deny-mode names of its own, so an
+    // inherited deny marker would otherwise swap this run's allowlist for the
+    // outer activity's disallow list. [ORB-13315]
+    child_env.retain(|(key, _)| {
+        ![
+            ACTIVITY_TOOL_POLICY_ENV,
+            ACTIVITY_TOOLS_DENY_ENV,
+            ACTIVITY_NAME_ENV,
+        ]
+        .contains(&key.as_str())
+    });
     child_env.extend(dispatch_env);
     if host.worker_invocation().is_some() {
         child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));

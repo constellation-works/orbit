@@ -47,9 +47,19 @@ pub struct AgentLoopSpec {
     /// System prompt / instruction delivered to the agent loop.
     #[serde(default)]
     pub instruction: String,
-    /// Tool allowlist (§6). Empty means no tools are allowed.
+    /// Tool allowlist (§6). Custom activities keep this exact allowlist
+    /// contract. An empty list with no `tool_disallow_list` is deprecated:
+    /// asset load warns and enforcement keeps its legacy behaviour until the
+    /// planned change recorded in the activity-job decisions log.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Tool disallow list (§6). Declaring it — even as `[]` — selects deny
+    /// mode: every registered agent-facing tool is callable except the
+    /// entries matched here. Mutually exclusive with a non-empty `tools`;
+    /// entries follow the allowlist's name and wildcard rules. A task's
+    /// `required_tools` cannot override an entry. Absent means allowlist mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_disallow_list: Option<Vec<String>>,
     /// Behavior when a denied tool is requested (§6 / §12 Q6).
     #[serde(default)]
     pub on_denial: OnDenial,

@@ -177,3 +177,82 @@ fn an_activity_that_omits_the_key_does_not_declare_the_mode() {
     };
     assert!(!spec.trusted_host_execution);
 }
+
+fn deny_mode_activity_yaml(name: &str, extra: &str) -> String {
+    format!(
+        r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: {name}
+spec:
+  type: agent_loop
+  description: Test agent loop.
+  instruction: Test.
+{extra}"#
+    )
+}
+
+/// [ORB-13315] A disallow-list activity loads in deny mode.
+#[test]
+fn load_activity_asset_accepts_a_tool_disallow_list() {
+    let yaml = deny_mode_activity_yaml(
+        "deny_tools",
+        "  tool_disallow_list:\n    - orbit.workflow.ship\n    - proc.*\n",
+    );
+
+    let asset = load_activity_asset(&yaml).expect("deny-mode activity should load");
+
+    let orbit_types::workflow::ActivityV2Spec::AgentLoop(spec) = &asset.spec.spec else {
+        panic!("agent loop");
+    };
+    assert_eq!(
+        spec.tool_policy_mode(),
+        orbit_types::workflow::ActivityToolPolicyMode::Deny
+    );
+}
+
+/// [ORB-13315] Declaring both lists is a load error naming the activity.
+#[test]
+fn load_activity_asset_rejects_tools_with_a_disallow_list() {
+    let yaml = deny_mode_activity_yaml(
+        "both_lists",
+        "  tools:\n    - orbit.task.show\n  tool_disallow_list:\n    - orbit.search\n",
+    );
+
+    let err = load_activity_asset(&yaml).expect_err("both lists must fail");
+
+    assert!(matches!(
+        &err,
+        AssetLoadError::ToolAllowlist {
+            activity,
+            source: orbit_types::workflow::ToolAllowlistError::ToolsAndDisallowListBothSet,
+        } if activity == "both_lists"
+    ));
+}
+
+/// [ORB-13315] Disallow entries obey the allowlist's wildcard roots.
+#[test]
+fn load_activity_asset_rejects_a_disallow_wildcard_outside_permitted_roots() {
+    let yaml = deny_mode_activity_yaml("broad_disallow", "  tool_disallow_list:\n    - orbit.*\n");
+
+    let err = load_activity_asset(&yaml).expect_err("broad wildcard must fail");
+
+    assert!(matches!(
+        &err,
+        AssetLoadError::ToolAllowlist {
+            activity,
+            source: orbit_types::workflow::ToolAllowlistError::DisallowList { .. },
+        } if activity == "broad_disallow"
+    ));
+}
+
+/// [ORB-13315] An empty `tools:` list keeps loading: it is deprecated with a
+/// warning, not refused or reinterpreted.
+#[test]
+fn load_activity_asset_keeps_loading_an_empty_tool_allowlist() {
+    let yaml = agent_loop_activity_yaml("empty_allowlist", "    []\n");
+
+    let asset = load_activity_asset(&yaml).expect("empty allowlist still loads");
+
+    assert!(orbit_types::workflow::activity_tool_policy_deprecation(&asset.spec).is_some());
+}

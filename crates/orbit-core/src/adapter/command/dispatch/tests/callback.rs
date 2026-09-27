@@ -608,3 +608,85 @@ fn revoking_the_grant_stops_a_live_callback_session() {
         "orbit.task.list",
     );
 }
+
+mod activity_tool_policy_env {
+    use orbit_types::workflow::ActivityToolDenyPolicy;
+
+    use super::super::super::callback::{
+        ActivityToolPolicyEnv, activity_tool_policy_from_env_values,
+    };
+
+    fn allowlist(tools: &[&str]) -> ActivityToolPolicyEnv {
+        ActivityToolPolicyEnv {
+            allowed_tools: tools.iter().map(|tool| (*tool).to_string()).collect(),
+            deny_policy: None,
+        }
+    }
+
+    /// [ORB-13315] A run with no policy marker is legacy allowlist mode with
+    /// today's exact semantics — including an empty or unset list, which
+    /// dispatch has always read as unrestricted.
+    #[test]
+    fn a_run_without_a_policy_marker_keeps_the_legacy_allowlist() {
+        assert_eq!(
+            activity_tool_policy_from_env_values(
+                None,
+                None,
+                None,
+                Some("orbit.task.*, orbit.search")
+            ),
+            allowlist(&["orbit.task.*", "orbit.search"])
+        );
+        assert_eq!(
+            activity_tool_policy_from_env_values(None, None, None, Some("")),
+            allowlist(&[])
+        );
+        assert_eq!(
+            activity_tool_policy_from_env_values(None, None, None, None),
+            allowlist(&[])
+        );
+    }
+
+    #[test]
+    fn a_deny_marker_with_its_list_selects_deny_mode() {
+        assert_eq!(
+            activity_tool_policy_from_env_values(
+                Some("deny"),
+                Some("orbit.workflow.ship,proc.*"),
+                Some("custom_agent"),
+                Some("orbit.search"),
+            ),
+            ActivityToolPolicyEnv {
+                allowed_tools: Vec::new(),
+                deny_policy: Some(ActivityToolDenyPolicy {
+                    activity: "custom_agent".to_string(),
+                    disallow_list: vec!["orbit.workflow.ship".to_string(), "proc.*".to_string()],
+                }),
+            }
+        );
+    }
+
+    /// A marker without its list, or a marker this build does not know, must
+    /// not widen access: both fall back to the stamped concrete allowlist.
+    #[test]
+    fn an_incomplete_or_unknown_marker_falls_back_to_the_stamped_allowlist() {
+        assert_eq!(
+            activity_tool_policy_from_env_values(
+                Some("deny"),
+                None,
+                Some("a"),
+                Some("orbit.search")
+            ),
+            allowlist(&["orbit.search"])
+        );
+        assert_eq!(
+            activity_tool_policy_from_env_values(
+                Some("future-mode"),
+                Some("orbit.search"),
+                Some("a"),
+                Some("orbit.task.show"),
+            ),
+            allowlist(&["orbit.task.show"])
+        );
+    }
+}

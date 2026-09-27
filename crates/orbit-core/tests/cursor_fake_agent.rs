@@ -110,6 +110,7 @@ fn seed_cursor_executor(runtime: &OrbitRuntime, program: &Path, keep_sandbox: bo
 
 fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
