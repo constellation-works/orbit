@@ -223,6 +223,17 @@ one of them in the same change. The consequences:
 `--fix-stale-artifacts` and `workspace sync` never disagree about whether a
 retired default is safe to remove.
 
+Reconciliation is confined to the catalog. The `routines/` directory, its
+manifest, each definition, and the `.retired-managed/routines/` route must be a
+real directory or regular file, or absent, judged without following links. Every
+creation, refresh (including a lifecycle-variant refresh), retirement, and
+preserved-copy move checks this first, and on Unix the definition write also
+refuses a final-component link. A symbolic link at any of those paths, dangling
+or not, is reported as preserved with its path and left untouched. Its manifest
+provenance is kept, so a later sync finishes the work once the operator replaces
+the link. A linked catalog or manifest refuses the whole routine catalog,
+matching the loader, which skips the same links.
+
 A routines directory carrying no manifest at all predates that provenance, and its routines
 are customized by design — flipping `enabled` is the lifecycle the templates invite. Content alone cannot separate such a routine from a file the operator wrote
 from scratch, so reconciliation adopts it [ORB-11154]: the binding is parsed from that exact

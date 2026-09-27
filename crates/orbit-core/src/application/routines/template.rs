@@ -5,11 +5,11 @@ use std::fs;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::write_text_with_parent;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::RoutineDefinition;
 
+use super::materialize::write_confined_routine;
 use super::rewrite_enabled_line;
 use super::seed::{
     BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
@@ -166,7 +166,7 @@ pub(super) fn reconcile_lifecycle_variant(
         ShippedShape::Superseded | ShippedShape::Retired => {
             let rendered = render_refresh(file_stem, template, &binding, existing)?;
             if mode == ManagedAssetReconcileMode::Apply {
-                write_text_with_parent(path, &rendered)?;
+                write_confined_routine(path, &rendered)?;
             }
             result.refreshed += 1;
             result.actions.push(ManagedAssetAction {
