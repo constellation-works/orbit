@@ -8,6 +8,11 @@
 	</button>
 </starlight-theme-select>
 
+{/* Set the initial icon before the deferred toggle script runs. */}
+<script is:inline>
+	StarlightThemeProvider.updatePickers();
+</script>
+
 <style>
 	.canon-theme-toggle {
 		background: transparent;
@@ -50,14 +55,14 @@
 			if (btn) {
 				btn.addEventListener('click', () => {
 					const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-					localStorage.setItem('starlight-theme', theme);
+					localStorage.setItem('orbit-theme-choice', theme);
 					document.documentElement.dataset.theme = theme;
 					updateThemePickers(theme);
 				});
 			}
 		}
 		connectedCallback() {
-			const theme = document.documentElement.dataset.theme || 'dark';
+			const theme = document.documentElement.dataset.theme || 'light';
 			updateThemePickers(theme);
 		}
 	}

@@ -2,19 +2,18 @@
 import { Icon } from '@astrojs/starlight/components';
 ---
 
-{/* Inlined to avoid a light-mode flash before the picker hydrates. */}
+{/* Inlined to avoid a dark-mode flash before the light default applies. */}
 <script is:inline>
 	window.StarlightThemeProvider = (() => {
-		const storageKey = 'starlight-theme';
+		// The old starlight-theme value was also written on plain page loads, so it
+		// cannot identify an explicit choice. Only the new key is authoritative.
+		const storageKey = 'orbit-theme-choice';
 		const storedTheme =
 			typeof localStorage !== 'undefined' && localStorage.getItem(storageKey);
-		const theme = storedTheme || 'dark';
-		if (!storedTheme && typeof localStorage !== 'undefined') {
-			localStorage.setItem(storageKey, theme);
-		}
-		document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+		const theme = storedTheme === 'dark' ? 'dark' : 'light';
+		document.documentElement.dataset.theme = theme;
 		return {
-			updatePickers(theme = storedTheme || 'dark') {
+			updatePickers(theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light') {
 				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
 					const select = picker.querySelector('select');
 					if (select) select.value = theme;
