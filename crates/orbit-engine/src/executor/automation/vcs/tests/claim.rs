@@ -248,10 +248,139 @@ fn claim_validate_refuses_a_candidate_that_does_not_contain_the_validated_base()
     );
 }
 
+fn local_candidate() -> (tempfile::TempDir, std::path::PathBuf, String) {
+    let temp = tempdir().expect("candidate tempdir");
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, ".gitignore", "build/\n");
+    git(&repo, &["checkout", "-b", "candidate"]);
+    let head = commit_file(&repo, "input.txt", "fail\n");
+    (temp, repo, head)
+}
+
+fn local_input(repo: &Path) -> serde_json::Value {
+    json!({"workspace_path": repo.to_string_lossy()})
+}
+
+#[test]
+fn dirty_tracked_edit_that_alone_makes_the_check_pass_is_refused() {
+    for staged in [false, true] {
+        let (_temp, repo, head) = local_candidate();
+        fs::write(repo.join("input.txt"), "pass\n").expect("edit candidate input");
+        if staged {
+            git(&repo, &["add", "input.txt"]);
+        }
+        assert!(
+            Command::new("/bin/sh")
+                .args(["-c", "test \"$(cat input.txt)\" = pass"])
+                .current_dir(&repo)
+                .status()
+                .expect("required command")
+                .success(),
+            "the uncommitted edit alone must make the required command pass"
+        );
+        let host = ClaimHost::local_with_commands(&["test \"$(cat input.txt)\" = pass"]);
+        let error = claim_validate(&host, &local_input(&repo))
+            .expect_err("a passing dirty worktree cannot certify clean HEAD");
+        assert!(error.to_string().contains("staged, tracked, or untracked"));
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+        assert_eq!(host.log_count(), 0);
+    }
+}
+
+#[test]
+fn relevant_untracked_candidate_input_is_refused() {
+    let (_temp, repo, _) = local_candidate();
+    fs::write(repo.join("proof.txt"), "pass\n").expect("untracked input");
+    assert!(
+        Command::new("/bin/sh")
+            .args(["-c", "test -f proof.txt"])
+            .current_dir(&repo)
+            .status()
+            .expect("required command")
+            .success()
+    );
+    let host = ClaimHost::local_with_commands(&["test -f proof.txt"]);
+    let error = claim_validate(&host, &local_input(&repo))
+        .expect_err("untracked input cannot certify a clean HEAD");
+    assert!(error.to_string().contains("staged, tracked, or untracked"));
+    assert_eq!(host.log_count(), 0);
+}
+
+#[test]
+fn required_command_that_changes_source_or_head_emits_no_passing_logs() {
+    for mutating_command in [
+        "printf pass > input.txt",
+        "git commit --allow-empty -m advanced",
+        "git checkout -b other",
+    ] {
+        let (_temp, repo, head) = local_candidate();
+        let host = ClaimHost::local_with_commands(&["true", mutating_command]);
+        let error = claim_validate(&host, &local_input(&repo))
+            .expect_err("a command that changes the candidate must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("staged, tracked, or untracked")
+                || message.contains("checked-out HEAD moved")
+                || message.contains("checked-out source branch moved"),
+            "unexpected refusal: {message}"
+        );
+        assert_eq!(host.log_count(), 0, "earlier passing logs are withheld");
+        assert!(host.handoff.lock().expect("handoff lock").is_none());
+        if mutating_command.starts_with("git commit") {
+            assert_ne!(git(&repo, &["rev-parse", "HEAD"]), head);
+        } else {
+            assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+        }
+    }
+}
+
+#[test]
+fn clean_candidate_succeeds_with_ignored_build_output() {
+    let (_temp, repo, head) = local_candidate();
+    let host = ClaimHost::local_with_commands(&[
+        "mkdir -p build && printf artifact > build/output",
+        "test -f build/output && test \"$(cat input.txt)\" = fail",
+    ]);
+    let input = local_input(&repo);
+    let validated = claim_validate(&host, &input).expect("clean candidate validation");
+    assert_eq!(validated["tested_head"], head);
+    assert_eq!(host.log_count(), 2);
+    assert!(repo.join("build/output").exists());
+    assert_eq!(
+        git(&repo, &["status", "--porcelain", "--untracked-files=all"]),
+        ""
+    );
+
+    let mut handoff_input = input;
+    handoff_input["candidate"] = validated["candidate"].clone();
+    handoff_input["validation"] = validated["validation"].clone();
+    let result = claim_handoff(&host, &handoff_input).expect("clean handoff");
+    assert_eq!(result["handed_off"], true);
+    assert!(host.handoff.lock().expect("handoff lock").is_some());
+}
+
+#[test]
+fn handoff_refuses_a_dirty_tree_after_validation() {
+    let (_temp, repo, _) = local_candidate();
+    let host = ClaimHost::local_with_commands(&["true"]);
+    let input = local_input(&repo);
+    let validated = claim_validate(&host, &input).expect("initial validation");
+    fs::write(repo.join("input.txt"), "changed\n").expect("change candidate after validation");
+    let mut handoff_input = input;
+    handoff_input["candidate"] = validated["candidate"].clone();
+    handoff_input["validation"] = validated["validation"].clone();
+    let error = claim_handoff(&host, &handoff_input)
+        .expect_err("dirty candidate must not reach typed handoff");
+    assert!(error.to_string().contains("staged, tracked, or untracked"));
+    assert!(host.handoff.lock().expect("handoff lock").is_none());
+}
+
 /// Host that records claim validation logs and the typed handoff so the
 /// activities can be driven without a full runtime.
 struct ClaimHost {
     context: ClaimExecutionContext,
+    logs: Mutex<Vec<String>>,
     handoff: Mutex<Option<TaskHandoff>>,
 }
 
@@ -259,8 +388,23 @@ impl ClaimHost {
     fn pr_mode() -> Self {
         Self {
             context: claim_context("pr"),
+            logs: Mutex::new(Vec::new()),
             handoff: Mutex::new(None),
         }
+    }
+
+    fn local_with_commands(commands: &[&str]) -> Self {
+        let mut context = claim_context("local");
+        context.required_commands = commands.iter().map(|command| (*command).into()).collect();
+        Self {
+            context,
+            logs: Mutex::new(Vec::new()),
+            handoff: Mutex::new(None),
+        }
+    }
+
+    fn log_count(&self) -> usize {
+        self.logs.lock().expect("validation logs lock").len()
     }
 }
 
@@ -269,11 +413,11 @@ impl RuntimeHost for ClaimHost {
         Ok(self.context.clone())
     }
 
-    fn attach_claim_validation_log(
-        &self,
-        _path: &str,
-        _content: Vec<u8>,
-    ) -> Result<(), OrbitError> {
+    fn attach_claim_validation_log(&self, path: &str, _content: Vec<u8>) -> Result<(), OrbitError> {
+        self.logs
+            .lock()
+            .expect("validation logs lock")
+            .push(path.into());
         Ok(())
     }
 
