@@ -91,8 +91,16 @@ fn emit_ndjson(doc: &Value) -> Result<(), OrbitError> {
     let mut stdout = std::io::stdout().lock();
     for record in ndjson_records(doc) {
         let line = crate::output::json::render(record, false)?;
-        writeln!(stdout, "{line}").map_err(write_error)?;
-        stdout.flush().map_err(write_error)?;
+        match writeln!(stdout, "{line}") {
+            Ok(()) => {}
+            Err(err) if crate::output::pipe::is_broken_pipe(&err) => return Ok(()),
+            Err(err) => return Err(write_error(err)),
+        }
+        match stdout.flush() {
+            Ok(()) => {}
+            Err(err) if crate::output::pipe::is_broken_pipe(&err) => return Ok(()),
+            Err(err) => return Err(write_error(err)),
+        }
     }
     Ok(())
 }
