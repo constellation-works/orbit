@@ -14,6 +14,11 @@ pub struct DeclaredResponseFailure {
     pub error: Option<AgentRunError>,
 }
 
+struct SelectedResponse {
+    status: String,
+    failure: Option<DeclaredResponseFailure>,
+}
+
 /// JSON documents from one stdout capture.
 ///
 /// CLI post-run handling peeks status, checks the completion envelope, and
@@ -49,9 +54,9 @@ impl<'a> ParsedStdout<'a> {
         match discover_in_values(
             documents.iter().rev(),
             &mut Budget::production(),
-            deserialize_envelope,
+            selected_response,
         ) {
-            Ok(Some(envelope)) => Some(envelope.status),
+            Ok(Some(selected)) => Some(selected.status),
             Ok(None) | Err(_) => None,
         }
     }
@@ -61,9 +66,10 @@ impl<'a> ParsedStdout<'a> {
         discover_in_values(
             documents.iter().rev(),
             &mut Budget::production(),
-            declared_response_failure,
+            selected_response,
         )
         .unwrap_or_default()
+        .and_then(|selected| selected.failure)
     }
 
     pub fn response_envelope_protocol_check(&self) -> Result<(), OrbitError> {
@@ -141,7 +147,9 @@ pub fn peek_response_status(stdout: &str) -> Option<String> {
 
 /// Best-effort lookup of a terminal failure declaration in provider stdout.
 ///
-/// Unlike full response validation, this preserves the status when its error
+/// Selects the same terminal envelope as [`peek_response_status`], so a nested
+/// failure cannot override a completed success. Unlike full response
+/// validation, this preserves a selected failed/timeout status when its error
 /// object is absent or malformed. The dispatcher uses that status to fail
 /// closed, while treating unavailable error details as a generic diagnostic.
 /// The returned error is present only when both its code and message are
@@ -569,7 +577,7 @@ pub(in crate::types) fn discover_agent_response_envelope_with_stats(
     Ok((found, budget.stats))
 }
 
-/// Declared-failure search with the same walk and bounds as envelope
+/// Selected-response search with the same walk and bounds as envelope
 /// discovery, including the mixed-stdout suffix scan used inside string
 /// fields. Visible to sibling tests.
 #[cfg(test)]
@@ -579,14 +587,12 @@ pub(in crate::types) fn discover_declared_response_failure_with_stats(
 ) -> Result<(Option<DeclaredResponseFailure>, EnvelopeDiscoveryStats), OrbitError> {
     let mut budget = Budget::new(budget);
     let found = match parse_json_documents(stdout) {
-        Ok(documents) => discover_in_values(
-            documents.iter().rev(),
-            &mut budget,
-            declared_response_failure,
-        )?,
-        Err(_) => discover_in_string(stdout, &mut budget, declared_response_failure)?,
+        Ok(documents) => {
+            discover_in_values(documents.iter().rev(), &mut budget, selected_response)?
+        }
+        Err(_) => discover_in_string(stdout, &mut budget, selected_response)?,
     };
-    Ok((found, budget.stats))
+    Ok((found.and_then(|selected| selected.failure), budget.stats))
 }
 
 fn discover_in_values<'a, T, I, F>(
@@ -695,6 +701,22 @@ where
         }
     }
     Ok(None)
+}
+
+fn selected_response(value: &Value) -> Option<SelectedResponse> {
+    if let Some(envelope) = deserialize_envelope(value) {
+        return Some(SelectedResponse {
+            failure: declared_response_failure(value),
+            status: envelope.status,
+        });
+    }
+
+    // A malformed error object makes full deserialization fail. A selected
+    // failure still controls the invocation outcome and must stop the walk.
+    declared_response_failure(value).map(|failure| SelectedResponse {
+        status: failure.status.clone(),
+        failure: Some(failure),
+    })
 }
 
 fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {

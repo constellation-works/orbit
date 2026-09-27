@@ -1071,21 +1071,46 @@ fn run_cli_backend_completion_gate_demotes_a_declared_timeout_envelope() {
 }
 
 #[test]
-fn run_cli_backend_demotes_declared_failure_with_missing_or_malformed_error_details() {
-    for (fixture, error) in [
-        ("missing", serde_json::Value::Null),
-        ("malformed", serde_json::json!({"code": 42, "message": []})),
-    ] {
+fn run_cli_backend_keeps_selected_success_over_secondary_failures() {
+    let failure = serde_json::json!({
+        "schemaVersion": 1,
+        "status": "failed",
+        "result": {},
+        "error": {"code": "historical", "message": "earlier failure"},
+    });
+    let success = serde_json::json!({
+        "schemaVersion": 1,
+        "status": "success",
+        "result": {"ok": true},
+        "error": null,
+    });
+    let cases = [
+        (
+            "nested-example",
+            serde_json::json!({
+                "schemaVersion": 1,
+                "status": "success",
+                "result": {"example": failure},
+                "error": null,
+            })
+            .to_string(),
+        ),
+        (
+            "structured-output",
+            serde_json::json!({
+                "structured_output": success,
+                "result": failure,
+            })
+            .to_string(),
+        ),
+        ("latest-jsonl", format!("{failure}\n{success}")),
+    ];
+
+    for (fixture, stdout) in cases {
         let temp = tempdir().expect("tempdir");
         let script = temp.path().join("codex");
-        let envelope = serde_json::json!({
-            "schemaVersion": 1,
-            "status": "failed",
-            "result": {},
-            "error": error,
-        });
         let stdout_file = temp.path().join("stdout.json");
-        fs::write(&stdout_file, envelope.to_string()).expect("write envelope fixture");
+        fs::write(&stdout_file, stdout).expect("write response fixture");
         write_executable(
             &script,
             &format!(
@@ -1097,30 +1122,89 @@ fn run_cli_backend_demotes_declared_failure_with_missing_or_malformed_error_deta
         let sink = Arc::new(RecordingSink::default());
         let sink_for_writer: Arc<dyn AuditSink> = sink;
         let audit = Arc::new(V2AuditWriter::new(
-            format!("job-declared-failure-{fixture}"),
+            format!("job-selected-success-{fixture}"),
             "codex:gpt-5.5",
             sink_for_writer,
         ));
         let host = TestHost::with_command(script.display().to_string());
-
         let outcome = run_cli_backend(
             &host,
             &test_agent_loop_spec(Duration::from_secs(5)),
             "test_activity",
-            &format!("job-declared-failure-{fixture}"),
+            &format!("job-selected-success-{fixture}"),
             audit,
-            &serde_json::json!({"task_id": "ORB-11439"}),
+            &serde_json::json!({"prompt": "report the outcome"}),
             None,
         )
         .expect("run cli backend");
 
-        assert!(!outcome.success, "{fixture} error must still demote exit 0");
-        assert_eq!(outcome.output["response_envelope_status"], "failed");
-        let message = outcome.message.expect("declared failure message");
+        assert!(outcome.success, "{fixture}: {:?}", outcome.message);
+        assert_eq!(outcome.output["response_envelope_status"], "success");
+        assert_eq!(outcome.output["completion_envelope_satisfied"], true);
         assert!(
-            message.contains("declared envelope error details unavailable"),
-            "{message}"
+            outcome.message.is_none(),
+            "{fixture}: {:?}",
+            outcome.message
         );
+    }
+}
+
+#[test]
+fn run_cli_backend_demotes_declared_failure_with_missing_or_malformed_error_details() {
+    for status in ["failed", "timeout"] {
+        for (fixture, error) in [
+            ("missing", serde_json::Value::Null),
+            ("malformed", serde_json::json!({"code": 42, "message": []})),
+        ] {
+            let temp = tempdir().expect("tempdir");
+            let script = temp.path().join("codex");
+            let envelope = serde_json::json!({
+                "schemaVersion": 1,
+                "status": status,
+                "result": {},
+                "error": error,
+            });
+            let stdout_file = temp.path().join("stdout.json");
+            fs::write(&stdout_file, envelope.to_string()).expect("write envelope fixture");
+            write_executable(
+                &script,
+                &format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat '{}'\n",
+                    stdout_file.display()
+                ),
+            );
+
+            let sink = Arc::new(RecordingSink::default());
+            let sink_for_writer: Arc<dyn AuditSink> = sink;
+            let audit = Arc::new(V2AuditWriter::new(
+                format!("job-declared-{status}-{fixture}"),
+                "codex:gpt-5.5",
+                sink_for_writer,
+            ));
+            let host = TestHost::with_command(script.display().to_string());
+
+            let outcome = run_cli_backend(
+                &host,
+                &test_agent_loop_spec(Duration::from_secs(5)),
+                "test_activity",
+                &format!("job-declared-{status}-{fixture}"),
+                audit,
+                &serde_json::json!({"task_id": "ORB-11439"}),
+                None,
+            )
+            .expect("run cli backend");
+
+            assert!(
+                !outcome.success,
+                "{status} {fixture} error must demote exit 0"
+            );
+            assert_eq!(outcome.output["response_envelope_status"], status);
+            let message = outcome.message.expect("declared failure message");
+            assert!(
+                message.contains("declared envelope error details unavailable"),
+                "{message}"
+            );
+        }
     }
 }
 
