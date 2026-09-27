@@ -14,7 +14,9 @@ use tempfile::tempdir;
 
 use crate::context::RuntimeHost;
 
-use super::super::cleanup::{remove_worktree, remove_worktree_without_force};
+use super::super::cleanup::{
+    recover_timed_out_removal, remove_worktree, remove_worktree_without_force,
+};
 use super::super::gc::{WorktreeGcOptions, collect_worktrees};
 use super::super::{
     WorktreeIdentity, is_registered_worktree, resolve_shared_worktree_path,
@@ -937,36 +939,18 @@ fn large_synthetic_worktree_is_reclaimed_within_the_gc_budget() {
 
     // The background deletion eventually finishes too, so no `.trash-*`
     // leftover survives indefinitely.
-    let parent = worktree.parent().unwrap().to_path_buf();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let leftover = fs::read_dir(&parent).unwrap().any(|entry| {
-            entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".trash-")
-        });
-        if !leftover {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "background trash deletion did not finish in time"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    wait_for_trash_cleanup(&worktree);
 }
 
-/// [DANI-10448] Exercises the recovery branch directly: when `git worktree
-/// remove` is killed by the supervisor's deadline rather than finishing or
-/// refusing, `remove_worktree_without_force` must relocate the tree instead of
-/// surfacing the timeout as an error. A budget of [`GitTimeoutBudget::MIN_MS`]
-/// reliably forces this — spawning `git` alone takes longer than 1ms — without
-/// depending on real bulk-delete wall time, which no fixture size can pin
-/// deterministically.
+/// A supervisor timeout can land before `git worktree remove` has finished
+/// its clean and lock checks. A budget of [`GitTimeoutBudget::MIN_MS`]
+/// reliably forces exactly that — spawning `git` alone takes longer than 1ms,
+/// so Git never reaches its checks — and the recovery's own verification
+/// cannot finish inside that budget either. The timeout alone must not
+/// authorize deletion: the dirty bytes and the registration stay put, now and
+/// after any background work would have had time to run.
 #[test]
-fn removal_without_force_relocates_a_worktree_after_a_git_remove_timeout() {
+fn removal_timeout_before_safety_checks_preserves_a_dirty_worktree() {
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -974,48 +958,183 @@ fn removal_without_force_relocates_a_worktree_after_a_git_remove_timeout() {
     add_worktree(&repo, &worktree, "orbit/timeout");
     fs::write(worktree.join("marker.txt"), "still here").unwrap();
 
+    let error = {
+        let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
+            default_ms: GitTimeoutBudget::MIN_MS,
+            ..GitTimeoutBudget::DEFAULT
+        });
+        remove_worktree(&repo, &worktree, None, false)
+            .expect_err("an unverified git worktree remove timeout must not count as removal")
+    };
+
+    assert!(
+        format!("{error}").contains("preserved worktree"),
+        "the error must say the worktree was preserved: {error}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(
+        fs::read_to_string(worktree.join("marker.txt")).unwrap(),
+        "still here"
+    );
+    assert!(is_registered_worktree(&repo, &worktree).unwrap());
+    assert_eq!(
+        trash_siblings(&worktree),
+        0,
+        "nothing was relocated for deletion"
+    );
+}
+
+/// Even a clean tree is not deleted on the strength of a timeout: when the
+/// independent verification cannot complete, the worktree stays registered.
+#[test]
+fn removal_timeout_never_deletes_an_unverified_clean_worktree() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-unverified");
+    add_worktree(&repo, &worktree, "orbit/unverified");
+
     {
         let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
             default_ms: GitTimeoutBudget::MIN_MS,
             ..GitTimeoutBudget::DEFAULT
         });
         remove_worktree_without_force(&repo, &worktree)
-            .expect("a git worktree remove timeout must be recovered, not propagated");
+            .expect_err("a timeout whose recovery cannot verify the tree must fail closed");
     }
 
+    assert!(worktree.join("base.txt").exists());
+    assert!(is_registered_worktree(&repo, &worktree).unwrap());
+    assert_eq!(trash_siblings(&worktree), 0);
+}
+
+/// GC's status scan runs before removal, so content can appear in between.
+/// When the non-force removal then times out, the recovery's own checks —
+/// run at the normal budget — see that content and preserve every byte.
+#[test]
+fn worktree_dirtied_after_the_scan_survives_an_interrupted_removal() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-late-dirt");
+    add_worktree(&repo, &worktree, "orbit/late-dirt");
+    fs::write(worktree.join("base.txt"), "edited after the scan").unwrap();
+    fs::create_dir_all(worktree.join("notes")).unwrap();
+    fs::write(worktree.join("notes/untracked.md"), "new work").unwrap();
+
+    let error = recover_timed_out_removal(&worktree, 30_000)
+        .expect_err("a dirty tree must never be relocated for deletion");
+
+    assert!(
+        format!("{error}").contains("uncommitted or untracked content"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("base.txt")).unwrap(),
+        "edited after the scan"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("notes/untracked.md")).unwrap(),
+        "new work"
+    );
+    assert!(is_registered_worktree(&repo, &worktree).unwrap());
+    assert_eq!(trash_siblings(&worktree), 0);
+}
+
+/// Git refuses to remove a locked worktree before looking at its contents;
+/// an interrupted removal must honor the same refusal.
+#[test]
+fn locked_worktree_survives_an_interrupted_removal() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-locked");
+    add_worktree(&repo, &worktree, "orbit/locked");
+    git(&repo, &["worktree", "lock", worktree.to_str().unwrap()]);
+
+    let error = recover_timed_out_removal(&worktree, 30_000)
+        .expect_err("a locked tree must never be relocated for deletion");
+
+    assert!(
+        format!("{error}").contains("locked"),
+        "unexpected error: {error}"
+    );
+    assert!(worktree.join("base.txt").exists());
+    assert!(is_registered_worktree(&repo, &worktree).unwrap());
+}
+
+/// Git refuses to remove a worktree holding a populated submodule, whose
+/// history may exist nowhere else, even when the superproject is clean.
+#[test]
+fn worktree_with_a_populated_gitlink_survives_an_interrupted_removal() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-gitlink");
+    add_worktree(&repo, &worktree, "orbit/gitlink");
+    let nested = worktree.join("nested");
+    init_repo(&nested);
+    git(&worktree, &["add", "nested"]);
+    git(&worktree, &["commit", "-m", "embed nested repository"]);
+
+    let error = recover_timed_out_removal(&worktree, 30_000)
+        .expect_err("a tree holding submodule history must never be relocated for deletion");
+
+    assert!(
+        format!("{error}").contains("submodules"),
+        "unexpected error: {error}"
+    );
+    assert!(nested.join("base.txt").exists());
+    assert!(is_registered_worktree(&repo, &worktree).unwrap());
+}
+
+/// [DANI-10448] The timeout this recovery exists for: Git approved a clean
+/// tree and was killed partway through physically deleting a huge ignored
+/// `target/`, having already removed some tracked files. Verification sees
+/// only missing tracked files — no bytes to lose — so the tree is relocated
+/// at once, Git's metadata is prunable immediately, and the bulk delete
+/// finishes off the critical path.
+#[test]
+fn interrupted_physical_delete_of_a_clean_worktree_is_finished_in_the_background() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    fs::write(repo.join(".gitignore"), "/target\n").unwrap();
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-m", "ignore build output"]);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-interrupted");
+    add_worktree(&repo, &worktree, "orbit/interrupted");
+    let build_dir = worktree.join("target");
+    fs::create_dir_all(&build_dir).unwrap();
+    for index in 0..4_000 {
+        fs::write(
+            build_dir.join(format!("artifact-{index}.o")),
+            b"fixture build output",
+        )
+        .unwrap();
+    }
+    // What Git's own delete had already unlinked when the deadline hit.
+    fs::remove_file(worktree.join("base.txt")).unwrap();
+
+    let started = std::time::Instant::now();
+    recover_timed_out_removal(&worktree, 30_000)
+        .expect("a verified-clean, partially deleted tree must be recovered");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "recovery took {elapsed:?}; the bulk delete must stay off the critical path"
+    );
     assert!(
         !worktree.exists(),
         "the worktree is relocated to a trash sibling, not left in place"
     );
-
-    // `remove_worktree_without_force` only relocates the tree; the caller
-    // (`remove_worktree`) prunes metadata next. Do that here, at the normal
-    // budget, to confirm the admin entry is prunable once the path is gone.
     git(&repo, &["worktree", "prune"]);
     assert!(
         !is_registered_worktree(&repo, &worktree).unwrap(),
         "Git metadata must be prunable immediately, without waiting on the relocated tree's deletion"
     );
-
-    let parent = worktree.parent().unwrap().to_path_buf();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let leftover = fs::read_dir(&parent).unwrap().any(|entry| {
-            entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".trash-")
-        });
-        if !leftover {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "background trash deletion did not finish in time"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    wait_for_trash_cleanup(&worktree);
 }
 
 /// [DANI-10448] One candidate's hard failure — here, a linked worktree whose
@@ -1177,6 +1296,33 @@ fn add_worktree(repo: &Path, path: &Path, branch: &str) {
             "HEAD",
         ],
     );
+}
+
+/// `.trash-*` siblings a relocated worktree leaves until its background
+/// deletion finishes.
+fn trash_siblings(worktree: &Path) -> usize {
+    fs::read_dir(worktree.parent().unwrap())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".trash-")
+        })
+        .count()
+}
+
+fn wait_for_trash_cleanup(worktree: &Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while trash_siblings(worktree) > 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background trash deletion did not finish in time"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 fn git(current_dir: &Path, args: &[&str]) -> String {
