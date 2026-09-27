@@ -77,6 +77,11 @@ impl DeliveryPin {
         }
     }
 
+    /// The head commit this run is authorized to deliver, after any in-run repair.
+    pub(in crate::executor::automation::vcs) fn candidate_sha(&self) -> Option<&str> {
+        self.candidate_sha.as_deref()
+    }
+
     /// Adopt the rewritten candidate an authorized in-run repair produced.
     ///
     /// The bounded conflict recovery rebases and lease-pushes the *same*
@@ -106,10 +111,11 @@ impl DeliveryPin {
 
     /// The full pinned identity, including the head commit.
     ///
-    /// `pr_complete` leaves the head to the conditional provider mutation,
-    /// which enforces it atomically. The owner landing consumer checks it on
-    /// every poll as well [ORB-12499]: a candidate that moved has to stop with
-    /// evidence an operator can read, not fail inside a merge request.
+    /// Checked before a merge or auto-merge is requested, so a head this run
+    /// did not publish never reaches the provider. Completion also sends this
+    /// SHA to the synchronous provider mutation, which refuses a head that
+    /// moves after the read. The owner landing consumer checks the same
+    /// identity on every poll [ORB-12499].
     pub(in crate::executor::automation::vcs) fn ensure_pinned_candidate(
         &self,
         status: &Value,

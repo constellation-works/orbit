@@ -29,6 +29,13 @@
 //! race that repoints the PR, a head this run never published, or a merged
 //! state reported without a merge commit all refuse completion instead of
 //! reaching the transition. See [`super::delivery`].
+//!
+//! [ORB-13444] Ungated completion is held to that same candidate. The
+//! published head is checked before any merge or auto-merge request, and that
+//! SHA is what the synchronous provider mutation requires. Pending work that
+//! carries a published head waits for the mutation instead of enabling
+//! auto-merge, which cannot keep the condition. A run with no published SHA
+//! still uses the ungated merge.
 
 use std::thread::sleep;
 use std::time::Duration;
@@ -262,7 +269,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 continue;
             }
             PrMergeState::Mergeable => {
-                pin.ensure_candidate_identity(&status, pr_number)?;
+                pin.ensure_pinned_candidate(&status, pr_number)?;
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
                 if !merge_requested {
                     let capabilities = resolved_capabilities(
@@ -277,7 +284,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         pr_number,
                         capabilities.strategy,
                         false,
-                        reviewed_head_sha.as_deref(),
+                        merge_condition_sha(reviewed_head_sha.as_deref(), &pin),
                     )
                     .map_err(|error| {
                         OrbitError::Execution(format!(
@@ -292,13 +299,17 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }
             }
             PrMergeState::Pending => {
-                pin.ensure_candidate_identity(&status, pr_number)?;
+                pin.ensure_pinned_candidate(&status, pr_number)?;
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
-                // The CLI auto-merge path cannot retain the review condition.
-                // Gated runs wait locally and use the conditional synchronous
-                // mutation once checks settle, including on queue-only branches
-                // where that mutation will refuse the unsupported merge.
-                if reviewed_head_sha.is_none() && !auto_merge_requested {
+                // Auto-merge cannot retain a head condition. A reviewed head
+                // or a published candidate waits for the synchronous mutation
+                // once checks settle, including on queue-only branches where
+                // that mutation refuses the unsupported merge. Only an
+                // unpinned ungated run may hand the merge to GitHub.
+                if reviewed_head_sha.is_none()
+                    && pin.candidate_sha().is_none()
+                    && !auto_merge_requested
+                {
                     // Required checks are still running. Hand the merge to
                     // GitHub's auto-merge when this repository allows it, then
                     // keep polling: enabling it is not success. Repositories
@@ -351,6 +362,18 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             )));
         }
     }
+}
+
+/// SHA the synchronous provider mutation must match.
+///
+/// A before-PR review wins when this run has one. Otherwise the published
+/// candidate, including a head rewritten by the bounded conflict repair, is
+/// the condition. With neither pin the merge stays ungated.
+fn merge_condition_sha<'a>(
+    reviewed_head_sha: Option<&'a str>,
+    pin: &'a DeliveryPin,
+) -> Option<&'a str> {
+    reviewed_head_sha.or(pin.candidate_sha())
 }
 
 /// The head a before-PR gate settled, when this run carried one.
