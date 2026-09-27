@@ -19,29 +19,33 @@ impl Execute for WorkspaceRemoveArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let workspace_id = workspace_id_for_selector(&registry, &self.workspace)?
-            .unwrap_or_else(|| self.workspace.clone());
-        let checkout = registry
-            .checkouts
-            .iter()
-            .find(|checkout| checkout.workspace_id == workspace_id)
-            .cloned();
-        let slug = workspace_registry::find_workspace_by_id(&registry, &workspace_id)
-            .map(|workspace| workspace.name.clone())
-            .unwrap_or_else(|| workspace_id.clone());
+        let (removed, leftover) = workspace_registry::with_registry_lock(&registry_path, || {
+            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+            let workspace_id = workspace_id_for_selector(&registry, &self.workspace)?
+                .unwrap_or_else(|| self.workspace.clone());
+            let checkout = registry
+                .checkouts
+                .iter()
+                .find(|checkout| checkout.workspace_id == workspace_id)
+                .cloned();
+            let slug = workspace_registry::find_workspace_by_id(&registry, &workspace_id)
+                .map(|workspace| workspace.name.clone())
+                .unwrap_or_else(|| workspace_id.clone());
 
-        // Retain checkout evidence before the catalog rows disappear so doctor
-        // can still classify a leftover populated partition [ORB-12223].
-        let leftover = retain_task_store_on_catalog_remove(
-            &global_root,
-            &workspace_id,
-            &slug,
-            checkout.as_ref(),
-        )?;
+            // Retain checkout evidence before the catalog rows disappear so doctor
+            // can still classify a leftover populated partition [ORB-12223].
+            let leftover = retain_task_store_on_catalog_remove(
+                &global_root,
+                &workspace_id,
+                &slug,
+                checkout.as_ref(),
+            )?;
 
-        let removed = workspace_registry::remove_workspace(&mut registry, &workspace_id)?;
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+            let removed = workspace_registry::remove_workspace(&mut registry, &workspace_id)?;
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+            Ok((removed, leftover))
+        })?;
+
         println!("workspace '{}' removed from registry", removed.name);
         if let Some(partition) = leftover.filter(|partition| partition.task_bundles > 0) {
             println!(

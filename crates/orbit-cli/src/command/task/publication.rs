@@ -114,7 +114,7 @@ impl Execute for TaskPublicationPublishArgs {
         let global_root = runtime.global_root();
         let machine = load_machine_identity(&global_root)?;
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+        let registry = workspace_registry::load_registry_from_read_only(&registry_path)?.registry;
         let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
             .cloned()
             .ok_or_else(|| {
@@ -158,14 +158,7 @@ impl Execute for TaskPublicationPublishArgs {
         };
         let outcome = runtime.publish_task_publication(request, &policy)?;
 
-        workspace_registry::record_publication_success_by_id(
-            &mut registry,
-            &workspace_id,
-            outcome.generation,
-            &outcome.commit_id,
-            Some(&binding.authority_machine_id),
-        )?;
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        record_success_at_registry_path(&registry_path, &binding, &outcome)?;
 
         Ok(Payload::detail(
             publish_json(&binding, &outcome),
@@ -173,6 +166,41 @@ impl Execute for TaskPublicationPublishArgs {
         )
         .into())
     }
+}
+
+// External publication deliberately runs without the catalog lock. Revalidate
+// its destination on a fresh snapshot before recording the completed publish.
+pub(super) fn record_success_at_registry_path(
+    registry_path: &std::path::Path,
+    expected: &WorkspacePublicationBinding,
+    outcome: &PublicationPublishOutcome,
+) -> Result<(), orbit_core::OrbitError> {
+    workspace_registry::with_registry_lock(registry_path, || {
+        let mut registry = workspace_registry::load_registry_from(registry_path)?;
+        let current =
+            workspace_registry::find_publication_binding_by_id(&registry, &expected.workspace_id);
+        let same_destination = current.is_some_and(|current| {
+            current.workspace_id == expected.workspace_id
+                && current.source_repository_fingerprint == expected.source_repository_fingerprint
+                && current.publication_remote == expected.publication_remote
+                && current.publication_branch == expected.publication_branch
+                && current.publication_id == expected.publication_id
+                && current.authority_machine_id == expected.authority_machine_id
+        });
+        if !same_destination {
+            return Err(orbit_core::OrbitError::WorkspaceError(
+                "publication completed remotely, but its local binding changed; success was not recorded".to_string(),
+            ));
+        }
+        workspace_registry::record_publication_success_by_id(
+            &mut registry,
+            &expected.workspace_id,
+            outcome.generation,
+            &outcome.commit_id,
+            Some(&expected.authority_machine_id),
+        )?;
+        workspace_registry::save_registry_to(&registry, registry_path)
+    })
 }
 
 #[derive(Args)]
