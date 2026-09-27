@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -83,7 +83,65 @@ pub fn spawn_under_macos_sandbox(
 /// key in [`cached_profile_tempfile`].
 type ProfileCacheKey = [u8; 32];
 
-/// Process-wide reuse of one profile tempfile per distinct compiled profile.
+/// Maximum number of compiled profile tempfiles retained in the process-wide
+/// cache.
+///
+/// Bounding cache size ensures long-lived hosts running diverse profiles do not
+/// leak open file descriptors or disk files. Inactive profiles beyond this
+/// capacity are evicted; if no active child process holds an [`Arc<NamedTempFile>`]
+/// reference to an evicted profile, the temporary file is closed and deleted.
+pub(crate) const MAX_CACHED_PROFILES: usize = 32;
+
+/// Bounded LRU cache of compiled SBPL profile tempfiles.
+struct ProfileCache {
+    entries: HashMap<ProfileCacheKey, Arc<NamedTempFile>>,
+    order: VecDeque<ProfileCacheKey>,
+    capacity: usize,
+}
+
+impl ProfileCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &ProfileCacheKey) -> Option<Arc<NamedTempFile>> {
+        if let Some(file) = self.entries.get(key) {
+            if let Some(pos) = self.order.iter().position(|k| k == key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(*key);
+            Some(Arc::clone(file))
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, key: ProfileCacheKey, file: Arc<NamedTempFile>) {
+        if self.entries.contains_key(&key) {
+            if let Some(pos) = self.order.iter().position(|k| k == &key) {
+                self.order.remove(pos);
+            }
+            self.order.push_back(key);
+            self.entries.insert(key, file);
+            return;
+        }
+
+        while self.entries.len() >= self.capacity && !self.order.is_empty() {
+            if let Some(evicted_key) = self.order.pop_front() {
+                self.entries.remove(&evicted_key);
+            }
+        }
+
+        self.order.push_back(key);
+        self.entries.insert(key, file);
+    }
+}
+
+/// Process-wide reuse of compiled profile tempfiles up to [`MAX_CACHED_PROFILES`].
 ///
 /// `(fs_profile, provider, env)` are constant within a run and across step
 /// retries, so [`compile_macos_sandbox_profile`](super::compile::compile_macos_sandbox_profile)
@@ -92,9 +150,14 @@ type ProfileCacheKey = [u8; 32];
 /// `NamedTempFile` for text that never changed. The compiled text already
 /// fully determines the enforced policy — provider-specific clauses are baked
 /// into it — so hashing the text alone is a correct and sufficient key.
-fn profile_cache() -> &'static Mutex<HashMap<ProfileCacheKey, Arc<NamedTempFile>>> {
-    static CACHE: OnceLock<Mutex<HashMap<ProfileCacheKey, Arc<NamedTempFile>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+///
+/// Evicting inactive entries beyond [`MAX_CACHED_PROFILES`] reclaims their
+/// temporary files and file descriptors, preventing resource exhaustion on
+/// long-lived hosts while keeping active child profiles alive via their strong
+/// [`Arc<NamedTempFile>`] references.
+fn profile_cache() -> &'static Mutex<ProfileCache> {
+    static CACHE: OnceLock<Mutex<ProfileCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(ProfileCache::new(MAX_CACHED_PROFILES)))
 }
 
 fn profile_cache_key(profile_text: &str) -> ProfileCacheKey {
@@ -103,13 +166,15 @@ fn profile_cache_key(profile_text: &str) -> ProfileCacheKey {
 
 /// Return the cached tempfile for `profile_text`, creating and writing one
 /// only on the first request for that exact profile.
-fn cached_profile_tempfile(profile_text: &str) -> Result<Arc<NamedTempFile>, OrbitError> {
+pub(crate) fn cached_profile_tempfile(
+    profile_text: &str,
+) -> Result<Arc<NamedTempFile>, OrbitError> {
     let key = profile_cache_key(profile_text);
     let mut cache = profile_cache()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     if let Some(existing) = cache.get(&key) {
-        return Ok(Arc::clone(existing));
+        return Ok(existing);
     }
 
     let mut profile_file = tempfile::Builder::new()
@@ -133,6 +198,18 @@ fn cached_profile_tempfile(profile_text: &str) -> Result<Arc<NamedTempFile>, Orb
     cache.insert(key, Arc::clone(&profile_file));
     Ok(profile_file)
 }
+
+#[cfg(test)]
+pub(crate) fn profile_cache_len() -> usize {
+    profile_cache()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entries
+        .len()
+}
+
+#[cfg(test)]
+pub(crate) static TEST_PROFILE_CACHE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Returns the stable program path used in audit logs for sandboxed CLI
 /// invocations. The real spawn path is resolved again at execution time so
