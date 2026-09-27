@@ -9,11 +9,16 @@
 //! would work once those grants are recorded.
 //!
 //! The run refuses, and the error prints the requested grant set, when the
-//! manifest asks for an unconfined backend (`sandbox: none`), an absolute
-//! `fs.write` root that is not a template, `network: any`, or any `env_pass`,
-//! unless the caller passes `--accept-requested` or a `--grant` list that
-//! names each of those grants. With that consent the run uses the requested
-//! profile. Consent applies to this run only; it does not record a host grant.
+//! manifest asks for an unconfined backend (`sandbox: none`), an `fs.write`
+//! root that resolves outside the temp directory, `network: any`, or any
+//! `env_pass`, unless the caller passes `--accept-requested` or a `--grant`
+//! list that names each of those grants. Write roots are judged where the
+//! backend would open them: rendered with the effective configuration,
+//! resolved against the plugin root and followed through symlinks, so a
+//! `{{config.<key>}}` default or a relative `../` root naming a host
+//! directory needs consent like an absolute one. With that consent the run
+//! uses the requested profile. Consent applies to this run only; it does not
+//! record a host grant, and it never lifts the protected-path refusal.
 //!
 //! Secrets come from the goldens alone: a case's `secrets` map is delivered
 //! the way the host delivers stored values (`context.secrets` /
@@ -26,7 +31,7 @@
 //! installed tree says nothing about the tree the host would run.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::OrbitError;
@@ -34,7 +39,8 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{
     DeliveredPluginSecret, LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginSecretSource,
     PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
-    refuse_covering_fs_write_roots, resolve_declared_programs, validate_loaded_plugin,
+    physical_with_missing_tail, refuse_covering_fs_write_roots, resolve_declared_programs,
+    validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
@@ -140,11 +146,12 @@ pub fn test_plugin_dir(
         )));
     }
     let requested_grants = format_requested_grants(&plugin.manifest);
-    authorize_conformance_run(&plugin, options, &requested_grants)?;
+    let consented = parse_consent(options)?;
 
     // One temp root stands in for both the global root and the workspace.
-    // Template paths render under it. An absolute write root is opened as
-    // declared, which is why that shape needs consent before this point.
+    // `{{workspace}}` and `{{plugin_state}}` render under it; any other root
+    // is opened where it resolves, which is why consent below is decided on
+    // the resolved roots rather than the manifest's spelling.
     let sandbox_root = tempfile::tempdir()
         .map_err(|error| OrbitError::Io(format!("create the conformance workspace: {error}")))?;
     // Resolved once, because `sandbox-exec` matches the resolved path: a
@@ -197,6 +204,18 @@ pub fn test_plugin_dir(
         Some(Arc::clone(&fixture_secrets) as Arc<dyn PluginSecretSource>),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
+    // The profile a call from the conformance workspace compiles, so consent
+    // reads the same rendered, resolved write set the sandbox will open. It
+    // also repeats the protected-path refusal against the real workspace.
+    let profile = backend.spec().sandbox_profile(Some(&workspace_root))?;
+    let external_writes = writes_outside(&profile.write, &profile.write_files, &sandbox_path);
+    authorize_conformance_run(
+        &plugin,
+        options,
+        &consented,
+        &external_writes,
+        &requested_grants,
+    )?;
     let mut results = Vec::with_capacity(case_locations.len());
     let mut changed_files = std::collections::BTreeSet::new();
     for (file_index, case_index) in case_locations {
@@ -542,27 +561,35 @@ fn compact(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
-/// Refuse a conformance run that would apply an unconfined backend, an
-/// absolute non-template write root, `network: any`, or `env_pass` unless
+/// The `--grant` list as consent, parsed before any scratch state exists so
+/// an unknown name is refused first.
+fn parse_consent(options: &PluginTestOptions) -> Result<PluginGrantSet, OrbitError> {
+    if options.grants.is_empty() {
+        Ok(PluginGrantSet::default())
+    } else {
+        parse_grants(&options.grants).map_err(OrbitError::InvalidInput)
+    }
+}
+
+/// Refuse a conformance run that would apply an unconfined backend, a write
+/// root outside the scratch directory, `network: any`, or `env_pass` unless
 /// the caller consented. Other requested grants stay on the profile the
 /// manifest asked for.
 fn authorize_conformance_run(
     plugin: &LoadedPlugin,
     options: &PluginTestOptions,
+    consented: &PluginGrantSet,
+    external_writes: &[PathBuf],
     requested_grants: &str,
 ) -> Result<(), OrbitError> {
-    let consented = if options.grants.is_empty() {
-        PluginGrantSet::default()
-    } else {
-        parse_grants(&options.grants).map_err(OrbitError::InvalidInput)?
-    };
     if options.accept_requested {
         return Ok(());
     }
-    let missing: Vec<PluginGrant> = consent_required_grants(&plugin.manifest)
-        .into_iter()
-        .filter(|grant| !consented.contains(*grant))
-        .collect();
+    let missing: Vec<PluginGrant> =
+        consent_required_grants(&plugin.manifest, !external_writes.is_empty())
+            .into_iter()
+            .filter(|grant| !consented.contains(*grant))
+            .collect();
     if missing.is_empty() {
         return Ok(());
     }
@@ -571,25 +598,30 @@ fn authorize_conformance_run(
         .map(|grant| grant.as_str())
         .collect::<Vec<_>>()
         .join(",");
+    let external = if missing.contains(&PluginGrant::Fs) {
+        format!(
+            " `fs.write` resolves outside the conformance scratch directory to: {}.",
+            external_writes
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        String::new()
+    };
     Err(OrbitError::InvalidInput(format!(
         "plugin '{}' requests grants `orbit plugin test` will not apply without consent. \
-         Requested grants: {requested_grants}. Re-run with `--accept-requested` to test under \
-         the requested profile, or `--grant {missing_names}`",
+         Requested grants: {requested_grants}.{external} Re-run with `--accept-requested` to \
+         test under the requested profile, or `--grant {missing_names}`",
         plugin.namespace()
     )))
 }
 
 /// Grants a conformance run will not apply on its own, in canonical order.
-fn consent_required_grants(manifest: &PluginManifest) -> Vec<PluginGrant> {
+fn consent_required_grants(manifest: &PluginManifest, external_writes: bool) -> Vec<PluginGrant> {
     let mut grants = Vec::new();
-    if manifest
-        .spec
-        .permissions
-        .fs
-        .write
-        .iter()
-        .any(|path| is_absolute_non_template_write(path))
-    {
+    if external_writes {
         grants.push(PluginGrant::Fs);
     }
     if manifest.spec.permissions.network == PluginNetworkPermission::Any {
@@ -604,11 +636,17 @@ fn consent_required_grants(manifest: &PluginManifest) -> Vec<PluginGrant> {
     grants
 }
 
-/// An `fs.write` entry the sandbox would open as given: absolute, and not a
-/// `{{...}}` template. Template roots render inside the temp workspace.
-fn is_absolute_non_template_write(path: &str) -> bool {
-    let trimmed = path.trim();
-    !trimmed.contains("{{") && Path::new(trimmed).is_absolute()
+/// The effective write roots and files that do not physically resolve
+/// inside `scratch`, each read the way the sandbox compiles it: existing
+/// ancestors canonicalized (symlinks and `..` followed), a missing tail kept.
+fn writes_outside(roots: &[PathBuf], files: &[PathBuf], scratch: &Path) -> Vec<PathBuf> {
+    let scratch = physical_with_missing_tail(scratch);
+    roots
+        .iter()
+        .chain(files)
+        .map(|path| physical_with_missing_tail(path))
+        .filter(|path| !path.starts_with(&scratch))
+        .collect()
 }
 
 /// The requested grant set, one entry per grant the manifest actually asks

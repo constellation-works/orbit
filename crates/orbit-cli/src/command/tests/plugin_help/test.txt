@@ -14,13 +14,13 @@ Options:
           Override the Orbit root directory (highest precedence)
 
       --grant <GRANTS>
-          Consent to these grants for this run (repeatable, comma-separated): fs, network, env_pass, orbit_tools, unsandboxed. Same names as `orbit plugin enable --grant`. Required when the manifest asks for an unconfined backend, an absolute write root, `network: any`, or `env_pass`, unless `--accept-requested` is set. Does not record a host grant
+          Consent to these grants for this run (repeatable, comma-separated): fs, network, env_pass, orbit_tools, unsandboxed. Same names as `orbit plugin enable --grant`. Required when the manifest asks for an unconfined backend, a write root that resolves outside the run's temp directory, `network: any`, or `env_pass`, unless `--accept-requested` is set. Does not record a host grant
 
       --workspace <SELECTOR>
           Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
 
       --accept-requested
-          Run under the profile the manifest requests, including an unconfined backend, absolute write roots, `network: any`, and `env_pass`. Does not record a host grant
+          Run under the profile the manifest requests, including an unconfined backend, write roots outside the run's temp directory, `network: any`, and `env_pass`. Does not record a host grant
 
       --case <NAME>
           Run exactly one named conformance case

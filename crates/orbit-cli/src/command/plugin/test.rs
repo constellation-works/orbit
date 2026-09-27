@@ -19,14 +19,14 @@ pub struct PluginTestArgs {
     /// Consent to these grants for this run (repeatable, comma-separated):
     /// fs, network, env_pass, orbit_tools, unsandboxed. Same names as
     /// `orbit plugin enable --grant`. Required when the manifest asks for an
-    /// unconfined backend, an absolute write root, `network: any`, or
-    /// `env_pass`, unless `--accept-requested` is set. Does not record a
-    /// host grant.
+    /// unconfined backend, a write root that resolves outside the run's temp
+    /// directory, `network: any`, or `env_pass`, unless `--accept-requested`
+    /// is set. Does not record a host grant.
     #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
     /// Run under the profile the manifest requests, including an unconfined
-    /// backend, absolute write roots, `network: any`, and `env_pass`. Does
-    /// not record a host grant.
+    /// backend, write roots outside the run's temp directory, `network: any`,
+    /// and `env_pass`. Does not record a host grant.
     #[arg(long = "accept-requested")]
     pub accept_requested: bool,
     /// Run exactly one named conformance case

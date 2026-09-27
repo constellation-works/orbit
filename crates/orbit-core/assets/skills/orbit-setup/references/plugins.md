@@ -197,15 +197,17 @@ in a temp workspace and compares `expect.output` exactly, or matches the backend
 stored ones at version `fixture`; a declared secret the case leaves out is unset, and the
 host's real secrets are never read. It exits non-zero when a
 case fails, naming it. `--case <name>` runs one case without certifying the full suite;
-`--update-goldens` replaces mismatched output expectations with actual output. Manifest
-template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
-`{{config.<key>}}`), `network: loopback`, and `orbit_tools` are applied as the manifest
-requests them, inside that temp workspace, so those paths do not touch the operator's
-Orbit state.
+`--update-goldens` replaces mismatched output expectations with actual output.
+`{{workspace}}` and `{{plugin_state}}` render inside that temp workspace, and write roots
+there, `network: loopback`, and `orbit_tools` are applied as the manifest requests them, so
+they do not touch the operator's Orbit state.
 
 The command refuses, and prints the requested grant set, when the manifest asks for an
-unconfined backend (`backend.sandbox: none`), an absolute `fs.write` root that is not a
-template, `network: any`, or any `env_pass` variable. Re-run with `--accept-requested` to
+unconfined backend (`backend.sandbox: none`), an `fs.write` root that resolves outside that
+temp workspace, `network: any`, or any `env_pass` variable. A write root is judged where it
+lands after rendering with the effective `[plugins.<ns>]` config and resolving relative paths
+against the plugin directory, so a `{{config.<key>}}` default or `../` path naming a host
+directory needs consent just like an absolute one. Re-run with `--accept-requested` to
 test under that requested profile, or with `--grant` using the same names as `orbit plugin
 enable --grant` (`fs`, `network`, `env_pass`, `orbit_tools`, `unsandboxed`). The `--grant`
 list has to name each of those requests. Either flag applies only to this run and does not
