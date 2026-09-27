@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use orbit_common::OrbitError;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 
-use super::super::git::{git_failure_error, git_run, git_success};
+use super::super::git::{git_failure_error, git_output_raw, git_run, git_success};
 
 /// Bounded budget for the background deletion of a relocated worktree. Not
 /// the 30s git default: this runs off the critical path on its own thread, so
@@ -46,14 +46,13 @@ pub(super) fn remove_worktree(
 
 /// Remove a worktree Git has not been told to force through.
 ///
-/// Git's own clean check runs before it deletes any file and finishes in
-/// milliseconds regardless of `target/` size, because an ignored directory
-/// plays no part in it — a genuinely dirty worktree is refused well inside
-/// the budget. The only way this call times out is the physical delete of a
-/// legitimately huge, already-clean tree, so the supervisor's timeout verdict
-/// reliably tells the two cases apart: recover a timeout by relocating the
-/// tree out of the way and finishing the bulk delete off the critical path,
-/// but let an ordinary refusal (dirty tree, locked ref, …) propagate as-is.
+/// Git runs its refusal checks (lock, submodules, clean tree) before it
+/// deletes any file, but the supervisor's timeout verdict says nothing about
+/// how far Git got: the deadline can land before those checks finish just as
+/// well as during the physical delete of a huge, already-approved tree. A
+/// timeout alone therefore never authorizes deletion. An ordinary refusal
+/// propagates as-is; a timeout goes to [`recover_timed_out_removal`], which
+/// re-establishes Git's verdict independently before touching anything.
 pub(super) fn remove_worktree_without_force(
     repo_root: &Path,
     workspace_path: &Path,
@@ -67,7 +66,106 @@ pub(super) fn remove_worktree_without_force(
     if !outcome.timed_out {
         return Err(git_failure_error(repo_root, &args, &outcome.stderr));
     }
+    recover_timed_out_removal(workspace_path, outcome.timeout_ms)
+}
+
+/// Finish a `git worktree remove` the supervisor killed, but only once the
+/// tree is verified to be one Git would have approved (or had already begun
+/// deleting). Then relocate it and finish the bulk delete off the critical
+/// path. A tree that cannot be verified — dirty, locked, holding submodules,
+/// or whose checks cannot complete inside the Git budget — is left in place
+/// with its registration intact and reported as an error.
+pub(super) fn recover_timed_out_removal(
+    workspace_path: &Path,
+    timeout_ms: u64,
+) -> Result<(), OrbitError> {
+    if let Err(reason) = verify_interrupted_removal(workspace_path) {
+        return Err(OrbitError::Execution(format!(
+            "git worktree remove timed out after {timeout_ms}ms before its safety checks could be confirmed; preserved worktree '{}' in place and registered because {reason}. Rescue or inspect its contents, then remove it manually or retry with a larger git timeout",
+            workspace_path.display()
+        )));
+    }
     relocate_worktree_to_trash(workspace_path)
+}
+
+/// Re-run Git's non-force refusal checks for a worktree whose removal was
+/// interrupted. The only change tolerated is a tracked file missing from the
+/// working tree with the index untouched — the footprint Git's own physical
+/// delete leaves once its checks have passed, and one that loses no bytes.
+fn verify_interrupted_removal(workspace_path: &Path) -> Result<(), String> {
+    // Without its `.git` link, Git would resolve an enclosing repository and
+    // every check below would describe the wrong tree.
+    if !workspace_path.join(".git").is_file() {
+        return Err("its .git link is missing, so its state cannot be verified".to_string());
+    }
+    let located = git_output_raw(
+        workspace_path,
+        &["rev-parse", "--show-toplevel", "--absolute-git-dir"],
+    )
+    .map_err(|error| error.to_string())?;
+    let mut lines = located.lines();
+    let (Some(toplevel), Some(admin_dir)) = (lines.next(), lines.next()) else {
+        return Err(
+            "git could not locate its working tree and administrative directory".to_string(),
+        );
+    };
+    if !same_directory(Path::new(toplevel), workspace_path) {
+        return Err(format!(
+            "git resolves it to a different working tree '{toplevel}'"
+        ));
+    }
+    let admin_dir = Path::new(admin_dir);
+    if admin_dir.join("locked").exists() {
+        return Err("it is locked".to_string());
+    }
+    if admin_dir.join("modules").is_dir() || has_populated_gitlink(workspace_path)? {
+        return Err("it contains submodules".to_string());
+    }
+    let status = git_output_raw(
+        workspace_path,
+        &[
+            "status",
+            "--porcelain",
+            "-z",
+            "--ignore-submodules=none",
+            "--untracked-files=all",
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    // `-z` gives a rename's source path its own field, but it trails an
+    // `R`/`C` entry that already fails this check, so it is never reached.
+    if let Some(entry) = status
+        .split('\0')
+        .find(|entry| !entry.is_empty() && !entry.starts_with(" D "))
+    {
+        return Err(format!(
+            "it has uncommitted or untracked content ('{entry}')"
+        ));
+    }
+    Ok(())
+}
+
+fn same_directory(left: &Path, right: &Path) -> bool {
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Mirrors Git's own submodule refusal: a gitlink whose directory still has
+/// content may hold history that exists nowhere else.
+fn has_populated_gitlink(workspace_path: &Path) -> Result<bool, String> {
+    let staged = git_output_raw(workspace_path, &["ls-files", "--stage", "-z"])
+        .map_err(|error| error.to_string())?;
+    Ok(staged
+        .split('\0')
+        .filter(|entry| entry.starts_with("160000 "))
+        .filter_map(|entry| entry.split_once('\t').map(|(_, path)| path))
+        .any(|path| {
+            fs::read_dir(workspace_path.join(path))
+                .map(|mut entries| entries.next().is_some())
+                .unwrap_or(false)
+        }))
 }
 
 /// Move a worktree directory to a same-filesystem sibling — an instant,
