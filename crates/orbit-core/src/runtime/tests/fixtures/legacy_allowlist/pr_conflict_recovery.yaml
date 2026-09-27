@@ -178,18 +178,9 @@ spec:
     Return exactly one Orbit response envelope. Result fields are advisory;
     durable Git state and the executor's host-owned continuation plus
     deterministic retry decide recovery.
-  tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.delete
-    - orbit.auto_task.mint
-    - orbit.auto_task.toggle
-    - orbit.auto_task.update
-    - orbit.command.exec
-    - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.workers
-    - orbit.workflow.ship
+  tools:
+    - orbit.task.*
+    - proc.spawn
   proc_allowed_programs:
     - cargo
     - git

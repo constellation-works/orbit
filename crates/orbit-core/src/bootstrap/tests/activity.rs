@@ -205,7 +205,7 @@ fn agent_implement_shared_contract_detects_former_suite_only_deletions() {
 }
 
 #[test]
-fn agent_implement_tools_remain_the_implementation_baseline() {
+fn agent_implement_seeds_a_deny_policy_with_proc_spawn() {
     let (_, yaml) = DEFAULT_ACTIVITY_FILES
         .iter()
         .find(|(name, _)| *name == "agent_implement")
@@ -214,21 +214,15 @@ fn agent_implement_tools_remain_the_implementation_baseline() {
     let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
         panic!("expected agent_loop activity");
     };
-    assert_eq!(
-        spec.tools,
-        [
-            "orbit.task.*",
-            "orbit.friction.*",
-            "orbit.search",
-            "proc.spawn"
-        ]
-    );
-    assert!(
-        spec.tools
-            .iter()
-            .all(|tool| !tool.starts_with("github.") && !tool.contains("ceiling")),
-        "agent_implement tool allowlist must not widen to GitHub reads or grow a task ceiling"
-    );
+    assert!(spec.tools.is_empty());
+    let deny = spec.tool_disallow_list.expect("shipped deny policy");
+    let policy = orbit_types::workflow::ActivityToolDenyPolicy {
+        activity: "agent_implement".to_string(),
+        disallow_list: deny,
+    };
+    assert!(policy.denies("orbit.agent.invoke"));
+    assert!(!policy.denies("proc.spawn"));
+    assert!(spec.proc_allowed_programs.is_some());
 }
 
 #[test]

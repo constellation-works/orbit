@@ -188,18 +188,11 @@ spec:
         the item 11 reconciliation (delivery paths, selector coverage, cleanup
         outcome, leftovers), and disclose risks or deviations.
         Do not claim skipped checks passed or incomplete work successful.
-  tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.delete
-    - orbit.auto_task.mint
-    - orbit.auto_task.toggle
-    - orbit.auto_task.update
-    - orbit.command.exec
-    - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.workers
-    - orbit.workflow.ship
+  tools:
+    - orbit.task.*
+    - orbit.friction.*
+    - orbit.search
+    - proc.spawn
   proc_allowed_programs:
     # Inspection and repository-local build entry points.
     - git

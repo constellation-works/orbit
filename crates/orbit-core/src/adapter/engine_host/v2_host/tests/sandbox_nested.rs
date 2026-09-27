@@ -149,9 +149,9 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
             "--title",
             "Ordinary nested implementation",
             "--description",
-            "Empty required_tools neighbor proving GitHub reads stay task-scoped.",
+            "Empty required_tools neighbor exercising shipped deny-mode policy.",
             "--acceptance-criteria",
-            "github.auth.status remains policy-denied",
+            "github.auth.status remains callable in deny mode",
             "--complexity",
             "low",
             "--json",
@@ -244,10 +244,15 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
     let ActivityV2Spec::AgentLoop(implement_spec) = implement.spec.spec else {
         panic!("agent_implement must remain an agent_loop activity");
     };
-    let minted_tools = RuntimeHost::resolve_activity_tools(
+    let disallowed = implement_spec
+        .tool_disallow_list
+        .as_ref()
+        .expect("shipped deny list");
+    let minted_tools = RuntimeHost::resolve_activity_tool_denials(
         &runtime,
         std::slice::from_ref(&task_id),
-        &implement_spec.tools,
+        "agent_implement",
+        disallowed,
     )
     .expect("resolve GitHub-capable tools");
     assert_eq!(
@@ -263,9 +268,14 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
     assert!(
         minted_tools
             .effective_tools
-            .starts_with(implement_spec.tools.as_slice()),
-        "effective tools must keep the production agent_implement baseline: {:?}",
-        minted_tools.effective_tools
+            .iter()
+            .any(|tool| tool == "proc.spawn")
+    );
+    assert!(
+        !minted_tools
+            .effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.agent.invoke")
     );
     assert!(
         minted_tools
@@ -273,27 +283,31 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
             .iter()
             .any(|tool| tool == "github.auth.status")
     );
-    let minted_auto_tools = RuntimeHost::resolve_activity_tools(
+    let minted_auto_tools = RuntimeHost::resolve_activity_tool_denials(
         &runtime,
         std::slice::from_ref(&minted_id),
-        &implement_spec.tools,
+        "agent_implement",
+        disallowed,
     )
     .expect("resolve minted qa-sweep tools");
     assert!(minted_auto_tools.requested_tools.is_empty());
-    assert_eq!(minted_auto_tools.effective_tools, implement_spec.tools);
-    let ordinary_tools = RuntimeHost::resolve_activity_tools(
+    assert_eq!(
+        minted_auto_tools.effective_tools,
+        minted_tools.effective_tools
+    );
+    let ordinary_tools = RuntimeHost::resolve_activity_tool_denials(
         &runtime,
         std::slice::from_ref(&ordinary_id),
-        &implement_spec.tools,
+        "agent_implement",
+        disallowed,
     )
     .expect("resolve ordinary tools");
-    assert_eq!(ordinary_tools.effective_tools, implement_spec.tools);
+    assert_eq!(ordinary_tools.effective_tools, minted_tools.effective_tools);
     assert!(
-        !ordinary_tools
+        ordinary_tools
             .effective_tools
             .iter()
-            .any(|tool| tool.starts_with("github.")),
-        "DANI-10056 missing-requirements behavior must remain denied for ordinary tasks"
+            .any(|tool| tool == "github.auth.status")
     );
 
     // A managed host and its nested children are the same installed executable,
@@ -314,6 +328,7 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
         &global_str,
         &task_id,
         &minted_tools.effective_tools,
+        disallowed,
         &resolved.fs_profile.name,
     );
 
@@ -449,28 +464,24 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
         &global_str,
         &ordinary_id,
         &ordinary_tools.effective_tools,
+        disallowed,
         &resolved.fs_profile.name,
     );
-    let denied = run_sandboxed_orbit(
+    let allowed = run_sandboxed_orbit(
         &orbit_bin,
         &profile_text,
         &ordinary_env,
         &worktree,
         &["tool", "run", "github.auth.status"],
     );
-    let denied_out = format!(
+    let allowed_out = format!(
         "{}\n{}",
-        String::from_utf8_lossy(&denied.stdout),
-        String::from_utf8_lossy(&denied.stderr)
+        String::from_utf8_lossy(&allowed.stdout),
+        String::from_utf8_lossy(&allowed.stderr)
     );
     assert!(
-        !denied.status.success(),
-        "ordinary agent_implement baseline must deny GitHub reads\n{denied_out}"
-    );
-    assert!(
-        denied_out.contains("policy_denied")
-            || denied_out.contains("not in the activity allowlist"),
-        "DANI-10056 missing-requirements denial must stay policy_denied: {denied_out}"
+        allowed.status.success(),
+        "deny-mode agent_implement permits registered GitHub reads\n{allowed_out}"
     );
 
     let input = serde_json::json!({ "id": task_id, "model": "grok" }).to_string();
@@ -509,6 +520,7 @@ fn managed_nested_env(
     registry_root: &str,
     task_id: &str,
     effective_tools: &[String],
+    disallowed_tools: &[String],
     fs_profile: &str,
 ) -> Vec<(String, String)> {
     vec![
@@ -529,6 +541,15 @@ fn managed_nested_env(
         (
             "ORBIT_ACTIVITY_TOOLS".to_string(),
             effective_tools.join(","),
+        ),
+        ("ORBIT_ACTIVITY_TOOL_POLICY".to_string(), "deny".to_string()),
+        (
+            "ORBIT_ACTIVITY_TOOLS_DENY".to_string(),
+            disallowed_tools.join(","),
+        ),
+        (
+            "ORBIT_ACTIVITY_NAME".to_string(),
+            "agent_implement".to_string(),
         ),
         (
             "ORBIT_ACTIVITY_FS_PROFILE".to_string(),

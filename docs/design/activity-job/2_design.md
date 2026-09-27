@@ -467,15 +467,18 @@ refuse a call outside it (§7.0). Provider-native tools stay with the provider
 harness.
 
 [ORB-11069] makes the activity `tools` list a baseline for task-backed
-dispatch. Before provider construction or launch, orbit-core loads every task
-selected by the agent activity and computes `effective_tools =
-deduplicate(activity.tools union selected_tasks.required_tools)`. Required
+allowlist-mode dispatch. Before provider construction or launch, orbit-core
+loads every task selected by the agent activity. In allowlist mode it computes
+`effective_tools = deduplicate(activity.tools union
+selected_tasks.required_tools)`; deny mode computes the registered tool set
+minus `tool_disallow_list` (§7.0). Required
 tools are immutable creation-time task authority; task update paths cannot
 alter the stored list. Required
 names are exact canonical registered tools;
 wildcards, malformed or unknown names, disabled tools, and registered tools not
 on the agent-facing surface fail with `RequiredToolAdmission` naming the task
-and tool. An empty requirement list returns the baseline byte-for-byte. Task
+and tool. An empty requirement list returns the `tools` baseline byte-for-byte
+in allowlist mode and the registered-minus-disallowed set in deny mode. Task
 requirements are normalized in the task store and freeze once the task enters
 `in-progress`, including later blocked retries.
 
@@ -483,12 +486,32 @@ requirements are normalized in the task store and freeze once the task enters
 
 [ORB-13315] gives an `agent_loop` activity one of two tool policies.
 
+The six seeded agent loops (`agent_implement`, `agent_invoke`,
+`agent_review_repair`, `pr_conflict_recovery`, `step_failure_recovery`, and
+`task_pilot`) now declare `tool_disallow_list`. They refuse registered
+control-plane mutations and `orbit.agent.invoke`; the read-only
+`agent_invoke` and `task_pilot` also refuse task and friction writes. Their
+`proc.spawn` program lists are unchanged here. The tool registry currently has
+no tool for run cancellation, plugin administration, config mutation, or
+crew/workspace mutation; those operations retain their separate governance.
+The disallow lists contain only registered tool names, so an activity asset
+continues to pass registry validation when loaded.
+
 - **Allowlist mode** (`tools`). Declaring no `tool_disallow_list` selects it.
   This is every activity written before deny mode existed. It is also the mode
   a custom or workspace-override activity keeps. Its semantics are unchanged:
   the effective list is `tools` ∪ task `required_tools`. Dispatch stamps it as
   `ORBIT_ACTIVITY_TOOLS` and nothing else, and a call outside it is refused
   with `tool '<name>' is not in the activity allowlist`.
+- Existing custom activities and workspace additions that declare `tools:`
+  retain that exact allowlist, including `proc_allowed_programs`. A previously
+  seeded YAML can restore its former tool policy when installed in an explicit
+  `ORBIT_ACTIVITY_DIR` override or the global managed activity directory.
+  Workspace-local assets with a shipped name are still ignored by the execution
+  catalog's existing precedence rule; they cannot replace a shipped activity
+  through that path. A workspace-local activity with its own name remains
+  supported. `orbit init` and `update-orbit.sh` reseeding replace the managed
+  copies of the six shipped YAMLs with the deny-mode versions.
 - **Deny mode** (`tool_disallow_list`). Declaring the key, even as `[]`,
   selects it. Every registered agent-facing tool is callable except the
   entries the list covers. Existing governance still applies first, so an
@@ -1168,6 +1191,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-10471]** — Judge a primary fast-forward against the dirt that interferes with the run instead of the primary's whole dirty state ([Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](./4_decisions.md#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)).
 - **[ORB-12443]** — Preserve local primary source dirt while the assigned candidate integrates against the fetched target ([Primary dirt is isolated from candidate integration](./4_decisions.md#primary-dirt-is-isolated-from-candidate-integration)).
 - **[ORB-13315]** — Add deny mode (`tool_disallow_list`) beside the allowlist, with an explicit policy envelope, mixed-version-safe enforcement, and a deprecation warning for an empty `tools:` ([Shipped activities move from tool allowlists to disallow lists](./4_decisions.md#shipped-activities-move-from-tool-allowlists-to-disallow-lists-allowlists-stay-for-custom-jobs)).
+- **[ORB-13316]** — Move the six seeded agent loops to deny mode while retaining the pre-change YAMLs as compatibility fixtures and leaving custom allowlists supported.
 - **[ORB-12467]** — Bound the recovery input's `error_message` and `failed_step_input`, and move the boundary guard's full checkout fingerprints out of the integrity error string into the run's audit blob store, so a large diagnostic can no longer push the recovery turn past the provider's input ceiling.
 - **[T20260509-30]** — Resolve the macOS `sandbox-exec` wrapper from a trusted absolute path before CLI spawn.
 - **[T20260509-40]** — Run CLI subprocesses in killable process groups and bound timeout-path output reader joins.
