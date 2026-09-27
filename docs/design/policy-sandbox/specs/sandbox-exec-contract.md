@@ -26,13 +26,14 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 ## Supervision Invariants
 
 - **Background drains.** `wait_with_optional_timeout` spawns reader threads for stdout and stderr immediately after spawn. The child must never block on a full pipe buffer because the parent is not reading.
-- **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`.
+- **Stdin writer thread.** When `StdinMode::Bytes` is set, a writer thread copies the payload to the child's stdin. A failed write terminates the child via `terminate_process_group` and surfaces as `OrbitError::Execution(<message>)`. A broken pipe (the child closed stdin, or the writer was stopped by the drain bound) is not a failure: the child's exit status and stderr stand.
 - **Poll interval.** The wait loop polls with `WAIT_POLL_INTERVAL = 100ms` (or the remaining deadline, whichever is smaller). The interval is global and not per-request configurable.
 - **Signal handler installation (Unix).** A `SignalHandlerGuard` refcounts process-wide SIGINT and SIGTERM handlers for the duration of the wait loop. The first live waiter installs the handlers and snapshots the previous `sigaction` structs; the last drop restores them and re-raises a captured signal so the previous disposition still runs (tokio shutdown, or SIG_DFL terminate). `SIG_IGN` is not re-raised. SIG_DFL additionally writes `process interrupted by signal SIG…` to the process stderr before `raise`. The install mutex is not held across the wait or across `raise`, so concurrent supervised waits overlap. Each waiter registers its child's pgid in a lock-free table; the handler `killpg`s every registered group, records a pending forward, and bumps a generation counter that waiters poll.
 - **Timeout escalation.** When the deadline expires, `terminate_process_group(child, SIGTERM, poll_interval)` is called. If the group does not exit within `TERMINATION_GRACE_PERIOD = 5 seconds`, `kill_process_group` (SIGKILL) is invoked plus a direct `child.kill()`/`child.wait()`.
 - **Parent-signal escalation.** When the parent receives SIGINT or SIGTERM during the wait, the same termination path runs with the received signal. The result reports `exit_code = Some(128 + signal)` and `success = false`.
-- **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends, then joins the reader threads. Without this, an orphan grandchild can keep the pipes open and block reader-thread completion indefinitely.
-- **Stderr annotation.** Timeouts append `process timed out` to stderr; parent-signal interruption appends `process interrupted by signal SIG<NAME>`. The annotations are added before the result is constructed, not by the caller.
+- **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends before the pipe workers settle.
+- **Bounded drain (Unix).** Killing the group closes every pipe end its members hold, but a descendant that left the group (`setsid`, `setpgid`) can keep stdout, stderr, or stdin open indefinitely. However the child ended — exit, timeout, cancellation, capture limit, or parent signal — the supervisor waits at most `DRAIN_BUDGET = 1 second` for the stdout/stderr readers and the stdin writer to finish, then stops them and joins them, so the call returns within that budget of the child ending. A stopped reader still reads what the pipe buffers at that moment, so output written before the stop is retained; later output is discarded, unwritten stdin is abandoned, and the supervisor closes its pipe ends before returning. The workers wait with `poll(2)` on their own non-blocking pipe end plus a socket-pair stop signal; no descriptor is closed from another thread. A stopped drain appends `process pipes were still held open outside its process group; …` to stderr. `run_process_streaming_stdout` hands its consumer a relay the stdout reader forwards into and closes within the same bound, so the consumer reaches EOF. Other platforms keep blocking workers and have no bound.
+- **Stderr annotation.** Timeouts append `process timed out` to stderr; parent-signal interruption appends `process interrupted by signal SIG<NAME>`; a stopped drain appends its note after those. The annotations are added before the result is constructed, not by the caller.
 - **Exit code reporting.** `ExecutionResult::exit_code` is `Some(code)` for clean exits, `Some(128 + signal)` for parent-signal exits, and `None` for timeouts.
 
 ## Sandbox strategies
@@ -65,6 +66,7 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 - **Wait error.** `child.wait_timeout` errors surface as `OrbitError::Execution("wait timeout error: …")`. The child is left to be reaped by the OS rather than force-killed in this path; this is a known soft spot.
 - **Timeout.** `success = false`, `exit_code = None`, stderr suffixed with `process timed out`.
 - **Parent signal.** `success = false`, `exit_code = Some(128 + signal)`, stderr suffixed with the signal name.
+- **Pipe held outside the process group.** The result keeps the child's own outcome (exit status, timeout, cancellation), output after the drain stop is missing, and stderr carries the drain note.
 
 ## Concurrency Constraints
 
@@ -76,7 +78,7 @@ A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` 
 
 - New `ExecRequest` fields must default to a backwards-compatible behavior; `EnvironmentMode::default()` and `StdinMode::default()` exist precisely so callers can adopt new fields incrementally.
 - The current `Sandbox` trait only exposes request validation. Adding live confinement requires an explicit confined-spawn seam or platform wrapper before untrusted code runs; returning successfully from `validate` alone cannot establish that boundary.
-- Changes to `TERMINATION_GRACE_PERIOD` or `WAIT_POLL_INTERVAL` require updated current documentation and behavior tests because both constants are observable in timeout/cancel behavior.
+- Changes to `TERMINATION_GRACE_PERIOD`, `WAIT_POLL_INTERVAL`, or `DRAIN_BUDGET` require updated current documentation and behavior tests because these constants are observable in timeout/cancel behavior.
 
 ## Agent Signature
 
