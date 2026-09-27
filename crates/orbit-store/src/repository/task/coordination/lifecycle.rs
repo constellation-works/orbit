@@ -1,5 +1,6 @@
 //! Internal attempt lifecycle on the existing task commit journal. No public pull route.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -678,6 +679,57 @@ impl TaskCommitBoundary {
                 files: files.into_values().collect(),
             };
             manifest.validate()?;
+            // Validate the combined topology, including existing manifest entries.
+            // Path components (rather than string prefixes) also catch aliases
+            // such as repeated separators without confusing `a` with `ab`.
+            let paths: BTreeSet<_> = manifest
+                .files
+                .iter()
+                .map(|file| Path::new(&file.path))
+                .collect();
+            for path in &paths {
+                if path
+                    .ancestors()
+                    .skip(1)
+                    .any(|parent| paths.contains(parent))
+                {
+                    return Err(invalid("artifact file conflicts with an ancestor artifact"));
+                }
+            }
+            let root = self
+                .bundle_store
+                .bundle_path(&intent.task_id)?
+                .join(TASK_ARTIFACTS_DIR_NAME)
+                .join("files");
+            for artifact in &evidence.artifacts {
+                let destination = root.join(&artifact.path);
+                // Walk top-down so an existing file ancestor is refused before
+                // attempting metadata on its impossible children. No directories
+                // or bytes are created until after the journal decision.
+                for path in destination
+                    .ancestors()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                {
+                    match std::fs::metadata(path) {
+                        Ok(metadata) => {
+                            let compatible = if path == destination {
+                                metadata.is_file()
+                            } else {
+                                metadata.is_dir()
+                            };
+                            if !compatible {
+                                return Err(invalid(
+                                    "artifact destination conflicts with an existing file or directory",
+                                ));
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+            }
             intent.evidence.manifest = Some(manifest);
             intent.evidence.artifacts = evidence.artifacts.clone();
         }

@@ -104,6 +104,12 @@ older binaries refuse schema 2. Comment replay records the original log length, 
 writes the recorded bytes/manifest, and summary replay writes the recorded content. A crash after
 the decision leaves a repair obligation, never a successful partial settlement.
 
+Before preparing the journal, claimed evidence checks the combined artifact manifest for
+file/ancestor conflicts and verifies that existing destination parents are directories and
+replacement destinations are files. These checks run under admission and bundle locks, before
+any artifact writes or pending marker, so an impossible artifact topology cannot create a
+durable replay obligation. Nested files and replacements retain the same recovery protocol.
+
 ## Composition and cost
 
 Every runtime builder branch uses `workspace_coordinated_backends`, including explicit

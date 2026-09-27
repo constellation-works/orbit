@@ -664,3 +664,201 @@ fn claimed_friction_revocation_between_failed_prepare_and_retry_cannot_publish()
     );
     assert_eq!(friction_count(&f), 0);
 }
+
+fn artifact_evidence(paths: &[&str], content: &[u8]) -> ClaimEvidence {
+    ClaimEvidence {
+        artifacts: paths
+            .iter()
+            .map(|path| orbit_types::task::TaskArtifact {
+                path: (*path).into(),
+                content: content.to_vec(),
+                media_type: "text/plain".into(),
+                created_by: None,
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+fn publish_artifacts(f: &Coordinated, c: &ExecutionClaim, id: &str, paths: &[&str], bytes: &[u8]) {
+    f.boundary()
+        .mutate_execution_claim(
+            Some(&worker(c, true)),
+            id,
+            &ClaimMutation::Evidence(artifact_evidence(paths, bytes)),
+        )
+        .expect("publish artifacts");
+}
+
+fn journal_count(f: &Coordinated) -> i64 {
+    f.boundary()
+        .store
+        .with_read_connection(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM task_commit_journal", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))
+        })
+        .expect("journal count")
+}
+
+#[test]
+fn conflicting_artifact_topologies_are_refused_before_any_durable_write() {
+    // Both proposed orders, manifest conflicts in both directions, and physical
+    // destinations absent from the manifest must all be checked before commit.
+    for (existing, manifested, proposed) in [
+        (None, false, vec!["a", "a/b"]),
+        (None, false, vec!["a/b", "a"]),
+        (None, false, vec!["a//b", "a"]),
+        (Some("a"), true, vec!["a/b"]),
+        (Some("a/b"), true, vec!["a"]),
+        (Some("a"), false, vec!["a/b"]),
+        (Some("a/b"), false, vec!["a"]),
+    ] {
+        let tmp = TempDir::new().expect("temp");
+        let f = Coordinated::open(tmp.path());
+        let c = claim(&f);
+        bind(&f, &c);
+        let other = f.create_task("other task in partition");
+        let root = f
+            .boundary()
+            .bundle_store
+            .bundle_path(&c.task_id)
+            .expect("bundle");
+        let artifacts = root.join(orbit_types::task::TASK_ARTIFACTS_DIR_NAME);
+        let files = artifacts.join("files");
+        if let Some(path) = existing {
+            if manifested {
+                publish_artifacts(&f, &c, "initial", &[path], b"original");
+            } else {
+                let destination = files.join(path);
+                std::fs::create_dir_all(destination.parent().expect("parent")).expect("parents");
+                std::fs::write(destination, b"original").expect("unmanifested file");
+            }
+        }
+        let manifest_path = artifacts.join(orbit_types::task::TASK_ARTIFACT_MANIFEST_FILE_NAME);
+        let files_existed = files.exists();
+        let manifest_before = std::fs::read(&manifest_path).ok();
+        let history_before = f.history(&c.task_id);
+        let journal_before = journal_count(&f);
+        let mut evidence = artifact_evidence(&proposed, b"replacement");
+        // A valid earlier file must not be applied before discovering a conflict.
+        evidence.artifacts.insert(
+            0,
+            artifact_evidence(&["unrelated"], b"new")
+                .artifacts
+                .remove(0),
+        );
+        evidence.summary = Some("must not be published".into());
+        evidence.comment = Some("must not be appended".into());
+        let error = f
+            .boundary()
+            .mutate_execution_claim(
+                Some(&worker(&c, true)),
+                "conflict",
+                &ClaimMutation::Evidence(evidence),
+            )
+            .expect_err("conflict must be refused");
+        assert!(
+            matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+            "{error}"
+        );
+        assert_eq!(
+            journal_count(&f),
+            journal_before,
+            "refusal must precede journal preparation"
+        );
+        assert!(!f.boundary().pending_marker_exists());
+        assert_eq!(std::fs::read(&manifest_path).ok(), manifest_before);
+        assert!(!files.join("unrelated").exists());
+        if let Some(path) = existing {
+            assert_eq!(
+                std::fs::read(files.join(path)).expect("preserved payload"),
+                b"original"
+            );
+        } else {
+            assert_eq!(files.exists(), files_existed);
+            assert!(
+                !files.join("a").exists(),
+                "refusal must not create payloads"
+            );
+        }
+        assert_eq!(f.history(&c.task_id), history_before);
+        assert!(f.task(&c.task_id).execution_summary.is_empty());
+        assert!(
+            f.backends
+                .task
+                .history
+                .get_task_comments(&c.task_id)
+                .expect("comments")
+                .expect("task")
+                .is_empty()
+        );
+        // Reopening and ordinary reads must not encounter an impossible replay.
+        let reopened = Coordinated::open(tmp.path());
+        assert_eq!(reopened.task(&c.task_id).status, TaskStatus::InProgress);
+        assert_eq!(reopened.task(&other.id).status, TaskStatus::Backlog);
+        publish_artifacts(&reopened, &c, "conflict", &["valid/nested"], b"accepted");
+        committed(
+            reopened
+                .boundary()
+                .commit_task_transition(&TaskCoordinationCommitParams {
+                    task_id: other.id.clone(),
+                    actor: "operator".into(),
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                })
+                .expect("other task remains writable"),
+        );
+        assert_eq!(reopened.task(&other.id).status, TaskStatus::InProgress);
+    }
+}
+
+#[test]
+fn nested_artifact_creation_and_replacement_recover_after_commit() {
+    for fault in [
+        CoordinationFault::AfterCommit,
+        CoordinationFault::DuringApply,
+        CoordinationFault::DuringEvidenceApply,
+    ] {
+        for replace in [false, true] {
+            let tmp = TempDir::new().expect("temp");
+            let f = Coordinated::open(tmp.path());
+            let c = claim(&f);
+            bind(&f, &c);
+            if replace {
+                publish_artifacts(&f, &c, "initial", &["a/b"], b"original");
+            }
+            // Shared directories and lexical prefixes are compatible.
+            let evidence = artifact_evidence(&["a/b", "a/c", "ab"], b"updated");
+            let mutation = ClaimMutation::Evidence(evidence);
+            inject_coordination_faults(&[fault]);
+            assert!(
+                f.boundary()
+                    .mutate_execution_claim(Some(&worker(&c, true)), "nested", &mutation,)
+                    .is_err()
+            );
+            assert!(f.boundary().pending_marker_exists());
+            let reopened = Coordinated::open(tmp.path());
+            assert_eq!(reopened.task(&c.task_id).status, TaskStatus::InProgress);
+            let artifacts = reopened
+                .backends
+                .task
+                .artifact
+                .get_task_artifacts(&c.task_id)
+                .expect("read recovered artifacts")
+                .expect("task");
+            assert_eq!(artifacts.len(), 3);
+            for artifact in artifacts {
+                assert_eq!(artifact.content, b"updated");
+            }
+            assert!(!reopened.boundary().pending_marker_exists());
+            let journals = journal_count(&reopened);
+            reopened
+                .boundary()
+                .mutate_execution_claim(Some(&worker(&c, true)), "nested", &mutation)
+                .expect("idempotent receipt replay");
+            assert_eq!(journal_count(&reopened), journals);
+        }
+    }
+}
