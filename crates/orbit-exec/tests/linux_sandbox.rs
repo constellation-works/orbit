@@ -635,6 +635,75 @@ fn direct_invocation_fails_closed_for_overlapping_non_subtree_deny() {
     assert!(error.to_string().contains("non-subtree denyModify"));
 }
 
+#[test]
+fn direct_invocation_refuses_absent_exact_and_subtree_denies_under_writable_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+
+    for denied in [
+        workspace.join("Cargo.lock").display().to_string(),
+        format!("{}/**", workspace.join("secrets").display()),
+    ] {
+        let resolved = profile(vec![
+            format!("{}/**", workspace.display()),
+            format!("!{denied}"),
+        ]);
+        let error = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+            .expect_err("an absent deny beneath a writable root must refuse before spawn");
+        assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+        assert!(
+            !workspace.join("Cargo.lock").exists() && !workspace.join("secrets").exists(),
+            "compilation must not create denied paths"
+        );
+
+        let mut managed =
+            compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
+                .expect("managed worktree retains the post-run guard");
+        assert!(managed.take_post_run_guard().is_some());
+    }
+}
+
+#[test]
+fn direct_invocation_mounts_existing_denies_and_allows_nonoverlapping_absent_denies() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    let outside = temp.path().join("outside");
+    let secrets = workspace.join("secrets");
+    let lock = workspace.join("Cargo.lock");
+    std::fs::create_dir_all(&secrets).expect("existing subtree");
+    std::fs::create_dir_all(&outside).expect("outside root");
+    std::fs::write(&lock, "locked").expect("existing file");
+    let resolved = profile(vec![
+        format!("{}/**", workspace.display()),
+        format!("!{}/**", secrets.display()),
+        format!("!{}", lock.display()),
+        format!("!{}/**", outside.join("absent").display()),
+        format!("!{}", outside.join("absent.lock").display()),
+    ]);
+
+    let mut plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+        .expect("existing denies mount and absent denies outside the write root need no mount");
+    let mounts: Vec<_> = plan
+        .args
+        .windows(3)
+        .filter(|args| args[0] == "--ro-bind")
+        .collect();
+    for path in [&secrets, &lock] {
+        let rendered = path.display().to_string();
+        assert!(
+            mounts
+                .iter()
+                .any(|args| args[1] == rendered && args[2] == rendered)
+        );
+    }
+    assert_eq!(plan.take_post_run_guard(), None);
+
+    let simple = profile(vec![format!("{}/**", workspace.display())]);
+    compile_linux_bwrap_argv(&simple, "/bin/true", &[], Some(&workspace), false)
+        .expect("a direct writable plan without denies remains supported");
+}
+
 /// [ORB-11257] A read-only direct invocation can compile default dotenv glob
 /// denials. Live Bubblewrap must leave an existing match intact and refuse a
 /// newly created matching path; a write-capable sibling still fails closed.
