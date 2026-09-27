@@ -132,8 +132,18 @@ Refresh applies the same reconciliation to activities and jobs:
 - an installation without a manifest adopts only exact current bundled bytes
   as managed; other YAML remains in place and `orbit init` warns with the paths
   plus the manual remedy to move or delete a stale legacy file;
+- every create, refresh, retirement, and preservation is confined to its
+  catalog: each component beneath the managed directory is inspected without
+  following links, and an asset with a symlink (dangling or not) or wrongly
+  typed component — or a preserved copy whose `.retired-managed/` destination
+  has one — is reported with a warning in both apply and check modes and left
+  untouched. Such a path keeps only the provenance already recorded, never a
+  digest for bytes Orbit did not write, so a later pass can finish once the
+  operator repairs it. Existing assets are replaced by rename and new ones
+  created exclusively, so neither write follows a final link;
 - the new manifest contains only current assets whose managed ownership is
-  established, so repeating refresh is idempotent;
+  established, plus refused retirements still awaiting repair, so repeating
+  refresh is idempotent;
 - a needed manifest write that hits EROFS/EACCES (immutable or shared global
   root, sandboxed runner) records a warning and continues. Read-only commands
   such as `orbit task show` must not fail closed on that maintenance write.

@@ -1300,3 +1300,394 @@ fn first_manifest_preserves_user_assets_and_warns_about_ambiguous_legacy_yaml() 
             .any(|(entry, _)| entry.job_id == user_job_name)
     );
 }
+
+#[cfg(unix)]
+fn write_skill_manifest(dir: &Path, assets: &[(&str, &str)]) {
+    let assets: serde_json::Map<String, Value> = assets
+        .iter()
+        .map(|(name, content)| ((*name).to_string(), Value::String(sha256(content))))
+        .collect();
+    std::fs::create_dir_all(dir).expect("create managed skill dir");
+    std::fs::write(
+        dir.join(MANAGED_ASSET_MANIFEST_FILE),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "assetKind": "skill",
+            "assets": assets,
+        }))
+        .expect("encode skill manifest"),
+    )
+    .expect("write skill manifest");
+}
+
+#[cfg(unix)]
+fn read_manifest_assets(dir: &Path) -> serde_json::Map<String, Value> {
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(dir.join(MANAGED_ASSET_MANIFEST_FILE)).expect("read managed manifest"),
+    )
+    .expect("parse managed manifest");
+    manifest["assets"]
+        .as_object()
+        .expect("manifest assets object")
+        .clone()
+}
+
+#[cfg(unix)]
+fn reconcile_skills(
+    dir: &Path,
+    files: &[(&'static str, &'static str)],
+    mode: super::super::managed_assets::ManagedAssetReconcileMode,
+) -> super::super::managed_assets::ManagedAssetReconciliation {
+    super::super::managed_assets::reconcile_managed_assets_in_mode(
+        dir,
+        "skill",
+        super::super::managed_assets::ManagedAssetLayout::RelativePath,
+        files,
+        false,
+        mode,
+        |_, content| Ok(std::borrow::Cow::Borrowed(content)),
+    )
+    .expect("reconcile skill tree")
+}
+
+#[cfg(unix)]
+fn outcomes(
+    result: &super::super::managed_assets::ManagedAssetReconciliation,
+) -> Vec<(String, super::super::managed_assets::ManagedAssetOutcome)> {
+    result
+        .actions
+        .iter()
+        .map(|action| (action.name.clone(), action.outcome))
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn reconcile_never_writes_through_linked_final_or_intermediate_paths() {
+    use super::super::managed_assets::ManagedAssetOutcome::{Created, Preserved, Refreshed};
+    use super::super::managed_assets::ManagedAssetReconcileMode::{Apply, Check};
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create tempdir");
+    let skills = root.path().join("skills");
+    let external = root.path().join("external");
+    std::fs::create_dir_all(&external).expect("create external tree");
+    let old = "previous shipped skill\n";
+    let new = "current shipped skill\n";
+
+    // Final link to an existing external file carrying the managed bytes.
+    std::fs::write(external.join("refresh.md"), old).expect("write external refresh target");
+    std::fs::create_dir_all(skills.join("final-link")).expect("create final-link dir");
+    symlink(
+        external.join("refresh.md"),
+        skills.join("final-link/SKILL.md"),
+    )
+    .expect("link final component");
+    // Dangling final link: creation must not materialize its target.
+    std::fs::create_dir_all(skills.join("dangling")).expect("create dangling dir");
+    symlink(
+        external.join("missing.md"),
+        skills.join("dangling/SKILL.md"),
+    )
+    .expect("link dangling final component");
+    // Intermediate directory links, one empty and one holding managed bytes.
+    std::fs::create_dir_all(external.join("empty-dir")).expect("create external empty dir");
+    symlink(external.join("empty-dir"), skills.join("dir-link-new")).expect("link empty dir");
+    std::fs::create_dir_all(external.join("full-dir")).expect("create external full dir");
+    std::fs::write(external.join("full-dir/SKILL.md"), old).expect("write external skill");
+    symlink(external.join("full-dir"), skills.join("dir-link-refresh")).expect("link full dir");
+    // Contained assets keep their ordinary create and refresh behavior.
+    std::fs::create_dir_all(skills.join("contained-refresh")).expect("create contained dir");
+    std::fs::write(skills.join("contained-refresh/SKILL.md"), old).expect("write contained");
+    write_skill_manifest(
+        &skills,
+        &[
+            ("final-link/SKILL.md", old),
+            ("dir-link-refresh/SKILL.md", old),
+            ("contained-refresh/SKILL.md", old),
+        ],
+    );
+
+    let files: &[(&str, &str)] = &[
+        ("contained-new/SKILL.md", new),
+        ("contained-refresh/SKILL.md", new),
+        ("dangling/SKILL.md", new),
+        ("dir-link-new/SKILL.md", new),
+        ("dir-link-refresh/SKILL.md", new),
+        ("final-link/SKILL.md", new),
+    ];
+    let expected = vec![
+        ("contained-new/SKILL.md".to_string(), Created),
+        ("contained-refresh/SKILL.md".to_string(), Refreshed),
+        ("dangling/SKILL.md".to_string(), Preserved),
+        ("dir-link-new/SKILL.md".to_string(), Preserved),
+        ("dir-link-refresh/SKILL.md".to_string(), Preserved),
+        ("final-link/SKILL.md".to_string(), Preserved),
+    ];
+    let assert_external_untouched = || {
+        assert_eq!(
+            std::fs::read_to_string(external.join("refresh.md")).expect("external final target"),
+            old
+        );
+        assert_eq!(
+            std::fs::read_to_string(external.join("full-dir/SKILL.md"))
+                .expect("external directory target"),
+            old
+        );
+        assert!(
+            std::fs::symlink_metadata(external.join("missing.md")).is_err(),
+            "a dangling link target must not be created"
+        );
+        assert!(
+            std::fs::symlink_metadata(external.join("empty-dir/SKILL.md")).is_err(),
+            "no file may be created through a linked directory"
+        );
+    };
+
+    let checked = reconcile_skills(&skills, files, Check);
+    assert_eq!(outcomes(&checked), expected);
+    assert_eq!(checked.refreshed, 2);
+    assert_eq!(checked.warnings.len(), 4, "{:?}", checked.warnings);
+    assert!(!skills.join("contained-new/SKILL.md").exists());
+    assert_external_untouched();
+
+    let applied = reconcile_skills(&skills, files, Apply);
+    assert_eq!(outcomes(&applied), expected);
+    assert_eq!(applied.refreshed, 2);
+    assert_eq!(applied.warnings, checked.warnings);
+    for warning in &applied.warnings {
+        assert!(
+            warning.contains("linked or is not the expected file or directory type"),
+            "{warning}"
+        );
+    }
+    assert_external_untouched();
+    for name in ["contained-new/SKILL.md", "contained-refresh/SKILL.md"] {
+        assert_eq!(
+            std::fs::read_to_string(skills.join(name)).expect("contained asset written"),
+            new
+        );
+    }
+    for link in ["final-link/SKILL.md", "dangling/SKILL.md", "dir-link-new"] {
+        assert!(
+            std::fs::symlink_metadata(skills.join(link))
+                .expect("link survives")
+                .file_type()
+                .is_symlink(),
+            "{link} stays a link"
+        );
+    }
+
+    // Refused paths keep only provenance that was already recorded; none is
+    // advanced to the bytes Orbit did not write.
+    let assets = read_manifest_assets(&skills);
+    assert_eq!(assets["contained-new/SKILL.md"], Value::String(sha256(new)));
+    assert_eq!(
+        assets["contained-refresh/SKILL.md"],
+        Value::String(sha256(new))
+    );
+    assert_eq!(assets["final-link/SKILL.md"], Value::String(sha256(old)));
+    assert_eq!(
+        assets["dir-link-refresh/SKILL.md"],
+        Value::String(sha256(old))
+    );
+    assert!(!assets.contains_key("dangling/SKILL.md"));
+    assert!(!assets.contains_key("dir-link-new/SKILL.md"));
+
+    let again = reconcile_skills(&skills, files, Apply);
+    assert_eq!(again.refreshed, 0);
+    assert_eq!(again.warnings, applied.warnings);
+    assert_external_untouched();
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_through_redirected_directories_preserves_external_bytes() {
+    use super::super::managed_assets::ManagedAssetOutcome::{Preserved, Retired};
+    use super::super::managed_assets::ManagedAssetReconcileMode::{Apply, Check};
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create tempdir");
+    let skills = root.path().join("skills");
+    let external = root.path().join("external");
+    let backups = root.path().join(".retired-managed/skills");
+    std::fs::create_dir_all(&skills).expect("create skills tree");
+    std::fs::create_dir_all(&external).expect("create external tree");
+    std::fs::create_dir_all(&backups).expect("create backup tree");
+    let old = "previous shipped skill\n";
+    let edited = "operator edited skill\n";
+
+    let mut externals = Vec::new();
+    for (name, body) in [("dir-clean", old), ("dir-modified", edited)] {
+        let target = external.join(name);
+        std::fs::create_dir_all(&target).expect("create external skill dir");
+        std::fs::write(target.join("SKILL.md"), body).expect("write external skill");
+        symlink(&target, skills.join(name)).expect("link retired skill dir");
+        externals.push((target.join("SKILL.md"), body));
+    }
+    std::fs::write(external.join("final.md"), old).expect("write external final target");
+    std::fs::create_dir_all(skills.join("file-link")).expect("create file-link dir");
+    symlink(external.join("final.md"), skills.join("file-link/SKILL.md"))
+        .expect("link retired final component");
+    externals.push((external.join("final.md"), old));
+    // A modified contained asset whose preservation directory is redirected.
+    std::fs::create_dir_all(external.join("backup")).expect("create external backup dir");
+    symlink(external.join("backup"), backups.join("backup-link")).expect("link backup dir");
+    for (name, body) in [
+        ("contained-clean", old),
+        ("contained-modified", edited),
+        ("backup-link", edited),
+    ] {
+        std::fs::create_dir_all(skills.join(name)).expect("create contained skill dir");
+        std::fs::write(skills.join(name).join("SKILL.md"), body).expect("write contained skill");
+    }
+    let retired = [
+        "backup-link/SKILL.md",
+        "contained-clean/SKILL.md",
+        "contained-modified/SKILL.md",
+        "dir-clean/SKILL.md",
+        "dir-modified/SKILL.md",
+        "file-link/SKILL.md",
+    ];
+    write_skill_manifest(
+        &skills,
+        &retired.iter().map(|name| (*name, old)).collect::<Vec<_>>(),
+    );
+    let refused = [
+        "backup-link/SKILL.md",
+        "dir-clean/SKILL.md",
+        "dir-modified/SKILL.md",
+        "file-link/SKILL.md",
+    ];
+    let expected = vec![
+        ("backup-link/SKILL.md".to_string(), Preserved),
+        ("contained-clean/SKILL.md".to_string(), Retired),
+        ("contained-modified/SKILL.md".to_string(), Preserved),
+        ("contained-modified/SKILL.md".to_string(), Retired),
+        ("dir-clean/SKILL.md".to_string(), Preserved),
+        ("dir-modified/SKILL.md".to_string(), Preserved),
+        ("file-link/SKILL.md".to_string(), Preserved),
+    ];
+    let assert_external_untouched = || {
+        for (path, body) in &externals {
+            assert_eq!(
+                std::fs::read_to_string(path).expect("external bytes survive"),
+                *body
+            );
+        }
+        assert_eq!(
+            std::fs::read_dir(external.join("backup"))
+                .expect("list external backup")
+                .count(),
+            0,
+            "nothing may be preserved through a redirected backup directory"
+        );
+    };
+
+    let checked = reconcile_skills(&skills, &[], Check);
+    assert_eq!(outcomes(&checked), expected);
+    assert_eq!(checked.retired, 2);
+    assert_eq!(checked.warnings.len(), 5, "{:?}", checked.warnings);
+    assert!(skills.join("contained-clean/SKILL.md").exists());
+    assert_external_untouched();
+
+    let applied = reconcile_skills(&skills, &[], Apply);
+    assert_eq!(outcomes(&applied), expected);
+    assert_eq!(applied.retired, 2);
+    assert_eq!(applied.warnings.len(), 5, "{:?}", applied.warnings);
+    assert_external_untouched();
+    assert!(!skills.join("contained-clean/SKILL.md").exists());
+    assert!(!skills.join("contained-modified/SKILL.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(backups.join("contained-modified/SKILL.md"))
+            .expect("contained edit preserved"),
+        edited
+    );
+    assert_eq!(
+        std::fs::read_to_string(skills.join("backup-link/SKILL.md"))
+            .expect("unpreservable edit stays active"),
+        edited
+    );
+    for link in ["dir-clean", "dir-modified", "file-link/SKILL.md"] {
+        assert!(
+            std::fs::symlink_metadata(skills.join(link))
+                .expect("link survives")
+                .file_type()
+                .is_symlink(),
+            "{link} stays a link"
+        );
+    }
+
+    // Refused retirements keep provenance so a later pass can finish them.
+    let assets = read_manifest_assets(&skills);
+    let remaining: Vec<&str> = assets.keys().map(String::as_str).collect();
+    assert_eq!(remaining, refused);
+
+    let again = reconcile_skills(&skills, &[], Apply);
+    assert_eq!(again.retired, 0);
+    assert_eq!(again.warnings.len(), 4, "{:?}", again.warnings);
+    assert_external_untouched();
+}
+
+#[cfg(unix)]
+#[test]
+fn activity_and_job_seeding_refuse_linked_catalog_entries() {
+    use super::super::managed_assets::ManagedAssetOutcome;
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create tempdir");
+    let global_root = root.path().join("global");
+    init_global(&global_root);
+    let external = root.path().join("external");
+    std::fs::create_dir_all(&external).expect("create external tree");
+
+    let activities_dir = global_root.join("resources/activities");
+    let sleep = activities_dir.join("sleep.yaml");
+    let original = std::fs::read_to_string(&sleep).expect("read seeded sleep activity");
+    let stale = format!("{original}# stale digest\n");
+    std::fs::write(external.join("sleep.yaml"), &stale).expect("write external activity");
+    std::fs::remove_file(&sleep).expect("remove seeded sleep activity");
+    symlink(external.join("sleep.yaml"), &sleep).expect("link sleep activity");
+    add_managed_manifest_entry(&activities_dir, "sleep", &stale);
+
+    let jobs_dir = global_root.join("resources/jobs");
+    let job = first_catalog_yaml(&jobs_dir);
+    std::fs::remove_file(&job).expect("remove seeded job");
+    symlink(external.join("job.yaml"), &job).expect("dangling job link");
+
+    for overwrite in [false, true] {
+        let activities = seed_default_activities(&activities_dir, overwrite)
+            .expect("activity reconciliation reports a linked entry");
+        let jobs = seed_default_jobs(&jobs_dir, overwrite)
+            .expect("job reconciliation reports a linked entry");
+        let sleep_action = activities
+            .actions
+            .iter()
+            .find(|action| action.name == "sleep")
+            .expect("sleep action");
+        assert_eq!(sleep_action.outcome, ManagedAssetOutcome::Preserved);
+        assert_eq!(activities.warnings.len(), 1, "{:?}", activities.warnings);
+        assert_eq!(jobs.warnings.len(), 1, "{:?}", jobs.warnings);
+        assert_eq!(
+            std::fs::read_to_string(external.join("sleep.yaml")).expect("external activity"),
+            stale
+        );
+        assert!(std::fs::symlink_metadata(external.join("job.yaml")).is_err());
+        let assets = read_manifest_assets(&activities_dir);
+        assert_eq!(assets["sleep"], Value::String(sha256(&stale)));
+    }
+}
+
+#[cfg(unix)]
+fn first_catalog_yaml(dir: &Path) -> std::path::PathBuf {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .expect("list catalog")
+        .map(|entry| entry.expect("catalog entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "yaml")
+        })
+        .collect();
+    entries.sort();
+    entries.into_iter().next().expect("seeded catalog yaml")
+}

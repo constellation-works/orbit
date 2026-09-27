@@ -11,13 +11,13 @@ use orbit_engine::activity_job::load_job_asset;
 use super::activity_catalog::{ActivityCatalogFault, collect_activity_catalog_faults};
 use super::artifact::{
     ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
-    ManagedCatalog, RemovableArtifact, init_command, provenance, read_artifact,
-    resolve_removable_artifact,
+    ManagedCatalog, init_command, provenance, read_artifact,
 };
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
 use crate::application::managed_assets::{
-    MANAGED_ASSET_MANIFEST_FILE, load_managed_asset_manifest,
+    ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, load_managed_asset_manifest,
+    resolve_confined_asset_path,
 };
 use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::template::{ShippedShape, shipped_shape_of};
@@ -90,11 +90,11 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
             continue;
         };
         let provenance = provenance(kind, name, Some(digest), &on_disk);
-        let (detail, remediation) = match resolve_removable_artifact(
+        let (detail, remediation) = match resolve_confined_asset_path(
             &catalog.dir,
             &kind.layout().relative_path(name),
         ) {
-            Ok(RemovableArtifact::Unsafe(component)) => (
+            Ok(ConfinedAssetPath::Unsafe(component)) => (
                 format!(
                     "`{name}` is a retired managed default, but retirement is skipped because \
                      '{}' is linked or is not the expected file or directory type",
