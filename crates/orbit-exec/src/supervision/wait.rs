@@ -1,3 +1,4 @@
+use std::io::PipeWriter;
 use std::process::Child;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
@@ -11,7 +12,10 @@ use super::cleanup::terminate_orphaned_process_group;
 use super::cleanup::{kill_process_group, terminate_process_group, termination_signal};
 #[cfg(unix)]
 use super::signal::{SignalHandlerGuard, signal_message};
-use super::tee::{output_capture_limit, spawn_stderr_drain, spawn_stdin_write, spawn_stdout_drain};
+use super::tee::{
+    DRAIN_BUDGET, DrainStop, StopWatch, output_capture_limit, spawn_relay_drain,
+    spawn_stderr_drain, spawn_stdin_write, spawn_stdout_drain,
+};
 
 pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -29,6 +33,12 @@ pub(crate) struct WaitResult {
     /// the child's process group. Callers that must distinguish a timeout from
     /// an ordinary nonzero exit read this instead of matching stderr text.
     pub(crate) timed_out: bool,
+    /// Whether a pipe was still held open [`DRAIN_BUDGET`] after the child
+    /// was reaped — by a descendant outside its process group — so the pipe
+    /// workers were stopped instead of reaching EOF. Callers see this as a
+    /// stderr note; the supervision tests read the flag.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) drain_stopped: bool,
 }
 
 pub(crate) fn wait_with_optional_timeout(
@@ -53,7 +63,36 @@ pub(super) fn wait_with_timeout_and_output_limit(
     stdin_payload: Option<Vec<u8>>,
     output_limit: usize,
 ) -> Result<WaitResult, OrbitError> {
-    wait_cancellable(child, timeout_ms, debug, stdin_payload, output_limit, None)
+    wait_cancellable(
+        child,
+        timeout_ms,
+        debug,
+        stdin_payload,
+        output_limit,
+        None,
+        None,
+    )
+}
+
+/// Supervise `child` like [`wait_with_optional_timeout`], forwarding its
+/// stdout into `relay` instead of capturing it. The relay is closed within
+/// the same drain bound, so its reader always reaches EOF.
+pub(crate) fn wait_with_stdout_relay(
+    child: Child,
+    timeout_ms: Option<u64>,
+    debug: bool,
+    stdin_payload: Option<Vec<u8>>,
+    relay: Option<PipeWriter>,
+) -> Result<WaitResult, OrbitError> {
+    wait_cancellable(
+        child,
+        timeout_ms,
+        debug,
+        stdin_payload,
+        output_capture_limit(),
+        relay,
+        None,
+    )
 }
 
 pub(crate) fn wait_with_cancellation(
@@ -68,6 +107,7 @@ pub(crate) fn wait_with_cancellation(
         false,
         stdin_payload,
         output_capture_limit(),
+        None,
         cancelled,
     )
 }
@@ -78,24 +118,58 @@ fn wait_cancellable(
     debug: bool,
     stdin_payload: Option<Vec<u8>>,
     output_limit: usize,
+    stdout_relay: Option<PipeWriter>,
     cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<WaitResult, OrbitError> {
+    // Every pipe worker is bounded by `drain_stop`: once the child is gone
+    // the supervisor waits at most `DRAIN_BUDGET` for them (see its docs).
+    // Dropping it on an early error return stops them as well.
+    let drain_stop = match DrainStop::new() {
+        Ok(stop) => stop,
+        Err(err) => {
+            kill_process_group(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(OrbitError::Execution(format!(
+                "failed to set up process pipe supervision: {err}"
+            )));
+        }
+    };
+    let watch = || {
+        drain_stop.watch().map_err(|err| {
+            OrbitError::Execution(format!("failed to set up process pipe supervision: {err}"))
+        })
+    };
+
     // Drain stdout/stderr in background threads so the child never blocks on a
     // full pipe buffer (which would prevent it from exiting).
     //
     // In debug mode, both stdout and stderr are tee'd through redaction-aware
     // drains so the user sees live output without bypassing capture/redaction.
-    let (stdin_result_rx, stdin_thread) = spawn_stdin_thread(&mut child, stdin_payload)?;
+    let (stdin_result_rx, stdin_thread) = spawn_stdin_thread(&mut child, stdin_payload, watch)?;
     // Each of the two drain threads reports its capture limit at most once.
     let (output_limit_tx, output_limit_rx) = mpsc::sync_channel(2);
-    let stdout_thread = child
-        .stdout
-        .take()
-        .map(|out| spawn_stdout_drain(out, debug, output_limit, output_limit_tx.clone()));
-    let stderr_thread = child
-        .stderr
-        .take()
-        .map(|err| spawn_stderr_drain(err, debug, output_limit, output_limit_tx));
+    let stdout_thread = match (child.stdout.take(), stdout_relay) {
+        (Some(out), Some(relay)) => Some(spawn_relay_drain(out, relay, watch()?)),
+        (Some(out), None) => Some(spawn_stdout_drain(
+            out,
+            debug,
+            output_limit,
+            output_limit_tx.clone(),
+            watch()?,
+        )),
+        (None, _) => None,
+    };
+    let stderr_thread = match child.stderr.take() {
+        Some(err) => Some(spawn_stderr_drain(
+            err,
+            debug,
+            output_limit,
+            output_limit_tx,
+            watch()?,
+        )),
+        None => None,
+    };
 
     // Last drop restores the previous SIGINT/SIGTERM disposition and
     // re-raises a captured signal so daemons still shut down.
@@ -166,7 +240,7 @@ fn wait_cancellable(
 
             // Child exited successfully within the timeout. Kill its process
             // group so any orphan subprocesses still holding the pipes open
-            // are reaped before we join the reader threads below.
+            // are reaped before the pipe workers settle below.
             kill_process_group(child.id());
             break (false, None, status.success(), status.code());
         }
@@ -184,12 +258,15 @@ fn wait_cancellable(
     };
     // Every exit above has reaped the child (directly or through
     // `terminate_process_group`); stop fanning signals out to its old group
-    // before the reader joins below, which can outlast a pid's reuse.
+    // before the pipe workers settle below, which can outlast a pid's reuse.
     #[cfg(unix)]
     signal_guard.release_process_group();
 
-    // Join reader threads. They complete quickly once the process group is
-    // killed (all pipe write ends are closed -> EOF).
+    // The process group is dead, so its pipe ends are closed and the workers
+    // normally hit EOF at once. Only a holder outside the group keeps one
+    // open; `settle` stops such workers after the budget, so the joins below
+    // are bounded either way.
+    let drain_stopped = drain_stop.settle(DRAIN_BUDGET);
     let stdout = stdout_thread
         .map(|h| h.join().unwrap_or_default())
         .unwrap_or_default();
@@ -213,8 +290,10 @@ fn wait_cancellable(
     {
         // A BrokenPipe here means the write raced the child's own exit and
         // observed EPIPE only after `wait_timeout` above already reaped the
-        // real exit status; treat it the same as the in-loop EPIPE case and
-        // let the already-captured exit status and stderr tail stand.
+        // real exit status, or that the writer was stopped because only a
+        // holder outside the process group still had the pipe. Treat it the
+        // same as the in-loop EPIPE case and let the already-captured exit
+        // status and stderr tail stand.
         return Err(OrbitError::Execution(format!(
             "failed to write process stdin: {err}"
         )));
@@ -247,6 +326,21 @@ fn wait_cancellable(
 
     #[cfg(not(unix))]
     let _ = interrupted_signal;
+    // Output after this point was discarded; without the note a caller could
+    // mistake a cut stream for the whole of it.
+    if drain_stopped {
+        if !stderr.is_empty() {
+            stderr.push(b'\n');
+        }
+        stderr.extend_from_slice(
+            format!(
+                "process pipes were still held open outside its process group; \
+                 stopped draining {} ms after it ended",
+                DRAIN_BUDGET.as_millis()
+            )
+            .as_bytes(),
+        );
+    }
 
     Ok(WaitResult {
         exit_success,
@@ -254,12 +348,14 @@ fn wait_cancellable(
         stdout,
         stderr,
         timed_out,
+        drain_stopped,
     })
 }
 
 fn spawn_stdin_thread(
     child: &mut Child,
     stdin_payload: Option<Vec<u8>>,
+    watch: impl FnOnce() -> Result<StopWatch, OrbitError>,
 ) -> Result<StdinWorker, OrbitError> {
     match stdin_payload {
         Some(bytes) => {
@@ -268,7 +364,7 @@ fn spawn_stdin_thread(
             })?;
             // The single stdin writer sends one completion result.
             let (tx, rx) = mpsc::sync_channel(1);
-            let handle = spawn_stdin_write(stdin, bytes, tx);
+            let handle = spawn_stdin_write(stdin, bytes, tx, watch()?);
             Ok((Some(rx), Some(handle)))
         }
         None => Ok((None, None)),
