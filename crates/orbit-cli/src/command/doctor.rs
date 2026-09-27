@@ -2,10 +2,12 @@ use clap::{Args, Subcommand};
 use orbit_cmd::{
     DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
 };
+use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use serde_json::{Value, json};
 
+use crate::command::mcp::registered_clients_for_workspace;
 use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::{Domain, Role};
 
@@ -171,6 +173,11 @@ impl Execute for DoctorCommand {
         }
         results.extend(runtime.doctor_workspace()?);
         results.push(state_directory_permissions_row(runtime));
+        results.extend(routed_provider_rows(runtime));
+        results.push(mcp_registration_row(
+            runtime,
+            orbit_common::fs::path::home_dir().ok().as_deref(),
+        ));
         // Machine-global rows, composed here rather than in `doctor_workspace`:
         // `orbit-cmd` does not know about MCP and must not learn, and this is
         // the one crate that already assembles both [ORB-11053].
@@ -221,6 +228,150 @@ impl Execute for DoctorCommand {
         Ok(Payload::blocks(Value::Array(values), blocks)
             .with_exit_code(exit_code)
             .into())
+    }
+}
+
+/// Check only crews that normal workflow routing can select. Provider auth is
+/// deliberately not probed: a status command may refresh credentials or call
+/// the network, while `doctor` must stay fast and read-only.
+pub(crate) fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
+    use std::collections::BTreeSet;
+
+    let config = match ResolvedConfig::load(&ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    )) {
+        Ok(config) => config,
+        Err(error) => {
+            return vec![WorkspaceDoctorResult {
+                check_name: "provider-routing".to_string(),
+                status: WorkspaceDoctorStatus::Error,
+                message: format!("cannot inspect effective crew routing: {error}"),
+                remediation: Some(
+                    "Repair the config reported by `orbit doctor`, then rerun it.".to_string(),
+                ),
+            }];
+        }
+    };
+
+    let mut names = BTreeSet::new();
+    if let Some(name) = &config.default_crew {
+        names.insert(name.clone());
+    }
+    names.insert(config.system_crew.clone());
+    for (complexity, entries) in [
+        ("low", &config.complexity_crews.low),
+        ("medium", &config.complexity_crews.medium),
+        ("hard", &config.complexity_crews.hard),
+        ("xhard", &config.complexity_crews.xhard),
+    ] {
+        if let Some(entries) = entries {
+            match canonical_crew_pool(
+                entries,
+                &config.crews,
+                &format!("workflow.{complexity}_complexity_crews"),
+            ) {
+                Ok(pool) => names.extend(
+                    pool.entries
+                        .into_iter()
+                        .filter(|entry| entry.weight > 0)
+                        .map(|entry| entry.name),
+                ),
+                Err(error) => {
+                    return vec![WorkspaceDoctorResult {
+                        check_name: "provider-routing".to_string(),
+                        status: WorkspaceDoctorStatus::Error,
+                        message: format!("cannot inspect {complexity} crew pool: {error}"),
+                        remediation: Some(
+                            "Repair the config reported by `orbit doctor`, then rerun it."
+                                .to_string(),
+                        ),
+                    }];
+                }
+            }
+        }
+    }
+
+    names.into_iter().map(|name| {
+        let check_name = format!("provider:{name}");
+        let Some(crew) = config.crews.get(&name) else {
+            return WorkspaceDoctorResult {
+                check_name,
+                status: WorkspaceDoctorStatus::Error,
+                message: format!("routed crew '{name}' is not configured"),
+                remediation: Some(format!("Define crew '{name}' in config.toml or change workflow routing.")),
+            };
+        };
+        let provider = &crew.assignment.provider;
+        match runtime.get_executor_def(provider) {
+            Ok(Some(def)) => match def.command.as_deref() {
+                Some(program) => match runtime.locate_provider_launcher(program) {
+                    Some(path) => WorkspaceDoctorResult {
+                        check_name,
+                        status: WorkspaceDoctorStatus::Ok,
+                        message: format!("crew '{name}' uses provider '{provider}'; CLI '{}' found at {} (authentication not checked)", program, path.display()),
+                        remediation: None,
+                    },
+                    None => WorkspaceDoctorResult {
+                        check_name,
+                        status: WorkspaceDoctorStatus::Error,
+                        message: format!("crew '{name}' uses provider '{provider}'; CLI '{program}' was not found"),
+                        remediation: Some(format!("Install the '{program}' CLI or change crew '{name}' to an available provider.")),
+                    },
+                },
+                None => WorkspaceDoctorResult {
+                    check_name,
+                    status: WorkspaceDoctorStatus::Skipped,
+                    message: format!("crew '{name}' uses provider '{provider}', which has no CLI command"),
+                    remediation: None,
+                },
+            },
+            Ok(None) => WorkspaceDoctorResult {
+                check_name,
+                status: WorkspaceDoctorStatus::Error,
+                message: format!("crew '{name}' uses provider '{provider}', but no executor definition exists"),
+                remediation: Some(format!("Restore the '{provider}' executor definition or change crew '{name}'.")),
+            },
+            Err(error) => WorkspaceDoctorResult {
+                check_name,
+                status: WorkspaceDoctorStatus::Error,
+                message: format!("cannot inspect provider '{provider}' for crew '{name}': {error}"),
+                remediation: Some("Repair executor storage, then rerun `orbit doctor`.".to_string()),
+            },
+        }
+    }).collect()
+}
+
+pub(crate) fn mcp_registration_row(
+    runtime: &OrbitRuntime,
+    home_dir: Option<&std::path::Path>,
+) -> WorkspaceDoctorResult {
+    let workspace_id = runtime
+        .workspace_runtime_binding()
+        .map(|binding| binding.logical_workspace_id.clone())
+        .or_else(|| runtime.workspace_id().ok());
+    let clients = registered_clients_for_workspace(
+        &runtime.paths().repo_root,
+        workspace_id.as_deref(),
+        home_dir,
+    );
+    if clients.is_empty() {
+        WorkspaceDoctorResult {
+            check_name: "mcp-registration".to_string(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: "no Orbit MCP client registration found for this workspace".to_string(),
+            remediation: Some("Run `orbit mcp init --auto` in this workspace, or configure a client with `orbit mcp init --client <client>`.".to_string()),
+        }
+    } else {
+        WorkspaceDoctorResult {
+            check_name: "mcp-registration".to_string(),
+            status: WorkspaceDoctorStatus::Ok,
+            message: format!(
+                "Orbit MCP registered in: {} (connection not checked)",
+                clients.join(", ")
+            ),
+            remediation: None,
+        }
     }
 }
 

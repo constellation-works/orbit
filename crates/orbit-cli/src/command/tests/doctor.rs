@@ -8,7 +8,8 @@ use orbit_core::application::routines::{ClockUnitInspection, ClockUnitVerdict};
 
 use super::super::doctor::{
     DoctorSubcommand, clock_unit_row_from_inspection, doctor_row_json, fs_access, human_detail,
-    orphan_task_store_removal_message, provider_diagnostics, state_directory_permissions_row,
+    mcp_registration_row, orphan_task_store_removal_message, provider_diagnostics,
+    routed_provider_rows, state_directory_permissions_row,
 };
 use super::super::{Cli, CommandOutput, Commands, Execute};
 use crate::output::payload::{Block, View};
@@ -34,6 +35,32 @@ fn payload_parts(output: CommandOutput) -> (serde_json::Value, View) {
         panic!("doctor diagnostics must return a payload");
     };
     payload.into_view()
+}
+
+fn configure_runnable_doctor_crew(runtime: &OrbitRuntime) {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+
+    std::fs::write(
+        runtime.shared_root().join("config.toml"),
+        "[crews.fixture]\nmodel = \"test-model\"\nprovider = \"codex\"\n[workflow]\ndefault_crew = \"fixture\"\nsystem_crew = \"fixture\"\n",
+    )
+    .expect("write isolated crew routing");
+    let executable = std::env::current_exe().expect("test executable path");
+    let resource: ExecutorResource = serde_yaml::from_str(&format!(
+        "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: codex\nspec:\n  executor_type: direct_agent\n  command: {}\n",
+        executable.display()
+    ))
+    .expect("executor YAML");
+    let def = ExecutorDef::from_resource_spec(
+        resource.metadata.name,
+        resource.spec.clone(),
+        resource.spec.created_at,
+        resource.spec.updated_at,
+    );
+    runtime
+        .upsert_executor_def(&def)
+        .expect("store runnable executor");
 }
 
 #[test]
@@ -121,6 +148,142 @@ fn provider_diagnostics_reports_launcher_availability_and_sandbox() {
     assert_eq!(absent["cli_available"], false, "{absent}");
     assert!(absent["launcher"].is_null(), "{absent}");
     assert_eq!(absent["sandbox"], "linux-bwrap", "{absent}");
+}
+
+#[test]
+fn default_doctor_reports_missing_routed_provider_without_healthy_summary() {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    std::fs::write(
+        runtime.shared_root().join("config.toml"),
+        "[crews.cold]\nmodel = \"test-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"cold\"\nsystem_crew = \"cold\"\n",
+    )
+    .expect("write isolated workspace config");
+    let missing = runtime.paths().repo_root.join("missing-provider-cli");
+    let resource: ExecutorResource = serde_yaml::from_str(&format!(
+        "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: codex\nspec:\n  executor_type: direct_agent\n  command: {}\n",
+        missing.display()
+    ))
+    .expect("executor YAML");
+    let def = ExecutorDef::from_resource_spec(
+        resource.metadata.name,
+        resource.spec.clone(),
+        resource.spec.created_at,
+        resource.spec.updated_at,
+    );
+    runtime.upsert_executor_def(&def).expect("store executor");
+
+    let output = super::super::doctor::DoctorCommand {
+        command: None,
+        json: false,
+        fix_stale_locks: false,
+        fix_stale_task_locks: false,
+        remove_graph: false,
+        fix_stale_artifacts: false,
+        fix_retired_activity_backends: false,
+        fix_orphan_task_stores: false,
+        confirm: false,
+    }
+    .execute(&runtime)
+    .expect("doctor report");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("doctor report must be a payload");
+    };
+    assert_eq!(payload.exit_code(), 1);
+    let (document, view) = payload.into_view();
+    let row = document
+        .as_array()
+        .expect("doctor rows")
+        .iter()
+        .find(|row| row["check"] == "provider:cold")
+        .expect("routed provider row");
+    assert_eq!(row["status"], "error", "{row}");
+    assert!(
+        row["message"]
+            .as_str()
+            .expect("message")
+            .contains("crew 'cold' uses provider 'codex'")
+    );
+    let View::Blocks(blocks) = view else {
+        panic!("doctor blocks")
+    };
+    assert!(
+        !blocks
+            .iter()
+            .any(|block| matches!(block, Block::Text(text) if text.contains("Workspace healthy.")))
+    );
+}
+
+#[test]
+fn default_provider_checks_ignore_unused_executor_definitions() {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let missing = runtime.paths().repo_root.join("not-installed-unused-cli");
+    let resource: ExecutorResource = serde_yaml::from_str(&format!(
+        "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: unused\nspec:\n  executor_type: direct_agent\n  command: {}\n",
+        missing.display()
+    ))
+    .expect("executor YAML");
+    let def = ExecutorDef::from_resource_spec(
+        resource.metadata.name,
+        resource.spec.clone(),
+        resource.spec.created_at,
+        resource.spec.updated_at,
+    );
+    runtime
+        .upsert_executor_def(&def)
+        .expect("store unused executor");
+
+    let rows = routed_provider_rows(&runtime);
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|row| row.check_name != "provider:unused"));
+    assert!(
+        rows.iter()
+            .all(|row| !row.message.contains("provider 'unused'"))
+    );
+}
+
+#[test]
+fn mcp_registration_warns_when_absent_and_recognizes_workspace_config() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let row = mcp_registration_row(&runtime, None);
+    assert_eq!(row.check_name, "mcp-registration");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+
+    let path = runtime.paths().repo_root.join(".codex/config.toml");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("create config dir");
+    std::fs::write(
+        &path,
+        "[mcp_servers.orbit]\ncommand = \"orbit\"\nargs = [\"mcp\", \"serve\"]\nenabled = true\n",
+    )
+    .expect("write MCP registration");
+    let row = mcp_registration_row(&runtime, None);
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok);
+    assert!(row.message.contains("codex (workspace)"), "{}", row.message);
+
+    std::fs::write(
+        &path,
+        "[mcp_servers.orbit]\ncommand = \"orbit\"\nargs = [\"mcp\", \"serve\", \"--workspace\", \"another-workspace\"]\nenabled = true\n",
+    )
+    .expect("bind client to another workspace");
+    assert_eq!(
+        mcp_registration_row(&runtime, None).status,
+        WorkspaceDoctorStatus::Warning
+    );
+
+    std::fs::write(
+        &path,
+        "[mcp_servers.orbit]\ncommand = \"custom-orbit-wrapper\"\n",
+    )
+    .expect("write custom client launcher");
+    assert_eq!(
+        mcp_registration_row(&runtime, None).status,
+        WorkspaceDoctorStatus::Ok
+    );
 }
 
 #[test]
@@ -341,6 +504,7 @@ fn failing_workspace_renders_diagnostics_and_exits_nonzero() {
 #[test]
 fn warning_only_workspace_keeps_zero_exit_and_structured_rows() {
     let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    configure_runnable_doctor_crew(&runtime);
     let lock_path = runtime.paths().state_dir.join("doctor-test.lock");
     std::fs::write(
         lock_path,
@@ -381,6 +545,7 @@ fn warning_only_workspace_keeps_zero_exit_and_structured_rows() {
 #[test]
 fn fix_stale_locks_records_repair_count_in_payload_doc() {
     let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    configure_runnable_doctor_crew(&runtime);
     let lock_path = runtime.paths().state_dir.join("doctor-test.lock");
     std::fs::write(
         lock_path,

@@ -67,11 +67,17 @@ cd <repo> && orbit workspace init --mcp         # add --ship-mode local to skip 
 # Review and commit the checkout files listed by workspace init before the first ship.
 # Local delivery requires a clean base checkout; the list includes MCP client files.
 
-# 4. Check everything is healthy
+# 4. Check workspace state, routed agent CLIs, and MCP client registration
 orbit doctor
 ```
 
 Now open your agent in the repo and ask for something. It files the task, asks for approval, ships it, and reports the PR.
+
+`orbit doctor` reports missing CLIs for crews selected by the default, system,
+or complexity routing and warns when no Orbit MCP client is registered for this
+workspace. It checks CLI presence and registration files only; provider sign-in
+and MCP connectivity are not checked. Use `orbit doctor providers` to inspect
+all executor definitions, including providers not selected by workflow routing.
 
 | To… | Run |
 |---|---|
