@@ -7,13 +7,18 @@
 //! registry bindings must be retired with it.
 //!
 //! [ORB-12347] The target is an explicit selector, never cwd inference.
+//!
+//! [ORB-13474] Legacy repo-local skill-link cleanup removes only links into the
+//! checkout's own `.orbit/skills/` and never follows a redirected discovery
+//! directory out of the checkout.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use clap::{Parser, error::ErrorKind};
 use orbit_cmd::DoctorCommands;
 use orbit_cmd::task_store::{bound_partition_id, partition_is_bound, task_workspaces_dir};
+use orbit_common::fs::io::create_dir_symlink;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
@@ -415,5 +420,222 @@ fn teardown_without_confirm_leaves_the_task_store_and_registration_untouched() {
     assert!(
         workspace_registry::find_workspace_by_id(&registry, "ws_unconfirmed").is_some(),
         "an unconfirmed teardown must not deregister the workspace"
+    );
+}
+
+/// A registered checkout whose `.orbit/skills/` holds the skill workspace init linked.
+struct SkillLinkFixture {
+    _temp: tempfile::TempDir,
+    root: PathBuf,
+    repo_root: PathBuf,
+    orbit_dir: PathBuf,
+    runtime: OrbitRuntime,
+}
+
+impl SkillLinkFixture {
+    fn new(workspace_id: &str) -> Self {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_path_buf();
+        let global_root = root.join("global");
+        let repo_root = root.join("repo");
+        let orbit_dir = repo_root.join(".orbit");
+        std::fs::create_dir_all(&global_root).expect("create global root");
+        std::fs::create_dir_all(orbit_dir.join("skills").join("orbit")).expect("create skill");
+        register(
+            &global_root,
+            workspace_id,
+            workspace_id,
+            &repo_root,
+            &orbit_dir,
+        );
+        let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("build runtime");
+        Self {
+            _temp: temp,
+            root,
+            repo_root,
+            orbit_dir,
+            runtime,
+        }
+    }
+
+    fn owned_target(&self, name: &str) -> PathBuf {
+        self.orbit_dir.join("skills").join(name)
+    }
+}
+
+fn link(target: &Path, link: &Path) {
+    std::fs::create_dir_all(link.parent().expect("link parent")).expect("create link parent");
+    create_dir_symlink(target, link).expect("create skill link");
+}
+
+fn assert_link_to(link: &Path, target: &Path, why: &str) {
+    let meta = std::fs::symlink_metadata(link)
+        .unwrap_or_else(|error| panic!("{why}: {} is gone: {error}", link.display()));
+    assert!(meta.file_type().is_symlink(), "{why}: {}", link.display());
+    assert_eq!(
+        std::fs::read_link(link).expect("read link"),
+        target,
+        "{why}: {}",
+        link.display()
+    );
+}
+
+fn assert_gone(path: &Path, why: &str) {
+    assert!(
+        std::fs::symlink_metadata(path).is_err(),
+        "{why}: {} still exists",
+        path.display()
+    );
+}
+
+#[test]
+fn teardown_removes_only_orbit_owned_skill_links_from_both_discovery_dirs() {
+    let fixture = SkillLinkFixture::new("ws_links");
+    let catalog = fixture.root.join("catalog").join("my-skill");
+    let plugin_skill = fixture
+        .root
+        .join("plugins")
+        .join("acme")
+        .join("1.0.0")
+        .join("skills")
+        .join("review");
+    std::fs::create_dir_all(&catalog).expect("create unrelated catalog skill");
+    std::fs::create_dir_all(&plugin_skill).expect("create plugin skill");
+    let missing = fixture.root.join("catalog").join("gone");
+
+    for dir_name in [".agents", ".claude"] {
+        let skills = fixture.repo_root.join(dir_name).join("skills");
+        link(&fixture.owned_target("orbit"), &skills.join("orbit"));
+        // A retired skill whose catalog entry is already gone is still Orbit's.
+        link(&fixture.owned_target("retired"), &skills.join("retired"));
+        link(&catalog, &skills.join("my-skill"));
+        link(&missing, &skills.join("gone"));
+        link(&plugin_skill, &skills.join("acme-review"));
+        // Named for something else, so not the link workspace init wrote.
+        link(&fixture.owned_target("orbit"), &skills.join("alias"));
+        std::fs::write(skills.join("notes.md"), b"user notes\n").expect("write regular file");
+        std::fs::create_dir_all(skills.join("local-skill")).expect("create skill directory");
+    }
+
+    teardown("ws_links", true)
+        .execute(&fixture.runtime)
+        .expect("confirmed teardown");
+
+    assert!(
+        !fixture.orbit_dir.exists(),
+        "teardown must still delete .orbit/"
+    );
+    for dir_name in [".agents", ".claude"] {
+        let skills = fixture.repo_root.join(dir_name).join("skills");
+        assert_gone(&skills.join("orbit"), "an Orbit-owned link must be removed");
+        assert_gone(
+            &skills.join("retired"),
+            "a dangling Orbit-owned link must be removed",
+        );
+        assert_link_to(
+            &skills.join("my-skill"),
+            &catalog,
+            "an unrelated link must survive",
+        );
+        assert_link_to(
+            &skills.join("gone"),
+            &missing,
+            "a dangling unrelated link must survive",
+        );
+        assert_link_to(
+            &skills.join("acme-review"),
+            &plugin_skill,
+            "a plugin-owned link must survive",
+        );
+        assert_link_to(
+            &skills.join("alias"),
+            &fixture.owned_target("orbit"),
+            "a link whose name does not match its Orbit target is not provably Orbit's",
+        );
+        assert!(
+            skills.join("notes.md").is_file() && skills.join("local-skill").is_dir(),
+            "regular files and directories in {dir_name}/skills must survive"
+        );
+    }
+    assert!(
+        catalog.is_dir() && plugin_skill.is_dir(),
+        "link targets must survive"
+    );
+}
+
+#[test]
+fn teardown_removes_discovery_dirs_it_empties_but_keeps_unowned_empty_ones() {
+    let fixture = SkillLinkFixture::new("ws_empty");
+    let agents = fixture.repo_root.join(".agents");
+    let claude = fixture.repo_root.join(".claude");
+    link(
+        &fixture.owned_target("orbit"),
+        &agents.join("skills").join("orbit"),
+    );
+    std::fs::create_dir_all(claude.join("skills")).expect("create empty claude skills dir");
+
+    teardown("ws_empty", true)
+        .execute(&fixture.runtime)
+        .expect("confirmed teardown");
+
+    assert_gone(
+        &agents,
+        "a discovery dir emptied of Orbit links must be removed with its empty parent",
+    );
+    assert!(
+        claude.join("skills").is_dir(),
+        "an empty discovery dir teardown did not empty is not Orbit's to remove"
+    );
+}
+
+#[test]
+fn teardown_does_not_follow_a_symlinked_discovery_dir_out_of_the_checkout() {
+    let fixture = SkillLinkFixture::new("ws_redirect");
+    let outside = fixture.root.join("outside");
+    let outside_agents = outside.join("agents");
+    let outside_claude_skills = outside.join("claude-skills");
+    let unrelated = outside.join("catalog").join("my-skill");
+    std::fs::create_dir_all(&unrelated).expect("create outside catalog skill");
+
+    // Entries outside the checkout, including ones shaped like Orbit-owned links.
+    for skills in [outside_agents.join("skills"), outside_claude_skills.clone()] {
+        link(&fixture.owned_target("orbit"), &skills.join("orbit"));
+        link(&unrelated, &skills.join("my-skill"));
+    }
+    // `.agents` itself and `.claude/skills` each redirect outside the checkout.
+    let repo_agents = fixture.repo_root.join(".agents");
+    let repo_claude_skills = fixture.repo_root.join(".claude").join("skills");
+    link(&outside_agents, &repo_agents);
+    link(&outside_claude_skills, &repo_claude_skills);
+
+    teardown("ws_redirect", true)
+        .execute(&fixture.runtime)
+        .expect("confirmed teardown");
+
+    assert!(
+        !fixture.orbit_dir.exists(),
+        "teardown must still delete .orbit/"
+    );
+    for skills in [outside_agents.join("skills"), outside_claude_skills.clone()] {
+        assert_link_to(
+            &skills.join("orbit"),
+            &fixture.owned_target("orbit"),
+            "teardown must not delete through a redirected discovery dir",
+        );
+        assert_link_to(
+            &skills.join("my-skill"),
+            &unrelated,
+            "teardown must not delete through a redirected discovery dir",
+        );
+    }
+    assert_link_to(
+        &repo_agents,
+        &outside_agents,
+        "a redirected discovery dir must survive",
+    );
+    assert_link_to(
+        &repo_claude_skills,
+        &outside_claude_skills,
+        "a redirected discovery dir must survive",
     );
 }

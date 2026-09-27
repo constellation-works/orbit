@@ -1,23 +1,97 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_core::OrbitError;
 
-/// Remove all symlinks in a directory (non-recursive).
-pub(super) fn remove_symlinks_in(dir: &Path) -> Result<(), OrbitError> {
-    let entries = std::fs::read_dir(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+/// Repo-local discovery directories a legacy workspace init linked skills into.
+pub(super) const LEGACY_SKILL_DISCOVERY_DIRS: [&str; 2] = [".agents", ".claude"];
+
+/// What legacy skill-link cleanup did in one discovery directory.
+pub(super) struct SkillLinkCleanup {
+    pub(super) removed_links: usize,
+    pub(super) removed_dirs: Vec<PathBuf>,
+}
+
+/// Remove the legacy skill links a workspace init wrote into
+/// `<repo_root>/<dir_name>/skills`.
+///
+/// A link is Orbit-owned only when its name matches the skill it targets and
+/// that target is `<orbit_dir>/skills/<name>` (or the same path through the
+/// canonical `orbit_dir`), the layout workspace init linked. Unrelated,
+/// dangling unrelated and plugin links, regular files, and directories stay.
+///
+/// Neither `<dir_name>` nor its `skills` child is followed when it is a
+/// symlink: that directory belongs to whatever tree it points at, not to the
+/// checkout being torn down. When this removes a link and so empties the real
+/// `skills` directory, that directory and then an emptied real parent go too.
+pub(super) fn remove_owned_skill_links(
+    repo_root: &Path,
+    orbit_dir: &Path,
+    dir_name: &str,
+) -> Result<SkillLinkCleanup, OrbitError> {
+    let mut cleanup = SkillLinkCleanup {
+        removed_links: 0,
+        removed_dirs: Vec::new(),
+    };
+    let parent = repo_root.join(dir_name);
+    let skills_dir = parent.join("skills");
+    if !is_real_dir(&parent)? || !is_real_dir(&skills_dir)? {
+        return Ok(cleanup);
+    }
+
+    let skills_root = orbit_dir.join("skills");
+    let canonical_skills_root = std::fs::canonicalize(orbit_dir)
+        .map(|dir| dir.join("skills"))
+        .unwrap_or_else(|_| skills_root.clone());
+    let entries = std::fs::read_dir(&skills_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
     for entry in entries {
         let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
-        let meta =
-            std::fs::symlink_metadata(entry.path()).map_err(|e| OrbitError::Io(e.to_string()))?;
-        if meta.file_type().is_symlink() {
-            std::fs::remove_file(entry.path()).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        if !meta.file_type().is_symlink() {
+            continue;
         }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        let target = std::fs::read_link(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        let resolved = if target.is_absolute() {
+            target
+        } else {
+            skills_dir.join(target)
+        };
+        if resolved != skills_root.join(name) && resolved != canonical_skills_root.join(name) {
+            continue;
+        }
+        std::fs::remove_file(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+        cleanup.removed_links += 1;
     }
-    Ok(())
+
+    // Only a directory this cleanup emptied is Orbit's to remove.
+    if cleanup.removed_links == 0 {
+        return Ok(cleanup);
+    }
+    for dir in [skills_dir, parent] {
+        if !is_dir_empty(&dir) {
+            break;
+        }
+        std::fs::remove_dir(&dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        cleanup.removed_dirs.push(dir);
+    }
+    Ok(cleanup)
+}
+
+/// Whether `path` is a directory itself rather than a symlink to one.
+fn is_real_dir(path: &Path) -> Result<bool, OrbitError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => Ok(meta.file_type().is_dir()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OrbitError::Io(error.to_string())),
+    }
 }
 
 /// Check if a directory is empty.
-pub(super) fn is_dir_empty(dir: &Path) -> bool {
+fn is_dir_empty(dir: &Path) -> bool {
     std::fs::read_dir(dir)
         .map(|mut entries| entries.next().is_none())
         .unwrap_or(false)
