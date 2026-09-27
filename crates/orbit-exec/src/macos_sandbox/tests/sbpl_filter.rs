@@ -160,9 +160,10 @@ fn compiled_read_glob_uses_the_physical_prefix_and_covers_future_files() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().expect("tempdir");
-    let real = temp.path().join("real");
+    let base = temp.path().canonicalize().expect("canonical tempdir");
+    let real = base.join("real");
     std::fs::create_dir(&real).expect("real directory");
-    let alias = temp.path().join("alias");
+    let alias = base.join("alias");
     symlink(&real, &alias).expect("path alias");
     let future = real.join("later/sub/.env");
     assert!(
@@ -193,9 +194,10 @@ fn compiled_default_credential_deny_and_keychain_reallow_share_physical_home() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().expect("tempdir");
-    let real = temp.path().join("real");
+    let base = temp.path().canonicalize().expect("canonical tempdir");
+    let real = base.join("real");
     std::fs::create_dir(&real).expect("real directory");
-    let alias = temp.path().join("alias");
+    let alias = base.join("alias");
     symlink(&real, &alias).expect("path alias");
     let home = alias.join("home");
     let physical_home = real.join("home");
