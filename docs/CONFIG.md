@@ -361,8 +361,8 @@ hard_complexity_crews = ["astra"]
 xhard_complexity_crews = ["fable", "astra"]
 ```
 
-- **Crew is fixed when the task is created.** A task created without `crew` (via `orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, or an import) draws from the pool for its complexity, falling back to `default_crew`, and stores the result in `task.crew`. A `crew_assigned` history entry records the source: `explicit`, `pool:<complexity>` or `default`. A workspace with no crews configured leaves the field unset.
-- **Nothing re-routes afterward.** Status transitions never change `task.crew`, and neither does changing `--complexity`. Only [`task update --crew ""`](#setting-taskcrew) draws again.
+- **Crew is selected when the task is created.** A task created without `crew` (via `orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, or an import) draws from the pool for its complexity, falling back to `default_crew`, and stores the result in `task.crew`. A `crew_assigned` history entry records the source: `explicit`, `pool:<complexity>` or `default`. A workspace with no crews configured leaves the field unset.
+- **Changes are explicit.** Status transitions never change `task.crew`, and neither does changing `--complexity`. An explicit `task update --crew <name>` changes the selection; [`task update --crew ""`](#setting-taskcrew) draws again. Every stored crew change records the actor, prior and new crew, and whether it came from an explicit name or a pool draw.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. A pool whose members are all [disabled](#disabled-crews) is treated the same way; disabled members of a mixed pool are skipped. Blank entries and unknown crew names fail before dispatch.
 - **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name.
@@ -394,11 +394,11 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 |---|---|
 | Dashboard | The crew dropdown on each task card. The label `default: <crew>` means the task has no `crew` and inherits `default_crew`. |
 | CLI | `orbit task add --crew <name>`, or `orbit task update <id> --crew <name>`. Passing `--crew ""` to `update` re-draws for the current complexity. |
-| MCP | The `crew` parameter on `orbit.task.add` / `orbit.task.update`. An empty string on update re-draws. |
+| MCP | The `crew` parameter on `orbit.task.add` / `orbit.task.update`. An empty string on update re-draws; `null` is rejected. Omitting `crew` keeps the stored selection. |
 
 ### What "ran" vs what "was selected"
 
-`orbit.task.show` returns `crew` (the task's selection) and, once a run exists, `resolved_crew` plus `crew_model` (what was dispatched, read from the persisted run record). `task.crew` is validated on write. If you later delete a crew that tasks still name, `orbit run ship` fails at run start, before any agent dispatches.
+`orbit.task.show` returns `crew` (the stored selection) and separately annotates it with `resolved_crew` and `crew_model` when this host can resolve it. An associated run's persisted resolution takes precedence over current configuration. A one-field `fields: ["crew"]` projection returns the same stored selection. `task.crew` is validated on write. If you later delete a crew that tasks still name, `orbit run ship` fails at run start, before any agent dispatches.
 
 ---
 

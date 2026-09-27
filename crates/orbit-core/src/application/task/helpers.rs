@@ -9,9 +9,8 @@ use crate::context::resolve_write_actor_label;
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 
 /// Provenance for the crew a task was assigned when it was created, or when an
-/// operator cleared the field and the pools chose again [ORB-12717]. Nothing
-/// after that point rewrites `task.crew`, so this entry explains the crew the
-/// record carries for the rest of its life.
+/// operator cleared the field and the pools chose again [ORB-12717]. Updates
+/// that change the stored crew append their own history entry.
 pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> TaskHistoryEntry {
     TaskHistoryEntry {
         at: Utc::now(),

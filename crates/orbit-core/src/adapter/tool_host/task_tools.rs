@@ -491,7 +491,15 @@ fn task_update_params_from_input(
         implemented_by: optional_raw_string(input, "implemented_by")?.map(empty_string_to_none),
         pr_status: optional_raw_string(input, "pr_status")?.map(empty_string_to_none),
         job_run_id: optional_raw_string(input, "job_run_id")?.map(empty_string_to_none),
-        crew: optional_raw_string(input, "crew")?.map(empty_string_to_none),
+        crew: match input.get("crew") {
+            Some(Value::Null) => {
+                return Err(OrbitError::InvalidInput(
+                    "`crew` must be a string; omit it to keep the current crew or use an empty string to redraw"
+                        .to_string(),
+                ));
+            }
+            _ => optional_raw_string(input, "crew")?.map(empty_string_to_none),
+        },
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
         upsert_artifacts: parse_artifacts(input)?,

@@ -12,7 +12,7 @@ use crate::application::job::crew_pools::{CreationCrewAssignment, random_crew_ti
 
 use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
-    crew_assigned_history, describe_optional_field_value,
+    describe_optional_field_value,
 };
 use super::lifecycle::{
     FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_status_change_allowed,
@@ -55,7 +55,7 @@ struct TaskUpdateContext {
 pub(super) struct ValidatedTaskFieldEdits {
     pub(super) params: TaskUpdateParams,
     /// Set when this write cleared the crew and the pools chose a replacement;
-    /// the caller records the provenance in task history [ORB-12717].
+    /// the caller includes the draw source in the change history [ORB-12717].
     pub(super) crew_assignment: Option<CreationCrewAssignment>,
 }
 
@@ -336,8 +336,26 @@ impl OrbitRuntime {
             .filter(|replacement| task.source_task_id() != *replacement);
 
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
-        if let Some(assignment) = &crew_assignment {
-            append_history.push(crew_assigned_history(assignment));
+        if let Some(replacement) = params.crew.as_ref()
+            && replacement.as_deref() != task.crew.as_deref()
+        {
+            let source = match &crew_assignment {
+                Some(assignment) => format!("pool draw ({})", assignment.source),
+                None if replacement.is_none() => "pool draw (no crew available)".to_string(),
+                None => "explicit name".to_string(),
+            };
+            append_history.push(TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: effective_label.clone(),
+                event: "crew_assigned".to_string(),
+                note: Some(format!(
+                    "crew changed from `{}` to `{}` via {source}",
+                    describe_optional_field_value(task.crew.as_deref()),
+                    describe_optional_field_value(replacement.as_deref()),
+                )),
+                from_status: None,
+                to_status: None,
+            });
         }
         if let Some(replacement) = source_task_id_replacement {
             // ORB-10311: record the explicit previous and replacement source
@@ -455,6 +473,9 @@ impl OrbitRuntime {
                 *crew = crew_assignment
                     .as_ref()
                     .map(|assignment| assignment.crew.clone());
+            } else {
+                // An explicit update must not pin a disabled crew onto a task.
+                self.resolve_crew_for_task(None, crew.as_deref())?;
             }
         }
         if let Some(orchestrator) = &mut params.orchestrator {

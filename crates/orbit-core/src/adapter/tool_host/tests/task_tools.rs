@@ -18,6 +18,7 @@ use super::super::test_support::{
     call, call_err, create_task, create_task_with_crew, default_identity, invalid_input_message,
     managed_tool_identity_env_guard, run_tool_as_operator, test_runtime, unmanaged_tool_env_guard,
 };
+use crate::OrbitRuntime;
 use crate::adapter::command::ToolEntryPoint;
 
 struct CurrentDirGuard {
@@ -1804,20 +1805,6 @@ fn task_update_tool_persists_complexity_without_adding_history() {
     assert_eq!(added.get("complexity"), Some(&json!("low")));
     let history_before = runtime.get_task_history(task_id).expect("initial history");
 
-    call(
-        &runtime,
-        "orbit.task.update",
-        json!({ "id": task_id, "crew": "sol" }),
-    )
-    .expect("crew update succeeds");
-    let history_after_crew = runtime
-        .get_task_history(task_id)
-        .expect("history after crew update");
-    assert_eq!(
-        history_after_crew, history_before,
-        "crew update adds no history"
-    );
-
     let updated = call(
         &runtime,
         "orbit.task.update",
@@ -1829,8 +1816,8 @@ fn task_update_tool_persists_complexity_without_adding_history() {
         runtime
             .get_task_history(task_id)
             .expect("history after complexity update"),
-        history_after_crew,
-        "complexity update must match crew's no-history behavior"
+        history_before,
+        "complexity update alone adds no crew history"
     );
 
     let shown =
@@ -1844,6 +1831,158 @@ fn task_update_tool_persists_complexity_without_adding_history() {
     )
     .expect("update omitting complexity succeeds");
     assert_eq!(omitted.get("complexity"), Some(&json!("medium")));
+}
+
+#[test]
+fn task_update_crew_null_omit_unknown_disabled_empty_string_redraw_and_projection() {
+    let root = tempfile::tempdir().expect("create test root");
+    let global_root = root.path().join("global");
+    let workspace_root = root.path().join("repo/.orbit");
+    fs::create_dir_all(&global_root).expect("create global root");
+    fs::create_dir_all(&workspace_root).expect("create workspace root");
+    fs::write(
+        workspace_root.join("config.toml"),
+        r#"
+[workflow]
+default_crew = "pool-crew"
+low_complexity_crews = ["pool-crew"]
+
+[crews.pool-crew]
+model = "pool-model"
+provider = "codex"
+backend = "cli"
+
+[crews.outside-crew]
+model = "outside-model"
+provider = "codex"
+backend = "cli"
+
+[crews.disabled-crew]
+model = "disabled-model"
+provider = "codex"
+backend = "cli"
+enabled = false
+"#,
+    )
+    .expect("write crew config");
+    let runtime =
+        OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build crew update runtime");
+    let added = call(
+        &runtime,
+        "orbit.task.add",
+        json!({
+            "title": "Low pool update",
+            "description": "Exercise crew update distinctions",
+            "complexity": "low",
+            "workspace": ".",
+        }),
+    )
+    .expect("create low-complexity task");
+    let id = added["id"].as_str().expect("task id");
+    assert_eq!(added["crew"], "pool-crew");
+    let initial_history = runtime.get_task_history(id).expect("initial history");
+
+    let null_error = call_err(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": id, "crew": null}),
+    );
+    assert!(
+        null_error.contains("`crew` must be a string"),
+        "{null_error}"
+    );
+    assert_eq!(
+        runtime
+            .get_task(id)
+            .expect("task after null")
+            .crew
+            .as_deref(),
+        Some("pool-crew")
+    );
+    assert_eq!(
+        runtime.get_task_history(id).expect("history after null"),
+        initial_history
+    );
+
+    let omitted = call(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": id, "title": "Crew omitted"}),
+    )
+    .expect("update omitting crew");
+    assert_eq!(omitted["crew"], "pool-crew");
+    let history_after_omit = runtime.get_task_history(id).expect("history after omit");
+    assert!(
+        history_after_omit[initial_history.len()..]
+            .iter()
+            .all(|event| event.event != "crew_assigned"),
+        "omitting crew must not add a crew assignment"
+    );
+
+    for rejected in ["unknown-crew", "disabled-crew"] {
+        let error = match call(
+            &runtime,
+            "orbit.task.update",
+            json!({"id": id, "crew": rejected}),
+        ) {
+            Err(orbit_common::OrbitError::InvalidInput(message))
+            | Err(orbit_common::OrbitError::InvalidInputDiagnostic { message, .. }) => message,
+            Err(error) => panic!("expected crew validation error, got {error:?}"),
+            Ok(value) => panic!("expected crew validation error, got {value}"),
+        };
+        assert!(error.contains(rejected), "{error}");
+        if rejected == "unknown-crew" {
+            assert!(error.contains("is not defined"), "{error}");
+        } else {
+            assert!(error.contains("enabled = false"), "{error}");
+        }
+        assert_eq!(
+            runtime
+                .get_task(id)
+                .expect("task after refusal")
+                .crew
+                .as_deref(),
+            Some("pool-crew")
+        );
+        assert_eq!(
+            runtime.get_task_history(id).expect("history after refusal"),
+            history_after_omit
+        );
+    }
+
+    let explicit = call(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": id, "crew": "outside-crew"}),
+    )
+    .expect("explicit crew update");
+    assert_eq!(explicit["crew"], "outside-crew");
+    let redrawn = call(&runtime, "orbit.task.update", json!({"id": id, "crew": ""}))
+        .expect("redraw low pool crew");
+    assert_eq!(redrawn["crew"], "pool-crew");
+    let history = runtime.get_task_history(id).expect("history after redraw");
+    assert_eq!(history.len(), history_after_omit.len() + 2);
+    let event = history.last().expect("redraw event");
+    assert_eq!(event.event, "crew_assigned");
+    assert_eq!(event.by, "codex");
+    let note = event.note.as_deref().expect("redraw note");
+    assert!(note.contains("outside-crew"), "{note}");
+    assert!(note.contains("pool-crew"), "{note}");
+    assert!(note.contains("pool draw (pool:low)"), "{note}");
+
+    let projected = call(
+        &runtime,
+        "orbit.task.show",
+        json!({"id": id, "fields": ["crew"]}),
+    )
+    .expect("one-field crew projection");
+    let shown = call(&runtime, "orbit.task.show", json!({"id": id})).expect("full task show");
+    assert_eq!(projected, shown["crew"]);
+    assert_eq!(
+        shown["crew"],
+        runtime.get_task(id).expect("stored task").crew.unwrap()
+    );
+    assert_eq!(shown["resolved_crew"], "pool-crew");
 }
 
 /// ORB-12116: the create-time assessment contract also holds on update, so an

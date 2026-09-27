@@ -148,6 +148,69 @@ fn invalid_accompanying_edit_does_not_partially_apply_status() {
 }
 
 #[test]
+fn crew_history_records_only_persisted_changes_with_the_update_actor() {
+    let (_root, runtime) = test_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Crew change audit".to_string(),
+            description: "Track the stored selection".to_string(),
+            crew: Some("implementer".to_string()),
+            ..Default::default()
+        })
+        .expect("create task");
+    let before = runtime
+        .get_task_history(&task.id)
+        .expect("history before edit");
+
+    let changed = runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                crew: Some(Some("orchestration".to_string())),
+                ..Default::default()
+            },
+            Some("codex".to_string()),
+            None,
+        )
+        .expect("explicit crew change");
+    assert_eq!(changed.crew.as_deref(), Some("orchestration"));
+    let history = runtime
+        .get_task_history(&task.id)
+        .expect("history after edit");
+    assert_eq!(history.len(), before.len() + 1);
+    let event = history.last().expect("crew change event");
+    assert_eq!(event.event, "crew_assigned");
+    assert_eq!(event.by, "codex");
+    let note = event.note.as_deref().expect("crew change note");
+    assert!(note.contains("implementer"), "{note}");
+    assert!(note.contains("orchestration"), "{note}");
+    assert!(note.contains("explicit name"), "{note}");
+
+    runtime
+        .update_task(&task.id, TaskUpdateParams::default())
+        .expect("omitting crew keeps it");
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                crew: Some(Some("orchestration".to_string())),
+                ..Default::default()
+            },
+        )
+        .expect("same crew is not a change");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("stored task").crew,
+        changed.crew
+    );
+    assert_eq!(
+        runtime
+            .get_task_history(&task.id)
+            .expect("unchanged history"),
+        history
+    );
+}
+
+#[test]
 fn stale_activity_status_write_cannot_overwrite_operator_reclassification() {
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Stale activity");
