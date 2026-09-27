@@ -21,16 +21,16 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use super::{LogQuery, map_runtime_error, non_empty_string, server_error};
 use crate::log_format::{
-    Filters as LogFilters, RenderedLogEvent, parse_matching_event, read_recent_rendered_events,
+    Filters as LogFilters, RenderedLogEvent, parse_matching_event, read_recent_rendered_tail,
     render_log_event_for_web, resolve_log_path,
 };
 
 const LOG_DEFAULT_LIMIT: usize = 50;
 pub(super) const LOG_MAX_LIMIT: usize = 500;
 
-/// Snapshot body for `GET /api/log`. `offset` is the log file length after
-/// the read so `/api/log/stream?from=` can resume without dropping lines
-/// appended between the two requests.
+/// Snapshot body for `GET /api/log`. `offset` is the byte cursor just past
+/// the records the snapshot scanned, so `/api/log/stream?from=` resumes with
+/// neither a gap nor a repeat, however many lines land in between.
 #[derive(Debug, Serialize)]
 pub(super) struct LogSnapshot {
     pub events: Vec<RenderedLogEvent>,
@@ -158,6 +158,16 @@ pub(super) fn read_log_snapshot_from_path(
     path: &std::path::Path,
     query: &LogQuery,
 ) -> Result<LogSnapshot, orbit_core::OrbitError> {
+    read_log_snapshot_then(path, query, || {})
+}
+
+/// [`read_log_snapshot_from_path`] running `after_scan` between the scan and
+/// building the response, so tests can append inside that window.
+pub(super) fn read_log_snapshot_then(
+    path: &std::path::Path,
+    query: &LogQuery,
+    after_scan: impl FnOnce(),
+) -> Result<LogSnapshot, orbit_core::OrbitError> {
     let limit = match query.limit {
         Some(limit) if limit > LOG_MAX_LIMIT => {
             return Err(orbit_core::OrbitError::InvalidInput(format!(
@@ -168,12 +178,16 @@ pub(super) fn read_log_snapshot_from_path(
         None => LOG_DEFAULT_LIMIT,
     };
     let filters = log_filters(query)?;
-    let events = read_recent_rendered_events(path, &filters, limit)
+    let tail = read_recent_rendered_tail(path, &filters, limit)
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
-    // Length after the snapshot read. Lines appended between this return and
-    // stream-open are picked up by `?from=<offset>` / `Last-Event-ID`.
-    let offset = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    Ok(LogSnapshot { events, offset })
+    after_scan();
+    // The cursor comes from the scanned extent itself, never a later `stat`:
+    // a line appended after the scan lies beyond it and reaches the client
+    // through `?from=<offset>` / `Last-Event-ID` instead of being skipped.
+    Ok(LogSnapshot {
+        events: tail.events,
+        offset: tail.cursor,
+    })
 }
 
 /// Prefer SSE `Last-Event-ID` over `?from=` so a browser auto-reconnect does

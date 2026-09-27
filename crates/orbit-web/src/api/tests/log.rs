@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -8,9 +9,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 
 use super::super::LogQuery;
 use super::super::log::{
-    LOG_MAX_LIMIT, LogStreamGate, format_sse_frame, last_event_id_header, log_stream_unavailable,
-    read_appended_log_events, read_log_snapshot_from_path, spawn_log_sse_frames,
-    stream_resume_offset,
+    LOG_MAX_LIMIT, LogSnapshot, LogStreamGate, format_sse_frame, last_event_id_header,
+    log_stream_unavailable, read_appended_log_events, read_log_snapshot_from_path,
+    read_log_snapshot_then, spawn_log_sse_frames, stream_resume_offset,
 };
 use super::test_support::{body_json, write_lines};
 use crate::log_format::Filters as LogFilters;
@@ -23,6 +24,62 @@ fn log_line(step_id: &str) -> String {
         "fields": {"job_run_id": "run-1", "step_id": step_id}
     })
     .to_string()
+}
+
+fn append(path: &Path, text: &str) {
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("append");
+    file.write_all(text.as_bytes()).expect("append bytes");
+    file.flush().expect("flush");
+}
+
+fn snapshot(path: &Path, query: LogQuery) -> LogSnapshot {
+    read_log_snapshot_from_path(path, &query).expect("snapshot")
+}
+
+fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).expect("metadata").len()
+}
+
+/// Resume a stream at `offset`, run `after_open`, then append a sentinel and
+/// return every frame before it. Collecting up to a known last line means a
+/// duplicate or extra frame cannot hide behind a timeout.
+fn stream_frames_until_sentinel(
+    path: &Path,
+    filters: LogFilters,
+    offset: u64,
+    after_open: impl FnOnce(),
+) -> Vec<String> {
+    let gate = LogStreamGate::new(1);
+    let permit = gate.try_acquire().expect("stream permit");
+    let mut rx = spawn_log_sse_frames(path.to_path_buf(), filters, permit, Some(offset));
+    after_open();
+    append(path, &format!("{}\n", log_line("sentinel")));
+    let mut frames = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match rx.try_recv() {
+            Ok(frame) if frame.contains("sentinel") => return frames,
+            Ok(frame) => frames.push(frame),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+        }
+    }
+    panic!("sentinel never arrived; frames so far: {frames:?}");
+}
+
+/// Occurrences of `step` across the snapshot events and the streamed frames.
+fn delivered(snapshot: &LogSnapshot, frames: &[String], step: &str) -> usize {
+    snapshot
+        .events
+        .iter()
+        .filter(|event| event.message_html.contains(step))
+        .count()
+        + frames.iter().filter(|frame| frame.contains(step)).count()
 }
 
 fn collect_sse_frames(rx: &mut tokio::sync::mpsc::Receiver<String>, n: usize) -> Vec<String> {
@@ -402,18 +459,30 @@ fn log_snapshot_includes_final_line_without_trailing_newline() {
     let body = format!("{}\n{}", log_line("first"), log_line("last"));
     std::fs::write(&path, body).expect("write");
 
-    let snapshot = read_log_snapshot_from_path(
+    let snapshot = snapshot(
         &path,
-        &LogQuery {
+        LogQuery {
             limit: Some(10),
             ..LogQuery::default()
         },
-    )
-    .expect("snapshot");
+    );
 
     assert_eq!(snapshot.events.len(), 2);
     assert!(snapshot.events[0].message_html.contains("first"));
     assert!(snapshot.events[1].message_html.contains("last"));
+    assert_eq!(
+        snapshot.offset,
+        file_len(&path),
+        "a complete unterminated record is served, so the cursor moves past it"
+    );
+
+    // Its newline arrives later and must not replay the record.
+    let frames =
+        stream_frames_until_sentinel(&path, LogFilters::default(), snapshot.offset, || {
+            append(&path, &format!("\n{}\n", log_line("next")));
+        });
+    assert_eq!(delivered(&snapshot, &frames, "last"), 1, "{frames:?}");
+    assert_eq!(delivered(&snapshot, &frames, "next"), 1, "{frames:?}");
 }
 
 #[test]
@@ -421,20 +490,138 @@ fn log_snapshot_zero_limit_returns_no_events() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("orbit.jsonl");
     write_lines(&path, &[log_line("seed")]);
+    let zero = || LogQuery {
+        limit: Some(0),
+        ..LogQuery::default()
+    };
 
-    let snapshot = read_log_snapshot_from_path(
+    let terminated = snapshot(&path, zero());
+    assert!(terminated.events.is_empty());
+    assert_eq!(terminated.offset, file_len(&path));
+
+    let records_end = file_len(&path);
+    let partial = log_line("partial");
+    let (head, rest) = partial.split_at(partial.len() / 2);
+    append(&path, head);
+    let torn = snapshot(&path, zero());
+    assert!(torn.events.is_empty());
+    assert_eq!(
+        torn.offset, records_end,
+        "zero limit still leaves a partial record for the stream"
+    );
+    let frames = stream_frames_until_sentinel(&path, LogFilters::default(), torn.offset, || {
+        append(&path, &format!("{rest}\n"));
+    });
+    assert_eq!(delivered(&torn, &frames, "partial"), 1, "{frames:?}");
+    assert_eq!(delivered(&torn, &frames, "seed"), 0, "{frames:?}");
+}
+
+#[test]
+fn line_appended_after_snapshot_scan_arrives_exactly_once() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(&path, &[log_line("seed")]);
+    let scanned_len = file_len(&path);
+
+    // Append after the scan fixed its extent but before the response is
+    // built: the window where a later `stat` used to swallow the line.
+    let snapshot = read_log_snapshot_then(
         &path,
         &LogQuery {
-            limit: Some(0),
+            limit: Some(50),
             ..LogQuery::default()
         },
+        || append(&path, &format!("{}\n", log_line("raced"))),
     )
     .expect("snapshot");
+    assert_eq!(snapshot.offset, scanned_len);
 
-    assert!(snapshot.events.is_empty());
+    let frames = stream_frames_until_sentinel(&path, LogFilters::default(), snapshot.offset, || {});
+    assert_eq!(delivered(&snapshot, &frames, "seed"), 1, "{frames:?}");
     assert_eq!(
-        snapshot.offset,
-        std::fs::metadata(&path).expect("metadata").len()
+        delivered(&snapshot, &frames, "raced"),
+        1,
+        "a line appended during snapshot construction must arrive exactly once: {frames:?}"
+    );
+}
+
+#[test]
+fn partial_trailing_record_completes_exactly_once_after_handoff() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(&path, &[log_line("seed")]);
+    let records_end = file_len(&path);
+    let partial = log_line("completed");
+    let (head, rest) = partial.split_at(partial.len() / 2);
+    append(&path, head);
+
+    let snapshot = snapshot(
+        &path,
+        LogQuery {
+            limit: Some(50),
+            ..LogQuery::default()
+        },
+    );
+    assert_eq!(snapshot.events.len(), 1);
+    assert_eq!(
+        snapshot.offset, records_end,
+        "the cursor stops at the start of the partial record"
+    );
+
+    let frames =
+        stream_frames_until_sentinel(&path, LogFilters::default(), snapshot.offset, || {
+            // Let the stream poll the partial bytes before the record completes.
+            std::thread::sleep(Duration::from_millis(150));
+            append(&path, &format!("{rest}\n"));
+        });
+    assert_eq!(delivered(&snapshot, &frames, "seed"), 1, "{frames:?}");
+    assert_eq!(delivered(&snapshot, &frames, "completed"), 1, "{frames:?}");
+}
+
+#[test]
+fn filtered_snapshot_hands_off_trailing_records_exactly_once() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    let policy = json!({
+        "timestamp": "2026-04-27T01:00:01Z",
+        "level": "WARN",
+        "target": "orbit.policy.deny",
+        "fields": {"tool": "fs.write", "path": "/etc/passwd"}
+    })
+    .to_string();
+    write_lines(&path, &[log_line("kept")]);
+    // A complete but filtered-out final record without its newline.
+    append(&path, &policy);
+    let query = || LogQuery {
+        limit: Some(10),
+        target: Some("orbit.job".to_string()),
+        ..LogQuery::default()
+    };
+    let filters =
+        LogFilters::from_query_parts(Some("orbit.job".to_string()), None, None).expect("filters");
+
+    let unterminated = snapshot(&path, query());
+    assert_eq!(unterminated.events.len(), 1);
+    assert!(unterminated.events[0].message_html.contains("kept"));
+    assert_eq!(unterminated.offset, file_len(&path));
+
+    append(&path, "\n");
+    let records_end = file_len(&path);
+    let partial = log_line("late");
+    let (head, rest) = partial.split_at(partial.len() / 2);
+    append(&path, head);
+    let torn = snapshot(&path, query());
+    assert_eq!(torn.events.len(), 1);
+    assert_eq!(torn.offset, records_end);
+
+    let frames = stream_frames_until_sentinel(&path, filters, torn.offset, || {
+        append(&path, &format!("{rest}\n"));
+    });
+    assert_eq!(delivered(&torn, &frames, "kept"), 1, "{frames:?}");
+    assert_eq!(delivered(&torn, &frames, "late"), 1, "{frames:?}");
+    assert!(
+        frames.iter().all(|frame| !frame.contains("policy")),
+        "{frames:?}"
     );
 }
 

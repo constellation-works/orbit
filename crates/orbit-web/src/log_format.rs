@@ -4,7 +4,7 @@
 //! used by /api/log and /api/diagnostics.
 
 use std::fs::File;
-use std::io::{self, Read, Seek};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -191,15 +191,142 @@ pub(crate) fn read_recent_matching_events_from<R: Read + Seek>(
     Ok(newest_first)
 }
 
-pub(crate) fn read_recent_rendered_events(
+/// Newest matching events of a snapshot plus the byte cursor that resumes
+/// exactly after the bytes those events were drawn from.
+#[derive(Debug)]
+pub(crate) struct RenderedLogTail {
+    pub events: Vec<RenderedLogEvent>,
+    pub cursor: u64,
+}
+
+/// Snapshot the newest matching events of the log at `path` together with a
+/// replay cursor bound to the same file extent.
+///
+/// The extent is fixed by one `stat` of the open handle; bytes appended later
+/// are neither scanned nor covered by the cursor, so a stream resumed at
+/// `cursor` delivers each record exactly once across snapshot and stream.
+pub(crate) fn read_recent_rendered_tail(
     path: &Path,
     filters: &Filters,
     limit: usize,
-) -> io::Result<Vec<RenderedLogEvent>> {
-    Ok(read_recent_matching_events(path, filters, limit)?
-        .into_iter()
-        .map(|event| render_log_event_for_web(&event))
-        .collect())
+) -> io::Result<RenderedLogTail> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(RenderedLogTail {
+                events: Vec::new(),
+                cursor: 0,
+            });
+        }
+        Err(err) => return Err(err),
+    };
+    let len = file.metadata()?.len();
+    read_rendered_tail_from(&mut file, len, filters, limit, TAIL_READ_BLOCK)
+}
+
+/// [`read_recent_rendered_tail`] over the first `len` bytes of `reader`.
+///
+/// Newline-terminated records are always complete. An unterminated final
+/// record counts only when it parses as JSON: a finished record written
+/// without a newline is served and the cursor moves past it (its newline later
+/// reads as an empty, skipped line), while a partial write leaves the cursor at
+/// its start so the stream reads it whole once it completes.
+pub(crate) fn read_rendered_tail_from<R: Read + Seek>(
+    reader: &mut R,
+    len: u64,
+    filters: &Filters,
+    limit: usize,
+    block_size: usize,
+) -> io::Result<RenderedLogTail> {
+    let block_size = if block_size == 0 {
+        TAIL_READ_BLOCK
+    } else {
+        block_size
+    };
+    let records_end = complete_records_end(reader, len, block_size)?;
+    let mut unterminated = vec![0; (len - records_end) as usize];
+    reader.seek(SeekFrom::Start(records_end))?;
+    reader.read_exact(&mut unterminated)?;
+    let final_record = std::str::from_utf8(&unterminated)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+    let cursor = if final_record.is_some() {
+        len
+    } else {
+        records_end
+    };
+
+    let final_match = final_record.filter(|event| limit > 0 && filters.matches(event));
+    let earlier_limit = limit - usize::from(final_match.is_some());
+    let mut events = read_recent_matching_events_from(
+        Prefix::new(reader, records_end),
+        filters,
+        earlier_limit,
+        block_size,
+    )?;
+    events.extend(final_match);
+    Ok(RenderedLogTail {
+        events: events.iter().map(render_log_event_for_web).collect(),
+        cursor,
+    })
+}
+
+/// Offset just past the last newline within the first `len` bytes, or 0.
+fn complete_records_end<R: Read + Seek>(
+    reader: &mut R,
+    len: u64,
+    block_size: usize,
+) -> io::Result<u64> {
+    let mut block = vec![0; block_size];
+    let mut end = len;
+    while end > 0 {
+        let start = end.saturating_sub(block_size as u64);
+        let window = &mut block[..(end - start) as usize];
+        reader.seek(SeekFrom::Start(start))?;
+        reader.read_exact(window)?;
+        if let Some(newline) = window.iter().rposition(|&byte| byte == b'\n') {
+            return Ok(start + newline as u64 + 1);
+        }
+        end = start;
+    }
+    Ok(0)
+}
+
+/// The first `len` bytes of a reader, so a reverse scan starts at a fixed
+/// extent instead of whatever the file has grown to.
+struct Prefix<R> {
+    inner: R,
+    len: u64,
+    pos: u64,
+}
+
+impl<R> Prefix<R> {
+    fn new(inner: R, len: u64) -> Self {
+        Self { inner, len, pos: 0 }
+    }
+}
+
+impl<R: Read + Seek> Read for Prefix<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.len.saturating_sub(self.pos);
+        let max = usize::try_from(remaining).map_or(buf.len(), |r| r.min(buf.len()));
+        let n = self.inner.read(&mut buf[..max])?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl<R: Read + Seek> Seek for Prefix<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let target = match pos {
+            SeekFrom::Start(offset) => Some(offset),
+            SeekFrom::End(delta) => self.len.checked_add_signed(delta),
+            SeekFrom::Current(delta) => self.pos.checked_add_signed(delta),
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "seek before start"))?;
+        self.pos = self.inner.seek(SeekFrom::Start(target))?;
+        Ok(self.pos)
+    }
 }
 
 pub(crate) fn parse_matching_event(raw: &str, filters: &Filters) -> Option<Value> {
