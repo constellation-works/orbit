@@ -53,19 +53,20 @@ impl OrbitRuntime {
         older_than_hours: Option<u64>,
         estimate_bytes: bool,
     ) -> Result<WorktreeGcResult, OrbitError> {
-        let runs = self.list_job_runs_for_worktree_gc()?;
         let older_than = older_than_hours
             .map(|hours| {
                 let hours = i64::try_from(hours).map_err(|_| {
                     OrbitError::InvalidInput("--older-than-hours is too large".to_string())
                 })?;
-                Utc::now()
-                    .checked_sub_signed(Duration::hours(hours))
-                    .ok_or_else(|| {
-                        OrbitError::InvalidInput("--older-than-hours is too large".to_string())
-                    })
+                let duration = Duration::try_hours(hours).ok_or_else(|| {
+                    OrbitError::InvalidInput("--older-than-hours is too large".to_string())
+                })?;
+                Utc::now().checked_sub_signed(duration).ok_or_else(|| {
+                    OrbitError::InvalidInput("--older-than-hours is too large".to_string())
+                })
             })
             .transpose()?;
+        let runs = self.list_job_runs_for_worktree_gc()?;
         collect_worktrees(
             &self.paths().repo_root,
             &runs,
