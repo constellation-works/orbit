@@ -26,6 +26,8 @@ let delayGet = false;
 let releaseGet = null;
 let nextTask = 1;
 let drainRunId = null;
+let drainPhase = 'idle';
+const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const requests = [];
 const confirmations = [];
@@ -93,6 +95,10 @@ globalThis.fetch = async (path, options = {}) => {
       occupancy: { phases: { implementing: 2, lock_waiting: 1, post_implementation: 1, unknown: 0 } },
       deferred_conflicts: [{ task_id: 'ORB-3', blocking_task_ids: ['ORB-30'] }],
       drain_run_id: drainRunId, admissions_stopped: false,
+      drain_phase: drainPhase,
+      drain_status_run_id: drainPhase === 'idle' ? null : 'jrun-20260923-0400-a1',
+      ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
+      admitted_workers: drainPhase === 'idle' ? 0 : 2,
     },
     tasks: readinessTasks,
   });
@@ -157,15 +163,17 @@ assert(completionOption('review').checked, 'completion returns to review');
 // A live window: header link in short form, time left for a window this
 // browser started, and Stop enabled.
 drainRunId = 'jrun-20260923-0400-a1';
+drainPhase = 'draining';
 await fetchAndRenderOperations();
 const liveLink = descendants(get('auto-drain-live')).find(node => String(node.href || '').includes('#runs/'));
 assert(liveLink?.textContent === 'jrun-…0400-a1' && String(liveLink.title).includes('jrun-20260923-0400-a1'), 'header links the live run by its short id');
-if (typeof window.localStorage?.setItem === 'function') assert(/· (1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows time left: ${get('auto-drain-live').textContent}`);
+assert(/(1h 59m|2h 00m) left/.test(get('auto-drain-live').textContent), `header shows server time left: ${get('auto-drain-live').textContent}`);
 drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
 assert(confirmations.at(-1).includes('This is not cancellation.') && confirmations.at(-1).includes('jrun-20260923-0400-a1'), 'stop confirms and names the window');
 assert(get('auto-drain-operation-feedback').textContent.includes('Admissions stopped') && get('auto-drain-operation-feedback').textContent.includes('1 admitted worker still running.'), 'stop result lands in the card status line');
 drainRunId = null;
+drainPhase = 'winding_down';
 
 // No concrete workspace: the card is read-only and fetches nothing.
 setWorkspace(null);
@@ -174,6 +182,7 @@ await fetchAndRenderOperations();
 assert(drainText().includes('All-workspace mode is read-only') && get('auto-drain-live').textContent === 'read-only', 'aggregate mode is read-only');
 assert(requests.filter(r => r.path === '/api/workflows/auto/readiness').length === readinessRequests, 'aggregate mode does not fetch readiness');
 setWorkspace('one');
+drainPhase = 'idle';
 await fetchAndRenderOperations();
 // Routines are grouped by whether they will fire, the toggle is a switch that
 // still reads Enable/Disable, and the row names the job it runs.
@@ -181,7 +190,7 @@ const routineGroups = descendants(get('routines-body')).filter(node => String(no
 assert(routineGroups.some(text => text.startsWith('Active1')) && routineGroups.some(text => text.startsWith('Paused1')), `routines grouped by state: ${routineGroups}`);
 const routineSwitch = descendants(get('routines-body')).find(node => String(node.className || '').includes('operation-switch'));
 assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable', 'routine toggle is a switch named by its action');
-assert(descendants(get('routines-body')).some(node => node.href === '#operations/jobs?job=fixture'), 'routine row links the job it runs');
+assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#operations/jobs?job=fixture'), 'routine row links the job it runs');
 assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
 assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
 assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');
@@ -444,3 +453,8 @@ assert(somedayConfirm.includes('No open instance is currently tagged for this de
 assert(!somedayConfirm.includes('An open instance already exists'), 'someday mint confirmation does not claim open instance exists');
 
 globalThis.operationsTestsPassed = true;
+globalThis.setDrainFixturePhase = async (phase) => {
+  drainPhase = phase;
+  drainRunId = phase === 'draining' ? 'jrun-20260923-0400-a1' : null;
+  await fetchAndRenderAutoDrainPane();
+};

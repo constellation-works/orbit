@@ -30,8 +30,10 @@ const assertNoOverflow = async (label) => {
 let browser;
 let page;
 try {
-  browser = await chromium.launch({headless:true});
+  browser = await chromium.launch({headless:true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined});
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const sharedDrainDeadline = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  await page.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   // Serve the actual markup/styles with only the Operations module initialized.
   // All API traffic is fixture data; no live scheduler or dashboard is contacted.
   page.on('pageerror', error => console.error(error));
@@ -158,6 +160,56 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const minimum = await drainCheck('1440-dock336', 336);
   if (minimum !== 336) throw new Error(`dock did not sit at its 336px minimum: ${minimum}`);
+  for (const [phase, label] of [['draining', 'Draining'], ['winding_down', 'Winding down'], ['idle', 'idle']]) {
+    await page.evaluate(state => globalThis.setDrainFixturePhase(state), phase);
+    const rendered = await page.evaluate(() => ({
+      card: document.getElementById('auto-drain-panel').dataset.drainState,
+      header: document.getElementById('auto-drain-live').textContent,
+      global: document.getElementById('global-drain-state').textContent,
+      globalHidden: document.getElementById('global-drain-state').hidden,
+      tab: document.getElementById('dock-drain-state').textContent,
+      status: document.getElementById('auto-drain-operation-feedback').textContent,
+    }));
+    if (rendered.card !== phase || !rendered.header.includes(label)) throw new Error(`Drain ${phase} header: ${JSON.stringify(rendered)}`);
+    if (phase === 'draining' && (!rendered.header.includes('left') || !rendered.header.includes('jrun-'))) throw new Error(`Missing server deadline or run link: ${rendered.header}`);
+    if (phase === 'winding_down' && !rendered.header.includes('1 workers still running')) throw new Error(`Missing wind-down count: ${rendered.header}`);
+    if (phase === 'idle' ? !rendered.globalHidden || rendered.tab : rendered.globalHidden || !rendered.global.includes(label) || !rendered.tab.includes(label)) throw new Error(`Drain ${phase} indicators: ${JSON.stringify(rendered)}`);
+    if (!rendered.status.includes(label)) throw new Error(`Drain ${phase} status announcement: ${rendered.status}`);
+    await drainCheck(`state-${phase}`, 336);
+  }
+  const timeLeft = async target => {
+    await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
+    return target.locator('#auto-drain-live').textContent();
+  };
+  const firstBrowser = await timeLeft(page);
+  const otherPage = await browser.newPage();
+  await otherPage.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
+  await otherPage.goto(`http://127.0.0.1:${server.address().port}/`);
+  await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
+  await otherPage.waitForFunction(() => globalThis.operationsTestsPassed);
+  const secondBrowser = await timeLeft(otherPage);
+  await otherPage.reload();
+  await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
+  await otherPage.waitForFunction(() => globalThis.operationsTestsPassed);
+  const afterDrainReload = await timeLeft(otherPage);
+  for (const [name, value] of [['second browser', secondBrowser], ['reload', afterDrainReload]]) {
+    if (!value.includes('left') || !value.includes('jrun-') || !/\d+h \d{2}m left/.test(value)) throw new Error(`Drain deadline missing after ${name}: ${value}`);
+    if (value !== firstBrowser) throw new Error(`Drain deadline differs in ${name}: ${value} vs ${firstBrowser}`);
+  }
+  await otherPage.close();
+  await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
+  await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
+  const logBadge = await page.locator('#dock-drain-state').textContent();
+  if (logBadge !== 'Draining') throw new Error(`Drain tab has no live badge while Log is selected: ${logBadge}`);
+  await page.click('.tab[data-tab="runs"]');
+  await page.click('#global-drain-state');
+  if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  for (const selector of ['#auto-drain-dot', '#global-drain-state .drain-dot']) {
+    const animation = await page.locator(selector).evaluate(node => getComputedStyle(node).animationName);
+    if (animation !== 'none') throw new Error(`Reduced-motion drain indicator ${selector} animates: ${animation}`);
+  }
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.setViewportSize({ width: 900, height: 900 });
   await drainCheck('900', null);
   await page.setViewportSize({ width: 375, height: 812 });

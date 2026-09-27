@@ -92,6 +92,7 @@
             <span class="kpi-window" id="kpi-window" title="Dashboard time window">24h</span>
           </div>
           <span class="topbar-spacer"></span>
+          <button id="global-drain-state" class="global-drain-state" type="button" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span></button>
           <button id="refresh-btn" class="refresh-btn" type="button">Refresh</button>
         </header>
 
@@ -134,7 +135,7 @@
         <div class="col-log" id="side-dock" data-mode="drain">
           <div class="dock-head">
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
-              <button type="button" role="tab" class="dock-seg on" data-mode="drain" aria-selected="true" tabindex="0">Drain</button>
+              <button type="button" role="tab" class="dock-seg on" data-mode="drain" aria-selected="true" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
               <button type="button" role="tab" class="dock-seg" data-mode="log" aria-selected="false" tabindex="-1">Log</button>
             </div>
             <span class="dock-meta"><span class="live-dot"></span><span id="log-count">0</span> lines</span>
