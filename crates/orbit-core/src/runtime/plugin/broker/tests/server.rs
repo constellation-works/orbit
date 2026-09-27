@@ -18,7 +18,7 @@ use super::super::peer::PeerAnchor;
 use super::super::protocol::{
     BUSY, INVALID_REQUEST, MAX_REQUEST_BYTES, REFUSED, REQUEST_TOO_LARGE, read_frame, write_frame,
 };
-use super::super::server::{IN_FLIGHT, QUEUED};
+use super::super::server::{IN_FLIGHT, IO_TIMEOUT, QUEUED};
 use super::{EchoDispatch, REFUSED_TOOL};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
@@ -221,4 +221,112 @@ fn dropping_the_broker_removes_its_socket_and_directory() {
 fn end(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Keep making progress until the server closes, with a bounded writer lifetime
+/// even if the assertion fails. All bytes belong to a valid request frame.
+fn assert_trickle_expires(prefix_sent: bool, interval: Duration) {
+    let running = start(own_anchor());
+    let mut stream = connect(&running);
+    stream
+        .set_read_timeout(Some(IO_TIMEOUT + Duration::from_secs(3)))
+        .expect("bounded regression wait");
+    let body = tool_request();
+    let mut wire = Vec::new();
+    write_frame(&mut wire, &body).expect("encode request");
+    if prefix_sent {
+        stream.write_all(&wire[..4]).expect("send prefix");
+        wire.drain(..4);
+    }
+    let mut writer = stream.try_clone().expect("clone peer");
+    let started = Instant::now();
+    let closed = std::thread::scope(|scope| {
+        let (stop, stopped) = std::sync::mpsc::sync_channel::<()>(1);
+        scope.spawn(move || {
+            for byte in wire {
+                if writer.write_all(&[byte]).is_err() {
+                    break;
+                }
+                if stopped.recv_timeout(interval) != Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                {
+                    break;
+                }
+            }
+        });
+        let closed = closed_without_reply(&mut stream);
+        drop(stop);
+        closed
+    });
+    assert!(closed, "a progressing incomplete frame must expire");
+    assert!(
+        started.elapsed() >= IO_TIMEOUT - Duration::from_millis(100),
+        "short polling waits must not expire the request"
+    );
+    assert!(started.elapsed() < IO_TIMEOUT + Duration::from_secs(3));
+    assert!(
+        running.dispatch.calls().is_empty(),
+        "incomplete requests never dispatch"
+    );
+    assert_eq!(call(&running, &tool_request())["ok"], true);
+}
+
+#[test]
+fn a_trickling_header_cannot_extend_the_request_deadline() {
+    assert_trickle_expires(false, IO_TIMEOUT * 2 / 5);
+}
+
+#[test]
+fn a_trickling_body_cannot_extend_the_request_deadline() {
+    assert_trickle_expires(true, IO_TIMEOUT / 20);
+}
+
+#[test]
+fn header_and_body_share_one_request_deadline() {
+    assert_trickle_expires(false, IO_TIMEOUT / 5);
+}
+
+#[test]
+fn dropping_the_broker_cancels_and_joins_incomplete_frame_readers() {
+    let running = start(own_anchor());
+    let mut peers: Vec<_> = (0..IN_FLIGHT + QUEUED).map(|_| connect(&running)).collect();
+    for (index, peer) in peers.iter_mut().enumerate() {
+        if index % 2 == 0 {
+            peer.write_all(&MAX_REQUEST_BYTES.to_be_bytes())
+                .expect("body pending");
+        } else {
+            peer.write_all(&[0]).expect("prefix pending");
+        }
+    }
+    // The busy reply proves these authenticated connections were admitted.
+    assert_eq!(
+        call_when(&running, |r| r["error"]["code"] == BUSY)["error"]["code"],
+        BUSY
+    );
+    let mut writer = peers[0].try_clone().expect("clone trickling peer");
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        let (stop, stopped) = std::sync::mpsc::sync_channel::<()>(1);
+        scope.spawn(move || {
+            for _ in 0..200 {
+                if writer.write_all(b" ").is_err() {
+                    break;
+                }
+                if stopped.recv_timeout(Duration::from_millis(10))
+                    != Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                {
+                    break;
+                }
+            }
+        });
+        drop(running.broker);
+        drop(stop);
+    });
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "drop must join readers promptly"
+    );
+    for mut peer in peers {
+        assert!(closed_without_reply(&mut peer));
+    }
+    assert!(running.dispatch.calls().is_empty());
 }

@@ -6,7 +6,7 @@
 //! (retryable). A refused peer is closed with no reply, so nothing reveals
 //! whether the socket belongs to a live run.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -26,8 +26,9 @@ use super::protocol::{
 pub(crate) const IN_FLIGHT: usize = 4;
 /// Requests a broker holds while all workers are busy.
 pub(crate) const QUEUED: usize = 16;
-/// How long a peer has to send its request, and to read the response.
-const IO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Total time to receive a frame once a worker starts reading it; also the
+/// per-write timeout for responses.
+pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a connection that arrives before the sandbox is identified waits
 /// for it. The agent cannot connect before it is spawned, so this only
 /// covers the moments between spawn and [`AnchorSlot::bind`].
@@ -311,7 +312,12 @@ impl Worker {
             peer,
             anchor,
         } = admitted;
-        let body = match read_frame(&mut stream, MAX_REQUEST_BYTES) {
+        let mut reader = RequestReader {
+            stream: &mut stream,
+            stop: &self.stop,
+            deadline: Instant::now() + IO_TIMEOUT,
+        };
+        let body = match read_frame(&mut reader, MAX_REQUEST_BYTES) {
             Ok(body) => body,
             Err(FrameError::TooLarge { declared }) => {
                 respond(
@@ -394,6 +400,58 @@ impl Worker {
             self.dispatch
                 .call(request, peer_pid, Arc::clone(&cancelled))
         })
+    }
+}
+
+/// Keep the framing parser generic while bounding every socket read, including
+/// reads that continuously make progress. One deadline covers prefix and body.
+struct RequestReader<'a> {
+    stream: &'a mut UnixStream,
+    stop: &'a AtomicBool,
+    deadline: Instant,
+}
+
+impl RequestReader<'_> {
+    fn remaining(&self) -> io::Result<Duration> {
+        if self.stop.load(Ordering::SeqCst) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "broker stopped",
+            ));
+        }
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "request deadline elapsed",
+            ));
+        }
+        Ok(remaining)
+    }
+}
+
+impl Read for RequestReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let remaining = self.remaining()?;
+            // Short waits bound shutdown latency even when no bytes arrive.
+            self.stream
+                .set_read_timeout(Some(remaining.min(Duration::from_millis(50))))?;
+            match self.stream.read(buf) {
+                Ok(count) => {
+                    self.remaining()?;
+                    return Ok(count);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
 }
 

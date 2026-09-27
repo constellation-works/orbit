@@ -243,7 +243,10 @@ Length-prefixed JSON frames: a 4-byte big-endian length, then that many bytes of
 is one request and one response per connection, a 4 MiB request cap, and the response is
 capped at the host's existing tool-output limits. The broker checks the declared length
 against the cap before it reads any of the body, so an oversized request is refused
-(`plugin_broker_request_too_large`) without being buffered.
+(`plugin_broker_request_too_large`) without being buffered. Once a worker starts reading,
+the complete prefix and body must arrive within a single 10-second deadline; partial
+progress does not extend it. Expired or teardown-cancelled reads close without dispatch
+or a reply. Reads check shutdown between socket waits capped at 50 ms (subject to OS scheduling).
 
 ```text
 request:  {"schema_version":1,"tool":"pulsar.post","input":{…},"cwd":"…","workspace":…|null,
