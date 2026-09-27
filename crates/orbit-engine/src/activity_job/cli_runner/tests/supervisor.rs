@@ -777,9 +777,7 @@ fn spawn_with_timeout_bounds_post_cancel_drain_against_a_busy_escaped_writer() {
             None,
             match exit {
                 EscapedHelperExit::Timeout => Duration::from_millis(50),
-                EscapedHelperExit::Normal | EscapedHelperExit::WaitError => {
-                    Duration::from_secs(20)
-                }
+                EscapedHelperExit::Normal | EscapedHelperExit::WaitError => Duration::from_secs(20),
             },
             SpawnTraceContext {
                 provider: "codex",
