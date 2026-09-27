@@ -16,12 +16,15 @@
 //!   silently reset the sandbox, approval, or environment allowlist.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
+use crate::store::validated_config_store_path;
 
 /// The reserved workspace table that holds per-plugin toggles.
 pub const PLUGIN_ENABLEMENT_TABLE: &str = "plugin_enablement";
@@ -151,12 +154,23 @@ pub(crate) fn strip_plugin_enablement(document: &mut toml::Value) -> bool {
 /// global. An unreadable or malformed file counts as a policy layer, so a
 /// display that relies on this never understates the exception.
 pub fn workspace_config_sets_policy(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
-    }
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return true;
+    let path = match validated_config_store_path(path) {
+        Ok(Some(path)) => path,
+        Ok(None) => return false,
+        Err(_) => return true,
     };
+    let mut file = match open_read_only_no_follow(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return true;
+    }
+    let mut raw = String::new();
+    if file.read_to_string(&mut raw).is_err() {
+        return true;
+    }
     let Ok(mut document) = toml::from_str::<toml::Value>(&raw) else {
         return true;
     };

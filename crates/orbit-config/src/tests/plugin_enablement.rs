@@ -115,6 +115,24 @@ fn a_toggle_only_workspace_file_keeps_the_security_keys_inherited() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symlinked_workspace_config_fails_closed_as_a_policy_layer() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let external = tempdir().expect("external tempdir");
+    let external_config = external.path().join("config.toml");
+    fs::write(&external_config, "[plugin_enablement]\ngraph = false\n")
+        .expect("write external config");
+    let workspace_config = workspace.path().join("config.toml");
+    std::os::unix::fs::symlink(&external_config, &workspace_config)
+        .expect("link workspace config to external config");
+
+    assert!(
+        workspace_config_sets_policy(&workspace_config),
+        "a symlinked config must fail closed instead of reading outside the selected path"
+    );
+}
+
 #[test]
 fn a_malformed_toggle_is_refused() {
     let global = tempdir().expect("global tempdir");
