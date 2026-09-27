@@ -11,7 +11,8 @@ use orbit_engine::activity_job::load_job_asset;
 use super::activity_catalog::{ActivityCatalogFault, collect_activity_catalog_faults};
 use super::artifact::{
     ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
-    ManagedCatalog, init_command, provenance, read_artifact,
+    ManagedCatalog, RemovableArtifact, init_command, provenance, read_artifact,
+    resolve_removable_artifact,
 };
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
@@ -89,16 +90,41 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
             continue;
         };
         let provenance = provenance(kind, name, Some(digest), &on_disk);
-        let detail = if provenance.is_removable() {
-            format!(
-                "`{name}` is a managed default this Orbit no longer ships; its content is \
-                 unmodified, so it can be retired safely"
-            )
-        } else {
-            format!(
-                "`{name}` is a managed default this Orbit no longer ships, but it was locally \
-                 modified; it will be preserved outside the active catalog rather than deleted"
-            )
+        let (detail, remediation) = match resolve_removable_artifact(
+            &catalog.dir,
+            &kind.layout().relative_path(name),
+        ) {
+            Ok(RemovableArtifact::Unsafe(component)) => (
+                format!(
+                    "`{name}` is a retired managed default, but retirement is skipped because \
+                     '{}' is linked or is not the expected file or directory type",
+                    component.display()
+                ),
+                "Review the linked or non-file path, restore a confined regular asset, then run \
+                 `orbit doctor --fix-stale-artifacts`."
+                    .to_string(),
+            ),
+            Err(error) => (
+                format!(
+                    "`{name}` is a retired managed default, but retirement is refused: {error}"
+                ),
+                "Repair the managed catalog path, then run `orbit doctor --fix-stale-artifacts`."
+                    .to_string(),
+            ),
+            _ if provenance.is_removable() => (
+                format!(
+                    "`{name}` is a managed default this Orbit no longer ships; its content is \
+                     unmodified, so it can be retired safely"
+                ),
+                "Run `orbit doctor --fix-stale-artifacts`.".to_string(),
+            ),
+            _ => (
+                format!(
+                    "`{name}` is a managed default this Orbit no longer ships, but it was locally \
+                     modified; it will be preserved outside the active catalog rather than deleted"
+                ),
+                "Run `orbit doctor --fix-stale-artifacts`.".to_string(),
+            ),
         };
         findings.push(ArtifactFinding {
             kind,
@@ -107,7 +133,7 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
             condition: ArtifactCondition::Deprecated,
             provenance,
             detail,
-            remediation: "Run `orbit doctor --fix-stale-artifacts`.".to_string(),
+            remediation,
         });
     }
 

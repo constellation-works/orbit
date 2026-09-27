@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use tempfile::tempdir;
@@ -8,7 +9,9 @@ use super::super::artifact::{
     FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
 };
 use crate::OrbitRuntime;
+use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
 use crate::runtime::OrbitRuntimeRoots;
+use orbit_common::security::release::sha256_hex;
 
 fn workspace_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
     let global_root = root.join("global");
@@ -47,6 +50,174 @@ fn seeded_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
     )
     .expect("initialize runtime with defaults");
     (runtime, global_root, workspace_root)
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_retirement_confines_linked_and_regular_skill_assets() {
+    if std::env::var_os("ORBIT_ARTIFACT_RETIRE_FIXTURE_CHILD").is_none() {
+        let home = tempdir().expect("isolated home");
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output = command
+            .args([
+                "--exact",
+                &format!(
+                    "{}::doctor_retirement_confines_linked_and_regular_skill_assets",
+                    module_path!()
+                ),
+                "--nocapture",
+            ])
+            .env("ORBIT_ARTIFACT_RETIRE_FIXTURE_CHILD", "1")
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .output()
+            .expect("run isolated fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("fixture root");
+    let (runtime, _, _) = workspace_runtime(root.path());
+    let skills = root.path().join("global/skills");
+    let external = root.path().join("external");
+    std::fs::create_dir_all(&skills).expect("skills catalog");
+    std::fs::create_dir_all(&external).expect("external fixture");
+    let original = "previous managed skill\n";
+    let modified = "operator edited skill\n";
+    let mut assets = BTreeMap::new();
+    let mut linked_targets = Vec::new();
+
+    for (name, body) in [
+        ("confined-clean", original),
+        ("confined-modified", modified),
+    ] {
+        let path = skills.join(name).join("SKILL.md");
+        std::fs::create_dir_all(path.parent().expect("skill directory"))
+            .expect("create confined skill");
+        std::fs::write(&path, body).expect("write confined skill");
+        assets.insert(format!("{name}/SKILL.md"), sha256_hex(original.as_bytes()));
+    }
+
+    for (name, body, intermediate) in [
+        ("linked-dir-clean", original, true),
+        ("linked-dir-modified", modified, true),
+        ("linked-file-clean", original, false),
+        ("linked-file-modified", modified, false),
+    ] {
+        let external_path = if intermediate {
+            let directory = external.join(name);
+            std::fs::create_dir_all(&directory).expect("external skill directory");
+            directory.join("SKILL.md")
+        } else {
+            external.join(format!("{name}.md"))
+        };
+        std::fs::write(&external_path, body).expect("write external skill");
+        let link = if intermediate {
+            let link = skills.join(name);
+            symlink(external_path.parent().expect("external directory"), &link)
+                .expect("link intermediate directory");
+            link
+        } else {
+            let directory = skills.join(name);
+            std::fs::create_dir_all(&directory).expect("confined skill directory");
+            let link = directory.join("SKILL.md");
+            symlink(&external_path, &link).expect("link final file");
+            link
+        };
+        assets.insert(format!("{name}/SKILL.md"), sha256_hex(original.as_bytes()));
+        linked_targets.push((name, link, external_path, body));
+    }
+
+    let manifest_path = skills.join(MANAGED_ASSET_MANIFEST_FILE);
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "assetKind": "skill",
+            "assets": assets,
+        }))
+        .expect("encode manifest"),
+    )
+    .expect("write retired provenance");
+
+    assert_eq!(
+        runtime
+            .remove_stale_definition_artifacts()
+            .expect("doctor retirement pass"),
+        2,
+        "only confined files may leave the catalog"
+    );
+    assert!(!skills.join("confined-clean/SKILL.md").exists());
+    assert!(!skills.join("confined-modified/SKILL.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(
+            root.path()
+                .join("global/.retired-managed/skills/confined-modified/SKILL.md")
+        )
+        .expect("read preserved confined edit"),
+        modified
+    );
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest after doctor"))
+            .expect("parse manifest after doctor");
+    let remaining = manifest["assets"]
+        .as_object()
+        .expect("remaining provenance");
+    assert_eq!(remaining.len(), linked_targets.len());
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("doctor still reports skipped assets");
+    let findings = &health_of(&report, ArtifactKind::Skill).findings;
+    for (name, link, external_path, body) in &linked_targets {
+        assert!(
+            link.symlink_metadata()
+                .expect("link survives")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(external_path).expect("external bytes survive"),
+            *body
+        );
+        assert!(
+            remaining.contains_key(&format!("{name}/SKILL.md")),
+            "{name} provenance must remain"
+        );
+        let finding = findings
+            .iter()
+            .find(|finding| finding.name == format!("{name}/SKILL.md"))
+            .expect("doctor must still report linked retired asset");
+        assert_eq!(finding.condition, ArtifactCondition::Deprecated);
+        assert!(
+            finding.detail.contains("retirement is skipped"),
+            "doctor must explain the linked-path refusal for {name}: {}",
+            finding.detail
+        );
+        assert!(
+            !root
+                .path()
+                .join(format!("global/.retired-managed/skills/{name}/SKILL.md"))
+                .exists(),
+            "doctor must not preserve an external file under {name}"
+        );
+    }
+    assert_eq!(
+        runtime
+            .remove_stale_definition_artifacts()
+            .expect("second doctor pass"),
+        0
+    );
 }
 
 #[test]
