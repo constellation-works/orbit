@@ -54,6 +54,14 @@ impl ToolEntryPoint {
     }
 }
 
+#[cfg(unix)]
+fn broker_entry_point(entry_point: ToolEntryPoint) -> &'static str {
+    match entry_point {
+        ToolEntryPoint::Cli => "cli",
+        ToolEntryPoint::Mcp => "mcp",
+    }
+}
+
 thread_local! {
     static TOOL_AUDIT_RECORDED: Cell<bool> = const { Cell::new(false) };
 }
@@ -117,6 +125,20 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     let binding = registry
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+    #[cfg(unix)]
+    if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER") {
+        let cwd = std::env::current_dir()?;
+        let result = crate::runtime::plugin::broker::forward_call(
+            Path::new(&socket),
+            name,
+            input,
+            &cwd,
+            None,
+            broker_entry_point(entry_point),
+        );
+        mark_tool_audit_recorded();
+        return result;
+    }
     let execution_kind = registry
         .execution_kind(name)
         .unwrap_or(ToolExecutionKind::Mutating);
@@ -305,6 +327,38 @@ impl OrbitRuntime {
         entry_point: ToolEntryPoint,
         session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
+        // The broker is the only dispatcher and audit writer for a forwarded
+        // plugin call. Intercept before the local audit boundary; built-ins
+        // and calls outside a managed broker environment keep their path.
+        #[cfg(unix)]
+        if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
+            && self.tool_registry().plugin_binding(name).is_some()
+        {
+            let cwd = std::env::current_dir()?;
+            // The CLI/MCP adapter already resolved an explicit workspace
+            // selector to this runtime. Send its logical identity so the
+            // broker can reject a selector for another run, even when the
+            // original spelling was a checkout path.
+            let workspace = input
+                .get("workspace")
+                .and_then(Value::as_str)
+                .map(|_| self.workspace_id())
+                .transpose()?;
+            let result = crate::runtime::plugin::broker::forward_call(
+                Path::new(&socket),
+                name,
+                input,
+                &cwd,
+                workspace.as_deref(),
+                broker_entry_point(entry_point),
+            );
+            mark_tool_audit_recorded();
+            let value = result?;
+            return Ok(ToolDispatchOutcome {
+                value,
+                audit_recorded: false,
+            });
+        }
         let audit_session_context = session_context.clone();
         self.execute_tool_dispatch_with(
             name,

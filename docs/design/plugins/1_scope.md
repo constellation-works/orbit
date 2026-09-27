@@ -504,18 +504,20 @@ that serves no task. Orbit takes them from the dispatch, never from tool input:
   owners and MCP audit correlation. Without the marker the call is interactive.
 - A call a run's plugin broker executes gets the run and task from the broker's own dispatch
   record, never from the request or the calling process's environment
-  ([2_agent_call_broker.md](./2_agent_call_broker.md) §4.4). Nested calls reach it once the
-  client forwards them.
+  ([2_agent_call_broker.md](./2_agent_call_broker.md) §4.4). Nested CLI and MCP plugin calls
+  reach it when `ORBIT_PLUGIN_BROKER` is set.
 
 A `task_id` or `job_run_id` in the tool's arguments reaches the backend as input and nothing
 else. Read identity from `context`, not from the forwarded `ORBIT_*` environment names, which
 are present only when the calling process has them.
 
-Trust level: host-attested, not authenticated. The agent cannot set or change the fields
-through a tool call. But the nested case reads process environment, and an agent with a shell
-inside its own sandbox can export different `ORBIT_*` values before running `orbit tool run`.
-So the fields tie a write to the run Orbit dispatched and are fit for matching an
-operator-enabled policy; they are not a credential that holds against a hostile agent.
+Trust level: host-attested for in-process calls and authenticated for brokered calls. An
+in-process nested call reads process environment, which an agent with a shell can change.
+When `ORBIT_PLUGIN_BROKER` is set, nested CLI and MCP plugin calls instead reach the run's
+broker. It authenticates the sandbox peer and supplies the run and task identity from its
+own dispatch record, independent of the nested process's `ORBIT_*` variables. Until the
+sandbox mask is deployed, a nested process without the broker variable still uses the
+in-process path and retains its host-attested trust level.
 
 No routine or auto-task id is sent. The run's trigger records the routine host-side, but
 neither the dispatcher's activity context nor the managed-run envelope carries it, so Orbit has

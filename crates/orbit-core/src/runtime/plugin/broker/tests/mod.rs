@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use super::{BrokerDispatch, BrokerRequest};
 
+mod client;
 mod peer;
 mod protocol;
 mod sandbox;
