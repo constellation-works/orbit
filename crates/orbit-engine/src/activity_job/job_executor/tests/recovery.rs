@@ -1558,6 +1558,7 @@ fn step_failure_recovery_agent_loop_activity(spec: AgentLoopSpec) -> ResolvedRec
 
 fn recovery_agent_loop_spec(provider: Provider, model: Option<&str>) -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: "recover carefully".to_string(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,

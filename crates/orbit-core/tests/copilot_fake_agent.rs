@@ -121,6 +121,7 @@ fn seed_copilot_executor(runtime: &OrbitRuntime, program: &Path) {
 
 fn spec(model: Option<&str>, timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,

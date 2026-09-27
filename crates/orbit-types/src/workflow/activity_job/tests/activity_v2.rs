@@ -1,4 +1,5 @@
 use super::super::activity_v2::*;
+use super::super::tool_allowlist::ActivityToolPolicyMode;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -454,4 +455,39 @@ fn agent_loop_spec_proc_allowed_programs_accepts_empty_seq() {
     let yaml = "instruction: hi\nproc_allowed_programs: []\n";
     let parsed: AgentLoopSpec = serde_yaml::from_str(yaml).expect("parse spec");
     assert_eq!(parsed.proc_allowed_programs, Some(Vec::<String>::new()));
+}
+
+/// [ORB-13315] An asset written before deny mode existed parses unchanged,
+/// stays in allowlist mode, and re-serializes without the new key, so stored
+/// activity snapshots keep their exact shape.
+#[test]
+fn agent_loop_spec_without_disallow_list_stays_in_allowlist_mode() {
+    let yaml = "instruction: hi\ntools:\n  - orbit.task.show\n";
+    let parsed: AgentLoopSpec = serde_yaml::from_str(yaml).expect("parse spec");
+    assert_eq!(parsed.tool_disallow_list, None);
+    assert_eq!(parsed.tool_policy_mode(), ActivityToolPolicyMode::Allow);
+    let reserialized = serde_json::to_value(&parsed).expect("serialize spec");
+    assert!(reserialized.get("tool_disallow_list").is_none());
+}
+
+/// [ORB-13315] Declaring the list selects deny mode, even when it is empty.
+#[test]
+fn agent_loop_spec_disallow_list_selects_deny_mode_and_round_trips() {
+    for (yaml, expected) in [
+        (
+            "instruction: hi\ntool_disallow_list:\n  - orbit.workflow.*\n",
+            vec!["orbit.workflow.*".to_string()],
+        ),
+        ("instruction: hi\ntool_disallow_list: []\n", Vec::new()),
+    ] {
+        let parsed: AgentLoopSpec = serde_yaml::from_str(yaml).expect("parse spec");
+        assert_eq!(
+            parsed.tool_disallow_list.as_deref(),
+            Some(expected.as_slice())
+        );
+        assert_eq!(parsed.tool_policy_mode(), ActivityToolPolicyMode::Deny);
+        let reserialized = serde_yaml::to_string(&parsed).expect("serialize spec");
+        let reparsed: AgentLoopSpec = serde_yaml::from_str(&reserialized).expect("re-parse spec");
+        assert_eq!(reparsed.tool_disallow_list, parsed.tool_disallow_list);
+    }
 }

@@ -20,6 +20,7 @@ fn runtime_identity_overwrites_self_reported_model_at_tool_boundary() {
 #[test]
 fn input_model_preserves_full_strings_and_refuses_unrecognized_families() {
     let ctx = ToolContext {
+        tool_deny_policy: None,
         cwd: None,
         session_context: Default::default(),
         allowed_tools: Vec::new(),
@@ -51,6 +52,7 @@ fn input_model_preserves_full_strings_and_refuses_unrecognized_families() {
 
 fn tool_context(agent: &str, model: &str) -> ToolContext {
     ToolContext {
+        tool_deny_policy: None,
         cwd: None,
         session_context: Default::default(),
         allowed_tools: Vec::new(),

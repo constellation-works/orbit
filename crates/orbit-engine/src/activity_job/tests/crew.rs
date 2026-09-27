@@ -10,6 +10,7 @@ use super::super::crew::{ResolvedAgentSettings, apply_resolved_settings, resolve
 
 fn inline_spec() -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: String::new(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,

@@ -373,7 +373,8 @@ impl PluginBackendSpec {
     }
 
     /// `permissions.orbit_tools` ∩ the `orbit_tools` grant ∩ the caller's own
-    /// allowlist when it has one (§4.2).
+    /// allowlist when it has one (§4.2), minus anything a deny-mode caller's
+    /// activity disallows — a callback never reaches past its caller.
     pub fn allowed_tools(&self, ctx: &ToolContext) -> Vec<String> {
         if !self.granted(PluginGrant::OrbitTools) {
             return Vec::new();
@@ -384,6 +385,11 @@ impl PluginBackendSpec {
             .filter(|tool| {
                 ctx.allowed_tools.is_empty()
                     || ctx.allowed_tools.iter().any(|allowed| allowed == *tool)
+            })
+            .filter(|tool| {
+                !ctx.tool_deny_policy
+                    .as_ref()
+                    .is_some_and(|policy| policy.denies(tool))
             })
             .cloned()
             .collect()

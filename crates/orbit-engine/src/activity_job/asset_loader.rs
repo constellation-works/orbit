@@ -11,7 +11,9 @@ use orbit_types::workflow::activity_job::{
 fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
     serde_yaml::from_str(yaml)
 }
-use orbit_types::workflow::{ToolAllowlistError, validate_activity_tool_allowlist};
+use orbit_types::workflow::{
+    ToolAllowlistError, activity_tool_policy_deprecation, validate_activity_tool_allowlist,
+};
 
 /// Loaded schemaVersion 2 activity asset plus its envelope metadata.
 #[derive(Debug, Clone)]
@@ -79,6 +81,9 @@ pub fn load_activity_asset(yaml: &str) -> Result<ActivityAsset, AssetLoadError> 
                     source,
                 }
             })?;
+            if let Some(deprecation) = activity_tool_policy_deprecation(&res.spec) {
+                tracing::warn!(activity = %res.metadata.name, "activity {deprecation}");
+            }
             // The unsandboxed execution mode is legal on exactly one built-in
             // activity name, so an edited or hand-written asset cannot claim
             // it. [ORB-11354]

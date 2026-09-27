@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::tool_allowlist::ActivityToolPolicyMode;
+
 /// Schema version for the §7 v2 audit envelope. Per §12 Q10 resolution,
 /// versioning is PER EVENT TYPE — each variant of `V2AuditEventKind` can be
 /// versioned independently. This constant is the envelope schema itself.
@@ -194,6 +196,14 @@ pub enum V2AuditEventKind {
         effective_tools: Vec<String>,
         /// Compatibility projection of `effective_tools`.
         tools: Vec<String>,
+        /// Policy mode the activity declared (`allow` or `deny`). Absent on
+        /// records written before deny mode existed, which were all
+        /// allowlist runs. [ORB-13315]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_policy: Option<ActivityToolPolicyMode>,
+        /// A deny-mode activity's `tool_disallow_list`; absent in allow mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_disallow_list: Option<Vec<String>>,
     },
     /// [ORB-11354] An operator-admitted provider subprocess is about to run
     /// **outside** the executor's filesystem sandbox.

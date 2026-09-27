@@ -97,6 +97,7 @@ impl RuntimeHost for CrewHost {
 
 fn inline_agent_loop_spec() -> AgentLoopSpec {
     AgentLoopSpec {
+        tool_disallow_list: None,
         instruction: "inline".to_string(),
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,

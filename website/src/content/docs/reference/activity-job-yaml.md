@@ -30,13 +30,21 @@ spec:
 
 | Type | Required fields | Notes |
 |------|-----------------|-------|
-| `agent_loop` | `instruction`; optional `tools`, `provider`, `model`, `wall_clock_timeout_seconds` | `tools` is the activity baseline. For task-backed dispatch Orbit adds exact `task.required_tools`, deduplicates the union, and rejects invalid requirements before provider launch. Agent execution uses the CLI path only. `backend: cli` still parses and is ignored; `http` and `auto` fail catalog load. `orbit doctor --fix-retired-activity-backends` removes those retired keys. `max_iterations` is inert. |
+| `agent_loop` | `instruction`; optional `tools` or `tool_disallow_list`, `provider`, `model`, `wall_clock_timeout_seconds` | `tools` is the activity baseline (allowlist mode). `tool_disallow_list` selects deny mode instead: every registered agent-facing tool except the listed ones; it cannot be combined with a non-empty `tools`. For task-backed dispatch Orbit adds exact `task.required_tools`, deduplicates the union, and rejects invalid requirements before provider launch. Agent execution uses the CLI path only. `backend: cli` still parses and is ignored; `http` and `auto` fail catalog load. `orbit doctor --fix-retired-activity-backends` removes those retired keys. `max_iterations` is inert. |
 | `deterministic` | `action`; optional `config` | Runs a registered deterministic action. |
 
 The computed effective list is serialized as `tools` in the CLI execution
 envelope and exported as `ORBIT_ACTIVITY_TOOLS`. The task-requested list is
 serialized separately as `required_tools`; it is immutable after task creation,
 and audit evidence records both lists.
+
+In deny mode the effective list is every callable tool, and the run also
+exports `ORBIT_ACTIVITY_TOOL_POLICY=deny`, `ORBIT_ACTIVITY_TOOLS_DENY`, and
+`ORBIT_ACTIVITY_NAME`. Disallow entries follow the same name and wildcard
+rules as `tools`. A task's `required_tools` cannot re-grant a disallowed tool:
+the run is refused before launch. An `agent_loop` activity that declares
+neither list still loads, with a deprecation warning; declare explicit `tools`
+or a `tool_disallow_list`.
 Allowlist inclusion never substitutes for runtime role, capability, policy,
 filesystem, subprocess, or authentication checks.
 

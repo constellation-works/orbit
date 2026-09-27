@@ -288,6 +288,9 @@ pub struct ToolContext {
     pub session_context: orbit_types::tool::ToolSessionContext,
     /// If non-empty, only tools in this list may be called. Empty means unrestricted.
     pub allowed_tools: Vec<String>,
+    /// A deny-mode activity's disallow list: every tool it covers is refused,
+    /// whatever `allowed_tools` says. `None` outside a deny-mode managed run.
+    pub tool_deny_policy: Option<orbit_types::workflow::ActivityToolDenyPolicy>,
     /// Workspace root used by tools that enforce path containment.
     /// The runtime pipeline auto-populates this from the data root's parent directory.
     pub workspace_root: Option<PathBuf>,
@@ -344,6 +347,7 @@ impl std::fmt::Debug for ToolContext {
             .field("cwd", &self.cwd)
             .field("session_context", &self.session_context)
             .field("allowed_tools", &self.allowed_tools)
+            .field("tool_deny_policy", &self.tool_deny_policy)
             .field("workspace_root", &self.workspace_root)
             .field("agent_name", &self.agent_name)
             .field("model_name", &self.model_name)

@@ -29,7 +29,7 @@ use super::audit::{
 };
 use super::callback::{
     enforce_plugin_callback_allowlist, enforce_plugin_callback_allowlist_from_root,
-    read_activity_tools_from_env, read_proc_allowed_programs_from_env,
+    read_activity_tool_policy_from_env, read_proc_allowed_programs_from_env,
     take_callback_plugin_provenance,
 };
 
@@ -301,10 +301,10 @@ impl OrbitRuntime {
             |input| {
                 self.ensure_tool_agent_facing(name)?;
                 let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
-                let allowed_tools = if trusted_env {
-                    read_activity_tools_from_env()
+                let activity_tool_policy = if trusted_env {
+                    read_activity_tool_policy_from_env()
                 } else {
-                    Vec::new()
+                    Default::default()
                 };
                 let (agent_name, model_name) = resolve_agent_identity_for_entry_point(
                     entry_point,
@@ -325,7 +325,8 @@ impl OrbitRuntime {
                 let mut tool_context = ToolContext {
                     cwd,
                     session_context,
-                    allowed_tools,
+                    allowed_tools: activity_tool_policy.allowed_tools,
+                    tool_deny_policy: activity_tool_policy.deny_policy,
                     agent_name,
                     model_name,
                     workspace_root: None,

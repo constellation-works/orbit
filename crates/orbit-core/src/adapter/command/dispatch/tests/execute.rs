@@ -405,3 +405,89 @@ fn successful_read_only_dispatch_survives_unwritable_audit_store() {
     assert_eq!(outcome.value, value);
     assert!(!outcome.audit_recorded);
 }
+
+/// The managed-agent envelope a deny-mode orchestrator stamps, applied under
+/// the same process-wide lock [`env_guard`] takes.
+fn deny_mode_managed_env(disallow_list: &str) -> orbit_common::test_env::ScopedEnv {
+    orbit_common::test_env::scoped([
+        ("ORBIT_AGENT_NAME", None),
+        ("ORBIT_AGENT_MODEL", None),
+        ("ORBIT_TASK_ID", None),
+        ("ORBIT_ACTIVITY_ID", None),
+        ("ORBIT_STEP_INDEX", None),
+        ("ORBIT_ALLOWED_TOOLS", None),
+        ("ORBIT_SESSION_ID", None),
+        ("ORBIT_RUN_ID", Some("jrun-deny-mode")),
+        (crate::adapter::command::dispatch::ORBIT_PLUGIN_ENV, None),
+        (orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV, None),
+        (orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_FD_ENV, None),
+        (
+            crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV,
+            Some("1"),
+        ),
+        ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
+        // The concrete set an older MCP server would enforce instead.
+        ("ORBIT_ACTIVITY_TOOLS", Some("orbit.search")),
+        ("ORBIT_ACTIVITY_TOOL_POLICY", Some("deny")),
+        ("ORBIT_ACTIVITY_TOOLS_DENY", Some(disallow_list)),
+        ("ORBIT_ACTIVITY_NAME", Some("custom_agent")),
+    ])
+}
+
+/// [ORB-13315] Through the managed MCP entry point (the path Claude and
+/// Codex agents reach), deny mode refuses a listed tool with a PolicyDenied
+/// naming the disallow list and records the refusal as today's audit row.
+#[test]
+fn managed_mcp_deny_mode_refuses_a_disallowed_tool_and_audits_it() {
+    let _env = deny_mode_managed_env("orbit.task.*,orbit.workflow.ship");
+    let runtime = fresh_runtime();
+
+    let error = runtime
+        .execute_tool_command_dispatch(
+            "orbit.task.show",
+            json!({ "id": "ORB-00001" }),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+        )
+        .expect_err("a disallowed tool must be refused");
+    match &error {
+        OrbitError::PolicyDenied(message) => assert_eq!(
+            message,
+            "tool 'orbit.task.show' is in the activity disallow list (custom_agent)"
+        ),
+        other => panic!("expected PolicyDenied, got {other:?}"),
+    }
+
+    let events = runtime
+        .list_audit_events(None, Some("orbit.task.show".to_string()), None, None, 16)
+        .expect("list audit events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].status, AuditEventStatus::Denied);
+    assert_eq!(events[0].subcommand.as_deref(), Some("run-mcp"));
+    assert!(
+        events[0]
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("activity disallow list")),
+        "{:?}",
+        events[0].error_message
+    );
+}
+
+/// [ORB-13315] Deny mode leaves every other registered tool callable — not
+/// just the stamped legacy allowlist an older server would enforce.
+#[test]
+fn managed_mcp_deny_mode_allows_every_tool_not_on_the_disallow_list() {
+    let _env = deny_mode_managed_env("orbit.workflow.ship");
+    let runtime = fresh_runtime();
+
+    for (tool, input) in [
+        ("orbit.search", json!({ "query": "anything" })),
+        ("orbit.task.list", json!({})),
+    ] {
+        runtime
+            .execute_tool_command_dispatch(tool, input, None, None, ToolEntryPoint::Mcp)
+            .unwrap_or_else(|error| panic!("{tool} must stay callable: {error:?}"));
+    }
+}

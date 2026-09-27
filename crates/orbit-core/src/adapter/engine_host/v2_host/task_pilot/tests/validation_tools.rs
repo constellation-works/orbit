@@ -447,3 +447,60 @@ fn readiness_treats_an_absent_finding_as_feasible() {
         json!(["acceptance criterion requires `orbit.workflow.run.show`"]);
     assert!(!member_ready(&assessment));
 }
+
+/// [ORB-13315] A deny-mode implementation activity grants every registered
+/// tool except its disallow list, so an undeclared tool outside the list is
+/// feasible, while a declared tool on the list stays ungranted — a task's
+/// `required_tools` cannot override a disallow entry.
+#[test]
+fn deny_mode_lane_grants_everything_but_its_disallow_list() {
+    let (root, runtime, repo_root) = runtime_with_workspace_layout();
+    let activities = root.path().join("home/.orbit/resources/activities");
+    std::fs::create_dir_all(&activities).expect("global activities dir");
+    std::fs::write(
+        activities.join("agent_implement.yaml"),
+        r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_implement
+spec:
+  type: agent_loop
+  description: Deny-mode implementation lane.
+  instruction: Implement the task.
+  tool_disallow_list:
+    - orbit.search
+  proc_allowed_programs: []
+"#,
+    )
+    .expect("seed a deny-mode implementation activity");
+
+    let undeclared = seed_task(
+        &runtime,
+        "undeclared but callable",
+        &[
+            "Enumerate the workspace's auto-task definitions with `orbit.auto_task.list` and confirm the seeded definition appears.",
+        ],
+        &[],
+    );
+    let disallowed = seed_task(
+        &runtime,
+        "declared but disallowed",
+        &["Search the workspace with `orbit.search` and confirm the fixture is found."],
+        &["orbit.search"],
+    );
+
+    let prepared = prepared(
+        &runtime,
+        &repo_root,
+        &[undeclared.id.clone(), disallowed.id.clone()],
+    );
+
+    assert_eq!(
+        findings(&prepared, &undeclared.id),
+        Vec::<String>::new(),
+        "deny mode leaves an undisallowed tool callable without a declaration"
+    );
+    let refused = findings(&prepared, &disallowed.id);
+    assert_eq!(refused.len(), 1, "unexpected findings: {refused:?}");
+    assert!(refused[0].contains("`orbit.search`"), "{refused:?}");
+}

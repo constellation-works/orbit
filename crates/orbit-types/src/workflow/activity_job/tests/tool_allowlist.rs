@@ -185,6 +185,141 @@ fn agent_loop_activity(
             require_completion_envelope: true,
             proc_allowed_programs,
             trusted_host_execution: false,
+            tool_disallow_list: None,
         }),
     }
+}
+
+fn deny_mode_activity(
+    disallow_list: Vec<String>,
+    proc_allowed_programs: Option<Vec<String>>,
+) -> ActivityV2 {
+    let mut activity = agent_loop_activity(Vec::new(), proc_allowed_programs);
+    if let ActivityV2Spec::AgentLoop(spec) = &mut activity.spec {
+        spec.tool_disallow_list = Some(disallow_list);
+    }
+    activity
+}
+
+const REGISTERED: [&str; 5] = [
+    "orbit.task.show",
+    "orbit.task.update",
+    "orbit.search",
+    "orbit.workflow.ship",
+    "proc.spawn",
+];
+
+/// [ORB-13315] `tools` and `tool_disallow_list` are two different policies;
+/// an activity naming both is refused at load rather than picking one.
+#[test]
+fn activity_validation_rejects_tools_and_disallow_list_together() {
+    let mut activity = deny_mode_activity(vec!["orbit.search".to_string()], None);
+    if let ActivityV2Spec::AgentLoop(spec) = &mut activity.spec {
+        spec.tools = vec!["orbit.task.show".to_string()];
+    }
+
+    assert_eq!(
+        validate_activity_tool_allowlist(&activity),
+        Err(ToolAllowlistError::ToolsAndDisallowListBothSet)
+    );
+    assert_eq!(
+        validate_activity_tool_allowlist_against_registered_tools(&activity, REGISTERED),
+        Err(ToolAllowlistError::ToolsAndDisallowListBothSet)
+    );
+}
+
+/// Disallow entries follow the allowlist's rules: wildcards only on the
+/// permitted roots, and every name must resolve in the registry.
+#[test]
+fn activity_validation_applies_allowlist_rules_to_disallow_entries() {
+    let wildcard = deny_mode_activity(vec!["orbit.*".to_string()], None);
+    assert_eq!(
+        validate_activity_tool_allowlist(&wildcard),
+        Err(ToolAllowlistError::DisallowList {
+            source: Box::new(ToolAllowlistError::WildcardRootNotPermitted {
+                entry: "orbit.*".to_string()
+            })
+        })
+    );
+
+    let unknown = deny_mode_activity(
+        vec!["orbit.graph.search".to_string(), "proc.spawn".to_string()],
+        None,
+    );
+    validate_activity_tool_allowlist(&unknown).expect("syntax alone cannot see the registry");
+    assert_eq!(
+        validate_activity_tool_allowlist_against_registered_tools(&unknown, REGISTERED),
+        Err(ToolAllowlistError::DisallowList {
+            source: Box::new(ToolAllowlistError::UnknownToolName {
+                entry: "orbit.graph.search".to_string()
+            })
+        })
+    );
+
+    let valid = deny_mode_activity(
+        vec!["orbit.workflow.ship".to_string(), "proc.*".to_string()],
+        None,
+    );
+    validate_activity_tool_allowlist_against_registered_tools(&valid, REGISTERED)
+        .expect("registered names and permitted roots load");
+}
+
+/// Deny mode grants `proc.spawn` unless the list covers it, so the
+/// [ORB-10959] pairing rule still requires a declared program allowlist.
+#[test]
+fn deny_mode_requires_program_allowlist_while_proc_spawn_stays_callable() {
+    assert_eq!(
+        validate_activity_tool_allowlist(&deny_mode_activity(Vec::new(), None)),
+        Err(ToolAllowlistError::ProcSpawnNotDisallowedWithoutProgramAllowlist)
+    );
+    validate_activity_tool_allowlist(&deny_mode_activity(Vec::new(), Some(Vec::new())))
+        .expect("an explicit program allowlist satisfies the pairing");
+    validate_activity_tool_allowlist(&deny_mode_activity(vec!["proc.*".to_string()], None))
+        .expect("disallowing proc.spawn needs no program allowlist");
+}
+
+/// Deny mode's callable set is the registry minus every covered tool.
+#[test]
+fn disallow_list_leaves_every_other_registered_tool_callable() {
+    let callable = tools_allowed_by_disallow_list(
+        &["orbit.workflow.ship".to_string(), "proc.*".to_string()],
+        REGISTERED,
+    );
+    assert_eq!(
+        callable,
+        ["orbit.task.show", "orbit.task.update", "orbit.search"]
+    );
+    assert_eq!(
+        tools_allowed_by_disallow_list(&[], REGISTERED),
+        REGISTERED.to_vec()
+    );
+
+    let policy = ActivityToolDenyPolicy {
+        activity: "agent_implement".to_string(),
+        disallow_list: vec!["orbit.task.*".to_string()],
+    };
+    assert!(policy.denies("orbit.task.update"));
+    assert!(!policy.denies("orbit.search"));
+    assert_eq!(
+        policy.denial_message("orbit.task.update"),
+        "tool 'orbit.task.update' is in the activity disallow list (agent_implement)"
+    );
+}
+
+/// [ORB-13315] An agent activity declaring no tool policy is warned about,
+/// not reinterpreted; an explicit policy of either kind is not.
+#[test]
+fn only_an_activity_without_any_tool_policy_is_deprecated() {
+    assert!(activity_tool_policy_deprecation(&agent_loop_activity(Vec::new(), None)).is_some());
+    assert!(
+        activity_tool_policy_deprecation(&agent_loop_activity(
+            vec!["orbit.task.show".to_string()],
+            None
+        ))
+        .is_none()
+    );
+    assert!(
+        activity_tool_policy_deprecation(&deny_mode_activity(Vec::new(), Some(Vec::new())))
+            .is_none()
+    );
 }

@@ -46,7 +46,8 @@ and then flattens one `ActivityV2Spec` variant:
 The common `agent_loop` fields are:
 
 - `instruction`
-- `tools`
+- `tools` (allowlist mode)
+- `tool_disallow_list` (deny mode; mutually exclusive with a non-empty `tools`, see §7)
 - `on_denial`
 - optional `model`
 - `max_iterations` (inert; see §5)
@@ -458,10 +459,12 @@ For example, `git_commit` now follows dispatcher → `execute_engine_action` →
 
 ## 7. Agent Loop Dispatch
 
-`agent_loop` has one execution path [ORB-10801]. Orbit does not enforce tool
-allowlists on it: the effective tool set is recorded as an advisory
-(`tool_allowlist.harness_delegated`) and enforcement is delegated to the
-provider harness.
+`agent_loop` has one execution path [ORB-10801]. The effective tool set is
+recorded as an advisory (`tool_allowlist.harness_delegated`). Orbit enforces
+the activity tool policy only where an agent reaches an Orbit tool: the managed
+MCP server and `orbit tool run` read the policy from the managed envelope and
+refuse a call outside it (§7.0). Provider-native tools stay with the provider
+harness.
 
 [ORB-11069] makes the activity `tools` list a baseline for task-backed
 dispatch. Before provider construction or launch, orbit-core loads every task
@@ -476,12 +479,74 @@ and tool. An empty requirement list returns the baseline byte-for-byte. Task
 requirements are normalized in the task store and freeze once the task enters
 `in-progress`, including later blocked retries.
 
+### 7.0 Tool policy modes
+
+[ORB-13315] gives an `agent_loop` activity one of two tool policies.
+
+- **Allowlist mode** (`tools`). Declaring no `tool_disallow_list` selects it.
+  This is every activity written before deny mode existed. It is also the mode
+  a custom or workspace-override activity keeps. Its semantics are unchanged:
+  the effective list is `tools` ∪ task `required_tools`. Dispatch stamps it as
+  `ORBIT_ACTIVITY_TOOLS` and nothing else, and a call outside it is refused
+  with `tool '<name>' is not in the activity allowlist`.
+- **Deny mode** (`tool_disallow_list`). Declaring the key, even as `[]`,
+  selects it. Every registered agent-facing tool is callable except the
+  entries the list covers. Existing governance still applies first, so an
+  operator-only tool such as `orbit.workflow.ship` stays refused to an agent
+  session whatever the list says. A non-empty `tools` next to the list is a
+  load error naming the activity. Entries follow the allowlist's rules: exact
+  registered names, and wildcards only on `V2_TOOL_WILDCARD_ROOTS`. The
+  [ORB-10959] pairing rule also carries over. Deny mode grants `proc.spawn`
+  unless the list covers it, so an activity that leaves it callable must
+  declare `proc_allowed_programs`.
+
+A task's `required_tools` cannot override a disallow entry. Admission checks
+each requirement as in allowlist mode. A requirement the list covers fails
+`RequiredToolAdmission` before launch, and the failure names the tool and the
+activity.
+
+**Managed envelope.** A deny-mode run stamps:
+
+| Variable | Value |
+|---|---|
+| `ORBIT_ACTIVITY_TOOL_POLICY` | `deny` |
+| `ORBIT_ACTIVITY_TOOLS_DENY` | the disallow list, comma-separated (stamped even when empty) |
+| `ORBIT_ACTIVITY_NAME` | the activity name |
+| `ORBIT_ACTIVITY_TOOLS` | the concrete callable set: registered agent-facing tools minus the list |
+
+The concrete `ORBIT_ACTIVITY_TOOLS` set is there for mixed-version safety. An
+MCP server that predates deny mode ignores the new names and enforces that set
+as an exact allowlist. It does not read an empty list as unrestricted. If the
+list covers every registered tool, the set is a reserved entry that names no
+tool. The child environment forwards `ORBIT_ACTIVITY_*` from an outer process,
+so dispatch strips the three deny-mode names before it stamps its own. An
+allowlist-mode run nested under a deny-mode process therefore keeps its own
+allowlist. Codex receives the new names through the same
+`mcp_servers.orbit.env_vars` forwarding list as the rest of the envelope.
+
+**Enforcement.** The tool-call boundary selects deny mode only when it sees
+both the `deny` marker and `ORBIT_ACTIVITY_TOOLS_DENY`. Any other shape keeps
+legacy allowlist mode with exactly its historical semantics: no marker (an
+allowlist activity, or a run from an older orchestrator), an unknown marker,
+or a marker without its list. That includes an empty or unset
+`ORBIT_ACTIVITY_TOOLS`, which has always meant unrestricted at this boundary.
+A disallowed call is refused with `tool '<name>' is in the activity disallow
+list (<activity>)`, audited as `Denied` like an allowlist refusal. The same
+policy bounds a plugin callback's ceiling. `on_denial` is unchanged.
+
+**Empty `tools:`.** The schema reads an empty allowlist as "no tools", but the
+tool-call boundary reads it as unrestricted. This change does not flip that. An
+`agent_loop` activity with an empty `tools:` and no `tool_disallow_list` loads
+with a deprecation warning, and the author should declare explicit `tools` or a
+`tool_disallow_list`. The planned change is recorded in
+[Shipped activities move from tool allowlists to disallow lists](./4_decisions.md#shipped-activities-move-from-tool-allowlists-to-disallow-lists-allowlists-stay-for-custom-jobs).
+
 ### 7.1 CLI agent path
 
 The path is driven by `cli_runner.rs`, added in [T20260419-0104]. The flow is:
 
-1. Ask the host for the concrete CLI executor and resolve every selected task's requested tools and the effective list.
-2. Emit the advisory `ToolAllowlistHarnessDelegated` event with the selected task ids, requested list, and effective list.
+1. Ask the host for the concrete CLI executor and resolve every selected task's requested tools and the effective list (in deny mode, the concrete callable set; §7.0).
+2. Emit the advisory `ToolAllowlistHarnessDelegated` event with the selected task ids, requested list, effective list, policy mode (`tool_policy`), and a deny-mode `tool_disallow_list`. Both policy fields are optional, so events recorded before deny mode existed still read.
 3. Resolve the subprocess cwd from runtime-owned workspace context.
 4. Build an `Agent` and its provider-specific `AgentInvocationSpec`.
 5. Emit `CliInvocationStarted` with redacted argv, stdin blob ref, and resolved cwd.
@@ -1010,13 +1075,16 @@ That seeded corpus is Activity / Job's executable reference documentation.
 
 The `Provider` enum names `claude`, `codex`, `gemini`, `grok`, `ollama`, and `openai_compat`, but `openai_compat` has no CLI runtime and therefore cannot be executed. The schema is broader than the runtime.
 
-### 11.2 Tool allowlists are advisory at dispatch
+### 11.2 Tool policy is advisory at dispatch
 
-Agent loops emit an advisory event and rely on the provider harness to enforce
-the effective baseline-plus-task list. Composition is not an authorization
-bypass: nested tool execution still applies caller role, host capability,
-tool-specific policy, filesystem profile, subprocess allowlist, and external
-authentication checks independently.
+Agent loops emit an advisory event. The tool policy (§7.0) is enforced only at
+Orbit's own tool-call boundary, and only when the provider forwards the managed
+envelope into its nested MCP server. Provider-native tools stay with the
+harness. Composition is not an authorization bypass: nested tool execution
+still applies caller role, host capability, tool-specific policy, filesystem
+profile, subprocess allowlist, and external authentication checks
+independently. An empty allowlist is still read as unrestricted at that
+boundary. That inconsistency is deprecated and warned about, not fixed yet.
 
 ### 11.3 Some structural controls are still literals
 
@@ -1099,6 +1167,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-12966]** — Refuse a resume while any run in the source's retry lineage is live, atomically at the store insert, so concurrent resumes from any surface create exactly one run.
 - **[ORB-10471]** — Judge a primary fast-forward against the dirt that interferes with the run instead of the primary's whole dirty state ([Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](./4_decisions.md#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)).
 - **[ORB-12443]** — Preserve local primary source dirt while the assigned candidate integrates against the fetched target ([Primary dirt is isolated from candidate integration](./4_decisions.md#primary-dirt-is-isolated-from-candidate-integration)).
+- **[ORB-13315]** — Add deny mode (`tool_disallow_list`) beside the allowlist, with an explicit policy envelope, mixed-version-safe enforcement, and a deprecation warning for an empty `tools:` ([Shipped activities move from tool allowlists to disallow lists](./4_decisions.md#shipped-activities-move-from-tool-allowlists-to-disallow-lists-allowlists-stay-for-custom-jobs)).
 - **[ORB-12467]** — Bound the recovery input's `error_message` and `failed_step_input`, and move the boundary guard's full checkout fingerprints out of the integrity error string into the run's audit blob store, so a large diagnostic can no longer push the recovery turn past the provider's input ceiling.
 - **[T20260509-30]** — Resolve the macOS `sandbox-exec` wrapper from a trusted absolute path before CLI spawn.
 - **[T20260509-40]** — Run CLI subprocesses in killable process groups and bound timeout-path output reader joins.

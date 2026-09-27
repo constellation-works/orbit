@@ -1,0 +1,47 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_apply_fixes
+spec:
+  type: agent_loop
+  description: >
+    Fixer step for the v2 review↔fix loop construct (§4.2). Consumes the
+    reviewer's findings plus the current diff and applies changes that address
+    the blocking items. Each iteration approaches the findings fresh so the
+    loop converges toward a clean diff rather than a stylistic stalemate.
+  input_schema_json:
+    type: object
+    required: [findings, branch]
+    properties:
+      findings:
+        type: array
+        items:
+          type: object
+      branch:
+        type: string
+      iteration:
+        type: integer
+  output_schema_json:
+    type: object
+    required: [commits_applied]
+    properties:
+      commits_applied:
+        type: integer
+      summary:
+        type: string
+  instruction: |
+    Apply the fixes the reviewer requested. Group related changes into a
+    single commit with a `fix:` prefix. Do not expand scope beyond the
+    findings you were given — out-of-scope changes are noise that stretches
+    the loop.
+  tools:
+    - proc.spawn
+  proc_allowed_programs:
+    - git
+    - make
+    - cargo
+    - rg
+  on_denial: terminate
+  max_iterations: 3
+  provider: claude
+  wall_clock_timeout_seconds: 600

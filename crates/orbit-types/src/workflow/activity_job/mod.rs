@@ -160,10 +160,11 @@ pub use job_v2::{
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;
 pub use tool_allowlist::{
-    ToolAllowlistError, V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS,
-    tool_allowed, validate_activity_tool_allowlist,
-    validate_activity_tool_allowlist_against_registered_tools, validate_tool_allowlist,
-    validate_tool_allowlist_against_registered_tools,
+    ActivityToolDenyPolicy, ActivityToolPolicyMode, ToolAllowlistError,
+    V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS,
+    activity_tool_policy_deprecation, tool_allowed, tools_allowed_by_disallow_list,
+    validate_activity_tool_allowlist, validate_activity_tool_allowlist_against_registered_tools,
+    validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
 };
 pub use trusted_host::{
     TRUSTED_HOST_ACTIVITY, TRUSTED_HOST_ADMISSION_KEY, TrustedHostActivityError,

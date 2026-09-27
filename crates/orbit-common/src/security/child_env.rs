@@ -50,6 +50,16 @@ pub const MCP_MANAGED_WORKSPACE_ENV: &str = "ORBIT_WORKSPACE";
 /// Registry locator forwarded to a nested MCP server.
 pub const MCP_MANAGED_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
 
+/// Deny-mode activity tool policy marker (`deny`). Stamped only for an
+/// activity that declares `tool_disallow_list`; absent means the legacy
+/// `ORBIT_ACTIVITY_TOOLS` allowlist mode. [ORB-13315]
+pub const ACTIVITY_TOOL_POLICY_ENV: &str = "ORBIT_ACTIVITY_TOOL_POLICY";
+/// A deny-mode activity's disallow list, comma-separated. Always stamped in
+/// deny mode, even when empty, so its absence can fail back to the allowlist.
+pub const ACTIVITY_TOOLS_DENY_ENV: &str = "ORBIT_ACTIVITY_TOOLS_DENY";
+/// The deny-mode activity's name, used to name it in a denial.
+pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
+
 /// Exact managed binding, identity, and activity policy names Codex must forward.
 pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     MCP_MANAGED_CONTEXT_ENV,
@@ -61,6 +71,9 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     "ORBIT_AGENT_MODEL",
     "ORBIT_TASK_ACTOR_KIND",
     "ORBIT_ACTIVITY_TOOLS",
+    ACTIVITY_TOOL_POLICY_ENV,
+    ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_NAME_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
 ];
@@ -93,7 +106,8 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
 ];
 
 /// Envelope families admitted by prefix because the engine treats them as
-/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_FS_PROFILE`).
+/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_TOOL_POLICY` / `_TOOLS_DENY` /
+/// `_NAME` / `_FS_PROFILE`).
 const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_"];
 
 fn is_orbit_envelope_name(name: &str) -> bool {

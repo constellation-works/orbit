@@ -106,6 +106,9 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     "ORBIT_TASK_ACTOR_KIND",
     // Sandbox and tool grants leased to the host activity, not to a fixture.
     "ORBIT_ACTIVITY_TOOLS",
+    "ORBIT_ACTIVITY_TOOL_POLICY",
+    "ORBIT_ACTIVITY_TOOLS_DENY",
+    "ORBIT_ACTIVITY_NAME",
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_BIN",

@@ -241,6 +241,7 @@ impl BrokerHost {
         )
         .expect("audit writer");
         let spec = AgentLoopSpec {
+            tool_disallow_list: None,
             instruction: String::new(),
             tools: Vec::new(),
             on_denial: OnDenial::Terminate,

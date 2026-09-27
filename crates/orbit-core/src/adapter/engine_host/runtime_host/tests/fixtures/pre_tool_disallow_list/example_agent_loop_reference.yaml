@@ -1,0 +1,30 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: agent_loop_reference
+spec:
+  type: agent_loop
+  description: >
+    Phase 2 reference for the agent_loop activity type. Declares a narrow
+    tool allowlist (orbit.task.show only) so the tool-denial smoke run can
+    exercise the enforcement path in orbit-engine::v2::tool_enforcement by
+    receiving a model-requested disallowed tool and observing the
+    synthesized tool.denied audit event.
+  input_schema_json:
+    type: object
+    required: [prompt]
+    properties:
+      prompt:
+        type: string
+  output_schema_json:
+    type: object
+    properties:
+      final_message:
+        type: string
+  instruction: |
+    Read the file the user points at and summarize it. Do not modify anything.
+    If asked to write a file, respond with the text explanation instead.
+  tools:
+    - orbit.task.show
+  on_denial: terminate
+  max_iterations: 4

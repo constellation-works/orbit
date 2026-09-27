@@ -1505,6 +1505,37 @@ The gate's contract is untouched. What changed is that its rejection is no longe
 - `Cost:` the parser is coupled to `git status --porcelain=v1 -z` record framing, including the rename/copy source field that follows its record.
 - `Cost:` a task tagged `no-diff-expected` with an empty summary still has nothing to derive from and still fails the gate, unchanged from before this decision.
 
+## Shipped activities move from tool allowlists to disallow lists; allowlists stay for custom jobs
+
+**Recorded:** 2026-09-27 · [ORB-13315]
+**Paths:** `crates/orbit-types/src/workflow/activity_job/tool_allowlist.rs`, `crates/orbit-core/src/adapter/command/dispatch/callback.rs`, `crates/orbit-engine/src/activity_job/cli_runner/orchestrator.rs`
+
+### Context
+
+Every shipped `agent_loop` activity names the exact Orbit tools its agent may call. That allowlist-by-default keeps blocking legitimate work. A tool an agent needs is missing until someone edits a shipped asset. A task can widen the list only through `required_tools`, which is immutable once the task exists. The lists also disagree with themselves: the schema reads an empty `tools:` as "no tools", but the managed tool-call boundary has always read an empty or unset `ORBIT_ACTIVITY_TOOLS` as unrestricted.
+
+### Decision
+
+1. `agent_loop` gains `tool_disallow_list`. Declaring it selects deny mode: every registered agent-facing tool is callable except the entries it covers, and existing governance still runs first. It is mutually exclusive with a non-empty `tools`, and it uses the allowlist's name, wildcard-root, registry, and `proc.spawn` pairing rules.
+2. Allowlist mode is not deprecated. Custom and workspace-override activities keep `tools:` with its exact semantics, and so does every activity written before this change. Shipped activities move to disallow lists in a follow-up change.
+3. The policy mode is explicit in the managed envelope. `ORBIT_ACTIVITY_TOOL_POLICY=deny`, `ORBIT_ACTIVITY_TOOLS_DENY`, and `ORBIT_ACTIVITY_NAME` are stamped only for deny mode. A run without the marker is legacy allowlist mode, so an older orchestrator's runs, and allowlist runs, behave exactly as before. A marker without its list, or an unknown marker, falls back to the allowlist rather than widening.
+4. A deny-mode run also stamps its concrete callable set as `ORBIT_ACTIVITY_TOOLS`. An MCP server that predates deny mode therefore enforces an equivalent exact allowlist instead of treating the run as unrestricted.
+5. A task's `required_tools` never overrides a disallow entry: admission refuses the run, naming the tool and the activity.
+6. The empty-`tools:` inconsistency is not flipped here. It gets a load-time deprecation warning. Planned: once shipped and seeded activities declare an explicit policy, a later change makes an `agent_loop` activity with neither list declare one or fail to load. It does not silently become deny-all.
+
+### Rejected alternatives
+
+- *Deny mode without a marker, inferred from an empty `ORBIT_ACTIVITY_TOOLS`.* That shape already means "unrestricted" to every deployed server, so the absence of an allowlist cannot carry a policy.
+- *Fail closed on an empty `tools:` now.* It would refuse runs of custom activities that work today, which the backward-compatibility requirement forbids.
+- *Let `required_tools` re-grant a disallowed tool.* The disallow list is the activity author's hard boundary. A task writer should not be able to lift it.
+
+### Consequences
+
+- Existing activity YAMLs, persisted run snapshots, and audit events load unchanged. `tool_disallow_list`, `tool_policy`, and the audit event's `tool_disallow_list` are optional and omitted when absent. A regression test pins the pre-change shipped activities and a custom allowlist to their prior effective policy and enforcement outcomes.
+- Codex forwards three more envelope names through `mcp_servers.orbit.env_vars`.
+- Dispatch strips inherited deny-mode names from the child environment before stamping, so a nested allowlist run cannot pick up an outer deny list.
+- `Cost:` the deny-mode `ORBIT_ACTIVITY_TOOLS` set is computed from the dispatching registry. A tool registered only in a later MCP server process is callable under the new server but refused by an older one during a mixed-version window.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1599,5 +1630,6 @@ The gate's contract is untouched. What changed is that its rejection is no longe
 - [ORB-10449] — split step-completion protocol from response content so a stalled agent-loop step fails where it happened.
 - [ORB-10464] — refuse workflow admission when a done dependency's work is not in the base the worktree would be cut from.
 - [ORB-10603] — derive the durable `execution_summary` from the delivered change when the implementing agent persisted none.
+- [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

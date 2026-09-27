@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::super::audit_envelope::*;
+use super::super::tool_allowlist::ActivityToolPolicyMode;
 
 #[test]
 fn tool_allowlist_audit_records_requested_and_effective_lists_compatibly() {
@@ -11,6 +12,8 @@ fn tool_allowlist_audit_records_requested_and_effective_lists_compatibly() {
         requested_tools: vec!["github.run.list".to_string()],
         effective_tools: vec!["orbit.task.show".to_string(), "github.run.list".to_string()],
         tools: vec!["orbit.task.show".to_string(), "github.run.list".to_string()],
+        tool_policy: None,
+        tool_disallow_list: None,
     })
     .expect("serialize tool allowlist audit");
     assert_eq!(encoded["task_id"], "ORB-11069");
@@ -172,4 +175,46 @@ fn run_finished_error_message_round_trips_and_absence_defaults_to_none() {
             ..
         }
     ));
+}
+
+/// [ORB-13315] The harness event records a deny-mode policy and its list, and
+/// both fields stay absent from an allowlist-mode record that omits them.
+#[test]
+fn tool_allowlist_audit_records_policy_mode_and_disallow_list() {
+    let deny = V2AuditEventKind::ToolAllowlistHarnessDelegated {
+        provider: "claude".to_string(),
+        task_id: None,
+        task_ids: Vec::new(),
+        requested_tools: Vec::new(),
+        effective_tools: vec!["orbit.search".to_string()],
+        tools: vec!["orbit.search".to_string()],
+        tool_policy: Some(ActivityToolPolicyMode::Deny),
+        tool_disallow_list: Some(vec!["orbit.task.*".to_string()]),
+    };
+    let encoded = serde_json::to_value(deny).expect("serialize deny-mode audit");
+    assert_eq!(encoded["tool_policy"], "deny");
+    assert_eq!(encoded["tool_disallow_list"], json!(["orbit.task.*"]));
+    let decoded: V2AuditEventKind = serde_json::from_value(encoded).expect("round trip");
+    assert!(matches!(
+        decoded,
+        V2AuditEventKind::ToolAllowlistHarnessDelegated {
+            tool_policy: Some(ActivityToolPolicyMode::Deny),
+            tool_disallow_list: Some(list),
+            ..
+        } if list == ["orbit.task.*"]
+    ));
+
+    let legacy = serde_json::to_value(V2AuditEventKind::ToolAllowlistHarnessDelegated {
+        provider: "claude".to_string(),
+        task_id: None,
+        task_ids: Vec::new(),
+        requested_tools: Vec::new(),
+        effective_tools: Vec::new(),
+        tools: Vec::new(),
+        tool_policy: None,
+        tool_disallow_list: None,
+    })
+    .expect("serialize allowlist audit");
+    assert!(legacy.get("tool_policy").is_none());
+    assert!(legacy.get("tool_disallow_list").is_none());
 }
