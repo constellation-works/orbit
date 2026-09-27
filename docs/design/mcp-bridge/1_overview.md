@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Draft
 feature: mcp-bridge
 doc_role: overview
@@ -119,10 +119,11 @@ destination additionally enforces whether its checkout holds the tool's
 `control_plane` or `execute` capability class.
 
 Advertised definitions contain only schema plus global-versus-workspace-required
-scope. `orbit.workspace.list` is the sole global tool. In direct mode it reports
-active logical workspaces that have a checkout registered on the accepting
-machine; federated mode replaces that response with live descriptors for the
-accepting machine and configured destinations.
+scope. `orbit.workspace.list` is the sole global discovery tool in the
+MCP-owned server surface; plugins may declare global tools through their own
+scope. In direct mode it reports active logical workspaces that have a checkout
+registered on the accepting machine; federated mode replaces that response
+with live descriptors for the accepting machine and configured destinations.
 
 The executable contract and validation map live in
 [`references/conformance-v1.yaml`](./references/conformance-v1.yaml). Detailed
