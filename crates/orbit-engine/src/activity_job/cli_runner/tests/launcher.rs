@@ -3,8 +3,8 @@
 use tempfile::tempdir;
 
 use super::super::launcher::{
-    MissingLauncher, SUPPORTED_SYSTEM_BIN_DIRS, locate_provider_launcher, missing_launcher_in,
-    orbit_tool_env_with, resolve_provider_launcher_with, resolve_provider_launcher_with_extra_dirs,
+    MissingLauncher, locate_provider_launcher, missing_launcher_in, orbit_tool_env_with,
+    resolve_provider_launcher_with, resolve_provider_launcher_with_extra_dirs,
 };
 use super::test_support::write_executable;
 
@@ -66,15 +66,18 @@ fn missing_provider_launcher_error_names_provider_and_searched_locations() {
     let temp = tempdir().expect("tempdir");
     let fake_path = temp.path().join("system-bin");
     let home = temp.path().join("home");
+    let extra_bin = temp.path().join("supported-system-bin");
     std::fs::create_dir_all(&fake_path).expect("create fake PATH");
     std::fs::create_dir_all(&home).expect("create fake HOME");
+    std::fs::create_dir_all(&extra_bin).expect("create extra search directory");
 
-    let error = resolve_provider_launcher_with(
+    let error = resolve_provider_launcher_with_extra_dirs(
         "claude",
         "claude",
         Some(fake_path.as_os_str()),
         Some(&home),
         None,
+        [extra_bin.clone()],
     )
     .expect_err("missing launcher must fail");
 
@@ -90,8 +93,7 @@ fn missing_provider_launcher_error_names_provider_and_searched_locations() {
         home.join(".orbit/bin/claude"),
         home.join(".cargo/bin/claude"),
         home.join("bin/claude"),
-        std::path::PathBuf::from("/opt/homebrew/bin/claude"),
-        std::path::PathBuf::from("/usr/local/bin/claude"),
+        extra_bin.join("claude"),
     ] {
         assert!(
             error.message.contains(&searched.display().to_string()),
@@ -100,10 +102,6 @@ fn missing_provider_launcher_error_names_provider_and_searched_locations() {
             error.message
         );
     }
-    assert_eq!(
-        SUPPORTED_SYSTEM_BIN_DIRS,
-        &["/opt/homebrew/bin", "/usr/local/bin"]
-    );
 }
 
 #[test]
@@ -481,16 +479,27 @@ fn missing_launcher_is_recovered_from_the_recorded_dispatch_error() {
     let temp = tempdir().expect("tempdir");
     let fake_path = temp.path().join("system-bin");
     let home = temp.path().join("home");
+    let extra_bin = temp.path().join("supported-system-bin");
     std::fs::create_dir_all(&fake_path).expect("create fake PATH");
     std::fs::create_dir_all(&home).expect("create fake HOME");
-    let error = resolve_provider_launcher_with(
+    std::fs::create_dir_all(&extra_bin).expect("create extra search directory");
+    let error = resolve_provider_launcher_with_extra_dirs(
         "codex",
         "codex",
         Some(fake_path.as_os_str()),
         Some(&home),
         None,
+        [extra_bin.clone()],
     )
     .expect_err("missing launcher must fail");
+    assert!(error.permanent, "missing launcher must remain permanent");
+    assert!(
+        error
+            .message
+            .contains(&extra_bin.join("codex").display().to_string()),
+        "resolver diagnostics should include the controlled extra directory: {}",
+        error.message
+    );
     let recorded = format!(
         "workflow run failed: job=task_pr_pipeline, run_id=jrun-1, error_code=-, \
          error=execution failed: v2 job dispatch: cli invocation failed (permanent): {}",
