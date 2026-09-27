@@ -566,6 +566,291 @@ fn spawn_with_timeout_returns_after_a_normal_exit_despite_an_escaped_pipe_holder
     );
 }
 
+/// How the supervised parent ends after its escaped helper is ready.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+enum EscapedHelperExit {
+    Normal,
+    Timeout,
+    WaitError,
+}
+
+/// A `/bin/sh` parent that starts a helper in its own session (`setsid`), so
+/// the helper survives the process-group kill while holding the parent's
+/// stdout/stderr pipes. The helper records its PID and readiness before the
+/// parent may end, and every helper is killed when the fixture drops.
+#[cfg(unix)]
+struct EscapedHelperFixture {
+    args: Vec<String>,
+    pid_file: PathBuf,
+    ready_file: PathBuf,
+    _guard: EscapedProcessGuard,
+    _dir: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl EscapedHelperFixture {
+    /// Returns `None` when `perl` is unavailable.
+    fn new(helper_body: &str, exit: EscapedHelperExit) -> Option<Self> {
+        if std::process::Command::new("perl")
+            .arg("-e")
+            .arg("1")
+            .output()
+            .is_err()
+        {
+            return None;
+        }
+        let dir = tempdir().expect("helper tempdir");
+        let pid_file = dir.path().join("escaped.pid");
+        let ready_file = dir.path().join("escaped.ready");
+        let guard = EscapedProcessGuard::new(pid_file.clone());
+        let parent_tail = match exit {
+            EscapedHelperExit::Normal => "",
+            EscapedHelperExit::Timeout | EscapedHelperExit::WaitError => "; sleep 30",
+        };
+        let script = format!(
+            "perl -MPOSIX -e '$SIG{{PIPE}}=\"IGNORE\"; $| = 1; POSIX::setsid() or die \"setsid: $!\\n\"; open(my $pid, \">\", $ARGV[0]); print $pid $$; close $pid; open(my $ready, \">\", $ARGV[1]); print $ready \"ready\"; close $ready; {helper_body}' {pid} {ready} & perl -e 'my $deadline = time + 5; while (!-s $ARGV[0]) {{ die \"helper did not become ready\\n\" if time >= $deadline; select(undef, undef, undef, 0.02); }}' {ready} && printf '%s\\n' done{parent_tail}",
+            pid = shell_quote(pid_file.to_string_lossy().as_ref()),
+            ready = shell_quote(ready_file.to_string_lossy().as_ref()),
+        );
+        Some(Self {
+            args: sh_args(&script),
+            pid_file,
+            ready_file,
+            _guard: guard,
+            _dir: dir,
+        })
+    }
+
+    fn wait_until_ready(&self) -> bool {
+        wait_until(Duration::from_secs(5), || {
+            std::fs::metadata(&self.ready_file).is_ok_and(|meta| meta.len() > 0)
+        })
+    }
+
+    fn helper_pid(&self) -> u32 {
+        read_pid(&self.pid_file)
+    }
+}
+
+/// Helper body that only holds the inherited pipes.
+#[cfg(unix)]
+const QUIET_HELPER_BODY: &str = "sleep 30;";
+
+/// Helper body that writes as fast as the pipe accepts for up to 20 seconds,
+/// then keeps the pipes open. An unbounded drain would run until the loop
+/// ends, which the tests' 5-second bound catches without hanging.
+#[cfg(unix)]
+const BUSY_HELPER_BODY: &str = "my $line = (\"x\" x 4095) . \"\\n\"; my $block = $line x 16; my $end = time + 20; while (time < $end) { print STDOUT $block or last; } sleep 30;";
+
+/// Counts output line events and slows each one so a busy writer always
+/// keeps the pipe readable while the reader is emitting.
+#[cfg(unix)]
+struct SlowCountingSubscriber {
+    events: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+impl tracing::Subscriber for SlowCountingSubscriber {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {
+        self.events.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_micros(200));
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// When the pollable cancel channel cannot be created, the reader must not
+/// fall back to a blocking `read` that an escaped pipe holder keeps open:
+/// supervision still returns within its bound with every reader joined.
+#[cfg(unix)]
+#[test]
+fn spawn_with_timeout_bounds_reader_finalization_when_cancel_pair_creation_fails() {
+    use std::cell::Cell;
+    use std::io;
+
+    let Some(fixture) = EscapedHelperFixture::new(QUIET_HELPER_BODY, EscapedHelperExit::Normal)
+    else {
+        return;
+    };
+    let pair_attempts = Cell::new(0usize);
+    let cancel_pair = || {
+        pair_attempts.set(pair_attempts.get() + 1);
+        Err(io::Error::other("injected cancel pair failure"))
+    };
+    let live_readers = Arc::new(AtomicUsize::new(0));
+    let mut request = spawn_test_request(
+        "/bin/sh",
+        &fixture.args,
+        None,
+        Duration::from_secs(20),
+        SpawnTraceContext {
+            provider: "codex",
+            job_run_id: "job-cancel-pair-escaped",
+            task_id: Some("TPAIRESC"),
+            cwd: None,
+        },
+    );
+    request.cancel_pair = Some(&cancel_pair);
+    request.live_readers = Some(Arc::clone(&live_readers));
+
+    let started = std::time::Instant::now();
+    let (stdout, _stderr, exit_code, _duration, timed_out) =
+        spawn_with_timeout(request).expect("spawn succeeds without a cancel pair");
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        pair_attempts.get(),
+        2,
+        "both readers must take the no-pair path"
+    );
+    assert!(
+        process_is_live(fixture.helper_pid()),
+        "the helper must still hold the pipes when the supervisor returns"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "a failed cancel pair must not leave an unbounded reader join; elapsed={elapsed:?}"
+    );
+    assert_eq!(
+        live_readers.load(Ordering::SeqCst),
+        0,
+        "no output reader may outlive the supervisor"
+    );
+    assert!(!timed_out);
+    assert_eq!(exit_code, Some(0));
+    assert_eq!(stdout.bytes(), b"done\n");
+    drop(fixture);
+}
+
+/// A continuously producing escaped writer must not extend the post-cancel
+/// drain. Every terminal path, with and without a cancel pair, returns within
+/// the bound with its readers joined, and no line event is emitted after
+/// return.
+#[cfg(unix)]
+#[test]
+fn spawn_with_timeout_bounds_post_cancel_drain_against_a_busy_escaped_writer() {
+    use std::io;
+
+    let cases = [
+        (EscapedHelperExit::Normal, true),
+        (EscapedHelperExit::Timeout, true),
+        (EscapedHelperExit::WaitError, true),
+        (EscapedHelperExit::Normal, false),
+    ];
+    for (exit, with_cancel_pair) in cases {
+        let Some(fixture) = EscapedHelperFixture::new(BUSY_HELPER_BODY, exit) else {
+            return;
+        };
+        let wait_timeout_hook = |_child: &mut std::process::Child| {
+            assert!(fixture.wait_until_ready(), "helper did not become ready");
+            Ok(None)
+        };
+        let wait_error_hook = |_child: &mut std::process::Child| {
+            assert!(fixture.wait_until_ready(), "helper did not become ready");
+            Err(io::Error::other("injected wait failure"))
+        };
+        let failing_pair = || Err(io::Error::other("injected cancel pair failure"));
+        let live_readers = Arc::new(AtomicUsize::new(0));
+        let events = Arc::new(AtomicUsize::new(0));
+        let dispatch = tracing::Dispatch::new(SlowCountingSubscriber {
+            events: Arc::clone(&events),
+        });
+
+        let mut request = spawn_test_request(
+            "/bin/sh",
+            &fixture.args,
+            None,
+            match exit {
+                EscapedHelperExit::Timeout => Duration::from_millis(50),
+                EscapedHelperExit::Normal | EscapedHelperExit::WaitError => {
+                    Duration::from_secs(20)
+                }
+            },
+            SpawnTraceContext {
+                provider: "codex",
+                job_run_id: "job-busy-escaped-writer",
+                task_id: Some("TBUSY"),
+                cwd: None,
+            },
+        );
+        request.output_capture_limit = Some(64 * 1024);
+        request.live_readers = Some(Arc::clone(&live_readers));
+        match exit {
+            EscapedHelperExit::Normal => {}
+            EscapedHelperExit::Timeout => request.wait = Some(&wait_timeout_hook),
+            EscapedHelperExit::WaitError => request.wait = Some(&wait_error_hook),
+        }
+        if !with_cancel_pair {
+            request.cancel_pair = Some(&failing_pair);
+        }
+
+        let started = std::time::Instant::now();
+        let result = tracing::dispatcher::with_default(&dispatch, || spawn_with_timeout(request));
+        let elapsed = started.elapsed();
+        let events_at_return = events.load(Ordering::SeqCst);
+        let case = format!("exit={exit:?} with_cancel_pair={with_cancel_pair}");
+
+        assert!(
+            process_is_live(fixture.helper_pid()),
+            "{case}: the helper must escape the process-group kill"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "{case}: a busy escaped writer must not extend finalization; elapsed={elapsed:?}"
+        );
+        assert_eq!(
+            live_readers.load(Ordering::SeqCst),
+            0,
+            "{case}: no output reader may outlive the supervisor"
+        );
+        assert!(
+            events_at_return > 0,
+            "{case}: the busy writer's output must reach the reader"
+        );
+        match exit {
+            EscapedHelperExit::Normal => {
+                let (stdout, _, exit_code, _, timed_out) = result.expect("normal exit");
+                assert_eq!(exit_code, Some(0), "{case}");
+                assert!(!timed_out, "{case}");
+                assert!(stdout.observed_bytes() > 0, "{case}");
+            }
+            EscapedHelperExit::Timeout => {
+                let (stdout, _, exit_code, _, timed_out) = result.expect("timeout");
+                assert_eq!(exit_code, None, "{case}");
+                assert!(timed_out, "{case}");
+                assert!(stdout.observed_bytes() > 0, "{case}");
+            }
+            EscapedHelperExit::WaitError => {
+                let error = result.expect_err("injected wait failure");
+                assert!(error.message.contains("injected wait failure"), "{case}");
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            events.load(Ordering::SeqCst),
+            events_at_return,
+            "{case}: no output line may be emitted after the supervisor returns"
+        );
+        drop(fixture);
+    }
+}
+
 #[cfg(unix)]
 struct EscapedProcessGuard {
     pid_file: PathBuf,
@@ -581,10 +866,15 @@ impl EscapedProcessGuard {
 #[cfg(unix)]
 impl Drop for EscapedProcessGuard {
     fn drop(&mut self) {
-        let Ok(contents) = std::fs::read_to_string(&self.pid_file) else {
-            return;
-        };
-        let Ok(pid) = contents.trim().parse::<u32>() else {
+        // A helper that is still starting (for example when an assertion
+        // failed early) records its PID shortly; wait for it rather than leak
+        // the process.
+        let mut pid = None;
+        let _ = wait_until(Duration::from_secs(2), || {
+            pid = read_pid_file(&self.pid_file);
+            pid.is_some()
+        });
+        let Some(pid) = pid else {
             return;
         };
         if pid > 0 && pid <= i32::MAX as u32 {
@@ -595,6 +885,11 @@ impl Drop for EscapedProcessGuard {
             let _ = wait_until(Duration::from_secs(2), || !process_is_live(pid));
         }
     }
+}
+
+#[cfg(unix)]
+fn read_pid_file(path: &Path) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 #[cfg(unix)]
