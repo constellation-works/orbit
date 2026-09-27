@@ -27,6 +27,7 @@ use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir, read
 use crate::runtime::plugin::sandbox_mask::{not_visible, plugin_trees_masked};
 
 use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
+use super::install::{NamespaceStep, lock_plugin_namespace, namespace_step};
 use super::secrets::{delete_plugin_secrets, unset_secret_warnings};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
 use super::skills::{PluginSkillLink, link_plugin_skills, unlink_plugin_skills};
@@ -597,6 +598,11 @@ pub struct PluginRemoveOptions {
 /// against the namespace install directory before anything is removed; a row
 /// that fails the check is refused whole, before any mutation, and
 /// [`PluginRemoveOptions::record_only`] is what clears it.
+///
+/// The whole removal holds the namespace lock `add` and `upgrade` take, and
+/// reads the row only once it has it: an overlapping install either lands
+/// first and is removed whole, or starts after and installs into an empty
+/// namespace.
 pub fn remove_plugin(
     runtime: &OrbitRuntime,
     name: &str,
@@ -607,13 +613,14 @@ pub fn remove_plugin(
             "--purge-state cannot be combined with --record-only".to_string(),
         ));
     }
-    let installed = installed_plugin(runtime, name)?;
     // An ordinary removal deletes the plugin's secrets, and `--purge-state`
     // its state. Inside an agent sandbox both trees are masked, so either
     // would find nothing there and report it gone; refuse before any change.
     if !options.record_only && plugin_trees_masked(&runtime.global_root()) {
         return Err(not_visible("this plugin's state and secrets"));
     }
+    let _namespace_lock = lock_plugin_namespace(&runtime.global_root(), name)?;
+    let installed = installed_plugin(runtime, name)?;
     if !options.record_only && !is_valid_namespace(name) {
         return Err(OrbitError::PolicyDenied(format!(
             "refusing to remove plugin with invalid namespace '{name}'; use --record-only to clear its record"
@@ -692,6 +699,8 @@ pub fn remove_plugin(
             },
         ))
     })?;
+
+    namespace_step(NamespaceStep::RemoveRowDeleted);
 
     // The authority goes with the install: a later reinstall of this namespace
     // starts from no authorized grants rather than inheriting these.

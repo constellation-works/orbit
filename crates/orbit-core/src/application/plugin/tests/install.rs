@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
-use super::super::install::StagedInstall;
+use super::super::install::{NamespaceStep, StagedInstall, set_namespace_step_hook};
 use super::super::{
     PluginAddOptions, PluginRemoveOptions, PluginUpgradeOptions, install_plugin, list_plugins,
     plugin_doctor, remove_plugin, show_plugin, upgrade_plugin, validate_plugin_dir,
@@ -1350,4 +1350,276 @@ fn rollback_does_not_remove_a_new_occupant_of_the_published_path() {
         previous,
         "rollback must preserve the old tree when the published path changes"
     );
+}
+
+/// A plugin source at `version`, padded so its tree is more than a manifest.
+fn version_source(fixture: &PluginFixture, dir: &str, name: &str, version: &str) -> PathBuf {
+    let mut spec = PluginSpecFixture::new(dir, name);
+    spec.version = version;
+    let root = fixture.write_plugin(spec);
+    for index in 0..16 {
+        std::fs::write(root.join(format!("bin/pad-{index}")), "x".repeat(1024))
+            .expect("write padding file");
+    }
+    root
+}
+
+type NamespaceOperation =
+    Box<dyn FnOnce(&crate::OrbitRuntime) -> Result<(), orbit_common::OrbitError> + Send>;
+
+/// One plugin verb running on its own thread with its own runtime — to the
+/// namespace lock, as separate as a second `orbit` process — parked at
+/// `park` until `release` fires.
+struct ParkedOperation {
+    handle: std::thread::JoinHandle<Result<(), orbit_common::OrbitError>>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+impl ParkedOperation {
+    /// Start `operation` and return once it has reached `park`.
+    fn start(fixture: &PluginFixture, park: NamespaceStep, operation: NamespaceOperation) -> Self {
+        let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let global_root = fixture.global_root.clone();
+        let workspace_root = fixture.workspace_root.clone();
+        let handle = std::thread::spawn(move || {
+            let runtime = crate::OrbitRuntime::from_roots(&global_root, &workspace_root)
+                .expect("build the operation's runtime");
+            set_namespace_step_hook(Some(Box::new(move |step| {
+                if step == park {
+                    reached_tx.send(()).expect("report the parked step");
+                    release_rx.recv().expect("wait to be released");
+                }
+            })));
+            let result = operation(&runtime);
+            set_namespace_step_hook(None);
+            result
+        });
+        reached_rx
+            .recv()
+            .unwrap_or_else(|_| panic!("the operation ended before reaching {park:?}"));
+        Self { handle, release }
+    }
+
+    /// Release the operation and wait for its result.
+    fn finish(self) -> Result<(), orbit_common::OrbitError> {
+        self.release.send(()).expect("release the parked operation");
+        self.handle.join().expect("operation thread")
+    }
+}
+
+fn install_operation(source: PathBuf, options: PluginAddOptions) -> NamespaceOperation {
+    Box::new(move |runtime| {
+        install_plugin(runtime, source.to_str().expect("utf8 source"), &options).map(drop)
+    })
+}
+
+fn remove_operation() -> NamespaceOperation {
+    Box::new(|runtime| remove_plugin(runtime, "demo", &PluginRemoveOptions::default()))
+}
+
+fn enabling() -> PluginAddOptions {
+    PluginAddOptions {
+        enable: true,
+        ..PluginAddOptions::default()
+    }
+}
+
+fn demo_row(fixture: &PluginFixture) -> Option<orbit_types::plugin::InstalledPlugin> {
+    fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read the demo row")
+}
+
+/// Park an install of 1.0.0 at `park`, start an install of 2.0.0 against the
+/// same namespace, then let both run, first to last. Unserialized, 2.0.0 published, recorded
+/// and pruned 1.0.0 while 1.0.0 was parked; 1.0.0 then pruned 2.0.0 — the
+/// tree its row named — or found its own staging tree gone [ORB-13570].
+fn two_versions_racing_from(park: NamespaceStep) {
+    let fixture = PluginFixture::new();
+    let first = version_source(&fixture, "first", "demo", "1.0.0");
+    let second = version_source(&fixture, "second", "demo", "2.0.0");
+
+    let first_install = ParkedOperation::start(
+        &fixture,
+        park,
+        install_operation(first, PluginAddOptions::default()),
+    );
+    // Reaching `Contended` proves the parked install holds the namespace; the
+    // second install touches nothing until the first has finished.
+    let second_install = ParkedOperation::start(
+        &fixture,
+        NamespaceStep::Contended,
+        install_operation(second.clone(), PluginAddOptions::default()),
+    );
+    first_install.finish().expect("the first install lands");
+    second_install.finish().expect("the second install lands");
+
+    let row = demo_row(&fixture).expect("a row is recorded");
+    assert_eq!(
+        row.version, "2.0.0",
+        "the install that went second is recorded"
+    );
+    assert_eq!(
+        relative_inventory(Path::new(&row.install_path)),
+        relative_inventory(&second),
+        "the recorded row names a complete tree"
+    );
+    assert_eq!(
+        namespace_entries(&fixture.global_root.join("plugins/demo")),
+        BTreeSet::from(["2.0.0".to_string()]),
+        "only the recorded version remains, with no staging or replaced trees"
+    );
+}
+
+#[test]
+fn concurrent_installs_of_two_versions_never_prune_the_recorded_tree() {
+    two_versions_racing_from(NamespaceStep::InstallRowWritten);
+}
+
+#[test]
+fn a_concurrent_install_never_prunes_another_installs_staging_tree() {
+    two_versions_racing_from(NamespaceStep::InstallStaged);
+}
+
+/// The lock is per namespace: a parked install of one plugin does not hold
+/// up an install of another.
+#[test]
+fn an_install_parked_in_one_namespace_does_not_hold_up_another() {
+    let fixture = PluginFixture::new();
+    let demo = version_source(&fixture, "demo", "demo", "1.0.0");
+    let other = version_source(&fixture, "other", "other", "1.0.0");
+    let parked = ParkedOperation::start(
+        &fixture,
+        NamespaceStep::InstallRowWritten,
+        install_operation(demo, PluginAddOptions::default()),
+    );
+    install_plugin(
+        &fixture.runtime,
+        other.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("an unrelated namespace installs while demo is mid-install");
+    parked.finish().expect("the parked install lands");
+    assert_eq!(list_plugins(&fixture.runtime).expect("list").len(), 2);
+}
+
+/// A removal that arrives while an enabling install is mid-transition waits
+/// for it, then removes it whole. Unserialized, the removal deleted the row
+/// and the tree under the install, which then wrote an enabled witness for a
+/// plugin with no row.
+#[test]
+fn a_removal_overlapping_an_install_removes_it_whole() {
+    let fixture = PluginFixture::new();
+    let first = version_source(&fixture, "first", "demo", "1.0.0");
+    let second = version_source(&fixture, "second", "demo", "2.0.0");
+    install_plugin(
+        &fixture.runtime,
+        first.to_str().expect("utf8 source"),
+        &enabling(),
+    )
+    .expect("install the first version enabled");
+
+    let install = ParkedOperation::start(
+        &fixture,
+        NamespaceStep::InstallRowWritten,
+        install_operation(second, enabling()),
+    );
+    let removal = ParkedOperation::start(&fixture, NamespaceStep::Contended, remove_operation());
+    install.finish().expect("the install lands");
+    removal.finish().expect("the removal lands");
+
+    assert_eq!(demo_row(&fixture), None, "the removal went last");
+    assert!(
+        !fixture.global_root.join("plugins/demo").exists(),
+        "the removal took the installed tree"
+    );
+    assert!(
+        !crate::runtime::plugin::grants::plugin_grant_witness_path(&fixture.global_root, "demo")
+            .exists(),
+        "no authorization survives the row it was written for"
+    );
+}
+
+/// An install that arrives while a removal is mid-transition waits for it,
+/// then installs into an empty namespace. Unserialized, the removal went on to
+/// delete the new install's tree and witness under a row that named them.
+#[test]
+fn an_install_overlapping_a_removal_lands_on_an_empty_namespace() {
+    let fixture = PluginFixture::new();
+    let first = version_source(&fixture, "first", "demo", "1.0.0");
+    let second = version_source(&fixture, "second", "demo", "2.0.0");
+    install_plugin(
+        &fixture.runtime,
+        first.to_str().expect("utf8 source"),
+        &enabling(),
+    )
+    .expect("install the first version enabled");
+
+    let removal = ParkedOperation::start(
+        &fixture,
+        NamespaceStep::RemoveRowDeleted,
+        remove_operation(),
+    );
+    let install = ParkedOperation::start(
+        &fixture,
+        NamespaceStep::Contended,
+        install_operation(second.clone(), enabling()),
+    );
+    removal.finish().expect("the removal lands");
+    install.finish().expect("the install lands");
+
+    let row = demo_row(&fixture).expect("the install went last");
+    assert_eq!(row.version, "2.0.0");
+    assert!(row.enabled, "the install recorded its consent");
+    assert_eq!(
+        relative_inventory(Path::new(&row.install_path)),
+        relative_inventory(&second),
+        "the recorded row names a complete tree"
+    );
+    assert!(
+        crate::runtime::plugin::grants::witnessed_program_paths(&fixture.global_root, &row)
+            .is_some(),
+        "the enabled row is backed by the witness its install wrote"
+    );
+}
+
+/// An upgrade reads the row before taking the lock. If a removal lands in
+/// between, the upgrade refuses rather than installing the plugin afresh.
+#[test]
+fn an_upgrade_that_loses_its_row_to_a_removal_installs_nothing() {
+    let fixture = PluginFixture::new();
+    let first = version_source(&fixture, "first", "demo", "1.0.0");
+    let second = version_source(&fixture, "second", "demo", "2.0.0");
+    install_plugin(
+        &fixture.runtime,
+        first.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install the first version");
+
+    let upgrade = ParkedOperation::start(
+        &fixture,
+        NamespaceStep::Locking,
+        Box::new(move |runtime| {
+            upgrade_plugin(
+                runtime,
+                "demo",
+                Some(second.to_str().expect("utf8 source")),
+                &PluginUpgradeOptions::default(),
+            )
+            .map(drop)
+        }),
+    );
+    remove_plugin(&fixture.runtime, "demo", &PluginRemoveOptions::default())
+        .expect("the removal lands first");
+    upgrade
+        .finish()
+        .expect_err("the upgrade finds nothing left to upgrade");
+
+    assert_eq!(demo_row(&fixture), None);
+    assert!(!fixture.global_root.join("plugins/demo").exists());
 }
