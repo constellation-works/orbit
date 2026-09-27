@@ -55,31 +55,11 @@ fn seeded_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
 #[cfg(unix)]
 #[test]
 fn doctor_retirement_confines_linked_and_regular_skill_assets() {
-    if std::env::var_os("ORBIT_ARTIFACT_RETIRE_FIXTURE_CHILD").is_none() {
-        let home = tempdir().expect("isolated home");
-        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
-        orbit_common::test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        let output = command
-            .args([
-                "--exact",
-                &format!(
-                    "{}::doctor_retirement_confines_linked_and_regular_skill_assets",
-                    module_path!()
-                ),
-                "--nocapture",
-            ])
-            .env("ORBIT_ARTIFACT_RETIRE_FIXTURE_CHILD", "1")
-            .env("HOME", home.path())
-            .env("USERPROFILE", home.path())
-            .output()
-            .expect("run isolated fixture");
-        assert!(
-            output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+    const CHILD_FLAG: &str = "ORBIT_ARTIFACT_RETIRE_FIXTURE_CHILD";
+    if std::env::var_os(CHILD_FLAG).is_none() {
+        run_isolated_child_fixture(
+            "doctor_retirement_confines_linked_and_regular_skill_assets",
+            CHILD_FLAG,
         );
         return;
     }
@@ -540,5 +520,226 @@ fn catalog_without_a_managed_manifest_does_not_report_missing_shipped_defaults()
         0,
         "custom catalogs without a managed manifest are not missing shipped defaults: {:?}",
         health_of(&report, ArtifactKind::Activity).findings
+    );
+}
+
+/// Re-run `test_name` in a child test process with an isolated `HOME`, failing
+/// if it does not finish within a bounded wait instead of hanging CI, or if the
+/// filter matched no test (libtest names omit the crate prefix).
+#[cfg(unix)]
+fn run_isolated_child_fixture(test_name: &str, child_flag: &str) {
+    use std::time::{Duration, Instant};
+
+    let home = tempdir().expect("isolated home");
+    let stdout_path = home.path().join("child.stdout");
+    let stderr_path = home.path().join("child.stderr");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module_path!());
+    let mut child = command
+        .args(["--exact", &format!("{module}::{test_name}"), "--nocapture"])
+        .env(child_flag, "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .stdout(std::fs::File::create(&stdout_path).expect("child stdout"))
+        .stderr(std::fs::File::create(&stderr_path).expect("child stderr"))
+        .spawn()
+        .expect("spawn isolated fixture");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll isolated fixture") {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let output = format!(
+        "{}\n{}",
+        std::fs::read_to_string(&stdout_path).unwrap_or_default(),
+        std::fs::read_to_string(&stderr_path).unwrap_or_default()
+    );
+    let status = status.unwrap_or_else(|| panic!("{test_name} did not finish in time\n{output}"));
+    assert!(status.success(), "{output}");
+    assert!(
+        output.contains("test result: ok. 1 passed;"),
+        "the isolated fixture must run exactly one test: {output}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retired_backend_repair_confines_links_cycles_and_special_files() {
+    const CHILD_FLAG: &str = "ORBIT_ACTIVITY_REPAIR_FIXTURE_CHILD";
+    if std::env::var_os(CHILD_FLAG).is_none() {
+        run_isolated_child_fixture(
+            "retired_backend_repair_confines_links_cycles_and_special_files",
+            CHILD_FLAG,
+        );
+        return;
+    }
+
+    use std::os::unix::fs::{FileTypeExt, symlink};
+
+    let root = tempdir().expect("fixture root");
+    let (runtime, _workspace, activities) = workspace_runtime(root.path());
+    let external = root.path().join("external");
+    std::fs::create_dir_all(external.join("dir")).expect("external fixture");
+
+    // Links below the catalog root to external retired-backend activities.
+    let external_final = external.join("final.yaml");
+    let external_nested = external.join("dir/nested.yaml");
+    let external_hard = external.join("hard.yaml");
+    let external_final_body = agent_loop_yaml("external_final", "  backend: http\n");
+    let external_nested_body = agent_loop_yaml("external_nested", "  backend: http\n");
+    let external_hard_body = agent_loop_yaml("hard_linked", "  backend: http\n");
+    std::fs::write(&external_final, &external_final_body).expect("write external final");
+    std::fs::write(&external_nested, &external_nested_body).expect("write external nested");
+    std::fs::write(&external_hard, &external_hard_body).expect("write external hard");
+    let final_link = activities.join("final_link.yaml");
+    symlink(&external_final, &final_link).expect("link final file");
+    let dir_link = activities.join("linked");
+    symlink(external.join("dir"), &dir_link).expect("link intermediate directory");
+    let hard_link = activities.join("hard_linked.yaml");
+    std::fs::hard_link(&external_hard, &hard_link).expect("hard link external file");
+
+    // A linked directory cycle and a FIFO that would block a plain read.
+    std::fs::create_dir_all(activities.join("nested")).expect("nested catalog dir");
+    let cycle = activities.join("nested/cycle");
+    symlink(&activities, &cycle).expect("link directory cycle");
+    let fifo = activities.join("pipe.yaml");
+    let mkfifo = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(mkfifo.success(), "mkfifo fixture");
+
+    // Ordinary in-catalog retired backends, including one in a real subdirectory.
+    let regular = activities.join("regular_loop.yaml");
+    let deep = activities.join("nested/deep_loop.yaml");
+    std::fs::write(
+        &regular,
+        agent_loop_yaml("regular_loop", "  backend: http\n"),
+    )
+    .expect("write regular");
+    std::fs::write(&deep, agent_loop_yaml("deep_loop", "  backend: auto\n")).expect("write deep");
+
+    // A configured root that is itself a link stays a root and is repaired.
+    let linked_catalog = root.path().join("linked_catalog");
+    std::fs::create_dir_all(&linked_catalog).expect("linked catalog");
+    let global_resources = root.path().join("global/resources");
+    std::fs::create_dir_all(&global_resources).expect("global resources");
+    symlink(&linked_catalog, global_resources.join("activities")).expect("link global root");
+    std::fs::write(
+        linked_catalog.join("global_loop.yaml"),
+        agent_loop_yaml("global_loop", "  backend: http\n"),
+    )
+    .expect("write global root activity");
+    let global_loop = global_resources.join("activities/global_loop.yaml");
+
+    let refused = [&final_link, &dir_link, &cycle, &fifo];
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("doctor scan finishes");
+    let findings = &health_of(&report, ArtifactKind::Activity).findings;
+    for path in refused {
+        let finding = findings
+            .iter()
+            .find(|finding| &finding.path == path)
+            .unwrap_or_else(|| panic!("doctor must report {}: {findings:?}", path.display()));
+        assert_eq!(finding.condition, ArtifactCondition::Faulty);
+        assert!(
+            !finding
+                .remediation
+                .contains(FIX_RETIRED_ACTIVITY_BACKENDS_CMD),
+            "a refused entry is not offered the automatic repair: {finding:?}"
+        );
+    }
+    assert!(
+        findings
+            .iter()
+            .all(|finding| !finding.path.starts_with(&external)),
+        "doctor must not inspect through links: {findings:?}"
+    );
+
+    let expected_repaired = {
+        let mut paths = vec![
+            deep.clone(),
+            global_loop.clone(),
+            hard_link.clone(),
+            regular.clone(),
+        ];
+        paths.sort();
+        paths
+    };
+    let mut expected_skipped: Vec<PathBuf> = refused.iter().map(|path| (*path).clone()).collect();
+    expected_skipped.sort();
+    for pass in ["first", "second"] {
+        let repair = runtime
+            .repair_retired_activity_backends()
+            .expect("repair pass");
+        let mut repaired = repair.repaired.clone();
+        repaired.sort();
+        let mut skipped: Vec<PathBuf> = repair
+            .skipped
+            .iter()
+            .map(|skip| skip.path.clone())
+            .collect();
+        skipped.sort();
+        if pass == "first" {
+            assert_eq!(repaired, expected_repaired, "{pass} pass: {repair:?}");
+        } else {
+            assert!(repaired.is_empty(), "repair is idempotent: {repair:?}");
+        }
+        assert_eq!(
+            skipped, expected_skipped,
+            "{pass} pass reports refusals: {repair:?}"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&external_final).expect("external final"),
+            external_final_body
+        );
+        assert_eq!(
+            std::fs::read_to_string(&external_nested).expect("external nested"),
+            external_nested_body
+        );
+        assert_eq!(
+            std::fs::read_to_string(&external_hard).expect("external hard link target"),
+            external_hard_body
+        );
+        for link in [&final_link, &dir_link, &cycle] {
+            assert!(
+                link.symlink_metadata()
+                    .expect("link survives")
+                    .file_type()
+                    .is_symlink()
+            );
+        }
+        assert!(
+            fifo.symlink_metadata()
+                .expect("fifo survives")
+                .file_type()
+                .is_fifo()
+        );
+    }
+    for path in &expected_repaired {
+        let after = std::fs::read_to_string(path).expect("read repaired activity");
+        assert!(!after.contains("backend:"), "{}: {after}", path.display());
+    }
+    assert!(
+        global_resources
+            .join("activities")
+            .symlink_metadata()
+            .expect("configured root link survives")
+            .file_type()
+            .is_symlink()
     );
 }

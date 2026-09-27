@@ -204,7 +204,11 @@ orbit doctor --fix-retired-activity-backends
 
 The repair deletes only that obsolete `spec.backend` key, leaves unknown backend values and
 unrelated malformed activities untouched (and reports them for a manual edit), and is
-idempotent across every activity catalog directory in the workspace.
+idempotent across every activity catalog directory in the workspace. Each configured catalog
+directory is a root even when it is a link, but nothing below it is followed: a linked `.yaml`
+file, a linked directory, or a special file such as a FIFO is reported by doctor and listed as
+skipped by the repair, and its target is never read or rewritten. To have such an activity
+checked and repaired, replace the link with a regular file inside the catalog.
 
 Graph is retired under the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) and is not inspected by ordinary health checks. To remove
 leftover state explicitly, run `orbit doctor --remove-graph`. This deletes only the current

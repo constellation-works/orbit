@@ -6,13 +6,22 @@
 //! never ran the registry tool-allowlist check. Catalog construction does
 //! both, so a workspace `spec.backend: http` (or a removed tool name) could
 //! fail every job run while doctor reported the activity catalog healthy.
+//!
+//! Discovery is confined to each configured catalog root: links below a root
+//! are reported rather than followed, and only regular files are read or
+//! rewritten, so a linked or special entry can neither redirect the repair
+//! outside the catalog nor stall the scan.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::open_read_only_no_follow;
 use orbit_engine::activity_job::{load_activity_catalog_asset, validate_catalog_activity_tools};
 
+use super::artifact::{RemovableArtifact, resolve_removable_artifact};
 use crate::OrbitRuntime;
 
 /// The single opt-in repair command named by retired-backend findings.
@@ -52,12 +61,24 @@ pub(crate) fn collect_activity_catalog_faults(
 ) -> (usize, Vec<ActivityCatalogFault>) {
     let registered_tools = runtime.allowlist_known_tool_names();
     let registered: Vec<&str> = registered_tools.iter().map(String::as_str).collect();
-    let paths = activity_catalog_yaml_files(runtime);
-    let scanned = paths.len();
+    let entries = activity_catalog_entries(runtime);
+    let scanned = entries.len();
     let mut faults = Vec::new();
-    for path in paths {
+    for entry in entries {
+        let path = match entry {
+            CatalogEntry::File { path, .. } => path,
+            CatalogEntry::Refused { path, reason } => {
+                faults.push(ActivityCatalogFault {
+                    name: file_stem_name(&path),
+                    detail: format!("`{}` — {reason}", path.display()),
+                    path,
+                    repair_command: None,
+                });
+                continue;
+            }
+        };
         let name = file_stem_name(&path);
-        let Some(raw) = read_text(&path) else {
+        let Some(raw) = read_confined_text(&path) else {
             faults.push(ActivityCatalogFault {
                 name,
                 path,
@@ -77,14 +98,25 @@ pub(crate) fn collect_activity_catalog_faults(
 /// Remove `spec.backend` only when it is a known retired value on a
 /// schemaVersion 2 agent-loop activity. Everything else is left untouched
 /// and, when it would fail catalog construction, reported for a manual edit.
+/// Linked and non-regular catalog entries are reported, never read or written.
 pub(crate) fn repair_retired_activity_backends(
     runtime: &OrbitRuntime,
 ) -> Result<RetiredActivityBackendRepair, OrbitError> {
     let registered_tools = runtime.allowlist_known_tool_names();
     let registered: Vec<&str> = registered_tools.iter().map(String::as_str).collect();
     let mut report = RetiredActivityBackendRepair::default();
-    for path in activity_catalog_yaml_files(runtime) {
-        let Some(raw) = read_text(&path) else {
+    for entry in activity_catalog_entries(runtime) {
+        let (root, path) = match entry {
+            CatalogEntry::File { root, path } => (root, path),
+            CatalogEntry::Refused { path, reason } => {
+                report.skipped.push(RetiredActivityBackendSkip {
+                    path,
+                    reason: reason.to_string(),
+                });
+                continue;
+            }
+        };
+        let Some(raw) = read_confined_text(&path) else {
             report.skipped.push(RetiredActivityBackendSkip {
                 path,
                 reason: "file is unreadable".to_string(),
@@ -95,15 +127,12 @@ pub(crate) fn repair_retired_activity_backends(
             BackendRepairClass::AlreadyClean => {}
             BackendRepairClass::Repairable { value } => match remove_spec_backend_key(&raw, &value)
             {
-                Ok(next) => {
-                    std::fs::write(&path, next).map_err(|error| {
-                        OrbitError::Io(format!(
-                            "remove retired spec.backend from {}: {error}",
-                            path.display()
-                        ))
-                    })?;
-                    report.repaired.push(path);
-                }
+                Ok(next) => match write_confined(&root, &path, &next)? {
+                    Some(reason) => report
+                        .skipped
+                        .push(RetiredActivityBackendSkip { path, reason }),
+                    None => report.repaired.push(path),
+                },
                 Err(reason) => report
                     .skipped
                     .push(RetiredActivityBackendSkip { path, reason }),
@@ -335,36 +364,81 @@ fn is_blank_or_comment(line: &str) -> bool {
     trimmed.is_empty() || trimmed.starts_with('#')
 }
 
-fn activity_catalog_yaml_files(runtime: &OrbitRuntime) -> Vec<PathBuf> {
-    let mut files = BTreeSet::new();
-    for dir in runtime.v2_activity_catalog_paths() {
-        if dir.is_dir() {
-            collect_yaml_files(&dir, &mut files);
-        }
-    }
-    files.into_iter().collect()
+/// Linked `.yaml`/`.yml` file below a catalog root.
+const LINKED_FILE: &str = "symbolic link below the catalog root; activity health reads only regular files inside the catalog, so it was not inspected or rewritten";
+/// Linked directory below a catalog root.
+const LINKED_DIR: &str = "linked directory below the catalog root; activity health does not follow it, so activities beneath it were not inspected or rewritten";
+/// FIFO, socket, device, or other special `.yaml`/`.yml` entry.
+const NOT_REGULAR: &str =
+    "not a regular file; activity health does not read special files, so it was not inspected";
+
+/// One activity catalog entry beneath a configured catalog root.
+#[derive(Debug)]
+enum CatalogEntry {
+    /// A regular YAML file reached without crossing a link below `root`.
+    File { root: PathBuf, path: PathBuf },
+    /// A link or special entry that is reported instead of followed or read.
+    Refused { path: PathBuf, reason: &'static str },
 }
 
-fn collect_yaml_files(dir: &Path, files: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_yaml_files(&path, files);
-            continue;
-        }
-        let is_yaml = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
-            });
-        if is_yaml {
-            files.insert(path);
+/// Enumerate every production catalog root. Configured roots are resolved as
+/// given (a linked root is still a root); nothing below a root is followed.
+fn activity_catalog_entries(runtime: &OrbitRuntime) -> Vec<CatalogEntry> {
+    let mut entries = BTreeMap::new();
+    for root in runtime.v2_activity_catalog_paths() {
+        if root.is_dir() {
+            collect_catalog_entries(&root, &root, &mut entries);
         }
     }
+    entries.into_values().collect()
+}
+
+/// Walk `dir` using each entry's own file type, so links are never traversed
+/// (which also makes a linked directory cycle impossible to revisit).
+fn collect_catalog_entries(root: &Path, dir: &Path, entries: &mut BTreeMap<PathBuf, CatalogEntry>) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_catalog_entries(root, &path, entries);
+            continue;
+        }
+        let reason = if file_type.is_symlink() {
+            if path.is_dir() {
+                LINKED_DIR
+            } else if is_yaml(&path) {
+                LINKED_FILE
+            } else {
+                continue;
+            }
+        } else if !is_yaml(&path) {
+            continue;
+        } else if file_type.is_file() {
+            entries.entry(path.clone()).or_insert(CatalogEntry::File {
+                root: root.to_path_buf(),
+                path,
+            });
+            continue;
+        } else {
+            NOT_REGULAR
+        };
+        entries
+            .entry(path.clone())
+            .or_insert(CatalogEntry::Refused { path, reason });
+    }
+}
+
+fn is_yaml(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
+        })
 }
 
 fn file_stem_name(path: &Path) -> String {
@@ -374,8 +448,52 @@ fn file_stem_name(path: &Path) -> String {
         .to_string()
 }
 
-fn read_text(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path).ok()
+/// Read a discovered file without following a final link, and only when the
+/// opened descriptor is a regular file. The open is nonblocking, so a FIFO
+/// swapped in after discovery cannot stall doctor.
+pub(super) fn read_confined_text(path: &Path) -> Option<String> {
+    let mut file = open_read_only_no_follow(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).ok()?;
+    Some(raw)
+}
+
+/// Replace `path` only while every component below `root` is still an
+/// unlinked directory or regular file. The write renames a sibling temp file
+/// over the entry, so it never writes through a link or a hard-linked inode.
+/// Returns a skip reason when the path changed shape since discovery.
+fn write_confined(root: &Path, path: &Path, content: &str) -> Result<Option<String>, OrbitError> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        OrbitError::InvalidInput(format!(
+            "activity '{}' is outside catalog root '{}'",
+            path.display(),
+            root.display()
+        ))
+    })?;
+    match resolve_removable_artifact(root, relative)? {
+        RemovableArtifact::File(_) => {}
+        RemovableArtifact::Missing => {
+            return Ok(Some(
+                "file disappeared before the repair could write it".to_string(),
+            ));
+        }
+        RemovableArtifact::Unsafe(component) => {
+            return Ok(Some(format!(
+                "`{}` became a link or non-regular entry before the repair could write it; left untouched",
+                component.display()
+            )));
+        }
+    }
+    atomic_write_text(path, content).map_err(|error| {
+        OrbitError::Io(format!(
+            "remove retired spec.backend from {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(None)
 }
 
 fn parse_mapping(raw: &str) -> Option<serde_yaml::Value> {

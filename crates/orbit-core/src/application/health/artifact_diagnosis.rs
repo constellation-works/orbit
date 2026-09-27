@@ -8,7 +8,9 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::activity_job::load_job_asset;
 
-use super::activity_catalog::{ActivityCatalogFault, collect_activity_catalog_faults};
+use super::activity_catalog::{
+    ActivityCatalogFault, collect_activity_catalog_faults, read_confined_text,
+};
 use super::artifact::{
     ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
     ManagedCatalog, init_command, provenance, read_artifact,
@@ -291,7 +293,14 @@ fn finish_catalog_health(
     let kind = catalog.kind;
     let (scanned, faults) = collect_faults(runtime, catalog);
     for fault in faults {
-        let provenance = read_artifact(&fault.path)
+        // Activity faults can name links or special files the confined
+        // catalog scan refused to read; provenance must not read them either.
+        let on_disk = if kind == ArtifactKind::Activity {
+            read_confined_text(&fault.path)
+        } else {
+            read_artifact(&fault.path)
+        };
+        let provenance = on_disk
             .map(|on_disk| provenance(kind, &fault.name, tracked.get(&fault.name), &on_disk))
             .unwrap_or(ArtifactProvenance::UserAuthored);
         let stale_shipped_default = findings.iter().any(|finding| {
