@@ -385,6 +385,7 @@ fn landlock_grants(spec: &PluginBackendSpec) -> Vec<orbit_exec::LandlockPathGran
     let boundary = LandlockBoundary {
         read: profile.read.clone(),
         read_denies: profile.read_denies.clone(),
+        read_exclusions: Vec::new(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
         deny_tcp: true,

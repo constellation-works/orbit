@@ -273,6 +273,40 @@ pub(super) fn carve_out_unlistable(
     Ok(grants)
 }
 
+/// Grant `root` for an explicit boundary: every `unlistable` path keeps no
+/// granted ancestor ([`carve_out_unlistable`]), and every `listable` path
+/// keeps a list-only one ([`carve_out`]).
+///
+/// The two answer different owners. `unlistable` holds host trees — callback
+/// sessions, grant witnesses, other plugins' state — whose names are part of
+/// what is protected. `listable` holds an agent's own read exclusions, which
+/// the activity ruleset carves with list-only ancestors, so a brokered backend
+/// sees the workspace the way the agent would. With no `listable` path this
+/// is exactly [`carve_out_unlistable`].
+pub(super) fn carve_out_boundary(
+    root: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    if listable.is_empty() {
+        return carve_out_unlistable(root, unlistable);
+    }
+    if unlistable.contains(root) || listable.contains(root) {
+        return Ok(Vec::new());
+    }
+    if !unlistable.iter().any(|path| path.starts_with(root)) {
+        return carve_out(root, listable);
+    }
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut grants = Vec::new();
+    for child in children_under(root, root)? {
+        grants.extend(carve_out_boundary(&child, unlistable, listable)?);
+    }
+    Ok(grants)
+}
+
 /// Grant `root` while leaving both the denied paths beneath it and the paths
 /// `reach` can still name there without a readable ancestor.
 fn carve_out_beneath(

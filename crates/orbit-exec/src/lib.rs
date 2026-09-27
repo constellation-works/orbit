@@ -66,16 +66,16 @@ pub use linux_sandbox::{
     LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
     LinuxBwrapSpawnRequest, PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind,
     WriteGrant, bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message,
-    compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
+    compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority, existing_glob_matches,
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
     probe_bwrap, spawn_under_linux_bwrap,
 };
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
     append_macos_network_access, append_macos_read_boundary, claude_state_dir_from_env,
-    compile_macos_sandbox_profile, grok_state_dir_from_env, macos_login_keychain_access,
-    sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
-    sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
+    compile_macos_sandbox_profile, default_credential_read_denies, grok_state_dir_from_env,
+    macos_login_keychain_access, sandbox_exec_available, sandbox_exec_path,
+    sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 pub use path_identity::{create_write_root, lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};

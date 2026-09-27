@@ -228,6 +228,8 @@ impl PluginBackendSpec {
                 .chain(host_write_dirs)
                 .collect(),
             network,
+            caller_read_exclusions: Vec::new(),
+            caller_write_rules: Vec::new(),
             unsandboxed: self.sandbox == PluginSandbox::None
                 && self.granted(PluginGrant::Unsandboxed),
             // Set by `with_callback_session` once the session exists.

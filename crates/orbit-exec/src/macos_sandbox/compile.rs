@@ -423,6 +423,31 @@ fn emit_default_credential_read_denies(
     cargo_home: Option<&OsStr>,
     out: &mut String,
 ) {
+    for deny in credential_read_denies(home, cargo_home) {
+        let path = deny.path.display().to_string();
+        if deny.file {
+            emit_read_deny_literal(&path, out);
+        } else {
+            emit_read_deny_subpath(&path, out);
+        }
+    }
+}
+
+/// One well-known credential location every confined child is denied.
+struct CredentialReadDeny {
+    path: PathBuf,
+    /// A single file beside granted siblings rather than a whole tree.
+    file: bool,
+}
+
+/// The default credential read denies, in the order the SBPL compiler emits
+/// them. One list serves both the agent profile and a brokered plugin
+/// backend ([`default_credential_read_denies`]), so the two cannot drift.
+fn credential_read_denies(
+    home: Option<&OsStr>,
+    cargo_home: Option<&OsStr>,
+) -> Vec<CredentialReadDeny> {
+    let mut denies = Vec::new();
     if let Some(home) = super::provider_dirs::non_empty_env_path(home) {
         let home = home.display().to_string();
         for suffix in [
@@ -435,7 +460,10 @@ fn emit_default_credential_read_denies(
             "Library/Application Support/BraveSoftware/Brave-Browser",
             "Library/Application Support/Firefox",
         ] {
-            emit_read_deny_subpath(&format!("{home}/{suffix}"), out);
+            denies.push(CredentialReadDeny {
+                path: PathBuf::from(format!("{home}/{suffix}")),
+                file: false,
+            });
         }
     }
 
@@ -447,13 +475,35 @@ fn emit_default_credential_read_denies(
     // extensionless `credentials` as well as `credentials.toml`. [ORB-12469]
     if let Some(cargo_home) = cargo_home_dir(home, cargo_home) {
         for name in CARGO_CREDENTIAL_FILE_NAMES {
-            emit_read_deny_literal(&format!("{}/{name}", cargo_home.display()), out);
+            denies.push(CredentialReadDeny {
+                path: PathBuf::from(format!("{}/{name}", cargo_home.display())),
+                file: true,
+            });
         }
     }
 
     for path in ["/Library/Keychains", "/System/Library/Keychains"] {
-        emit_read_deny_subpath(path, out);
+        denies.push(CredentialReadDeny {
+            path: PathBuf::from(path),
+            file: false,
+        });
     }
+    denies
+}
+
+/// The well-known credential locations the SBPL compiler denies every
+/// confined child, resolved from this process's `HOME` and `CARGO_HOME`.
+///
+/// Exposed for a confinement that is not compiled from an agent profile — a
+/// plugin backend the host spawns on an agent's behalf — so it carries the
+/// same credential denies on either platform.
+pub fn default_credential_read_denies() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME");
+    let cargo_home = std::env::var_os("CARGO_HOME");
+    credential_read_denies(home.as_deref(), cargo_home.as_deref())
+        .into_iter()
+        .map(|deny| deny.path)
+        .collect()
 }
 
 /// Whether the resolved profile grants any write at all. A profile whose

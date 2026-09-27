@@ -39,6 +39,7 @@ fn fs_state_permissions() -> PluginPermissions {
     }
 }
 
+mod brokered;
 mod confinement;
 mod grants;
 mod programs;

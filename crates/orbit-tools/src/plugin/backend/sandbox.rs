@@ -40,6 +40,18 @@ pub struct PluginSandboxProfile {
     /// so the two lists cannot drift apart [ORB-12872].
     pub(crate) materialization_roots: Vec<PathBuf>,
     pub network: PluginNetworkPermission,
+    /// The calling agent's read exclusions, as absolute globs, for a backend
+    /// the host spawns on an agent's behalf
+    /// ([`PluginBackendSpec::brokered_sandbox_profile`]). Empty on every
+    /// other call path.
+    pub caller_read_exclusions: Vec<String>,
+    /// The calling agent's `modify` rules, as absolute globs in their own
+    /// order, each grant clipped to the write roots this profile kept. Only
+    /// the seatbelt profile replays them: Landlock holds the same boundary
+    /// through the write roots the profile was compiled down to, and cannot
+    /// refuse a name one of these exclusions matches after spawn. Empty on
+    /// every non-brokered call path.
+    pub caller_write_rules: Vec<String>,
     /// `backend.sandbox: none` with the `unsandboxed` grant: no confinement.
     pub unsandboxed: bool,
     /// The host descriptor the child receives as [`PLUGIN_CALLBACK_FD`]: its
@@ -98,7 +110,8 @@ impl PluginSandboxProfile {
     /// Linux test compiles it to check the two platforms express the same
     /// write set. Directories become `subpath` roots (`<dir>/**`); a named
     /// file is emitted literally, so `orbit.db` never widens into the global
-    /// root that holds it.
+    /// root that holds it. A calling agent's read exclusions and replayed
+    /// `modify` rules follow every grant, so they win under last-match-wins.
     pub fn macos_fs_rules(&self) -> ResolvedFsProfile {
         ResolvedFsProfile {
             name: "plugin".to_string(),
@@ -111,6 +124,7 @@ impl PluginSandboxProfile {
                         orbit_exec::physical_with_missing_tail(path).display()
                     )
                 })
+                .chain(negated(&self.caller_read_exclusions))
                 .collect(),
             modify: self
                 .write
@@ -126,9 +140,14 @@ impl PluginSandboxProfile {
                         .display()
                         .to_string()
                 }))
+                .chain(self.caller_write_rules.iter().cloned())
                 .collect(),
         }
     }
+}
+
+fn negated(patterns: &[String]) -> impl Iterator<Item = String> + '_ {
+    patterns.iter().map(|pattern| format!("!{pattern}"))
 }
 
 impl Sandbox for PluginSandboxProfile {
@@ -320,6 +339,7 @@ fn spawn_confined(
     let boundary = orbit_exec::LandlockBoundary {
         read: profile.read.clone(),
         read_denies: profile.read_denies.clone(),
+        read_exclusions: profile.caller_read_exclusions.clone(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
         // Landlock has no address filter: `loopback` and `any` both leave
