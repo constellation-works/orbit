@@ -39,6 +39,7 @@ fn input_model_preserves_full_strings_and_refuses_unrecognized_families() {
         reservation_owner: None,
         activity_binding: None,
         brokered_caller: None,
+        broker_call: None,
         orbit_host: None,
     };
 
@@ -73,6 +74,7 @@ fn tool_context(agent: &str, model: &str) -> ToolContext {
         reservation_owner: None,
         activity_binding: None,
         brokered_caller: None,
+        broker_call: None,
         orbit_host: None,
     }
 }

@@ -34,6 +34,7 @@ pub(crate) struct RunDispatch {
     /// The run's worktree, resolved once so a request `cwd` is compared
     /// against the real directory rather than a spelling of it.
     worktree: PathBuf,
+    sessions: std::sync::Arc<orbit_tools::plugin::BrokerSessions>,
 }
 
 impl RunDispatch {
@@ -47,6 +48,7 @@ impl RunDispatch {
             runtime,
             run,
             worktree,
+            sessions: Default::default(),
         }
     }
 
@@ -126,7 +128,12 @@ impl RunDispatch {
 }
 
 impl BrokerDispatch for RunDispatch {
-    fn call(&self, request: BrokerRequest, peer_pid: u32) -> Result<Value, OrbitError> {
+    fn call(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Value, OrbitError> {
         let BrokerRequest {
             tool,
             input,
@@ -184,7 +191,14 @@ impl BrokerDispatch for RunDispatch {
                         &tool,
                         input,
                         Role::Admin,
-                        self.tool_context(&cwd, session_context),
+                        {
+                            let mut ctx = self.tool_context(&cwd, session_context);
+                            ctx.broker_call = Some(orbit_tools::plugin::BrokerCall {
+                                sessions: std::sync::Arc::clone(&self.sessions),
+                                cancelled,
+                            });
+                            ctx
+                        },
                         CapabilityEnforcement::McpSessionOnly,
                     )
                 },

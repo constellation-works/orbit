@@ -63,7 +63,7 @@ allowed_internal_deps() {
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
       # and Core's authoritative runtime dispatcher.
-      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types"
+      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types orbit-engine orbit-exec orbit-tools"
       ;;
     *)
       return 1
@@ -73,6 +73,9 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-cli)
+      echo "orbit-engine orbit-exec orbit-tools"
+      ;;
     orbit-core)
       echo "orbit-exec"
       ;;

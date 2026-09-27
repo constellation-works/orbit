@@ -344,6 +344,8 @@ pub struct ToolContext {
     /// ([`plugin::PluginBackendSpec::brokered_sandbox_profile`]). Tool input
     /// cannot set it.
     pub brokered_caller: Option<plugin::BrokeredCaller>,
+    /// Session ownership and cancellation for a host-brokered call.
+    pub broker_call: Option<plugin::BrokerCall>,
     /// Narrow Orbit application host used by Orbit builtins instead of respawning
     /// the Orbit CLI or carrying task-specific state in the generic tool context.
     pub orbit_host: Option<Arc<dyn OrbitToolHost>>,

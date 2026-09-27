@@ -101,6 +101,10 @@ impl Fixture {
 
     /// Install and enable a one-tool exec plugin `<name>.hello`.
     fn plugin(&self, name: &str, backend: &str, secrets: Option<&str>) {
+        self.plugin_kind(name, backend, secrets, "exec");
+    }
+
+    fn plugin_kind(&self, name: &str, backend: &str, secrets: Option<&str>, kind: &str) {
         let root = self.sources.join(name);
         std::fs::create_dir_all(root.join("bin")).expect("plugin bin dir");
         let script = root.join("bin/backend.sh");
@@ -114,7 +118,7 @@ impl Fixture {
             root.join("plugin.yaml"),
             format!(
                 "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: 1.0.0\n  \
-                 description: Fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: \
+                 description: Fixture plugin.\nspec:\n  backend:\n    type: {kind}\n    command: \
                  bin/backend.sh\n  tools:\n    - name: hello\n      description: Say hello.\n      \
                  execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        \
                  type: object\n        properties:\n          subject: {{ type: string, \
@@ -399,3 +403,180 @@ fn a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned() {
         Some(&PluginSecretUpdateStatus::Applied)
     );
 }
+
+/// A blocked exec backend leaves a descendant holding its pipes. Disconnect
+/// and broker teardown must kill both, without waiting for the tool timeout.
+#[test]
+fn disconnect_and_run_teardown_kill_the_backend_process_group() {
+    const CHILD: &str = "ORBIT_BROKER_LIFECYCLE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            child.env_remove(name);
+        });
+        let output = child.env(CHILD, "1").args(["--exact", "adapter::command::dispatch::tests::brokered::disconnect_and_run_teardown_kill_the_backend_process_group", "--nocapture"]).output().expect("isolated lifecycle fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.plugin("waiting", "#!/bin/sh\ncat >/dev/null\nsleep 120 &\nprintf '%s %s' \"$$\" \"$!\" > \"$ORBIT_PLUGIN_STATE/pids\"\nwait\n", None);
+    // The manifest needs a write grant for the readiness file.
+    // Use the existing source with an explicitly scoped plugin-state write.
+    let manifest = fixture.sources.join("waiting/plugin.yaml");
+    let text = std::fs::read_to_string(&manifest).expect("manifest");
+    std::fs::write(
+        &manifest,
+        format!("{text}  permissions:\n    fs:\n      write: ['{{{{plugin_state}}}}']\n"),
+    )
+    .expect("permissions");
+    install_plugin(
+        &fixture.runtime(),
+        fixture.sources.join("waiting").to_str().expect("source"),
+        &PluginAddOptions {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .expect("update fixture");
+    let options = PluginEnableOptions {
+        grants: vec!["fs".to_string()],
+        ..Default::default()
+    };
+    enable_plugin(&fixture.runtime(), "waiting", &options).expect("grant state write");
+    for disconnect in [true, false] {
+        let serving = serve(&fixture, fixture.run(&["waiting.hello"]));
+        let path = fixture.global_root.join("state/plugins/waiting/pids");
+        if path.exists() {
+            std::fs::remove_file(&path).expect("remove prior readiness");
+        }
+        let mut stream = UnixStream::connect(serving.broker.socket_path()).expect("connect");
+        let bytes = request("waiting.hello", json!({}), &fixture.worktree)
+            .to_string()
+            .into_bytes();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .expect("header");
+        stream.write_all(&bytes).expect("body");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let pids = loop {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                let pids: Vec<i32> = text
+                    .split_whitespace()
+                    .filter_map(|v| v.parse().ok())
+                    .collect();
+                if pids.len() == 2 {
+                    break pids;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "backend did not publish readiness"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let serving = if disconnect {
+            drop(stream);
+            Some(serving)
+        } else {
+            drop(serving);
+            drop(stream);
+            None
+        };
+        for pid in pids {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                // Linux orphan zombies are no longer executing, even if init
+                // has not yet reaped them. On other hosts kill(0) reports exit.
+                #[cfg(target_os = "linux")]
+                let zombie =
+                    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                        stat.rsplit_once(") ")
+                            .is_some_and(|(_, rest)| rest.starts_with('Z'))
+                    });
+                #[cfg(not(target_os = "linux"))]
+                let zombie = false;
+                // SAFETY: signal zero checks existence only.
+                if zombie || unsafe { libc::kill(pid, 0) } != 0 {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "backend group member {pid} survived teardown"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        drop(serving);
+    }
+}
+
+#[test]
+fn broker_mcp_sessions_are_reused_and_reclaimed_without_dropping_the_runtime() {
+    const CHILD: &str = "ORBIT_BROKER_MCP_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        orbit_common::test_env::clear_inherited_authority(|name| {
+            child.env_remove(name);
+        });
+        let output = child.env(CHILD, "1").args(["--exact", "adapter::command::dispatch::tests::brokered::broker_mcp_sessions_are_reused_and_reclaimed_without_dropping_the_runtime", "--nocapture"]).output().expect("isolated MCP fixture");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.plugin_kind("mcpecho", MCP_BACKEND, None, "mcp");
+    let first = serve(&fixture, fixture.run(&["mcpecho.hello"]));
+    let mut other_run = fixture.run(&["mcpecho.hello"]);
+    other_run.activity_name = "another_invocation".to_string();
+    let second = serve(&fixture, other_run);
+    let call = || request("mcpecho.hello", json!({}), &fixture.worktree);
+    let a = first.call(call());
+    let b = second.call(call());
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(b["ok"], true, "{b}");
+    assert_ne!(a["output"]["pid"], b["output"]["pid"]);
+    assert_eq!(first.call(call())["output"]["pid"], a["output"]["pid"]);
+    assert_eq!(a["output"]["context"]["task_id"], RUN_TASK);
+    assert_eq!(a["output"]["context"]["job_run_id"], RUN_ID);
+    assert_eq!(a["output"]["parent"], std::process::id());
+    let runtime = first.runtime.clone();
+    let pid = a["output"]["pid"].as_u64().expect("pid") as i32;
+    drop(first);
+    // SAFETY: signal zero checks existence only.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "broker drop reaped its session while host runtime remains alive"
+    );
+    assert_eq!(second.call(call())["output"]["pid"], b["output"]["pid"]);
+    let pid = b["output"]["pid"].as_u64().expect("pid") as i32;
+    drop(second);
+    // SAFETY: signal zero checks existence only.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    drop(runtime);
+}
+
+const MCP_BACKEND: &str = r#"#!/usr/bin/python3
+import json, os, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'hello', 'inputSchema': {'type': 'object', 'properties': {'subject': {'type': 'string', 'description': 'Who to greet.'}}}}]}
+    elif method == 'tools/call':
+        result = {'content': [], 'structuredContent': {'pid': os.getpid(), 'parent': os.getppid(), 'context': request['params']['_meta']['orbit']}}
+    else:
+        continue
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+"#;

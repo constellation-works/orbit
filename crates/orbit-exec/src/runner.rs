@@ -126,9 +126,20 @@ pub fn supervise_child(
     timeout_ms: Option<u64>,
     stdin_payload: Option<Vec<u8>>,
 ) -> Result<SupervisedOutcome, OrbitError> {
+    supervise_child_cancellable(child, timeout_ms, stdin_payload, None)
+}
+
+/// Supervise a child with host-requested cancellation. Cancellation kills the
+/// whole process group from the owning wait loop, before reaping the child.
+pub fn supervise_child_cancellable(
+    child: Child,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<SupervisedOutcome, OrbitError> {
     let started = Instant::now();
     let result =
-        crate::supervision::wait_with_optional_timeout(child, timeout_ms, false, stdin_payload)?;
+        crate::supervision::wait_with_cancellation(child, timeout_ms, stdin_payload, cancelled)?;
     Ok(SupervisedOutcome {
         result: ExecutionResult {
             success: result.exit_success,

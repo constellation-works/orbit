@@ -11,6 +11,7 @@
 mod backend;
 mod callback;
 mod envelope;
+mod lifecycle;
 mod loader;
 mod mcp;
 mod migrate;
@@ -38,6 +39,7 @@ pub use envelope::{
     PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, take_delivered_plugin_secret_names,
     take_plugin_secret_updates, validate_output,
 };
+pub use lifecycle::{BrokerCall, BrokerSessions};
 pub use loader::{
     FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginTestFile, PluginDefinitionFiles,
     PluginLoadError, PluginValidationPolicy, ResolvedPluginTool, first_party_source,

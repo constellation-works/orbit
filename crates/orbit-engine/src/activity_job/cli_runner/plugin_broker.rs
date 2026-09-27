@@ -11,7 +11,8 @@ use super::super::dispatcher::ResolvedSandbox;
 use crate::context::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
 
 /// This launch's broker, if one bound. Dropping it stops the listener and
-/// removes the socket, so every return path out of the step tears it down.
+/// cancels admitted calls, reclaims backend sessions and removes the socket,
+/// so every return path out of the step tears it down.
 pub(super) struct RunPluginBroker {
     handle: Option<Box<dyn PluginBrokerHandle>>,
     run_id: String,

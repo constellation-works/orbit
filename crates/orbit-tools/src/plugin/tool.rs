@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, supervise_child};
+use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, supervise_child_cancellable};
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
@@ -104,17 +104,15 @@ impl Tool for PluginTool {
         self.backend.spec().enforce_programs(ctx, &self.name)?;
         let output = match &self.backend {
             PluginBackend::Exec(spec) => self.execute_process(spec, ctx, input)?,
-            // A long-lived `mcp` child is shared per caller context, and the
-            // broker does not yet keep or reclaim one per run (design
-            // `docs/design/plugins/2_agent_call_broker.md` §4.4). Refuse
-            // rather than hand a brokered call a child confined by another
-            // caller's profile.
-            PluginBackend::Mcp(_) if ctx.brokered_caller.is_some() => {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "plugin tool '{}' has an `mcp` backend, which the plugin broker does not \
-                     run yet",
-                    self.name
-                )));
+            PluginBackend::Mcp(backend) if ctx.brokered_caller.is_some() => {
+                let call = ctx.broker_call.as_ref().ok_or_else(|| {
+                    OrbitError::PolicyDenied(
+                        "brokered MCP calls require a host-owned session lifetime".to_string(),
+                    )
+                })?;
+                call.sessions
+                    .backend(backend)
+                    .call(ctx, &self.name, &self.verb, input)?
             }
             PluginBackend::Mcp(backend) => backend.call(ctx, &self.name, &self.verb, input)?,
         };
@@ -181,7 +179,21 @@ impl PluginTool {
             let _ = child.wait();
             return Err(error);
         }
-        let output = supervise_child(child, Some(timeout_ms), Some(stdin))?.result;
+        let output = supervise_child_cancellable(
+            child,
+            Some(timeout_ms),
+            Some(stdin),
+            ctx.broker_call.as_ref().map(|call| call.cancelled.as_ref()),
+        )?
+        .result;
+
+        // A backend may report a rotation and then remain alive until a
+        // disconnect cancels it. Apply a complete reply even when supervision
+        // ended the process; a service-side rotation cannot be rolled back.
+        let response = parse_response_json(&self.name, &output.stdout);
+        if let Ok(response) = &response {
+            apply_secret_updates(spec, &self.name, response.get("secret_updates"));
+        }
 
         if output.timed_out {
             return Err(OrbitError::Execution(format!(
@@ -197,11 +209,6 @@ impl PluginTool {
                 output.stderr.trim()
             )));
         }
-        let response = parse_response_json(&self.name, &output.stdout)?;
-        // Applied before the answer is judged: a backend that refreshed an
-        // OAuth token and then failed the call it refreshed for still holds
-        // the only valid token, and it must not be lost with the error.
-        apply_secret_updates(spec, &self.name, response.get("secret_updates"));
-        response_output(&self.name, &response)
+        response_output(&self.name, &response?)
     }
 }
