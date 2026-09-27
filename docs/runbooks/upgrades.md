@@ -2,10 +2,10 @@
 type: runbook
 summary: Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace.
 tags: [operations, upgrades, migrations, recovery]
-paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
+paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation.rs", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434]
-last_validated: 2026-09-20
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631]
+last_validated: 2026-09-27
 ---
 
 # Upgrade Orbit Safely
@@ -78,16 +78,122 @@ Everything before the swap fails with nothing changed. After the swap the comman
 reports success on an incomplete upgrade: it exits `4` with `outcome: needs_recovery` and
 names the step that failed.
 
-### Persistent MCP clients and upgrade admission
+### Upgrade admission: compatibility generations
+
+Every participating Orbit process — a one-shot command, `orbit mcp serve` (stdio,
+the TCP listener, the local part of a federated mux, destination-side SSH servers),
+the dashboard, a clock tick, and every pipeline worker — joins its **generation
+authority** before runtime bootstrap and holds that membership until it exits.
+Admission follows `compatibility-generation-v2`: it asks whether the binaries'
+*state versions* are compatible, not whether their executables are identical.
+
+Each binary is compiled with a **compatibility identity**, which `orbit update
+--contract` reports:
+
+- the store schema and the workspace layout ledgers, each as the newest version the
+  binary migrates to plus two floors — the newest migration an older binary cannot
+  keep **writing** through, and the newest one it cannot **read** (see
+  [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace)
+  for how migrations are classified);
+- every feature schema (automation, review, local pull) at the version the binary
+  migrates it to. Feature ledgers refuse any newer version, so they must match.
+
+The authority records the envelope of every identity admitted since it last had no
+participant in `.generation-compat.json`, and each live process registers a
+record — pid, role, access, digest, identity and start time — under
+`.generation-participants/`. A newcomer is admitted beside the live processes when:
+
+- every live reader can read what the newcomer migrates to, and it can read theirs;
+- the oldest live writer keeps writing correctly through the newcomer's migrations;
+- when the newcomer writes, it keeps writing correctly through theirs;
+- the feature schemas are equal.
+
+So a new build with the **same schema, layout and feature schemas** runs task, clock,
+`migrate` and `workspace sync` commands while older `mcp serve`, dashboard and drain
+processes stay up. A build that adds only **additive** migrations migrates the store
+while they are live, and the older processes keep reading *and writing* it. Distinct
+executables share the authority; identical copies trivially do.
+
+#### A migration older processes cannot keep: the quiesce wait
+
+A newer **writing** command whose migrations the live processes cannot keep (a
+read-compatible or breaking migration beyond them) does not fail at once:
+
+1. It records a **pending generation switch** in `.generation-pending.json` naming
+   itself, its target identity and a deadline, and waits — `ORBIT_UPGRADE_QUIESCE_SECS`
+   seconds, default 120.
+2. While the switch is pending, no new process of the old generation is admitted;
+   each is refused with `a generation switch is pending: pid N (role) is waiting until
+   <deadline> to migrate to <identity>`. A command of the switch's own target identity
+   waits behind it instead.
+3. Live processes yield at their next safe point:
+   - `orbit mcp serve` finishes its in-flight requests and exits (stdio closes; the
+     client reconnects against the new generation);
+   - the dashboard drains its connections and exits;
+   - a pipeline worker completes its current top-level step, checkpoints it, records
+     its run **`interrupted`** with error code `upgrade_quiesce` — not failed — and
+     exits. `orbit job resume <run_id>` continues it from that checkpoint once the
+     upgrade is done. A drain coordinator yields between admission passes and admits
+     no new leaves meanwhile; its already running leaves yield at their own step
+     boundaries.
+4. Once every participant is gone the switch takes the authority, records its own
+   identity, and runs.
+
+If the bound expires first, the command is refused and names every blocker:
+
+```text
+upgrade admission refused: a breaking migration is waiting (store schema: a live writer at
+version 32 predates migration v33, which older writers do not keep), and these Orbit
+processes did not yield within 120s: pid 41822 (drain, started 2026-09-27T21:33:02Z),
+pid 40211 (mcp serve, started 2026-09-27T20:01:15Z), and any processes that did not
+register (executable-generation-v1 binaries, or sandboxed children that cannot write the
+Orbit root); leave the installation and stores unchanged. …
+```
+
+Quiesce those through their owners (or let long steps finish) and retry. An **older**
+binary never displaces newer processes: it is refused as incompatible, and a
+read-only command whose readers would break is refused the same way.
+
+#### Handing a long-lived process over to a replaced executable
+
+`orbit mcp serve`, the dashboard, and drain coordinators notice when the installed
+executable they were started from is replaced (write beside it, rename over it — the
+way `install.sh`, Homebrew and `orbit update` install). At an idle boundary they ask
+the installed binary for its `update --contract` and, when it speaks
+`compatibility-generation-v2` and the resume capability they need, re-exec it in place:
+
+- `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
+  MCP session survive — the client does not re-initialize — because the new image
+  receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+- The dashboard drains, then execs the new image on the same address without
+  reopening a browser.
+- A drain coordinator (`drain-adopt-v1`) execs between admission passes and **adopts**
+  its own run: same run id, owner pid and window, resuming from its checkpoints.
+  Running leaves stay on the image they started with and finish normally.
+
+The new image joins the authority like any newcomer, so an incompatible replacement
+triggers the quiesce wait above instead. A candidate that cannot take over (older
+contract, missing capability) is logged once, and the process keeps running the
+replaced image until it exits. The `mcp listen` TCP listener and one-shot commands
+are not handed over; they finish on the image they started with.
+
+#### `--contract` and `--preflight`
 
 `orbit update --contract --json` reports protocol support without opening state:
-`{"schema_version":1,"contract":"executable-generation-v1"}`. The supported
-updater requires this response from a candidate before installation; a missing
-or incompatible protocol refuses, including a downgrade to an unprotected build.
+
+```json
+{"schema_version":1,"contract":"executable-generation-v1","contracts":["executable-generation-v1","compatibility-generation-v2"],"admission_contract":"compatibility-generation-v2","compatibility":{"store_schema":{"version":32,"writer_floor":28,"reader_floor":26},"workspace_layout":{"version":3,"writer_floor":3,"reader_floor":3},"features":{"automation":3,"local_pull":1,"review":1}},"resume":["mcp-stdio-v1","drain-adopt-v1"]}
+```
+
+`contract` stays `executable-generation-v1` because every v2 binary still honours it
+(see [Rollout beside executable-generation-v1 processes](#rollout-beside-executable-generation-v1-processes));
+`admission_contract` is the protocol it admits by. The supported updater requires
+this response from a candidate before installation; a missing or incompatible
+protocol refuses, including a downgrade to an unprotected build.
 
 `orbit update --preflight --json` is the wrapper-facing admission probe. It
 opens no runtime, migrates no store, downloads nothing, and changes no binary
-or managed resource. It uses OS locks under every **generation authority** the
+or managed resource. It uses OS locks under every generation authority the
 invocation can be refused by, in the order the update takes them:
 
 1. The invocation's own resolution — `--root`, then `ORBIT_ROOT`, otherwise the
@@ -98,135 +204,93 @@ invocation can be refused by, in the order the update takes them:
    named something else. A root override does not move what `orbit update`
    replaces: the executable is the running one (`~/.orbit/bin/orbit` for a
    managed install), and every client started *without* an override — including
-   the persistent `orbit mcp serve` processes this protocol exists for — pins
-   the host-global root. Admitting against the override alone would replace the
-   binary those clients are running and leave their record naming a generation
-   no later host-global process could ever take over from.
+   persistent `orbit mcp serve` processes — joins the host-global root.
 
 Both are listed in `admission_roots`, and a refusal names the authority it came
-from. So a live client refuses the upgrade whether it is pinned under
-`--root`/`ORBIT_ROOT` or on the host-global root, and a green preflight is only
-evidence for an update that used the same invocation's root resolution. There is
-no path where preflight consults a different set of authorities than the
-following `orbit update` locks.
-
-Admission also requires each authority's `.generation.lock` to be *writable*,
-and checks that before anything is downloaded, staged or replaced. Writability
-belongs to the record rather than to the lock — a participant can join an
-already-recorded generation from a read-only mount — so an authority that can
-never record a takeover would otherwise only refuse at pin time, once the
-executable had already been swapped. A `~/.orbit` on a read-only mount, or one
-whose record another user owns, therefore refuses `orbit update --root
-<scratch>` up front with `the record cannot be written from here` naming that
-root, rather than replacing the binary and returning `needs_recovery` against a
-host-global record it cannot correct. `--preflight` takes the same admissions,
-so a green preflight is evidence the update can pin every authority it
-reported.
-
-Isolated `HOME=` is the other working isolation — it relocates `~/.orbit`
-itself, which is what in-process MCP roundtrip fixtures use, and it moves the
-host-global authority with it. What a root override protects is *state*
-isolation, not host-binary replacement: a read-only unpinned `~/.orbit` (the
-agent-executor / Cowork sandbox) still cannot block `orbit --root <scratch>
-init`, because that invocation pins only its own resolved root and an unpinned
-root refuses nothing. `orbit update` and its `--preflight` are the exception:
-they admit against the host-global root too, so a `--root` override never
-exempts a host-binary replacement from that root's live clients — nor from a
-record it cannot write — and an environment with no resolvable home has no
-host-global authority to observe them through, so `orbit update` refuses there
-rather than replacing blind. Replace the host binary from outside such a
-sandbox, or give the sandbox a writable host-global root. Coordination lock
-files may be created. Exit 0 returns:
+from. Exit 0 returns:
 
 ```json
-{"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","global_root":"/srv/project","admission_roots":["/srv/project","/home/operator/.orbit"]}
+{"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","admission_contract":"compatibility-generation-v2","compatibility":{…},"quiesce_timeout_secs":120,"global_root":"/srv/project","admission_roots":["/srv/project","/home/operator/.orbit"]}
 ```
 
-Exit 1 with `upgrade admission refused` on stderr means stop before installation.
-`--json` emits the CLI's normal JSON error envelope on stderr. This is an
-observation, **not a reservation**. Constellation's wrapper should call it using
-the configured executable, user, environment and authority, without an ad-hoc
-MCP server or alternate store. Use `orbit update` for replacement through the
-supported installer: it acquires admission again against that same set of
-authorities, retains it across staging and replacement, and pins the candidate
-generation in each of them. `--check` only checks release availability and is not this probe.
-External installers do not hold Orbit's admission across their file operations;
-they must quiesce clients before replacement. A preflight alone does not make an
-external installer race-free.
+Exit 1 with `upgrade admission refused` on stderr means stop before installation;
+`--json` emits the CLI's normal JSON error envelope on stderr. This is an observation,
+**not a reservation**. `orbit update` itself still takes each authority **exclusively**:
+it refuses while any participant is live or a switch is pending, retains admission
+across staging and replacement, and pins the candidate's generation (with the
+candidate's reported identity, so compatible builds may join once it releases). Use
+`--preflight` to learn whether it would be admitted now; use an installer that renames
+over the executable when long-lived processes should stay up and hand over instead.
+`--check` only checks release availability and is not this probe.
 
-`orbit update` does not signal live drain workers. It requires exclusive
-generation admission before replacing the executable and refuses while any
-worker holds a shared pin. An external binary copy bypasses that admission and
-can run while drains are live; an external installer or service restart may
-signal them independently. A new writing `orbit clock tick` then refuses while
-the old generation stays pinned, and logs one dated hold summary when it can
-run again. A claimed worker terminated without a recorded cancellation is
-`interrupted` with `worker_terminated` whether its supervisor observes SIGTERM
-or stale-owner reconciliation sees the dead process first. The reconciler
-cannot determine which signal or installer killed an already-gone process.
+Admission also requires each authority's `.generation.lock` to be *writable*, and
+`orbit update` checks that before anything is downloaded, staged or replaced. An
+authority that can never record a takeover — a `~/.orbit` on a read-only mount, or one
+whose record another user owns — refuses `orbit update --root <scratch>` up front with
+`the record cannot be written from here`, rather than replacing the binary and
+returning `needs_recovery`.
 
-Every participating CLI process pins its executable generation before runtime
-bootstrap and retains that pin until exit. This includes ordinary/ operator MCP
-stdio, the TCP listener, the local part of a federated mux, destination-side SSH
-servers, and managed workers. The proxy does not grant authority at its
-remote destination; that destination admits its own process. All existing
-workspace selection, operator/agent capability, remote caller and managed-run
-checks still run. Admission grants none of those permissions.
-
-On macOS, a managed child with `ORBIT_REGISTRY_ROOT` joins its parent's host
-generation pin and keeps global stores on that registry even if it sets
-`ORBIT_ROOT` to select shared workspace data. The workspace `.orbit` generation
-record may be absent and cannot be created by the child sandbox. `orbit update`
-and `orbit update --preflight` still check both the explicit workspace authority
-and the host-global authority.
-
-The policy is deliberately conservative: any live process prevents ordinary
-`orbit update`, even an update with the same schema or version. A *writing*
-command from a different executable generation cannot open a runtime while that
-authority is pinned, so launching a newly installed executable cannot silently
-auto-migrate underneath an older participating MCP process. A *read-only*
-command (`RuntimeNeed::ReadOnly` — `task show`/`list`/`flow`, `run history`/
-`show`, `search`, `workspace list`/`show`, `tool list`, `friction list`, and
-other observation verbs) may join the live generation without rewriting
-`.generation.lock` when its compiled store schema equals the store's current
-schema. The joiner takes the same shared flock, so `orbit update` still refuses
-while it runs. Schema equality is exact, not ORB-12434 additive-newer; a
-matching digest still uses that additive-newer read-only compatibility after
-admission. A differing digest whose schema does not match is refused for
-read-only commands too, naming both schema versions. Writer refusals say the
-command writes. The updater changes its exclusive pin to the candidate
-generation before convergence children start. An old pinned executable cannot
-enter that gap. Identical executable copies share admission; version strings
-alone are not compatibility evidence. On Linux, the digest comes from
-`/proc/self/exe`, including a deleted running inode. On macOS the native Mach-O
-image UUID must match the loaded image before the opened descriptor is hashed;
-a replaced path or unsupported image format refuses admission.
+Isolated `HOME=` relocates `~/.orbit` itself, which is what in-process MCP roundtrip
+fixtures use, and it moves the host-global authority with it. A root override protects
+*state*, not host-binary replacement: a read-only unpinned `~/.orbit` (the agent-executor
+/ Cowork sandbox) cannot block `orbit --root <scratch> init`, because that invocation
+joins only its own resolved root. `orbit update` and `--preflight` admit against the
+host-global root too, and an environment with no resolvable home has no host-global
+authority to observe, so `orbit update` refuses there rather than replacing blind.
 
 A participant that can only read the admission files — a read-only mount, or a
-sandboxed child denied writes under its authority root — still joins the
-generation already recorded there, because a lock needs a descriptor rather than
-permission to rewrite bytes. It can never record a takeover: a differing
-generation is refused with `the record cannot be written from here`, leaving the
-record intact rather than partially written. A managed nested child therefore
-runs against the generation its host recorded; widen nothing to change that,
-and give a child a writable authority root only when it must own one.
+sandboxed child denied writes under its authority root — still joins a compatible
+generation, and a read-only command joins even when it cannot record itself in the
+envelope. It can never record a takeover: a switch it would need is refused with `the
+record cannot be written from here`, leaving the record intact. On macOS, a managed
+child with `ORBIT_REGISTRY_ROOT` joins its parent's host authority and keeps global
+stores on that registry even if it sets `ORBIT_ROOT` to select shared workspace data.
 
-Refusal leaves the connected client and its in-flight calls running. There is
-no server handoff, connection replacement, mutation retry or blind replay. If a
-mutation committed but its reply was lost, inspect the durable task/audit through
-the same authority before deciding what to do next. Quiesce through the process's
-owning client/operator, then retry the update. Orbit does not kill sessions,
-change identities or reclaim claims. OS locks release on exit/crash; never unlink
-`.generation.lock` or `.generation-admission.lock` to force admission. Keep these
-files in the authoritative root and out of lock-file garbage collection.
+Admission grants no permission: workspace selection, operator/agent capability,
+remote caller and managed-run checks all still run. On Linux the executable digest
+comes from `/proc/self/exe`, including a deleted running inode; on macOS the native
+Mach-O image UUID must match the loaded image before the opened descriptor is hashed.
+OS locks release on exit or crash (and on exec, which is how a handover leaves);
+never unlink `.generation.lock`, `.generation-admission.lock`,
+`.generation-compat.json`, `.generation-pending.json` or `.generation-participants/`
+to force admission. Keep them in the authoritative root and out of lock-file garbage
+collection. A participant record left by a process that exited without cleanup is
+unlocked, and the next admission collects it.
 
-**Bootstrap limitation:** processes from before this fix do not participate.
-Before the first protected upgrade, explicitly quiesce every pre-fix backend
-(including unmanaged or pinned executables), install the fix, and reconnect using
-the same configured authority. Restarting a desktop window is not evidence that
-its backend exited. The protocol cannot retroactively protect a pre-fix process,
-an external writer, or a process using another authority root. Normal schema and
-layout compatibility checks remain in force; admission is not a downgrade waiver.
+A new writing `orbit clock tick` that is refused — the live generation is
+incompatible, or a switch is pending — logs one dated hold summary and runs again
+once admitted. A claimed worker terminated without a recorded cancellation (an
+external installer or service restart signalling it) is `interrupted` with
+`worker_terminated` whether its supervisor observes SIGTERM or stale-owner
+reconciliation sees the dead process first.
+
+#### Rollout beside executable-generation-v1 processes
+
+Processes from builds that predate this contract admit by executable digest alone,
+and never write `.generation-compat.json`. The two protocols share
+`.generation.lock`, so during a rollout:
+
+- While a v1 process holds the authority, a v2 **writer** with a different digest is
+  refused at once (`another executable generation is still running (this command
+  writes; …)`), exactly as v1 would
+  refuse it — v1 processes do not yield, so waiting would only delay the refusal.
+  A v2 **read-only** command joins a v1 generation when its store schema equals the
+  store's, as v1 read-only joins did.
+- A v2 process that takes an idle authority records both the digest (for v1) and its
+  identity. A v1 process with another digest is then refused by the digest check, as
+  before; a v1 process that takes an idle authority rewrites the digest, which
+  invalidates the v2 envelope, and later v2 newcomers fall back to the v1 rules until
+  the authority is idle again.
+- `orbit update` keeps speaking v1 to the updater: the candidate must report
+  `contract: executable-generation-v1`, and its `compatibility` is recorded only when
+  it also reports `admission_contract: compatibility-generation-v2`.
+
+**Bootstrap limitation:** processes from before generation admission existed at all
+do not participate. Before the first protected upgrade, quiesce every such backend
+(including unmanaged or pinned executables), install, and reconnect using the same
+configured authority. Restarting a desktop window is not evidence that its backend
+exited. Admission is not a downgrade waiver: normal schema and layout compatibility
+checks stay in force.
 
 ### Recovery and resumption
 
@@ -239,8 +303,9 @@ includes that root explicitly, so retrying from a different checkout does not si
 workspace being repaired.
 
 The outgoing executable stays at `<orbit>.previous`. Restoring it is safe when the state it
-must open is newer only by additive migrations — it then serves reads and refuses writes —
-and refused when a breaking migration separates the two. See
+must open is newer only by additive migrations — it keeps reading and writing — or by
+read-compatible ones — it serves reads and refuses writes — and refused when a breaking
+migration separates the two. See
 [Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
 
 Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
@@ -256,7 +321,8 @@ the version the running process started with — is refused unless `--allow-down
 Even then, the staged older binary must be able to open this workspace's state — `orbit update`
 runs its `migrate --dry-run --json` *before* replacing anything and requires an
 explicit up-to-date report with matching current/supported layout and schema versions.
-Missing reports and additive-newer read-only success both refuse replacement.
+Missing reports and forward-compatible success (newer state the older binary could still
+open) both refuse replacement.
 
 ### Release mirrors
 
@@ -403,28 +469,51 @@ retired projection writer and can recreate links while they remain running.
 ## Run an older binary against a newer workspace
 
 A binary older than the workspace no longer fails every command on the version number
-alone. Each migration declares itself **additive** (an older binary reads the result
-correctly) or **breaking** (it removes, renames, or reinterprets state older binaries
-use), and the binary that applies a migration records that classification beside the
-version it stamps — `state/layout.compat` for the layout, the `migration.compat` row in
-`schema_meta` for the database. An older binary reads the record and takes one of two
-paths. The contract is described in
-[docs/design/state-compatibility](../design/state-compatibility/2_design.md).
+alone. Each migration declares what it means for a binary that does not have it, and
+the binary that applies a migration records that classification beside the version it
+stamps — `state/layout.compat` for the layout, the `migration.compat` row in
+`schema_meta` for the database:
 
-### Additive-newer: unaudited CLI reads
+- **additive** — it only adds state an older binary can both read *and keep writing
+  through its own code paths*: new tables no existing row depends on, nullable or
+  defaulted columns, indexes an older writer cannot violate, files it never touches.
+  Rows the older binary writes afterwards stay correct for the newer one.
+- **read-compatible** — an older binary still reads the result correctly, but its
+  writes would not be: a `NOT NULL` column without a default, a constraint or trigger
+  its statements could trip, a projection or journal the newer binary keeps in step
+  with rows an older writer would not update, or a backfill an older writer would write
+  back in the old shape.
+- **breaking** — it removes, renames, or reinterprets state older binaries use.
 
-Generation admission may first refuse a different executable while a participating
-process is live. Once admitted, reader compatibility applies independently.
-MCP `tools/call` is **not** an unaudited read: even `orbit.workspace.list` must
-write its durable audit event. An old process with a read-only newer store is
-therefore not a usable MCP authority, even when `orbit task show` works at the CLI.
-Do not use successful CLI reads or candidate-vs-store checks as proof of MCP
-continuity.
+An older binary reads the record and takes one of three paths. The same
+classification decides upgrade admission: only additive migrations let older processes
+keep writing beside a newer one (see
+[Upgrade admission](#upgrade-admission-compatibility-generations)). The contract is
+described in [docs/design/state-compatibility](../design/state-compatibility/2_design.md).
 
-When nothing breaking sits above the binary's supported version, the workspace opens
-**read-only**. `orbit task list`, `orbit task show`, `orbit run history`, and
-`orbit search` work; every write is refused with its own diagnostic, and the older
-binary never migrates, restamps, or otherwise rewrites the newer state:
+### Additive-newer: reads and writes
+
+When every migration above the binary's supported version is additive, the workspace
+opens normally and the older binary keeps reading and writing it. It never migrates or
+restamps the newer state. `orbit migrate` reports the case as a successful inspection:
+
+```text
+forward-compatible: store schema version 33 is newer than this binary's supported
+version 32, but only by migrations older writers keep; opened for reads and writes
+
+This workspace is newer than this binary, by migrations older writers keep writing
+through: commands read and write it as usual.
+```
+
+`--json` reports it under `forward_compatible` with `"writable": true`.
+
+### Read-compatible-newer: unaudited CLI reads
+
+When nothing breaking sits above the binary's supported version but at least one
+read-compatible migration does, the workspace opens **read-only**. `orbit task list`,
+`orbit task show`, `orbit run history`, and `orbit search` work; every write is refused
+with its own diagnostic, and the older binary never migrates, restamps, or otherwise
+rewrites the newer state:
 
 ```text
 error: schema migration failed: cannot open a write transaction: this orbit binary
@@ -435,19 +524,24 @@ read-only; reads are served normally — upgrade orbit to write to this store
 `orbit migrate` (and `--dry-run`) report this as a successful inspection and name it:
 
 ```text
-read-only: store schema version 21 is newer than this binary's supported version 20,
-but only by additive migrations; opened read-only
+forward-compatible: store schema version 21 is newer than this binary's supported
+version 20, but only by read-compatible migrations; opened read-only
 
-This workspace is newer than this binary, by additive migrations only: read-only
+This workspace is newer than this binary, by read-compatible migrations: read-only
 commands work and writes are refused. Upgrade orbit to write to it.
 ```
 
-Two limits are worth knowing before relying on this. Audit events are writes, so a
-read-only command records no audit row and prints a `failed to write audit event`
-warning. And an additive-newer *layout* (as opposed to store schema) is not
-write-gated: additive is a declaration that older binaries stay safe, which is why
-anything an older writer could damage — layout v3's task projections, for instance — is
-declared breaking instead.
+MCP `tools/call` is **not** an unaudited read: even `orbit.workspace.list` must write
+its durable audit event. An old process with a read-only newer store is therefore not a
+usable MCP authority, even when `orbit task show` works at the CLI. Audit events are
+writes, so a read-only command records no audit row and prints a `failed to write audit
+event` warning.
+
+The workspace layout has no single write choke point, so it cannot be held read-only:
+a read-compatible layout migration the binary lacks refuses the workspace like a breaking
+one. Records written by a binary from before writers were classified carry no
+read-compatible list; an older binary then opens a newer store read-only and a newer
+layout for writes, exactly as it did before.
 
 ### Breaking-newer, or unclassified: still refused
 

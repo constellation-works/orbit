@@ -62,7 +62,11 @@ fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 // SQLite may materialize WAL/SHM for a read-only open. Flock
                 // state (and the empty lock files flock needs) is excluded.
-                if name.ends_with("-wal")
+                // Participant registrations are admission state too.
+                if path
+                    .components()
+                    .any(|component| component.as_os_str() == ".generation-participants")
+                    || name.ends_with("-wal")
                     || name.ends_with("-shm")
                     || name.ends_with(".lock")
                     || name == "orbit.jsonl"
@@ -153,6 +157,7 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
     assert!(contract.status.success(), "{contract:?}");
     let report: Value = serde_json::from_slice(&contract.stdout).expect("contract JSON");
     assert_eq!(report["contract"], "executable-generation-v1");
+    assert_eq!(report["admission_contract"], "compatibility-generation-v2");
     assert_refused(&preflight(&workspace));
     // Exercise ordinary update admission, not just the observation helper. An
     // explicit target avoids network access; refusal must precede staging.
@@ -192,53 +197,380 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
 
 #[test]
 #[cfg(target_os = "linux")]
-fn different_executable_cannot_auto_migrate_while_old_client_is_live() {
+fn a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
     client.call_tool_ok("orbit_workspace_list", json!({}));
-    // An executable with distinct bytes but the same version and schema proves
-    // admission is conservative; neither version equality nor additive shape
-    // may grant an old writer a waiver.
-    let candidate = workspace.home.join("candidate-orbit");
-    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &candidate).expect("candidate copy");
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&candidate)
-        .expect("open candidate")
-        .write_all(b"\nupgrade-regression-candidate\n")
-        .expect("distinct executable");
+    let old = Path::new(env!("CARGO_BIN_EXE_orbit"));
+    let (mut dashboard, port) = spawn_dashboard(&workspace, old);
+    let drain = start_drain(&workspace, old);
+    // Distinct bytes, same store schema, layout and feature schemas: admission
+    // keys on compatibility, so the candidate joins the live generation as a
+    // writer instead of being refused for its digest.
+    let candidate = distinct_candidate(&workspace);
+    let old_digest = executable_generation(old).expect("old");
     assert_ne!(
         executable_generation(&candidate).expect("candidate"),
-        executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("old")
+        old_digest
     );
-    let before = store_bytes(&workspace);
+    assert_eq!(running_digest(drain.pid), old_digest);
+    let recorded = generation_record(&workspace);
+    let added = candidate_ok(
+        &workspace,
+        &candidate,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Written by the candidate",
+            "--complexity",
+            "low",
+            "--json",
+        ],
+    );
+    let added: Value = serde_json::from_slice(&added.stdout).expect("task add JSON");
+    let task_id = added["id"].as_str().expect("task id").to_string();
     for args in [
         vec!["migrate", "--confirm"],
         vec!["workspace", "sync"],
-        vec!["mcp", "serve"],
+        vec![
+            "task",
+            "update",
+            &task_id,
+            "--title",
+            "Updated by the candidate",
+        ],
+        vec!["clock", "tick"],
     ] {
-        let output =
-            McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
-                .args(args)
-                .stdin(Stdio::null())
-                .output()
-                .expect("candidate launch");
-        assert_refused(&output);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("this command writes"),
-            "writer refusal must say the command writes: {stderr}"
-        );
-        assert_eq!(store_bytes(&workspace), before);
+        candidate_ok(&workspace, &candidate, &args);
     }
+    assert_eq!(
+        generation_record(&workspace),
+        recorded,
+        "a compatible writer joins without taking the generation over"
+    );
+
+    // Every older long-lived process is still up, on its own image, serving.
+    assert!(
+        matches!(dashboard.try_wait(), Ok(None)),
+        "the dashboard must stay live"
+    );
+    assert!(http_get(port, "/healthz").contains("ok"));
+    let run = run_show(&workspace, &drain.run_id);
+    assert_eq!(run["run"]["state"], "running", "{run}");
+    assert_eq!(run["run"]["pid"].as_u64(), Some(u64::from(drain.pid)));
+    assert_eq!(running_digest(drain.pid), old_digest);
+    let task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"Written by the old client", "description":"After the candidate wrote", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(task["title"], "Written by the old client");
+    let tasks = client.call_tool_ok("orbit_task_list", json!({}));
+    assert_eq!(tasks["total"], 2, "{tasks}");
+    // `orbit update` still needs the whole authority to itself.
+    assert_refused(&preflight(&workspace));
+
+    cancel_drain(&workspace, &drain);
+    stop(&mut dashboard);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
+    let workspace = McpWorkspace::init();
+    let install = workspace.home.join("installation");
+    std::fs::create_dir_all(&install).expect("installation");
+    let installed = install.join("orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    let drain = start_drain(&workspace, &installed);
+    assert_eq!(
+        running_digest(drain.pid),
+        executable_generation(&installed).expect("old digest")
+    );
+
+    let candidate = distinct_candidate(&workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    install_over(&candidate, &installed);
+
+    // The coordinator notices at its next admission pass and execs in place.
+    wait_until(
+        || running_digest(drain.pid) == new_digest,
+        "the drain to hand over to the installed executable",
+    );
+    // Same run, same owner: the new image adopted it rather than claiming it,
+    // and it is still running a few admission passes later.
+    std::thread::sleep(Duration::from_secs(3));
+    let adopted = run_show(&workspace, &drain.run_id);
+    assert_eq!(adopted["run"]["state"], "running", "{adopted}");
+    assert_eq!(adopted["run"]["pid"].as_u64(), Some(u64::from(drain.pid)));
+    cancel_drain(&workspace, &drain);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_pending_breaking_switch_waits_for_live_processes_to_yield_at_safe_points() {
+    use orbit_common::fs::generation::{Access, GenerationUpdate, Participant, ParticipantRole};
+
+    let workspace = McpWorkspace::init();
+    let jobs = workspace.home.join(".orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs).expect("job catalog");
+    std::fs::write(
+        jobs.join("quiesce_fixture.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: quiesce_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: first\n      default_input:\n        seconds: 8\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n    - id: second\n      default_input:\n        seconds: 30\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    )
+    .expect("fixture job");
+    let submitted = candidate_ok(
+        &workspace,
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        &["job", "run", "quiesce_fixture", "--json"],
+    );
+    let run_id = serde_json::from_slice::<Value>(&submitted.stdout).expect("submission")["run_id"]
+        .as_str()
+        .expect("run id")
+        .to_string();
+    let worker = wait_for_owner(&workspace, &run_id);
+    let mut client = workspace.serve();
     client.call_tool_ok("orbit_workspace_list", json!({}));
-    drop(client);
-    let migrated =
-        McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
-            .args(["migrate", "--confirm"])
+    let (mut dashboard, _) = spawn_dashboard(&workspace, Path::new(env!("CARGO_BIN_EXE_orbit")));
+
+    // A build whose store migration breaks older writers.
+    let current = orbit_core::composition::compiled_compatibility();
+    let mut breaking = current.clone();
+    breaking.store_schema.version += 1;
+    breaking.store_schema.writer_floor = breaking.store_schema.version;
+    breaking.store_schema.reader_floor = breaking.store_schema.version;
+    let breaking_digest = "b".repeat(64);
+    let participant = Participant {
+        digest: &breaking_digest,
+        identity: &breaking,
+        role: ParticipantRole::Command,
+        access: Access::Write,
+    };
+    let root = authority_root(&workspace);
+
+    // Bound expires mid-step: the refusal names the worker that blocks it.
+    let refused = GenerationGuard::join(&root, &participant, Duration::from_millis(500), || Ok(0))
+        .err()
+        .expect("the switch cannot complete while the worker is mid-step")
+        .to_string();
+    assert!(
+        refused.contains(&format!("pid {} (drain, started ", worker)),
+        "{refused}"
+    );
+
+    // While the switch is pending, no new old-generation participant joins.
+    let late_joiner = {
+        let workspace_home = workspace.home.clone();
+        let work = workspace.work.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(700));
+            McpWorkspace::orbit_program_command(
+                Path::new(env!("CARGO_BIN_EXE_orbit")),
+                &work,
+                &workspace_home,
+            )
+            .args(["task", "list"])
+            .stdin(Stdio::null())
             .output()
-            .expect("candidate after quiescence");
-    assert!(migrated.status.success(), "{migrated:?}");
+            .expect("late joiner")
+        })
+    };
+    let admitted = GenerationGuard::join(&root, &participant, Duration::from_secs(60), || Ok(0))
+        .expect("the worker yields at its step boundary and the switch proceeds");
+    let late = late_joiner.join().expect("late joiner thread");
+    assert!(!late.status.success(), "{late:?}");
+    assert!(
+        String::from_utf8_lossy(&late.stderr).contains("generation switch is pending"),
+        "{late:?}"
+    );
+    // The idle MCP server and dashboard yielded too: the switch could not
+    // have been admitted while either still held its share.
+    assert!(
+        matches!(client.child.try_wait(), Ok(Some(_))),
+        "mcp serve yields"
+    );
+    assert!(
+        matches!(dashboard.try_wait(), Ok(Some(_))),
+        "the dashboard yields"
+    );
+    drop(admitted);
+    // Roll the simulated candidate back so the fixture's own binary can read
+    // what the worker recorded; the store itself never migrated.
+    let old_digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("old");
+    drop(
+        GenerationUpdate::acquire(&root)
+            .expect("nothing is live")
+            .pin(&old_digest, Some(&current))
+            .expect("roll back"),
+    );
+
+    // The worker stopped after its first step and recorded why, as
+    // interrupted rather than failed, so the run resumes from its checkpoint.
+    let run = poll_run_state(&workspace, &run_id, "interrupted");
+    let steps = run["run"]["steps"].as_array().expect("steps");
+    assert!(
+        steps
+            .iter()
+            .any(|step| step["error_code"] == "upgrade_quiesce"),
+        "{run}"
+    );
+    assert!(!process_alive(worker), "the yielding worker exits");
+}
+
+#[cfg(target_os = "linux")]
+struct Drain {
+    run_id: String,
+    pid: u32,
+}
+
+#[cfg(target_os = "linux")]
+fn candidate_ok(workspace: &McpWorkspace, program: &Path, args: &[&str]) -> std::process::Output {
+    let output = McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("orbit launch");
+    assert!(
+        output.status.success(),
+        "{args:?} must be admitted beside the live processes: {output:?}"
+    );
+    output
+}
+
+#[cfg(target_os = "linux")]
+fn run_show(workspace: &McpWorkspace, run_id: &str) -> Value {
+    let output = candidate_ok(
+        workspace,
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        &["run", "show", run_id, "--json"],
+    );
+    serde_json::from_slice(&output.stdout).expect("run show JSON")
+}
+
+#[cfg(target_os = "linux")]
+fn poll_run_state(workspace: &McpWorkspace, run_id: &str, state: &str) -> Value {
+    let mut last = Value::Null;
+    wait_until(
+        || {
+            last = run_show(workspace, run_id);
+            last["run"]["state"] == state
+        },
+        state,
+    );
+    last
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_owner(workspace: &McpWorkspace, run_id: &str) -> u32 {
+    let run = poll_run_state(workspace, run_id, "running");
+    run["run"]["pid"].as_u64().expect("worker pid") as u32
+}
+
+#[cfg(target_os = "linux")]
+fn start_drain(workspace: &McpWorkspace, program: &Path) -> Drain {
+    let submitted = candidate_ok(
+        workspace,
+        program,
+        &[
+            "job",
+            "run",
+            "workspace_auto_pipeline",
+            "--input",
+            "for_seconds=600",
+            "--input",
+            "idle_sleep_seconds=1",
+            "--input",
+            "poll_sleep_seconds=1",
+            "--json",
+        ],
+    );
+    let run_id = serde_json::from_slice::<Value>(&submitted.stdout).expect("submission")["run_id"]
+        .as_str()
+        .expect("run id")
+        .to_string();
+    let pid = wait_for_owner(workspace, &run_id);
+    Drain { run_id, pid }
+}
+
+#[cfg(target_os = "linux")]
+fn cancel_drain(workspace: &McpWorkspace, drain: &Drain) {
+    candidate_ok(
+        workspace,
+        Path::new(env!("CARGO_BIN_EXE_orbit")),
+        &["run", "cancel", &drain.run_id, "--confirm"],
+    );
+    wait_until(|| !process_alive(drain.pid), "the cancelled drain to exit");
+}
+
+#[cfg(target_os = "linux")]
+fn process_alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map(|stat| {
+            // A reaped-but-unwaited child lingers as a zombie.
+            stat.rsplit(')')
+                .next()
+                .is_some_and(|rest| !rest.trim_start().starts_with('Z'))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_dashboard(workspace: &McpWorkspace, program: &Path) -> (Child, u16) {
+    let port = TcpListener::bind(("127.0.0.1", 0))
+        .expect("ephemeral port")
+        .local_addr()
+        .expect("local addr")
+        .port();
+    let child = McpWorkspace::orbit_program_command(program, &workspace.work, &workspace.home)
+        .args(["web", "serve", "--port", &port.to_string(), "--no-open"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn dashboard");
+    wait_until(
+        || TcpStream::connect(("127.0.0.1", port)).is_ok(),
+        "the dashboard to listen",
+    );
+    (child, port)
+}
+
+#[cfg(target_os = "linux")]
+fn http_get(port: u16, path: &str) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .expect("write request");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("read response");
+    response
+}
+
+#[cfg(target_os = "linux")]
+fn stop(child: &mut Child) {
+    // Safety: SIGTERM to this test's own child, as a service manager would.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !matches!(child.try_wait(), Ok(Some(_))) {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !ready() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
@@ -331,15 +663,17 @@ fn assert_byte_identical_root(
 
 #[test]
 #[cfg(target_os = "linux")]
-fn read_only_foreign_digest_joins_matching_schema_without_rewriting_the_record() {
+fn read_only_candidate_joins_a_v1_generation_without_rewriting_the_record() {
     let workspace = McpWorkspace::init();
     {
         let mut client = workspace.serve();
         client.call_tool_ok("orbit_workspace_list", json!({}));
         drop(client);
     }
-    let a_digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("A");
-    let _pin_a = GenerationGuard::acquire(&authority_root(&workspace), &a_digest).expect("pin A");
+    // A live executable-generation-v1 process: it records only its digest and
+    // never yields, so v2 builds fall back to v1 rules against it.
+    const V1_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let _pin_a = GenerationGuard::acquire(&authority_root(&workspace), V1_DIGEST).expect("pin A");
     let recorded = generation_record(&workspace);
     let candidate = distinct_candidate(&workspace);
     assert_ne!(
@@ -408,22 +742,8 @@ fn read_only_foreign_digest_joins_matching_schema_without_rewriting_the_record()
         String::from_utf8_lossy(&writes.stderr)
     );
 
-    let candidate_digest = executable_generation(&candidate).expect("candidate digest");
-    let compiled = Connection::open(workspace.home.join(".orbit/orbit.db"))
-        .expect("schema")
-        .query_row(
-            "SELECT MAX(CAST(substr(key, 12) AS INTEGER)) FROM schema_meta WHERE key LIKE 'migration.v%'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .expect("compiled schema");
-    let _joiner = GenerationGuard::acquire_read_only(
-        &authority_root(&workspace),
-        &candidate_digest,
-        compiled as u32,
-        || Ok(compiled as u32),
-    )
-    .expect("hold foreign shared pin");
+    let _joiner = GenerationGuard::acquire(&authority_root(&workspace), V1_DIGEST)
+        .expect("hold a second v1 shared pin");
     assert_refused(&preflight(&workspace));
     assert_eq!(generation_record(&workspace), recorded);
 }
@@ -466,4 +786,75 @@ fn read_only_foreign_digest_refuses_when_store_schema_differs() {
         "{stderr}"
     );
     assert_eq!(generation_record(&workspace), format!("1:{FOREIGN}\n"));
+}
+
+/// Install `source`'s bytes at `installed` the way an installer does: write
+/// beside it, then rename over it, so the running inode is left untouched.
+#[cfg(target_os = "linux")]
+fn install_over(source: &Path, installed: &Path) {
+    let staged = installed.with_extension("staged");
+    std::fs::copy(source, &staged).expect("stage replacement");
+    std::fs::rename(&staged, installed).expect("replace installation");
+}
+
+#[cfg(target_os = "linux")]
+fn running_digest(pid: u32) -> String {
+    executable_generation(&PathBuf::from(format!("/proc/{pid}/exe"))).expect("running image")
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_replaced_mcp_server_hands_its_session_to_the_installed_executable() {
+    let workspace = McpWorkspace::init();
+    let install = workspace.home.join("installation");
+    std::fs::create_dir_all(&install).expect("installation");
+    let installed = install.join("orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    let old_digest = executable_generation(&installed).expect("old digest");
+    let child = McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home)
+        .args([
+            "mcp",
+            "serve",
+            "--operator",
+            "--workspace",
+            "ws_mcp-roundtrip",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("old server");
+    let pid = child.id();
+    let mut client = McpClient::new(child);
+    workspace.initialize(&mut client);
+    client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"Before the handover", "description":"Old image", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(running_digest(pid), old_digest);
+
+    let candidate = distinct_candidate(&workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    install_over(&candidate, &installed);
+
+    // The idle server notices within a lifecycle interval and execs itself.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while running_digest(pid) != new_digest {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the idle server never handed over to the installed executable"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Same process, same pipes, no second `initialize`: the session goes on.
+    assert_eq!(client.child.id(), pid);
+    let task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"After the handover", "description":"New image", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(task["title"], "After the handover");
+    let tasks = client.call_tool_ok("orbit_task_list", json!({}));
+    assert_eq!(tasks["total"], 2, "{tasks}");
+    assert_eq!(running_digest(pid), new_digest);
 }

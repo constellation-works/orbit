@@ -113,7 +113,10 @@ pub fn ensure_sqlite_store_ready(
     database: &std::path::Path,
 ) -> Result<(), orbit_common::OrbitError> {
     let store = Store::open(database)?;
-    if let Some(forward) = store.forward_compatible_open() {
+    if let Some(forward) = store
+        .forward_compatible_open()
+        .filter(|forward| !forward.writable)
+    {
         return Err(orbit_common::OrbitError::Migration(format!(
             "store database '{}' records {} version {} and this orbit binary supports {}, \
              so it opened read-only; work that writes needs a newer orbit",
@@ -274,8 +277,11 @@ pub fn layered_policy_def_store(
     Arc::new(LayeredPolicyDefStore::new(workspace, global))
 }
 
+mod compatibility;
 #[cfg(test)]
 mod tests;
+
+pub use compatibility::compiled_compatibility;
 
 /// Legacy cursor file persistence, retained for rollback compatibility.
 pub mod auto_task {

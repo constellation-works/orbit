@@ -210,13 +210,14 @@ fn pin_candidate(
     roots: &[PathBuf],
     admissions: Vec<orbit_common::fs::generation::GenerationUpdate>,
     digest: &str,
+    identity: Option<&orbit_common::fs::generation::CompatibilityIdentity>,
 ) -> Result<Vec<orbit_common::fs::generation::GenerationGuard>, OrbitError> {
     roots
         .iter()
         .zip(admissions)
         .map(|(root, admission)| {
             admission
-                .pin(digest)
+                .pin(digest, identity)
                 .map_err(|error| naming_authority(root, &error))
         })
         .collect()
@@ -394,9 +395,14 @@ pub fn run_update(
     if target == current {
         // Not a no-op: re-running `orbit update` at the installed version is
         // the documented way to finish a run whose convergence failed.
-        converge::require_admission_contract(&executable)?;
+        let identity = converge::require_admission_contract(&executable)?;
         let digest = orbit_common::fs::generation::executable_generation(&executable)?;
-        let _generations = pin_candidate(&environment.admission_roots, admissions, &digest)?;
+        let _generations = pin_candidate(
+            &environment.admission_roots,
+            admissions,
+            &digest,
+            identity.as_ref(),
+        )?;
         return Ok(finish(
             environment,
             &executable,
@@ -416,7 +422,7 @@ pub fn run_update(
     report.archive_sha256 = Some(staged.archive_sha256.clone());
     report.signing_key_id = Some(staged.signing_key_id.clone());
 
-    converge::require_admission_contract(staged.path())?;
+    let identity = converge::require_admission_contract(staged.path())?;
     if target < current {
         assert_downgrade_is_compatible(environment, staged.path(), &current, &target)?;
     }
@@ -449,7 +455,12 @@ pub fn run_update(
         }
     }
 
-    let _generations = match pin_candidate(&environment.admission_roots, admissions, &digest) {
+    let _generations = match pin_candidate(
+        &environment.admission_roots,
+        admissions,
+        &digest,
+        identity.as_ref(),
+    ) {
         Ok(guards) => guards,
         Err(error) => {
             report.outcome = UpdateOutcome::NeedsRecovery;

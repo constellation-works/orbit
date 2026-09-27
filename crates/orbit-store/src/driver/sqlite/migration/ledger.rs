@@ -18,7 +18,8 @@
 //! - A database whose recorded version is newer than
 //!   [`SUPPORTED_SCHEMA_VERSION`] is decided from the
 //!   `schema_meta` forward-compatibility record a newer binary leaves
-//!   behind (ORB-12434): newer by additive migrations only opens
+//!   behind (ORB-12434): newer by additive migrations only keeps
+//!   serving reads and writes, newer by a read-compatible migration opens
 //!   read-only, anything else is refused with [`OrbitError::Migration`]
 //!   naming the first breaking migration this binary lacks.
 //! - Legacy databases created by the pre-ledger idempotent migrations
@@ -96,7 +97,9 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 8,
         name: "hub_registry_metadata",
-        compat: MigrationCompatibility::Additive,
+        // Every host-registry write must bump `registry_revision` in the same
+        // transaction; an older writer of those tables leaves it stale.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_hub_registry_metadata,
     },
     Migration {
@@ -127,7 +130,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 12,
         name: "friction_records_sqlite",
-        compat: MigrationCompatibility::Additive,
+        // Friction records move into the store once, behind an import marker;
+        // an older binary keeps writing the Markdown tree the newer one no
+        // longer reads, and can reuse friction IDs.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_friction_records_schema,
     },
     // ORB-10709 / ADR-0352: `task_reservations` gains the coordination
@@ -162,7 +168,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 16,
         name: "audit_actor_identity",
-        compat: MigrationCompatibility::Additive,
+        // The actor columns are derived from `role` when a row is written and
+        // never re-derived; an older writer leaves them NULL, which newer
+        // reads count as unattributed.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_audit_actor_identity,
     },
     // ORB-10890: the untrusted half of attribution. An MCP client started from
@@ -179,7 +188,9 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 18,
         name: "audit_actor_alias_v2",
-        compat: MigrationCompatibility::Additive,
+        // An older writer keeps stamping rows with the v1 alias map, and
+        // nothing re-derives them afterwards.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_audit_actor_alias_v2,
     },
     // The run listing orders by `created_at DESC, run_id` per workspace; the
@@ -205,11 +216,15 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     // ORB-12528: the durable commit decision that lets one task transition,
     // its history, a reservation, and dependent coordination rows be
     // published as a single outcome across the bundle files and this
-    // database. Additive: an older binary ignores both tables.
+    // database. An older binary still reads correctly by ignoring both
+    // tables.
     Migration {
         version: 21,
         name: "task_commit_journal",
-        compat: MigrationCompatibility::Additive,
+        // Newer task writes publish through this journal and its coordination
+        // rows under a partition lock; an older writer bypasses both and can
+        // admit a task the newer binary has claimed.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_task_commit_journal,
     },
     Migration {
@@ -259,7 +274,9 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 27,
         name: "plugin_certified_orbit_version",
-        compat: MigrationCompatibility::Additive,
+        // A reinstall must clear the certification when the manifest changes;
+        // an older upsert keeps it for bytes that were never tested.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_plugin_certified_orbit_version,
     },
     // Plugin standard: the SHA-256 of the archive a digest-pinned `https://`
@@ -268,7 +285,9 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 28,
         name: "plugin_archive_digest",
-        compat: MigrationCompatibility::Additive,
+        // A reinstall must overwrite the archive digest; an older upsert keeps
+        // the previous archive's digest and hides drift from doctor.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_plugin_archive_digest,
     },
     // Friction re-homing: the workspace that owns a friction recorded in
@@ -328,9 +347,10 @@ pub struct AppliedMigration {
 /// applied migration in the ledger.
 ///
 /// A database newer than the registry supports is decided by its
-/// forward-compatibility record: `Ok(Some(..))` means the caller must keep
-/// the connection read-only (ORB-12434); an error means this binary must not
-/// touch the database at all.
+/// forward-compatibility record: `Ok(Some(..))` describes that newer open —
+/// the caller must keep the connection read-only unless it is
+/// [`ForwardCompatibleOpen::writable`] (ORB-12434); an error means this binary
+/// must not touch the database at all.
 pub(crate) fn run_migrations(
     conn: &Connection,
     migrations: &[Migration],
@@ -386,10 +406,25 @@ fn evaluate_newer_database(
     supported: u32,
 ) -> Result<ForwardCompatibleOpen, OrbitError> {
     let record = match read_compat_record(conn) {
-        Ok(record) => evaluate_newer_state(StateComponent::StoreSchema, current, supported, record),
+        Ok(record) => evaluate_newer_state(
+            StateComponent::StoreSchema,
+            current,
+            supported,
+            record,
+            true,
+        ),
         Err(refusal) => Err(refusal),
     };
     match record {
+        Ok(forward) if forward.writable => {
+            orbit_common::tracing::info!(
+                target: "orbit.store.sqlite",
+                schema_version = current,
+                supported_version = supported,
+                "opening a newer store database whose newer migrations keep older writers safe; this binary applies no schema migration to it",
+            );
+            Ok(forward)
+        }
         Ok(forward) => {
             orbit_common::tracing::warn!(
                 target: "orbit.store.sqlite",

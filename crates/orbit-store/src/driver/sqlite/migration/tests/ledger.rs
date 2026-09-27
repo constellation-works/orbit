@@ -400,6 +400,17 @@ fn refuses_db_from_a_newer_binary() {
 /// Stamp a database as a newer binary would have left it: an extra ledger
 /// row plus the forward-compatibility record describing that version.
 fn stamp_newer_database(conn: &Connection, version: u32, breaking: &[(u32, &str)]) {
+    stamp_newer_database_with(conn, version, breaking, None);
+}
+
+/// [`stamp_newer_database`], with the writer classification a binary that
+/// covers older writers records (`None` is a record from before it did).
+fn stamp_newer_database_with(
+    conn: &Connection,
+    version: u32,
+    breaking: &[(u32, &str)],
+    read_only: Option<&[(u32, &str)]>,
+) {
     conn.execute(
         "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, 'from-the-future', ?2)",
         rusqlite::params![format!("migration.v{version:04}"), "2099-01-01T00:00:00Z"],
@@ -415,6 +426,15 @@ fn stamp_newer_database(conn: &Connection, version: u32, breaking: &[(u32, &str)
                 name: (*name).to_string(),
             })
             .collect(),
+        read_only: read_only.map(|entries| {
+            entries
+                .iter()
+                .map(|(version, name)| BreakingMigration {
+                    version: *version,
+                    name: (*name).to_string(),
+                })
+                .collect()
+        }),
     };
     conn.execute(
         "INSERT INTO schema_meta(key, value, updated_at) VALUES ('migration.compat', ?1, ?2)
@@ -451,6 +471,15 @@ fn applying_migrations_records_the_compatibility_contract() {
         })
         .collect();
     assert_eq!(record.breaking, expected);
+    let expected_read_only: Vec<BreakingMigration> = ledger::MIGRATIONS
+        .iter()
+        .filter(|migration| migration.compat == MigrationCompatibility::ReadCompatible)
+        .map(|migration| BreakingMigration {
+            version: migration.version,
+            name: migration.name.to_string(),
+        })
+        .collect();
+    assert_eq!(record.read_only, Some(expected_read_only));
     // The record never lands in the version ledger itself.
     assert!(
         !ledger_rows(&conn)
@@ -515,6 +544,112 @@ fn additive_newer_database_opens_read_only_and_leaves_its_bytes_untouched() {
         before,
         "an older binary must not rewrite a newer store"
     );
+}
+
+fn add_origin_column(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch("ALTER TABLE schema_meta ADD COLUMN origin TEXT;")
+        .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// A newer binary's registry: this binary's, plus one write-safe migration.
+fn newer_registry_with(compat: MigrationCompatibility) -> Vec<Migration> {
+    ledger::MIGRATIONS
+        .iter()
+        .map(|migration| Migration {
+            version: migration.version,
+            name: migration.name,
+            compat: migration.compat,
+            apply: migration.apply,
+        })
+        .chain(std::iter::once(Migration {
+            version: SUPPORTED_SCHEMA_VERSION + 1,
+            name: "future_origin_column",
+            compat,
+            apply: add_origin_column,
+        }))
+        .collect()
+}
+
+#[test]
+fn older_writers_keep_writing_across_a_newer_additive_migration() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.db");
+    // The older process is live, and writing, before the upgrade.
+    let older = crate::Store::open(&path).expect("older process");
+    older
+        .set_schema_meta_value("older.before", "1")
+        .expect("older writer before the upgrade");
+
+    // A newer binary migrates the same store while the older one stays open.
+    let newer = Connection::open(&path).expect("newer process");
+    newer
+        .busy_timeout(Duration::from_secs(5))
+        .expect("busy timeout");
+    let newer_registry = newer_registry_with(MigrationCompatibility::Additive);
+    assert_eq!(
+        ledger::run_migrations(&newer, &newer_registry).expect("newer migrates"),
+        None
+    );
+    assert_eq!(
+        ledger::current_schema_version(&newer).expect("version"),
+        SUPPORTED_SCHEMA_VERSION + 1
+    );
+
+    // The live older handle keeps writing...
+    older
+        .set_schema_meta_value("older.after", "2")
+        .expect("a live older writer keeps writing after an additive migration");
+    // ...and so does an older process that opens the migrated store later.
+    let late = crate::Store::open(&path).expect("older binary opens the newer store");
+    let forward = late
+        .forward_compatible_open()
+        .expect("the handle records the newer open");
+    assert!(forward.writable, "{forward}");
+    assert_eq!(forward.state_version, SUPPORTED_SCHEMA_VERSION + 1);
+    late.set_schema_meta_value("older.late", "3")
+        .expect("a late older writer is admitted");
+    late.with_transaction(|_| Ok(()))
+        .expect("write transactions are admitted");
+    crate::compose::ensure_sqlite_store_ready(&path)
+        .expect("work that writes may start on a writer-safe newer store");
+
+    // The newer binary reads every older row, with its new column unset.
+    let rows: Vec<(String, String, Option<String>)> = newer
+        .prepare("SELECT key, value, origin FROM schema_meta WHERE key LIKE 'older.%' ORDER BY key")
+        .expect("prepare")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        rows,
+        vec![
+            ("older.after".to_string(), "2".to_string(), None),
+            ("older.before".to_string(), "1".to_string(), None),
+            ("older.late".to_string(), "3".to_string(), None),
+        ]
+    );
+}
+
+#[test]
+fn read_compatible_newer_database_opens_read_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.db");
+    drop(crate::Store::open(&path).expect("create store"));
+    let newer = Connection::open(&path).expect("newer process");
+    let newer_registry = newer_registry_with(MigrationCompatibility::ReadCompatible);
+    ledger::run_migrations(&newer, &newer_registry).expect("newer migrates");
+
+    let older = crate::Store::open(&path).expect("older binary still reads");
+    let forward = older
+        .forward_compatible_open()
+        .expect("the handle records the newer open");
+    assert!(!forward.writable, "{forward}");
+    let error = older
+        .set_schema_meta_value("older.after", "1")
+        .expect_err("an older writer is refused");
+    assert!(error.to_string().contains("opened read-only"), "{error}");
+    assert!(crate::compose::ensure_sqlite_store_ready(&path).is_err());
 }
 
 #[test]

@@ -63,7 +63,10 @@ pub(super) fn serve_mcp_stdio(
         bound_workspace,
         bound_orchestrator,
     )?;
-    block_on_server(orbit_mcp::serve_stdio_with_context(host, session_context))
+    finish_stdio_session(block_on_server(orbit_mcp::serve_stdio_with_context(
+        host,
+        session_context,
+    ))?)
 }
 
 /// Serve the federated mux: the accepting machine plus operator-configured
@@ -139,10 +142,28 @@ pub(super) fn serve_mcp_federated_stdio(
     );
     // Session-unbound by construction: the federated list takes no workspace,
     // and a routed call is addressed only by the copied host-qualified selector.
-    block_on_server(orbit_mcp::serve_stdio_with_context(
+    finish_stdio_session(block_on_server(orbit_mcp::serve_stdio_with_context(
         host,
         identity.session_context,
-    ))
+    ))?)
+}
+
+/// Complete a stdio session: re-exec this command under the installed
+/// executable when the session was handed over to it. `exec` keeps the pid
+/// and stdio descriptors, so the client keeps its session; every Orbit lock
+/// is close-on-exec, so this image's participation ends with the exec.
+fn finish_stdio_session(exit: orbit_mcp::StdioExit) -> Result<(), OrbitError> {
+    match exit {
+        orbit_mcp::StdioExit::Closed | orbit_mcp::StdioExit::Yielded => Ok(()),
+        orbit_mcp::StdioExit::HandOver { executable, resume } => {
+            let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+            Err(orbit_common::fs::generation::reexec(
+                &executable,
+                &args,
+                &[(orbit_mcp::RESUME_ENV, std::ffi::OsStr::new(&resume))],
+            ))
+        }
+    }
 }
 
 pub(super) fn serve_mcp_listener(
@@ -223,9 +244,9 @@ fn normalized_selector(value: Option<String>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn block_on_server<F>(server: F) -> Result<(), OrbitError>
+fn block_on_server<F, T>(server: F) -> Result<T, OrbitError>
 where
-    F: Future<Output = Result<(), OrbitError>>,
+    F: Future<Output = Result<T, OrbitError>>,
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

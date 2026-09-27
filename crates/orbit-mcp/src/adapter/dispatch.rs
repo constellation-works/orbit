@@ -273,17 +273,23 @@ impl OrbitToolServer {
     }
 }
 
-impl ServerHandler for OrbitToolServer {
-    fn initialize(
+impl OrbitToolServer {
+    /// Apply one client's `initialize` to this session: the worker binding it
+    /// carries, and its announced workspace and self-reported identity.
+    ///
+    /// Shared by the handshake and by a session resumed across an executable
+    /// handover, which replays the original request instead of asking the
+    /// client to initialize again.
+    pub(crate) fn apply_initialize(
         &self,
-        request: InitializeRequestParams,
-        context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        request: &InitializeRequestParams,
+        transport_meta: &Meta,
+    ) -> Result<(), McpError> {
         let metadata = request
             .meta
             .as_ref()
             .map(|meta| &meta.0)
-            .unwrap_or(&context.meta.0);
+            .unwrap_or(&transport_meta.0);
         if let Some(value) = metadata
             .get("orbit")
             .and_then(|value| value.get("worker_invocation"))
@@ -291,35 +297,42 @@ impl ServerHandler for OrbitToolServer {
         {
             let binding =
                 serde_json::from_value::<orbit_types::tool::WorkerInvocation>(value.clone())
-                    .map_err(|error| McpError::invalid_params(error.to_string(), None))
-                    .and_then(|binding| {
-                        binding
-                            .validate()
-                            .map_err(|error| McpError::invalid_params(error, None))?;
-                        let mut session = self.session_context();
-                        if session.transport != Some(orbit_types::tool::McpTransport::SshMcp)
-                            || session
-                                .worker_invocation
-                                .as_ref()
-                                .is_some_and(|old| old != &binding)
-                        {
-                            return Err(McpError::invalid_params(
-                                "worker session binding refused",
-                                None,
-                            ));
-                        }
-                        session.worker_invocation = Some(binding);
-                        session
-                            .effective_capabilities
-                            .remove(&orbit_types::tool::McpCapability::Operator);
-                        self.replace_session_context(session);
-                        Ok(())
-                    });
-            if let Err(error) = binding {
-                return std::future::ready(Err(error));
+                    .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
+            binding
+                .validate()
+                .map_err(|error| McpError::invalid_params(error, None))?;
+            let mut session = self.session_context();
+            if session.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+                || session
+                    .worker_invocation
+                    .as_ref()
+                    .is_some_and(|old| old != &binding)
+            {
+                return Err(McpError::invalid_params(
+                    "worker session binding refused",
+                    None,
+                ));
             }
+            session.worker_invocation = Some(binding);
+            session
+                .effective_capabilities
+                .remove(&orbit_types::tool::McpCapability::Operator);
+            self.replace_session_context(session);
         }
-        self.adopt_announced_session(session_context_from_initialize(&request, &context.meta));
+        self.adopt_announced_session(session_context_from_initialize(request, transport_meta));
+        Ok(())
+    }
+}
+
+impl ServerHandler for OrbitToolServer {
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        if let Err(error) = self.apply_initialize(&request, &context.meta) {
+            return std::future::ready(Err(error));
+        }
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);
         }

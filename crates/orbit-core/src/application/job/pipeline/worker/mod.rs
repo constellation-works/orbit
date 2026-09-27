@@ -19,6 +19,7 @@ use supervisor::PipelineWorkerSupervisor;
 
 use super::admission::pipeline_run_is_runnable;
 use super::wait::PIPELINE_WAIT_MIN_POLL_SECONDS;
+use crate::runtime::upgrade_handover;
 
 pub(super) mod command;
 pub(super) mod log;
@@ -40,6 +41,10 @@ mod tests;
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
         self.preflight_pipeline_worker_store()?;
+        upgrade_handover::bind_worker_run(run_id);
+        if upgrade_handover::adopts_run(run_id) {
+            return self.adopt_pipeline_run(run_id);
+        }
         // [ORB-12616] A claimed leaf is executable, but only by the worker the
         // owner's claim is bound to. The check is the trusted process worker
         // binding against the durable admission — never a run input, an
@@ -202,6 +207,27 @@ impl OrbitRuntime {
         self.ensure_persistence_ready()?;
         Ok(())
     }
+    /// Continue a run this process already owns, after its previous image
+    /// handed it over at an upgrade. The run keeps its start, owner and
+    /// checkpoints; only steps that had not completed run again.
+    fn adopt_pipeline_run(&self, run_id: &str) -> Result<(), OrbitError> {
+        let run = self.show_job_run(run_id)?;
+        if run.state != JobRunState::Running || run.pid != Some(std::process::id()) {
+            return Err(OrbitError::Execution(format!(
+                "pipeline worker cannot adopt run '{run_id}': it is {} and not owned by this \
+                 process",
+                run.state
+            )));
+        }
+        let (yaml_path, _) = self.resolve_run_definition(&run)?;
+        tracing::info!(
+            target: "orbit.core.job_run",
+            run_id,
+            "adopted the run handed over by the replaced Orbit executable",
+        );
+        let started_at = run.started_at.unwrap_or(run.scheduled_at);
+        self.execute_started_pipeline_run(&run, &yaml_path, started_at, false)
+    }
     fn execute_pipeline_run_now(&self, run: &JobRun, yaml_path: &Path) -> Result<(), OrbitError> {
         let started_at = Utc::now();
         // [ORB-10965] The state read in `execute_pipeline_run_worker` and this
@@ -230,6 +256,15 @@ impl OrbitRuntime {
             }
             JobRunStartOutcome::NotFound => return Ok(()),
         }
+        self.execute_started_pipeline_run(run, yaml_path, started_at, true)
+    }
+    fn execute_started_pipeline_run(
+        &self,
+        run: &JobRun,
+        yaml_path: &Path,
+        started_at: chrono::DateTime<Utc>,
+        announce_start: bool,
+    ) -> Result<(), OrbitError> {
         let input = run
             .input
             .clone()
@@ -241,11 +276,13 @@ impl OrbitRuntime {
         let outcome = (|| {
             self.record_run_crew_for_job(&run.run_id, &input, yaml_path)?;
 
-            self.record_event(OrbitEvent::JobRunStarted {
-                job_id: run.job_id.clone(),
-                run_id: run.run_id.clone(),
-                attempt: run.attempt,
-            })?;
+            if announce_start {
+                self.record_event(OrbitEvent::JobRunStarted {
+                    job_id: run.job_id.clone(),
+                    run_id: run.run_id.clone(),
+                    attempt: run.attempt,
+                })?;
+            }
 
             // [ORB-10470] The run's own persisted checkpoints are the resume
             // cursor. A run seeded by `submit_resume_run` starts at the

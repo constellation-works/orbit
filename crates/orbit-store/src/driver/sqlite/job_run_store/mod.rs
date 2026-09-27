@@ -8,7 +8,7 @@
 //! the file-size budget.
 
 mod backend;
-mod pull;
+pub(crate) mod pull;
 mod queries;
 mod start;
 mod state;

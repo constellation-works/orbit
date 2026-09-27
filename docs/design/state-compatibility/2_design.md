@@ -1,17 +1,17 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-09-13
-last_validated: 2026-09-13
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Draft
 feature: state-compatibility
 doc_role: design
 type: design
-summary: The implemented forward-compatibility contract — how migrations declare additive vs breaking, where the record lives, and how an older binary is held read-only.
+summary: The implemented forward-compatibility contract — how migrations declare additive, read-compatible or breaking, where the record lives, and when an older binary keeps writing, is held read-only, or is refused.
 tags: [state-compatibility, migrations, upgrades]
 paths: ["crates/orbit-store/src/contracts/compat.rs", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/driver/sqlite/connection.rs", "crates/orbit-cmd/src/migrate.rs"]
 related_features: [state-compatibility, orbit-core]
-related_artifacts: [ORB-10003, ORB-10012, ORB-12434]
+related_artifacts: [ORB-10003, ORB-10012, ORB-12434, ORB-13631]
 ---
 
 # State Compatibility — Design
@@ -25,10 +25,17 @@ unchanged and is not restated here.
 
 Both registries carry a `compat: MigrationCompatibility` field per entry:
 
-- **`Additive`** — the migration only adds state (tables, columns, indexes,
-  files), or rewrites state into a shape older binaries already understand.
-  A binary without the migration reads the result correctly and ignores what
-  it does not know.
+- **`Additive`** — the migration only adds state an older binary can both
+  read *and keep writing through its own code paths*: new tables no existing
+  row depends on, nullable or defaulted columns, indexes an older writer
+  cannot violate, files it never touches. Rows the older binary writes
+  afterwards stay correct for the newer one, which reads a missing value as
+  its documented default.
+- **`ReadCompatible`** — an older binary reads the result correctly, but its
+  writes would not be: a `NOT NULL` column without a default, a constraint or
+  trigger its statements could trip, a projection or journal kept in step with
+  rows an older writer would not update, or a backfill an older writer would
+  write back in the old shape.
 - **`Breaking`** — the migration removes, renames, or reinterprets state that
   an older binary reads *or writes*. Layout v3
   (`remove-task-checkout-projections`) is the canonical example: binaries
@@ -36,9 +43,23 @@ Both registries carry a `compat: MigrationCompatibility` field per entry:
   when they write ([ORB-11994], [ORB-12078]).
 
 The declaration is a claim about *readers and writers that do not have the
-migration*, not about the SQL statements it runs. When in doubt, declare
-`Breaking`: the cost is the old refusal, while a wrong `Additive` claim hands
-an old binary state it misreads.
+migration*, not about the SQL statements it runs. When in doubt, declare the
+stricter class: the cost is a read-only open or the old refusal, while a wrong
+`Additive` claim lets an old binary write state the new one misreads.
+
+The class also decides upgrade admission (`orbit_common::fs::generation`):
+each binary's compiled compatibility identity carries, per ledger, the newest
+non-`Additive` migration (its writer floor) and the newest `Breaking` one (its
+reader floor). Older processes keep running beside a newer one only across
+`Additive` migrations; see the
+[upgrades runbook](../../runbooks/upgrades.md#upgrade-admission-compatibility-generations).
+
+[ORB-13631] audited every declaration against this writer rule. Store schema
+v8, v12, v16, v18, v21, v27 and v28 and layout v2 had been declared
+`Additive` while older writers could not keep them correct (backfills,
+`NOT NULL` columns, triggers and projections); they are now `ReadCompatible`.
+Only the `compat` field of those shipped entries changed — their versions,
+names and SQL are untouched.
 
 ## 2 The compatibility record
 
@@ -51,8 +72,9 @@ that applies them records the classification:
 | Store database | `schema_meta` row `migration.compat` | inside the same transaction that commits a migration and its ledger row |
 
 The record (`contracts::CompatibilityRecord`) is JSON: a `format`, the
-`version` it describes, and every `Breaking` migration at or below that
-version. It is written only when a migration is applied — the up-to-date
+`version` it describes, every `Breaking` migration at or below that version,
+and (`read_only`, an optional field format 1 readers ignore) every
+`ReadCompatible` one. It is written only when a migration is applied — the up-to-date
 fast path stays free of writes, and a record is only ever needed once some
 binary has advanced the state past another.
 
@@ -76,7 +98,14 @@ exceeds the binary's supported version:
 4. A `Breaking` entry above the supported version → refuse, naming the
    **first** such entry, so the diagnostic names a migration the operator can
    look up rather than the newest version number.
-5. Otherwise → `ForwardCompatibleOpen`: read-only.
+5. A `ReadCompatible` entry above the supported version →
+   `ForwardCompatibleOpen` read-only for the store. The layout cannot be held
+   read-only (§4), so there it refuses like step 4.
+6. Otherwise — every newer migration `Additive` → `ForwardCompatibleOpen`
+   with `writable`: the binary keeps reading and writing.
+
+A record without the `read_only` list predates the writer classification: a
+newer store then opens read-only and a newer layout writable, as before.
 
 Every refusal keeps the previous message shape (`… newer than the newest
 version this orbit binary supports (N); …; upgrade orbit …`) with the reason
@@ -84,7 +113,7 @@ inserted, so existing operator habits and log greps still match.
 
 ## 4 Read-only is enforced, not promised
 
-For the store database, a forward-compatible open pins the writer connection
+For the store database, a read-only forward-compatible open pins the writer connection
 with `PRAGMA query_only=ON` before `Store::open` returns, and `Store` refuses
 its write surfaces (`with_transaction*`, store-metadata writes) with a scoped
 `OrbitError::Migration` naming the operation. The pragma is the guarantee;
@@ -94,9 +123,8 @@ the early refusals only make the error actionable instead of
 
 For the layout, the pre-flight applies no migration and does not rewrite the
 marker or the record. There is no single choke point for arbitrary `.orbit/`
-file writes, so the layout guarantee is the declaration itself: a layout
-change that an older *writer* could damage must be declared `Breaking`, which
-returns that release to the old refusal.
+file writes, so a layout change an older *writer* could damage refuses older
+binaries whether it is declared `ReadCompatible` or `Breaking`.
 
 ## 5 Surfaces
 
@@ -107,8 +135,9 @@ their own compatibility logic.
 
 `orbit migrate` reports it: `MigrateStatus` carries
 `layout_forward_compatible` / `schema_forward_compatible`, and
-`forward_compatible_only()` is true when everything newer is additive. The
-dry-run path then reports a read-only workspace as a successful inspection
+`forward_compatible_only()` is true when nothing newer is breaking, and
+`forward_compatible_writable()` when every newer migration is additive. The
+dry-run path then reports a forward-compatible workspace as a successful inspection
 instead of erroring, while a breaking-newer workspace keeps the previous
 refusal and exit code. Pending listings, auto-apply on open by a newer
 binary, and the apply path are otherwise unchanged.
@@ -120,9 +149,9 @@ binary, and the apply path are otherwise unchanged.
   advanced only by such binaries carries no record, so it is refused too.
   This contract pays off from the next schema bump onward.
 - **`Additive` is a human claim.** Nothing verifies that a migration marked
-  additive is one. The registries are append-only, so a mistaken marker
-  cannot be corrected in place for state already stamped — only a later
-  breaking migration raises the floor again.
+  additive is one. Records already stamped keep the class they were written
+  with, so a corrected declaration protects only state advanced by a binary
+  that carries it.
 - **The layout half is not write-gated.** See §4: an additive-newer layout
   permits ordinary operation, so the classification carries the whole weight.
 - **Audit rows are not written.** A read-only open still tries to record its
@@ -142,5 +171,8 @@ binary, and the apply path are otherwise unchanged.
   worked example of a breaking layout migration.
 - [ORB-12434] added the compatibility declaration, records, decision, and
   read-only enforcement.
+- [ORB-13631] extended `Additive` to cover older writers, added
+  `ReadCompatible`, and made the classification the basis of upgrade
+  admission.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

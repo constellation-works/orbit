@@ -11,6 +11,9 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::generation::{
+    CompatibilityIdentity, GENERATION_CONTRACT, LEGACY_GENERATION_CONTRACT,
+};
 use serde::Serialize;
 
 /// How much of a failing step's stderr to carry into the report.
@@ -259,21 +262,32 @@ pub(super) fn probe_writable_state(
 
 /// A trusted release must implement admission before it can replace a protected
 /// installation. Older or unrecognized candidates fail before any installation.
-pub(super) fn require_admission_contract(executable: &Path) -> Result<(), OrbitError> {
+///
+/// Returns the compatibility the candidate reports under
+/// `compatibility-generation-v2`, which its pin records so compatible builds
+/// can join it; `None` for a candidate that only speaks
+/// `executable-generation-v1`.
+pub(super) fn require_admission_contract(
+    executable: &Path,
+) -> Result<Option<CompatibilityIdentity>, OrbitError> {
     let output = run_process(Command::new(executable).args(["update", "--contract", "--json"]))
         .map_err(|error| {
             OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
         })?;
     let report = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
-    if output.status.success()
-        && report.is_some_and(|report| {
-            report["schema_version"] == 1
-                && report["contract"] == orbit_common::fs::generation::GENERATION_CONTRACT
-        })
-    {
-        return Ok(());
+    match report {
+        Some(report)
+            if output.status.success()
+                && report["schema_version"] == 1
+                && report["contract"] == LEGACY_GENERATION_CONTRACT =>
+        {
+            Ok((report["admission_contract"] == GENERATION_CONTRACT)
+                .then(|| serde_json::from_value(report["compatibility"].clone()).ok())
+                .flatten())
+        }
+        _ => Err(OrbitError::Execution(
+            "replacement does not support executable generation admission; nothing was replaced"
+                .into(),
+        )),
     }
-    Err(OrbitError::Execution(
-        "replacement does not support executable generation admission; nothing was replaced".into(),
-    ))
 }

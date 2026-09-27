@@ -100,7 +100,8 @@ pub struct SchemaLedgerStatus {
     /// (compare against [`SUPPORTED_SCHEMA_VERSION`] to distinguish).
     pub pending: Vec<PendingSchemaMigration>,
     /// Set when the database is newer than this binary supports but only by
-    /// additive migrations, so it can still be opened read-only (ORB-12434).
+    /// additive or read-compatible migrations, so it can still be opened —
+    /// read-only unless [`ForwardCompatibleOpen::writable`] (ORB-12434).
     /// `None` also covers a newer database this binary must refuse — the
     /// open path carries that refusal and its reason.
     pub forward_compatible: Option<ForwardCompatibleOpen>,
@@ -132,6 +133,7 @@ pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, O
                         current_version,
                         SUPPORTED_SCHEMA_VERSION,
                         record,
+                        true,
                     )
                 })
                 .ok()
@@ -148,6 +150,15 @@ pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, O
         pending: pending_schema_migrations_after(current_version),
         forward_compatible,
     })
+}
+
+/// This binary's schema ledger as upgrade admission compares it.
+pub(crate) fn schema_compatibility() -> orbit_common::fs::generation::LedgerCompatibility {
+    orbit_common::fs::generation::LedgerCompatibility::from_registry(
+        ledger::MIGRATIONS
+            .iter()
+            .map(|m| (m.version, m.compat.is_write_safe(), !m.compat.is_breaking())),
+    )
 }
 
 /// Registry migrations newer than `current_version`, in apply order. Lets

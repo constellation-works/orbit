@@ -1,1 +1,2 @@
+mod compatibility;
 mod factory;

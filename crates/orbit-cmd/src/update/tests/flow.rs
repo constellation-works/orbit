@@ -3,6 +3,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
+use orbit_common::fs::generation::GenerationGuard;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
 };
@@ -870,12 +871,11 @@ fn split_authorities(environment: &mut UpdateEnvironment) -> (PathBuf, PathBuf) 
 
 #[test]
 fn live_client_on_overridden_root_refuses_update_while_host_global_is_quiet() {
-    use orbit_common::fs::generation::GenerationGuard;
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
     let mut environment = fixture.environment();
     let (override_root, _host_global) = split_authorities(&mut environment);
-    let _client = GenerationGuard::for_process(&override_root).expect("live client on override");
+    let _client = live_client(&override_root).expect("live client on override");
     let before = std::fs::read(&fixture.executable).expect("installed bytes");
     let error = run_update(&environment, &request()).expect_err("override pin must refuse");
     let message = error.to_string();
@@ -895,12 +895,11 @@ fn live_client_on_overridden_root_refuses_update_while_host_global_is_quiet() {
 /// so a client pinned there refuses it just as one pinned on the override does.
 #[test]
 fn live_host_global_client_refuses_an_update_admitting_against_an_override() {
-    use orbit_common::fs::generation::GenerationGuard;
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
     let mut environment = fixture.environment();
     let (_override_root, host_global) = split_authorities(&mut environment);
-    let _host_client = GenerationGuard::for_process(&host_global).expect("live host-global pin");
+    let _host_client = live_client(&host_global).expect("live host-global pin");
     let before = std::fs::read(&fixture.executable).expect("installed bytes");
     let error = run_update(&environment, &request()).expect_err("host-global pin must refuse");
     let message = error.to_string();
@@ -951,7 +950,6 @@ fn an_override_update_pins_the_candidate_in_every_authority_it_locked() {
 #[cfg(unix)]
 #[test]
 fn an_unwritable_host_global_record_refuses_an_override_update_before_staging() {
-    use orbit_common::fs::generation::GenerationGuard;
     const RECORDED: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
     let fixture = Fixture::new("0.18.0");
@@ -1022,7 +1020,6 @@ fn chmod(path: &Path, mode: u32) {
 
 #[test]
 fn live_generation_refuses_before_installation_or_candidate_execution() {
-    use orbit_common::fs::generation::GenerationGuard;
     for behavior in [
         FakeBinary::Healthy,
         FakeBinary::MigrationFails,
@@ -1031,8 +1028,7 @@ fn live_generation_refuses_before_installation_or_candidate_execution() {
         let fixture = Fixture::new("0.18.0");
         fixture.publish("0.19.0", behavior);
         let environment = fixture.environment();
-        let _client =
-            GenerationGuard::for_process(&environment.admission_roots[0]).expect("live client");
+        let _client = live_client(&environment.admission_roots[0]).expect("live client");
         let before = std::fs::read(&fixture.executable).expect("installed bytes");
         let error = run_update(&environment, &request()).expect_err("live clients refuse");
         assert!(error.to_string().contains("upgrade admission refused"));
@@ -1077,4 +1073,9 @@ fn a_replacement_without_admission_protocol_is_refused_before_installation() {
         before
     );
     assert!(fixture.invocations().is_empty());
+}
+
+/// A live Orbit client pinned on `root`, as this test binary.
+fn live_client(root: &Path) -> Result<GenerationGuard, orbit_common::OrbitError> {
+    GenerationGuard::acquire(root, orbit_common::fs::generation::process_generation()?)
 }
