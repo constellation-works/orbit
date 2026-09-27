@@ -14,6 +14,9 @@
 //! - `*` — any sequence of non-separator characters.
 //! - `?` — any single non-separator character.
 //!
+//! A newline is not a separator. `*`, `?`, and `**` match a newline inside a
+//! path segment; only `/` bounds `*` and `?`.
+//!
 //! All inputs are normalized to forward-slash separators and stripped of
 //! leading `./`. Paths that escape the workspace (`..`, `~`, absolute) are
 //! rejected as `PolicyError::Invalid`.
@@ -175,8 +178,11 @@ fn translate_glob_body(rule: &str) -> String {
 
 fn compile_filesystem_regex(pattern: &str) -> Result<Regex, regex::Error> {
     // L-0062: Match policy globs using the target filesystem's case identity.
+    // `**` compiles to `.*`. Rust's `.` does not match `\n` unless asked, while
+    // `*` and `?` compile to `[^/]` and already do. A newline is not a separator.
     RegexBuilder::new(pattern)
         .case_insensitive(filesystem_globs_are_case_insensitive())
+        .dot_matches_new_line(true)
         .build()
 }
 

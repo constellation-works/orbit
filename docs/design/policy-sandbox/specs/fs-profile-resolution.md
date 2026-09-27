@@ -41,7 +41,7 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 
 - **Supported syntax:** `*` (single-segment wildcard, anchored to `[^/]*`), `**` (cross-segment wildcard, anchored to `.*`), `**/` segment (anchored to `(?:.*/)?`), `?` (single character within a segment, anchored to `[^/]`), `<prefix>/**` directory-subtree match (anchored to `^<prefix>(?:/.*)?$`).
 - **Unsupported syntax:** character classes (`[abc]`), brace expansion (`{a,b}`), and POSIX bracket expressions are matched literally. Backslash is normalized as a path separator, not a glob escape. `**` may still be combined with other supported operators, including a `**/` segment followed by another `**`.
-- **Anchoring.** Compiled regexes are anchored at both ends (`^…$`). Partial matches do not satisfy a rule.
+- **Anchoring.** Compiled regexes are anchored at both ends (`^…$`). Partial matches do not satisfy a rule. `.` matches a newline, so `**`, `**/`, and trailing `/**` include a newline inside a path segment. `*` and `?` already do, because `[^/]` matches `\n`; `/` is still the only character that bounds them.
 
 ## Failure Modes
 
@@ -60,4 +60,4 @@ The resolution algorithm has multiple layered transformations (lookup, normaliza
 
 ## Agent Signature
 
-Last revised by codex / gpt-5.6 for [ORB-10560].
+Last revised by grok for [ORB-13489].

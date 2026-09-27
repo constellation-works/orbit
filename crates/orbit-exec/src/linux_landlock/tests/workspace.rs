@@ -528,3 +528,61 @@ fn carve_walkers_stay_bounded_and_keep_grants() {
         "boundary outside: {boundary:?}"
     );
 }
+
+/// Grant compilation walks real filenames. A recursive deny has to exclude a
+/// name that contains a newline, and a recursive grant has to include one
+/// whose path only matches because `.*` consumes that newline.
+#[test]
+fn newline_filenames_follow_recursive_grants_and_denies() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let secrets = workspace.path().join("secrets");
+    fs::create_dir(&secrets).expect("secrets");
+    let sibling = secrets.join("ab");
+    let newline_secret = secrets.join("a\nb");
+    fs::write(&sibling, "s").expect("sibling");
+    fs::write(&newline_secret, "n").expect("newline secret");
+
+    let nested_dir = workspace.path().join("a\nb");
+    let nested_leaf = nested_dir.join("leaf");
+    let nested_other = nested_dir.join("other");
+    fs::create_dir(&nested_dir).expect("newline dir");
+    fs::write(&nested_leaf, "leaf").expect("leaf");
+    fs::write(&nested_other, "other").expect("other");
+
+    let vault_token = nested_dir.join("vault").join("token");
+    fs::create_dir(vault_token.parent().expect("vault parent")).expect("vault");
+    fs::write(&vault_token, "token").expect("token");
+    let other_token = nested_dir.join("other-dir").join("token");
+    fs::create_dir(other_token.parent().expect("other parent")).expect("other-dir");
+    fs::write(&other_token, "token").expect("other token");
+
+    let denied = compile(workspace.path(), &profile(&["secrets/*"], &["secrets/**"]));
+    assert!(
+        !grants_read(&denied, &sibling),
+        "ordinary sibling stays denied: {denied:?}"
+    );
+    assert!(
+        !grants_read(&denied, &newline_secret),
+        "newline filename stays denied: {denied:?}"
+    );
+
+    let leading = compile(workspace.path(), &profile(&["**/leaf"], &[]));
+    assert!(
+        grants_read(&leading, &nested_leaf),
+        "**/leaf grants a newline directory: {leading:?}"
+    );
+    assert!(
+        !grants_read(&leading, &nested_other),
+        "**/leaf does not grant the sibling: {leading:?}"
+    );
+
+    let trailing = compile(workspace.path(), &profile(&["**/vault/**"], &[]));
+    assert!(
+        grants_read(&trailing, &vault_token),
+        "trailing /** grants through a newline segment: {trailing:?}"
+    );
+    assert!(
+        !grants_read(&trailing, &other_token),
+        "trailing /** does not grant a different directory: {trailing:?}"
+    );
+}
