@@ -8,8 +8,9 @@ use super::support::{append_enable_report_text, enable_report_json, plugin_recor
 
 #[derive(Args)]
 pub struct PluginAddArgs {
-    /// Plugin source: a directory, a `git+<url>#<ref>` reference, a local
-    /// archive, or an `https://` archive URL
+    /// Plugin source holding `.orbit-plugin/`: a directory, a
+    /// `git+<url>#<ref>` reference, a local archive, or an `https://` archive
+    /// URL
     pub source: String,
     /// Replace an existing install of the same version
     #[arg(long)]

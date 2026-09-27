@@ -10,7 +10,8 @@ use crate::output::color::Domain;
 
 #[derive(Args)]
 pub struct PluginTestArgs {
-    /// Plugin directory holding `plugin.yaml`
+    /// Plugin source: a directory holding `.orbit-plugin/plugin.yaml`, or
+    /// that `.orbit-plugin` directory itself
     pub dir: PathBuf,
     /// Treat the source as a verified first-party checkout, so an
     /// `origin: orbit` manifest runs as it would after a verified install.

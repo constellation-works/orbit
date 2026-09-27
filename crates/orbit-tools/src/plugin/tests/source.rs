@@ -1,9 +1,10 @@
 use std::io::Write;
 
-use orbit_types::plugin::MANIFEST_FILE_NAME;
+use orbit_types::plugin::{MANIFEST_FILE_NAME, PLUGIN_DIR_NAME};
 
 use super::super::source::{
-    ArchiveLimits, PluginSourceRequest, resolve_plugin_source, unpack_tar, unpack_zip,
+    ArchiveLimits, PluginSourceRequest, resolve_plugin_root, resolve_plugin_source, unpack_tar,
+    unpack_zip,
 };
 
 const MANIFEST: &str = "\
@@ -46,14 +47,40 @@ fn append_symlink(builder: &mut tar::Builder<Vec<u8>>, name: &str, target: &str)
         .expect("append symlink");
 }
 
-fn plugin_tar(with_symlink: bool) -> Vec<u8> {
+/// A source archive: product files at the top, the plugin under
+/// `<prefix>.orbit-plugin/`.
+fn source_tar(prefix: &str, with_symlink: bool) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
-    append_regular(&mut builder, MANIFEST_FILE_NAME, MANIFEST.as_bytes());
-    append_regular(&mut builder, "bin/backend.sh", b"#!/bin/sh\n");
+    append_regular(
+        &mut builder,
+        &format!("{prefix}{PLUGIN_DIR_NAME}/{MANIFEST_FILE_NAME}"),
+        MANIFEST.as_bytes(),
+    );
+    append_regular(
+        &mut builder,
+        &format!("{prefix}{PLUGIN_DIR_NAME}/bin/backend.sh"),
+        b"#!/bin/sh\n",
+    );
+    append_regular(&mut builder, &format!("{prefix}Cargo.lock"), b"# product\n");
     if with_symlink {
         append_symlink(&mut builder, "env", "/proc/self/environ");
     }
     builder.into_inner().expect("finish tar")
+}
+
+fn plugin_tar(with_symlink: bool) -> Vec<u8> {
+    source_tar("", with_symlink)
+}
+
+/// A checkout under `parent`: a product file beside `.orbit-plugin/`.
+fn write_checkout(parent: &std::path::Path) -> std::path::PathBuf {
+    let checkout = parent.join("checkout");
+    let root = checkout.join(PLUGIN_DIR_NAME);
+    std::fs::create_dir_all(root.join("bin")).expect("mkdir");
+    std::fs::write(root.join(MANIFEST_FILE_NAME), MANIFEST).expect("manifest");
+    std::fs::write(root.join("bin/backend.sh"), "#!/bin/sh\n").expect("backend");
+    std::fs::write(checkout.join("Cargo.lock"), "# product\n").expect("product file");
+    checkout
 }
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -101,7 +128,7 @@ fn enter_fake_git_child(test: &str) -> bool {
     let quote =
         |value: &std::path::Path| format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"));
     let script = format!(
-        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nenv | sort > {env}\ncheckout=''\nfor arg in \"$@\"; do checkout=$arg; done\nmkdir -p \"$checkout/.git\"\nprintf 'schemaVersion: 2\\nkind: Plugin\\n' > \"$checkout/plugin.yaml\"\nprintf 'url=https://user:secret@example.com/demo.git\\n' > \"$checkout/.git/config\"\n",
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nenv | sort > {env}\ncheckout=''\nfor arg in \"$@\"; do checkout=$arg; done\nmkdir -p \"$checkout/.git\" \"$checkout/.orbit-plugin\"\nprintf 'schemaVersion: 2\\nkind: Plugin\\n' > \"$checkout/.orbit-plugin/plugin.yaml\"\nprintf 'url=https://user:secret@example.com/demo.git\\n' > \"$checkout/.git/config\"\n",
         args = quote(&args_capture),
         env = quote(&env_capture),
     );
@@ -173,30 +200,149 @@ fn a_tar_gz_archive_with_a_symlink_entry_is_refused() {
 }
 
 #[test]
-fn a_tar_archive_without_symlinks_resolves_to_the_manifest_root() {
+fn a_tar_archive_resolves_to_the_orbit_plugin_directory_at_its_top() {
     let temp = tempfile::tempdir().expect("tempdir");
     let archive = temp.path().join("plugin.tar");
     std::fs::write(&archive, plugin_tar(false)).expect("write tar");
 
     let resolved =
         resolve_plugin_source(&unpinned(archive.to_str().expect("utf8"))).expect("resolve");
+    assert!(
+        resolved.root.ends_with(PLUGIN_DIR_NAME),
+        "{:?}",
+        resolved.root
+    );
     assert!(resolved.root.join(MANIFEST_FILE_NAME).is_file());
-    assert!(!resolved.root.join("env").exists());
+    assert!(
+        !resolved.root.join("Cargo.lock").exists(),
+        "product files beside .orbit-plugin/ are not part of the plugin root"
+    );
+}
+
+#[test]
+fn a_tar_archive_resolves_to_the_orbit_plugin_directory_in_one_wrapper() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let archive = temp.path().join("demo-1.0.0.tar.gz");
+    std::fs::write(&archive, gzip(&source_tar("demo-1.0.0/", false))).expect("write tar.gz");
+
+    let resolved =
+        resolve_plugin_source(&unpinned(archive.to_str().expect("utf8"))).expect("resolve");
+    assert!(
+        resolved
+            .root
+            .ends_with(format!("demo-1.0.0/{PLUGIN_DIR_NAME}")),
+        "{:?}",
+        resolved.root
+    );
+    assert!(resolved.root.join(MANIFEST_FILE_NAME).is_file());
+}
+
+#[test]
+fn an_archive_with_only_a_top_level_manifest_is_refused() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let archive = temp.path().join("flat.tar");
+    std::fs::write(
+        &archive,
+        tar_with(&[
+            (MANIFEST_FILE_NAME, MANIFEST.as_bytes()),
+            ("bin/backend.sh", b"#!/bin/sh\n"),
+        ]),
+    )
+    .expect("write tar");
+
+    let error = resolve_plugin_source(&unpinned(archive.to_str().expect("utf8")))
+        .expect_err("a flat archive is not a plugin source")
+        .to_string();
+    assert!(
+        error.contains(&format!("{PLUGIN_DIR_NAME}/{MANIFEST_FILE_NAME}")),
+        "the refusal must name the expected manifest path: {error}"
+    );
+}
+
+#[test]
+fn a_directory_source_resolves_to_its_orbit_plugin_directory() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let checkout = write_checkout(temp.path());
+
+    let resolved =
+        resolve_plugin_source(&unpinned(checkout.to_str().expect("utf8"))).expect("resolve");
+    assert_eq!(
+        resolved.root,
+        std::fs::canonicalize(checkout.join(PLUGIN_DIR_NAME)).expect("canonical root")
+    );
+}
+
+#[test]
+fn a_path_that_is_the_orbit_plugin_directory_is_the_plugin_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = write_checkout(temp.path()).join(PLUGIN_DIR_NAME);
+
+    let resolved = resolve_plugin_source(&unpinned(root.to_str().expect("utf8"))).expect("resolve");
+    assert_eq!(
+        resolved.root,
+        std::fs::canonicalize(&root).expect("canonical root")
+    );
+}
+
+#[test]
+fn a_directory_with_only_a_top_level_manifest_is_refused_naming_the_expected_path() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let flat = temp.path().join("flat");
+    std::fs::create_dir_all(&flat).expect("mkdir");
+    std::fs::write(flat.join(MANIFEST_FILE_NAME), MANIFEST).expect("manifest");
+
+    let error = resolve_plugin_source(&unpinned(flat.to_str().expect("utf8")))
+        .expect_err("a top-level plugin.yaml is not a plugin source")
+        .to_string();
+    let expected = std::fs::canonicalize(&flat)
+        .expect("canonical source")
+        .join(PLUGIN_DIR_NAME)
+        .join(MANIFEST_FILE_NAME);
+    assert!(
+        error.contains(&expected.display().to_string()),
+        "the refusal must name {}: {error}",
+        expected.display()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_outside_the_orbit_plugin_directory_does_not_block_resolution() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let checkout = write_checkout(temp.path());
+    std::os::unix::fs::symlink("/etc/hostname", checkout.join("unrelated-link")).expect("symlink");
+
+    let resolved =
+        resolve_plugin_source(&unpinned(checkout.to_str().expect("utf8"))).expect("resolve");
+    assert!(resolved.root.join(MANIFEST_FILE_NAME).is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_orbit_plugin_directory_that_is_a_symlink_is_refused() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real = write_checkout(temp.path()).join(PLUGIN_DIR_NAME);
+    let linked = temp.path().join("linked");
+    std::fs::create_dir_all(&linked).expect("mkdir");
+    std::os::unix::fs::symlink(&real, linked.join(PLUGIN_DIR_NAME)).expect("symlink");
+
+    let error = resolve_plugin_root(&linked)
+        .expect_err("a linked plugin root must be refused")
+        .to_string();
+    assert!(error.contains("symbolic link"), "{error}");
 }
 
 #[cfg(unix)]
 #[test]
 fn a_directory_source_with_a_symlink_to_a_file_outside_the_tree_is_refused() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let root = temp.path().join("plugin");
-    std::fs::create_dir_all(root.join("bin")).expect("mkdir");
-    std::fs::write(root.join(MANIFEST_FILE_NAME), MANIFEST).expect("manifest");
-    std::fs::write(root.join("bin/backend.sh"), "#!/bin/sh\n").expect("backend");
+    let checkout = write_checkout(temp.path());
+    let root = checkout.join(PLUGIN_DIR_NAME);
     let secret = temp.path().join("secret");
     std::fs::write(&secret, "SECRET-CONTENT-OUTSIDE-PLUGIN-TREE").expect("secret");
     std::os::unix::fs::symlink(&secret, root.join("leaked")).expect("symlink");
 
-    let error = resolve_plugin_source(&unpinned(root.to_str().expect("utf8")))
+    let error = resolve_plugin_source(&unpinned(checkout.to_str().expect("utf8")))
         .expect_err("an outside-tree symlink must be refused")
         .to_string();
     assert_refuses_symlink(&error, "leaked");
@@ -271,10 +417,15 @@ fn tagged_https_git_source_uses_hardened_argv_and_environment() {
         ],
         "Git protocol policy and option terminator must precede the URL"
     );
+    assert!(
+        resolved.root.ends_with(PLUGIN_DIR_NAME),
+        "{:?}",
+        resolved.root
+    );
     assert_eq!(
         args.last().map(String::as_str),
-        Some(resolved.root.to_str().expect("UTF-8 checkout path")),
-        "the final argument is the checkout path"
+        resolved.root.parent().and_then(std::path::Path::to_str),
+        "the final argument is the checkout, whose .orbit-plugin/ is the plugin root"
     );
 
     let environment = std::fs::read_to_string(
@@ -306,9 +457,10 @@ fn an_untagged_git_source_clones_the_default_branch_and_scrubs_git_metadata() {
     let resolved = resolve_plugin_source(&unpinned("git+https://example.com/demo.git"))
         .expect("untagged HTTPS source resolves");
     assert!(resolved.root.join(MANIFEST_FILE_NAME).is_file());
+    let checkout = resolved.root.parent().expect("checkout");
     assert!(
-        !resolved.root.join(".git").exists(),
-        "clone metadata can contain source credentials and must not enter the plugin tree"
+        !checkout.join(".git").exists(),
+        "clone metadata can contain source credentials and must not outlive the clone"
     );
 
     let args = std::fs::read_to_string(

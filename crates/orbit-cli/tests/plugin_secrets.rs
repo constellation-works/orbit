@@ -120,7 +120,7 @@ impl Fixture {
     }
 
     fn source(&self) -> PathBuf {
-        self.home.join("plugin-sources/vault")
+        self.home.join("plugin-sources/vault/.orbit-plugin")
     }
 }
 
@@ -371,7 +371,7 @@ fn remove_deletes_the_plugins_secrets_unless_record_only() {
 fn a_set_secret_reaches_its_exec_backend_on_stdin_only() {
     let fixture = Fixture::new();
     write_plugin(&fixture.source(), TWO_SECRETS);
-    let other = fixture.home.join("plugin-sources/other");
+    let other = fixture.home.join("plugin-sources/other/.orbit-plugin");
     write_plugin_named(&other, "other", TWO_SECRETS);
     for source in [fixture.source(), other] {
         fixture.run_ok(&["plugin", "add", source.to_str().expect("utf8"), "--enable"]);

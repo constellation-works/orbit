@@ -1,10 +1,10 @@
-Check a plugin directory without installing it
+Check a plugin source without installing it
 
 Usage: orbit plugin validate [OPTIONS] <DIR>
 
 Arguments:
   <DIR>
-          Plugin directory holding `plugin.yaml`
+          Plugin source: a directory holding `.orbit-plugin/plugin.yaml`, or that `.orbit-plugin` directory itself
 
 Options:
       --first-party

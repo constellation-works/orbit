@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_types::plugin::is_valid_namespace;
+use orbit_types::plugin::{MANIFEST_FILE_NAME, is_valid_namespace, plugin_root_in};
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -24,7 +24,8 @@ pub struct PluginScaffoldArgs {
     /// Namespace for the new plugin: it owns `<ns>.*` tools, `orbit <ns>`,
     /// and `[plugins.<ns>]`
     pub namespace: String,
-    /// Directory to create (defaults to `./<namespace>`)
+    /// Source directory to create; the plugin goes in its `.orbit-plugin/`
+    /// (defaults to `./<namespace>`)
     #[arg(long)]
     pub dir: Option<PathBuf>,
     /// Overwrite existing files
@@ -41,7 +42,8 @@ impl Execute for PluginScaffoldArgs {
                  '_' or '-', starting with a letter, and not the reserved 'orbit'"
             )));
         }
-        let root = self.dir.unwrap_or_else(|| default_scaffold_dir(&namespace));
+        let source = self.dir.unwrap_or_else(|| default_scaffold_dir(&namespace));
+        let root = plugin_root_in(&source);
         let files = scaffold_files(&namespace);
         if !self.force {
             for (relative, _, _) in &files {
@@ -68,6 +70,7 @@ impl Execute for PluginScaffoldArgs {
             }
         }
 
+        let source_display = source.display().to_string();
         let root_display = root.display().to_string();
         let written: Vec<String> = files
             .iter()
@@ -75,9 +78,9 @@ impl Execute for PluginScaffoldArgs {
             .collect();
         let text = format!(
             "Created the '{namespace}' plugin in {root_display}:\n{}\n\nNext steps:\n  orbit \
-             plugin validate {root_display}\n  orbit plugin add {root_display} --enable\n  orbit plugin \
-             test {root_display}\n  orbit {namespace} status\n\nThe seeded auto-task is \
-             disabled; review it before switching it on.",
+             plugin validate {source_display}\n  orbit plugin add {source_display} --enable\n  \
+             orbit plugin test {source_display}\n  orbit {namespace} status\n\nThe seeded \
+             auto-task is disabled; review it before switching it on.",
             written
                 .iter()
                 .map(|path| format!("  {path}"))
@@ -87,6 +90,7 @@ impl Execute for PluginScaffoldArgs {
         Ok(Payload::detail(
             json!({
                 "name": namespace,
+                "source": source_display,
                 "root": root_display,
                 "files": written,
             }),
@@ -105,7 +109,7 @@ fn scaffold_files(namespace: &str) -> Vec<(PathBuf, String, bool)> {
     let render = |template: &str| template.replace(NAMESPACE_PLACEHOLDER, namespace);
     vec![
         (
-            PathBuf::from("plugin.yaml"),
+            PathBuf::from(MANIFEST_FILE_NAME),
             render(MANIFEST_TEMPLATE),
             false,
         ),

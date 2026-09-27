@@ -29,13 +29,14 @@ pub use grant::{
 pub use manifest::{
     DEFAULT_PANEL_REFRESH_MS, LINK_URL_SCHEMES, MANIFEST_FILE_NAME, MANIFEST_KIND,
     MANIFEST_SCHEMA_VERSION, MAX_PANEL_REFRESH_MS, MAX_SECRET_NAME_LEN, MIN_PANEL_REFRESH_MS,
-    PANEL_SOURCE_TOOL_PREFIX, PluginBackend, PluginBackendType, PluginCliShape,
+    PANEL_SOURCE_TOOL_PREFIX, PLUGIN_DIR_NAME, PluginBackend, PluginBackendType, PluginCliShape,
     PluginConfigSection, PluginDefinitions, PluginExecutionKind, PluginFsPermissions,
     PluginManifest, PluginManifestError, PluginMcpScope, PluginMetadata, PluginNetworkPermission,
     PluginOrigin, PluginPanelGroup, PluginPanelRender, PluginPermissions, PluginRequires,
     PluginSandbox, PluginSecretSpec, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel,
     PluginWebSection, derive_plugin_cli_flag, is_valid_secret_name, plugin_provenance_label,
-    validate_plugin_cli_flags, validate_plugin_cli_positionals, validate_plugin_relative_path,
+    plugin_root_in, validate_plugin_cli_flags, validate_plugin_cli_positionals,
+    validate_plugin_relative_path,
 };
 pub use namespace::{
     FIRST_PARTY_PUBLISHER, ORBIT_NAMESPACE_PREFIX, RESERVED_CLI_COMMANDS, is_valid_namespace,

@@ -8,7 +8,7 @@ use std::os::unix::net::UnixListener;
 /// Write a plugin outside the workspace checkout — installs are global, and a
 /// source inside the repository is refused on purpose.
 fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
-    let root = home.join(format!("plugin-sources/{namespace}"));
+    let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -479,10 +479,11 @@ fn audit_rows_for_tool(
 fn plugin_add_refuses_a_source_inside_the_repository() {
     let workspace = McpWorkspace::init();
     let inside = workspace.work.join("vendor/plugin");
-    std::fs::create_dir_all(inside.join("bin")).expect("create in-repo plugin dirs");
-    std::fs::write(inside.join("bin/backend.sh"), "#!/bin/sh\n").expect("write backend");
+    let root = inside.join(".orbit-plugin");
+    std::fs::create_dir_all(root.join("bin")).expect("create in-repo plugin dirs");
+    std::fs::write(root.join("bin/backend.sh"), "#!/bin/sh\n").expect("write backend");
     std::fs::write(
-        inside.join("plugin.yaml"),
+        root.join("plugin.yaml"),
         "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: vendored\n  version: 0.1.0\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: echo\n      execution_kind: read_only\n",
     )
     .expect("write manifest");
@@ -503,7 +504,7 @@ fn plugin_add_refuses_a_source_inside_the_repository() {
 /// `ORBIT_ALLOWED_TOOLS` its plugin was granted. The plugin's tool reports
 /// the callback's exit status and stderr, so a refusal is observable.
 fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
-    let root = home.join(format!("plugin-sources/{namespace}"));
+    let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -641,7 +642,7 @@ fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
 /// would be indistinguishable from the allowlist refusal under test
 /// [ORB-12865].
 fn write_forging_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
-    let root = home.join(format!("plugin-sources/{namespace}"));
+    let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -932,7 +933,7 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
 /// caller [ORB-12841].
 #[cfg(target_os = "linux")]
 fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
-    let root = home.join(format!("plugin-sources/{namespace}"));
+    let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -1110,7 +1111,7 @@ fn an_mcp_backend_plugin_is_advertised_and_proxied() {
         return;
     }
     let workspace = McpWorkspace::init();
-    let source = workspace.home.join("plugin-sources/mcpdemo");
+    let source = workspace.home.join("plugin-sources/mcpdemo/.orbit-plugin");
     copy_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
@@ -1160,7 +1161,7 @@ fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it(
         return;
     }
     let workspace = McpWorkspace::init();
-    let source = workspace.home.join("plugin-sources/mcpdemo");
+    let source = workspace.home.join("plugin-sources/mcpdemo/.orbit-plugin");
     copy_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
@@ -1277,7 +1278,7 @@ fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value(
     }
     let rotated = format!("{MCP_ROTATION_SECRET}-rotated");
     let workspace = McpWorkspace::init();
-    let source = workspace.home.join("plugin-sources/mcpdemo");
+    let source = workspace.home.join("plugin-sources/mcpdemo/.orbit-plugin");
     copy_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
@@ -1420,7 +1421,7 @@ fn copy_tree(source: &Path, target: &Path) {
 /// a granted callback. Everything is reported, so a silent success is visible.
 #[cfg(target_os = "linux")]
 fn write_probe_plugin(home: &Path, namespace: &str) -> PathBuf {
-    let root = home.join(format!("plugin-sources/{namespace}"));
+    let root = home.join(format!("plugin-sources/{namespace}/.orbit-plugin"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(

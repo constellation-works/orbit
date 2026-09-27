@@ -116,7 +116,9 @@ impl Fixture {
 /// A plugin whose one tool's schema covers every shape the mapping names:
 /// string, integer, boolean, enum, array and a nested object. The backend
 /// echoes the input back, so the two spellings can be compared by result.
-fn write_fixture_plugin(root: &Path) {
+/// Written into the source's `.orbit-plugin/`.
+fn write_fixture_plugin(source: &Path) {
+    let root = &source.join(".orbit-plugin");
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -175,7 +177,9 @@ spec:
     .expect("write manifest");
 }
 
-fn write_status_plugin(root: &Path, namespace: &str, extra_spec: &str) {
+/// A one-tool plugin written into the source's `.orbit-plugin/`.
+fn write_status_plugin(source: &Path, namespace: &str, extra_spec: &str) {
+    let root = &source.join(".orbit-plugin");
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -215,7 +219,7 @@ fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
     let source = fixture.source("errors");
     write_status_plugin(&source, "errors", "");
     std::fs::write(
-        source.join("bin/backend.sh"),
+        source.join(".orbit-plugin/bin/backend.sh"),
         "#!/bin/sh\nprintf '{\"ok\":false,\"error\":{\"code\":\"budget_exceeded\",\"message\":\"wait\",\"retryable\":true,\"detail\":{\"retry_after\":30}}}\\n'\n",
     )
     .expect("write error backend");
@@ -789,7 +793,7 @@ fn plugin_validate_warns_when_timeout_exceeds_the_host_ceiling() {
     let fixture = Fixture::new();
     let source = fixture.source("timeout");
     write_status_plugin(&source, "timeout", "");
-    let manifest = source.join("plugin.yaml");
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
     let original = std::fs::read_to_string(&manifest).expect("read manifest");
     let command = "    command: bin/backend.sh\n";
 
@@ -862,7 +866,7 @@ fn scaffold_defaults_to_the_current_directory_and_honors_explicit_dir() {
         .args(["plugin", "scaffold", "local"])
         .assert()
         .success();
-    assert!(scratch.join("local/plugin.yaml").is_file());
+    assert!(scratch.join("local/.orbit-plugin/plugin.yaml").is_file());
     assert!(!scratch.join(".orbit").exists());
     assert!(!fixture.home.join(".orbit/scaffold/local").exists());
 
@@ -879,7 +883,7 @@ fn scaffold_defaults_to_the_current_directory_and_honors_explicit_dir() {
         ])
         .assert()
         .success();
-    assert!(explicit.join("plugin.yaml").is_file());
+    assert!(explicit.join(".orbit-plugin/plugin.yaml").is_file());
     assert!(!scratch.join("explicit").exists());
     assert!(!scratch.join(".orbit").exists());
 }
@@ -1059,7 +1063,7 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
     assert!(scaffold.status.success(), "{scaffold:?}");
     let scaffold_stdout = String::from_utf8_lossy(&scaffold.stdout);
     assert!(scaffold_stdout.contains("plugin.yaml"), "{scaffold_stdout}");
-    assert!(root.join("plugin.yaml").is_file());
+    assert!(root.join(".orbit-plugin/plugin.yaml").is_file());
 
     let rendered = fixture
         .orbit()
@@ -1092,7 +1096,7 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
 
     // Exercise template substitution in both input and output plus the
     // structured error expectation through the public CLI.
-    let backend = root.join("bin/backend.py");
+    let backend = root.join(".orbit-plugin/bin/backend.py");
     let backend_text = std::fs::read_to_string(&backend).expect("read scaffold backend");
     std::fs::write(
         &backend,
@@ -1102,7 +1106,7 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
         ),
     )
     .expect("add error path to scaffold backend");
-    let golden = root.join("tests/conformance/status.yaml");
+    let golden = root.join(".orbit-plugin/tests/conformance/status.yaml");
     let golden_text = std::fs::read_to_string(&golden).expect("read scaffold golden");
     std::fs::write(
         &golden,
@@ -1543,7 +1547,8 @@ fn copy_tree(from: &Path, to: &Path) {
 #[test]
 fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgrade() {
     let fixture = Fixture::new();
-    let source = fixture.source("uvdemo");
+    // The fixture is a plugin root; this source is that `.orbit-plugin/`.
+    let source = fixture.source("uvdemo").join(".orbit-plugin");
     copy_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../orbit-tools/tests/fixtures/plugins/uv-example"),

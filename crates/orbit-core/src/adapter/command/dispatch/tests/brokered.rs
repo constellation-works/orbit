@@ -109,7 +109,10 @@ impl Fixture {
     }
 
     fn plugin_kind(&self, name: &str, backend: &str, secrets: Option<&str>, kind: &str) {
-        let root = self.sources.join(name);
+        let root = self
+            .sources
+            .join(name)
+            .join(orbit_types::plugin::PLUGIN_DIR_NAME);
         std::fs::create_dir_all(root.join("bin")).expect("plugin bin dir");
         let script = root.join("bin/backend.sh");
         std::fs::write(&script, backend).expect("write backend");
@@ -431,7 +434,7 @@ fn disconnect_and_run_teardown_kill_the_backend_process_group() {
     fixture.plugin("waiting", "#!/bin/sh\ncat >/dev/null\nsleep 120 &\nprintf '%s %s' \"$$\" \"$!\" > \"$ORBIT_PLUGIN_STATE/pids\"\nwait\n", None);
     // The manifest needs a write grant for the readiness file.
     // Use the existing source with an explicitly scoped plugin-state write.
-    let manifest = fixture.sources.join("waiting/plugin.yaml");
+    let manifest = fixture.sources.join("waiting/.orbit-plugin/plugin.yaml");
     let text = std::fs::read_to_string(&manifest).expect("manifest");
     std::fs::write(
         &manifest,

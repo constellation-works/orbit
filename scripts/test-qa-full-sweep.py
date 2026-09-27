@@ -695,11 +695,13 @@ spec:
                 [assertion], lambda evidence, assertion=assertion: parse_json(evidence, assertion))
 
     plugin_source = temp / "qa-plugin"
-    (plugin_source / "bin").mkdir(parents=True)
-    backend = plugin_source / "bin/backend.sh"
+    # A plugin source keeps its plugin in `.orbit-plugin/`, the only tree installed.
+    plugin_root = plugin_source / ".orbit-plugin"
+    (plugin_root / "bin").mkdir(parents=True)
+    backend = plugin_root / "bin/backend.sh"
     backend.write_text("#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"echo\":%s}}\\n' \"$input\"\n")
     backend.chmod(0o755)
-    (plugin_source / "plugin.yaml").write_text("""schemaVersion: 2
+    (plugin_root / "plugin.yaml").write_text("""schemaVersion: 2
 kind: Plugin
 metadata:
   name: qashapes

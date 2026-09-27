@@ -104,7 +104,7 @@ fn sandbox_fixture() {
         work.to_str().expect("work")
     );
     for (name, kind) in [("execfixture", "exec"), ("mcpfixture", "mcp")] {
-        let source = root.join(name);
+        let source = root.join(name).join(".orbit-plugin");
         fs::create_dir_all(source.join("bin")).expect("plugin dirs");
         let backend = source.join("bin/backend");
         fs::write(

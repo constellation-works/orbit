@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use orbit_common::OrbitError;
+use orbit_types::plugin::PLUGIN_DIR_NAME;
 
 use super::fixture::PluginFixture;
 use crate::OrbitRuntime;
@@ -20,7 +21,7 @@ fn write_tested_plugin(
     namespace: &str,
     expected_subject: &str,
 ) -> PathBuf {
-    let root = fixture.sources.join(namespace);
+    let root = fixture.sources.join(namespace).join(PLUGIN_DIR_NAME);
     std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
     std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
     let backend = root.join("bin/backend.sh");
@@ -379,9 +380,10 @@ fn run_with(
 #[cfg(unix)]
 fn mark_first_party_source(root: &Path) {
     mark_first_party_manifest(root);
+    let checkout = root.parent().expect("the plugin root sits in its checkout");
     let status = Command::new("git")
         .args(["init", "--quiet"])
-        .current_dir(root)
+        .current_dir(checkout)
         .status()
         .expect("run git init");
     assert!(status.success(), "git init must succeed");
@@ -392,7 +394,7 @@ fn mark_first_party_source(root: &Path) {
             "origin",
             "https://github.com/constellation-works/fixture.git",
         ])
-        .current_dir(root)
+        .current_dir(checkout)
         .status()
         .expect("add first-party origin");
     assert!(status.success(), "git remote add must succeed");
@@ -917,9 +919,9 @@ fn a_write_root_escaping_the_source_or_scratch_needs_fs_consent() {
     let external = external_dir_with_sentinel(&fixture, "escaping-outside");
     write_sentinel_backend(&root, &external);
     for (declared, needle) in [
-        // Relative roots resolve against the plugin source, beside which the
-        // sentinel directory sits.
-        ("../escaping-outside", external.display().to_string()),
+        // Relative roots resolve against the plugin root, `.orbit-plugin/`
+        // inside the source, beside which the sentinel directory sits.
+        ("../../escaping-outside", external.display().to_string()),
         // `..` out of the rendered scratch workspace is resolved physically.
         ("{{workspace}}/../../../escaped", "--grant fs".to_string()),
     ] {
@@ -973,7 +975,7 @@ fn consent_still_refuses_a_config_templated_protected_write_root() {
 /// values its request carried — the golden's fixture (at version `fixture`)
 /// or the host's stored one — without echoing either.
 fn write_secret_plugin(fixture: &PluginFixture, namespace: &str, golden: &str) -> PathBuf {
-    let root = fixture.sources.join(namespace);
+    let root = fixture.sources.join(namespace).join(PLUGIN_DIR_NAME);
     std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
     std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
     let backend = root.join("bin/backend.sh");

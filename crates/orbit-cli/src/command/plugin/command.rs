@@ -28,6 +28,8 @@ Examples:
   orbit plugin secret set demo api_token < token.txt
   orbit plugin list
 
+A plugin source keeps its plugin in a `.orbit-plugin/` directory holding
+`plugin.yaml`; that directory is the plugin root and the only tree installed.
 Plugins install once per machine under the Orbit global root; a repository
 commits only the `.orbit/plugins.yaml` pin file, never a plugin tree.
 Golden input and output strings may use {{workspace}} and {{plugin_root}};
@@ -70,7 +72,7 @@ pub enum PluginSubcommand {
     Doctor,
     /// Set, list or remove the secrets a plugin declares in `spec.secrets`
     Secret(PluginSecretCommand),
-    /// Check a plugin directory without installing it
+    /// Check a plugin source without installing it
     Validate(PluginValidateArgs),
     /// Run a plugin's conformance goldens against this Orbit
     Test(PluginTestArgs),

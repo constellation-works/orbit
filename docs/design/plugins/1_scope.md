@@ -74,8 +74,24 @@ from the verified `git+` source (or a release bundles the digest).
 
 ## 2. Manifest
 
+A plugin source keeps its plugin in a dedicated `.orbit-plugin/` directory. That directory is
+the **plugin root**: it holds the manifest, still named `plugin.yaml`, and every file the
+manifest names. Product code beside it is never installed.
+
+```
+<repo>/
+  .orbit-plugin/            ← plugin root
+    plugin.yaml             ← manifest
+    bin/                    ← backend launcher (backend.command)
+    schemas/
+    skills/
+    definitions/            ← activities, jobs, routines, auto_tasks
+    tests/conformance/
+  src/ crates/ docs/ …      ← product code, never installed
+```
+
 ```yaml
-# plugin.yaml — at the plugin root
+# .orbit-plugin/plugin.yaml — at the plugin root
 schemaVersion: 2
 kind: Plugin
 metadata:
@@ -185,6 +201,28 @@ orbit plugin secret list <ns> | rm <ns> <name>
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
 
+**Plugin sources.** `add`, `upgrade`, `sync`, `validate <dir>` and `test <dir>` resolve a
+source to its plugin root before reading anything:
+
+- A directory or `git+` checkout resolves to `<source>/.orbit-plugin/`, which must be a real
+  directory (not a link) holding `plugin.yaml`. A path that is itself a `.orbit-plugin`
+  directory is taken as the plugin root.
+- An archive holds `.orbit-plugin/` at its top or inside one wrapper directory, as
+  `git archive` and release tarballs produce.
+- A source whose only manifest is a top-level `plugin.yaml` is refused; the error names the
+  expected `.orbit-plugin/plugin.yaml` path. There is no fallback.
+- Only the plugin root is walked, checked and copied: the symbolic-link refusal and the
+  confinement roots apply to `.orbit-plugin/`, so a link elsewhere in the repository does not
+  block an install. An archive is still refused whole if any member is a link, because its
+  members are unpacked before the plugin root is known.
+- `~/.orbit/plugins/<ns>/<version>/` holds the plugin root's contents, with `plugin.yaml` at
+  its top; `{{plugin_root}}` and `ORBIT_PLUGIN_ROOT` point there. That is an internal layout,
+  not a source form. Manifest paths stay relative to the plugin root, so moving an unchanged
+  manifest into `.orbit-plugin/` keeps its bytes and its `manifest_digest`.
+
+`validate` and `test` report the resolved plugin root. `scaffold <ns>` creates
+`<ns>/.orbit-plugin/`, and `migrate --out-dir <dir>` writes into `<dir>/.orbit-plugin/`.
+
 **Workspace toggles.** The host row is the ceiling; a workspace may narrow it.
 `--scope workspace` writes `[plugin_enablement] <ns> = true|false` into the selected
 workspace's `config.toml` and nothing else. The effective state in a workspace is the host
@@ -221,7 +259,7 @@ the only authority for where a plugin lives: the loader reads it, every lifecycl
 it, and the sandbox profile is built from it. There is no `current` link; `add` prunes one left
 by an older Orbit.
 
-- `add` copies the source into a staging directory inside `~/.orbit/plugins/<ns>/` and
+- `add` copies the plugin root into a staging directory inside `~/.orbit/plugins/<ns>/` and
   publishes it with a single `rename`, so a concurrent reader (clock tick, MCP server,
   dashboard) never loads a half-written tree. Replacing a tree renames the old one aside
   first; in that window a reader gets "not installed", not half a plugin.
@@ -332,7 +370,7 @@ schemaVersion: 1
 plugins:
   - name: graph
     version: "0.4.x"
-    source: git+https://github.com/constellation-works/orbit-graph#v0.4.1
+    source: git+https://github.com/constellation-works/orbit-graph#v0.4.1   # installs its .orbit-plugin/
     enabled: true
 ```
 
@@ -342,7 +380,7 @@ plugins:
   Other transports, URL-shaped options and refs beginning with `-` are refused before Git is
   spawned. Clones disable user-selected protocols and terminal prompts, permit only HTTPS and
   SSH, and end option parsing before the URL.
-- A source tree containing a symbolic link is refused before copying, naming the entry;
+- A plugin root containing a symbolic link is refused before copying, naming the entry;
   `load_plugin_dir` repeats the walk so a hand-edited install cannot become active.
 - `orbit plugin sync` converges this host and workspace from the pin file: installs missing
   plugins, applies `enabled: false` as this workspace's toggle (never the host row), and
@@ -990,8 +1028,9 @@ schema self-consistency, definition cross-references, and the `spec.web` rules o
   when that namespace is installed at the **same manifest digest**; a different install drops
   the claim.
 
-`orbit plugin scaffold <ns>` — a Python `exec` backend, one `read_only` tool with schemas, one
-`kv` panel over it, one disabled auto-task, one skill stub, and two passing goldens.
+`orbit plugin scaffold <ns>` — in `<ns>/.orbit-plugin/`: a Python `exec` backend, one
+`read_only` tool with schemas, one `kv` panel over it, one disabled auto-task, one skill stub,
+and two passing goldens.
 `orbit tool scaffold` still writes the v1 sidecar pair and prints a deprecation naming its
 replacement.
 

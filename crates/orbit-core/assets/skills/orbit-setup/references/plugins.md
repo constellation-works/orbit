@@ -1,7 +1,12 @@
 # Installing plugins
 
 A plugin is one directory holding a `plugin.yaml` (`schemaVersion: 2`,
-`kind: Plugin`) that declares a namespace and what it contributes. Installing
+`kind: Plugin`) that declares a namespace and what it contributes. In a plugin
+source that directory is `.orbit-plugin/`, the plugin root: `orbit plugin add`,
+`upgrade`, `sync`, `validate` and `test` resolve a checkout, `git+` clone or
+archive to its `.orbit-plugin/`, and only that directory is installed. A source
+whose only manifest is a top-level `plugin.yaml` is refused, naming the expected
+`.orbit-plugin/plugin.yaml` path. Installing
 one adds `<ns>.<verb>` tools to `orbit tool list`, makes them runnable with
 `orbit tool run`, and — for a tool whose manifest gives it an `mcp_scope` —
 advertises them to MCP clients as `<ns>_<verb>`. A plugin may also contribute
@@ -31,9 +36,10 @@ plugins:
 
 Cloning a repository therefore does not make its plugins available. Plugin
 trees are never vendored into a checkout, and `orbit plugin add` refuses a
-source inside the current repository for exactly that reason. A source that
-contains a symbolic link is refused, naming the entry, because the install
-copy would follow it and place the target's bytes inside the plugin root.
+source inside the current repository for exactly that reason. A plugin root
+that contains a symbolic link is refused, naming the entry, because the install
+copy would follow it and place the target's bytes inside the plugin root. Links
+elsewhere in the source repository are not walked and do not block an install.
 
 ## Install
 
@@ -181,7 +187,7 @@ restarting `orbit web serve`.
 ## Certifying a plugin for this Orbit
 
 ```bash
-orbit plugin scaffold demo            # creates ./demo with backend, tool, panel, skill, goldens
+orbit plugin scaffold demo            # creates ./demo/.orbit-plugin with backend, tool, panel, skill, goldens
 orbit plugin scaffold demo --dir /path/to/demo # choose an explicit output directory
 orbit plugin validate ./demo --render # manifest plus effective profile/env
 orbit plugin test ./demo              # run its goldens through the real protocol
@@ -218,8 +224,9 @@ A passing run records this Orbit's version on the installed plugin, and `orbit p
 The record is only written when the directory tested is the installed one (same manifest
 digest); reinstalling a changed manifest drops the claim.
 
-`orbit plugin scaffold <namespace>` creates `./<namespace>` in the current directory;
-`--dir <path>` creates the plugin at that path instead. Plugin installation refuses
+`orbit plugin scaffold <namespace>` creates the plugin in `./<namespace>/.orbit-plugin/`
+in the current directory; `--dir <path>` creates it in `<path>/.orbit-plugin/` instead.
+`orbit plugin migrate --out-dir <dir>` likewise writes `<dir>/.orbit-plugin/plugin.yaml`. Plugin installation refuses
 sources inside a workspace repository, so move the scaffold outside the repository
 or give `--dir` an external path before installing it.
 
@@ -376,16 +383,18 @@ The scaffold's backend uses only the standard library. A Python backend that
 needs third-party packages ships as a uv project, and uv builds the environment
 under the plugin's state directory on first call. Do not commit a virtualenv:
 it symlinks its interpreter, and `plugin add` refuses a tree that contains a
-symbolic link.
+symbolic link. The uv project lives inside the plugin root, because nothing
+outside `.orbit-plugin/` is installed.
 
 ```text
 my-plugin/
-  plugin.yaml
-  pyproject.toml     # [project] dependencies; [tool.uv] package = false
-  uv.lock            # committed: pins every dependency
-  .python-version    # optional: an interpreter uv may download into plugin state
-  backend/main.py
-  bin/my-plugin      # the shim below, executable
+  .orbit-plugin/
+    plugin.yaml
+    pyproject.toml     # [project] dependencies; [tool.uv] package = false
+    uv.lock            # committed: pins every dependency
+    .python-version    # optional: an interpreter uv may download into plugin state
+    backend/main.py
+    bin/my-plugin      # the shim below, executable
 ```
 
 ```yaml

@@ -47,7 +47,7 @@ impl PluginFixture {
     }
 
     fn source(&self) -> PathBuf {
-        self._temp.path().join("sources/panels")
+        self._temp.path().join("sources/panels/.orbit-plugin")
     }
 
     fn dashboard_state(&self) -> DashboardState {

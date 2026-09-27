@@ -170,7 +170,7 @@ fn doctor_reports_a_declared_program_that_cannot_be_resolved() {
     let temp = tempfile::tempdir().expect("tempdir");
     let global_root = temp.path().join("global");
     let workspace_root = temp.path().join("repo/.orbit");
-    let source = temp.path().join("sources/demo");
+    let source = temp.path().join("sources/demo/.orbit-plugin");
     for dir in [&global_root, &workspace_root, &source.join("bin")] {
         std::fs::create_dir_all(dir).expect("create fixture dir");
     }

@@ -87,9 +87,13 @@ impl<'a> DefinitionPlugin<'a> {
         self
     }
 
-    /// Write the plugin tree under `fixture.sources` and return its root.
+    /// Write the plugin source under `fixture.sources` and return its plugin
+    /// root, the source's `.orbit-plugin/`.
     pub(super) fn write(&self, fixture: &PluginFixture) -> PathBuf {
-        let root = fixture.sources.join(self.namespace);
+        let root = fixture
+            .sources
+            .join(self.namespace)
+            .join(orbit_types::plugin::PLUGIN_DIR_NAME);
         write_backend(&root, self.program);
 
         let activities = root.join("definitions/activities");
