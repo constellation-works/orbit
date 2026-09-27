@@ -115,9 +115,7 @@ impl<'de> Deserialize<'de> for JobV2Step {
             .remove("id")
             .and_then(|x| x.as_str().map(String::from))
             .ok_or_else(|| D::Error::custom("step missing `id`"))?;
-        let when = obj
-            .remove("when")
-            .and_then(|x| x.as_str().map(String::from));
+        let when = deserialize_optional_string::<D::Error>("when", obj.remove("when"))?;
         let retry = match obj.remove("retry") {
             Some(rv) => Some(
                 serde_json::from_value::<RetrySpec>(rv)
@@ -125,9 +123,10 @@ impl<'de> Deserialize<'de> for JobV2Step {
             ),
             None => None,
         };
-        let recovery_activity = obj
-            .remove("recovery_activity")
-            .and_then(|x| x.as_str().map(String::from));
+        let recovery_activity = deserialize_optional_string::<D::Error>(
+            "recovery_activity",
+            obj.remove("recovery_activity"),
+        )?;
 
         if obj.contains_key("role") {
             return Err(D::Error::custom(
@@ -203,6 +202,17 @@ impl<'de> Deserialize<'de> for JobV2Step {
             resolved_recovery_activity: None,
             body,
         })
+    }
+}
+
+fn deserialize_optional_string<E: serde::de::Error>(
+    field: &str,
+    value: Option<Value>,
+) -> Result<Option<String>, E> {
+    match value {
+        None => Ok(None),
+        Some(value) => serde_json::from_value::<Option<String>>(value)
+            .map_err(|error| E::custom(format!("`{field}`: {error}"))),
     }
 }
 

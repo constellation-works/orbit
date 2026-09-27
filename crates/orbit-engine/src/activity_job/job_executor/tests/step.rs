@@ -51,6 +51,38 @@ fn when_false_literal_skips_step_without_failing_job() {
 }
 
 #[test]
+fn invalid_boolean_guard_is_rejected_before_step_dispatch() {
+    let host = ScriptedHost::new([("disabled", vec![Action::Ok(json!({"ran": true}))])]);
+    let job = job_with_steps(vec![target_step("guarded", "disabled")]);
+    let mut encoded = serde_json::to_value(job).expect("serialize executable job");
+    encoded["steps"][0]["when"] = json!(false);
+
+    // If deserialization accepts the boolean by dropping it, execute the
+    // otherwise valid step so the call-count assertion catches the dispatch.
+    let parse_error = match serde_json::from_value::<JobV2>(encoded) {
+        Ok(job) => {
+            let _ = execute_job(
+                &job,
+                Value::Null,
+                "run-invalid-boolean-guard",
+                std::sync::Arc::new(test_writer("run-invalid-boolean-guard")),
+                &host,
+            );
+            None
+        }
+        Err(error) => Some(error.to_string()),
+    };
+
+    assert_eq!(
+        host.call_count("disabled"),
+        0,
+        "an invalid boolean guard must never dispatch its step body"
+    );
+    let parse_error = parse_error.expect("invalid guard must fail before a job reaches dispatch");
+    assert!(parse_error.contains("when"), "{parse_error}");
+}
+
+#[test]
 fn step_failure_short_circuits_remaining_steps() {
     // Invariant: a failed step terminates the linear loop in `execute_job`
     // (mod.rs:131-148). Without retry/recovery, a retryable

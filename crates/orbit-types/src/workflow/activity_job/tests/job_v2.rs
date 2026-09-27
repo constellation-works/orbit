@@ -1,4 +1,29 @@
 use super::super::job_v2::*;
+use serde_json::{Value, json};
+
+fn json_target_step() -> Value {
+    json!({ "id": "guarded", "target": "activity:noop" })
+}
+
+fn json_target_step_with(field: &str, value: Value) -> Value {
+    let mut step = json_target_step();
+    step.as_object_mut()
+        .expect("target step is an object")
+        .insert(field.to_string(), value);
+    step
+}
+
+fn assert_actionable_field_error(error: impl std::fmt::Display, field: &str) {
+    let message = error.to_string();
+    assert!(
+        message.contains(field),
+        "error should identify `{field}`: {message}"
+    );
+    assert!(
+        message.contains("string"),
+        "error should explain the expected type: {message}"
+    );
+}
 
 #[test]
 fn task_worktree_ownership_is_opt_in_and_round_trips() {
@@ -107,4 +132,98 @@ target: activity:something
             .to_string()
             .contains("pass `crew` in the activity input")
     );
+}
+
+#[test]
+fn step_optional_strings_preserve_omitted_null_and_string_values_in_json_and_yaml() {
+    let omitted: JobV2Step =
+        serde_json::from_value(json_target_step()).expect("parse step with omitted fields");
+    assert_eq!(omitted.when, None);
+    assert_eq!(omitted.recovery_activity, None);
+
+    let null_fields: JobV2Step = serde_json::from_value(json!({
+        "id": "guarded",
+        "when": null,
+        "recovery_activity": null,
+        "target": "activity:noop"
+    }))
+    .expect("null optional strings remain absent");
+    assert_eq!(null_fields.when, None);
+    assert_eq!(null_fields.recovery_activity, None);
+
+    let strings: JobV2Step = serde_json::from_value(json!({
+        "id": "guarded",
+        "when": "{{ input.ready }}",
+        "recovery_activity": "recover",
+        "target": "activity:noop"
+    }))
+    .expect("parse string optional fields");
+    assert_eq!(strings.when.as_deref(), Some("{{ input.ready }}"));
+    assert_eq!(strings.recovery_activity.as_deref(), Some("recover"));
+
+    let omitted: JobV2Step = serde_yaml::from_str("id: guarded\ntarget: activity:noop\n")
+        .expect("parse YAML step with omitted fields");
+    assert_eq!(omitted.when, None);
+    assert_eq!(omitted.recovery_activity, None);
+
+    let null_fields: JobV2Step = serde_yaml::from_str(
+        "id: guarded\nwhen: null\nrecovery_activity: null\ntarget: activity:noop\n",
+    )
+    .expect("YAML null optional strings remain absent");
+    assert_eq!(null_fields.when, None);
+    assert_eq!(null_fields.recovery_activity, None);
+
+    let strings: JobV2Step = serde_yaml::from_str(
+        "id: guarded\nwhen: '{{ input.ready }}'\nrecovery_activity: recover\ntarget: activity:noop\n",
+    )
+    .expect("parse YAML string optional fields");
+    assert_eq!(strings.when.as_deref(), Some("{{ input.ready }}"));
+    assert_eq!(strings.recovery_activity.as_deref(), Some("recover"));
+}
+
+#[test]
+fn non_string_when_values_are_rejected_with_field_errors_in_json_and_yaml() {
+    for invalid_value in [
+        json!(false),
+        json!(7),
+        json!(["ready"]),
+        json!({ "ready": true }),
+    ] {
+        let error =
+            serde_json::from_value::<JobV2Step>(json_target_step_with("when", invalid_value))
+                .expect_err("non-string JSON guard must fail before dispatch");
+        assert_actionable_field_error(error, "when");
+    }
+
+    for invalid_yaml in ["false", "7", "[ready]", "{ ready: true }"] {
+        let yaml = format!("id: guarded\nwhen: {invalid_yaml}\ntarget: activity:noop\n");
+        let error = serde_yaml::from_str::<JobV2Step>(&yaml)
+            .expect_err("non-string YAML guard must fail before dispatch");
+        assert_actionable_field_error(error, "when");
+    }
+}
+
+#[test]
+fn non_string_recovery_activity_values_are_rejected_in_json_and_yaml() {
+    for invalid_value in [
+        json!(false),
+        json!(7),
+        json!(["recover"]),
+        json!({ "name": "recover" }),
+    ] {
+        let error = serde_json::from_value::<JobV2Step>(json_target_step_with(
+            "recovery_activity",
+            invalid_value,
+        ))
+        .expect_err("non-string JSON recovery activity must fail");
+        assert_actionable_field_error(error, "recovery_activity");
+    }
+
+    for invalid_yaml in ["false", "7", "[recover]", "{ name: recover }"] {
+        let yaml =
+            format!("id: guarded\nrecovery_activity: {invalid_yaml}\ntarget: activity:noop\n");
+        let error = serde_yaml::from_str::<JobV2Step>(&yaml)
+            .expect_err("non-string YAML recovery activity must fail");
+        assert_actionable_field_error(error, "recovery_activity");
+    }
 }
