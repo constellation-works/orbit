@@ -3,8 +3,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use tempfile::tempdir;
-
 use super::super::socket::{BROKER_DIR, RunSocketDir, SOCKET_NAME, sweep_orphaned};
 
 const ORPHAN_HELPER: &str = "runtime::plugin::broker::tests::socket::leave_an_orphaned_run_dir";
@@ -16,7 +14,7 @@ fn mode(path: &Path) -> u32 {
 
 #[test]
 fn a_run_directory_is_private_to_the_host_and_removed_whole() {
-    let root = tempdir().expect("global root");
+    let root = super::short_tempdir();
     let global = root.path().canonicalize().expect("canonical root");
 
     let run = RunSocketDir::create(&global).expect("create run dir");
@@ -40,7 +38,7 @@ fn a_run_directory_is_private_to_the_host_and_removed_whole() {
 
 #[test]
 fn two_runs_never_share_a_directory() {
-    let root = tempdir().expect("global root");
+    let root = super::short_tempdir();
 
     let first = RunSocketDir::create(root.path()).expect("first run");
     let second = RunSocketDir::create(root.path()).expect("second run");
@@ -50,8 +48,8 @@ fn two_runs_never_share_a_directory() {
 
 #[test]
 fn a_symlinked_broker_directory_is_refused() {
-    let root = tempdir().expect("global root");
-    let elsewhere = tempdir().expect("link target");
+    let root = super::short_tempdir();
+    let elsewhere = super::short_tempdir();
     fs::create_dir(root.path().join("state")).expect("state");
     std::os::unix::fs::symlink(elsewhere.path(), root.path().join(BROKER_DIR))
         .expect("plant symlink");
@@ -68,8 +66,8 @@ fn a_symlinked_broker_directory_is_refused() {
 
 #[test]
 fn a_symlinked_state_directory_is_refused() {
-    let root = tempdir().expect("global root");
-    let elsewhere = tempdir().expect("link target");
+    let root = super::short_tempdir();
+    let elsewhere = super::short_tempdir();
     std::os::unix::fs::symlink(elsewhere.path(), root.path().join("state")).expect("plant symlink");
 
     let error = RunSocketDir::create(root.path()).expect_err("symlinked state");
@@ -80,7 +78,7 @@ fn a_symlinked_state_directory_is_refused() {
 
 #[test]
 fn a_socket_path_longer_than_sun_path_is_refused_before_anything_is_created() {
-    let root = tempdir().expect("scratch");
+    let root = super::short_tempdir();
     let global = root.path().join("g".repeat(120));
     fs::create_dir(&global).expect("long global root");
 
@@ -115,7 +113,7 @@ fn leave_an_orphaned_run_dir() {
 
 #[test]
 fn sweep_removes_only_directories_whose_owner_is_gone() {
-    let root = tempdir().expect("global root");
+    let root = super::short_tempdir();
     let live = RunSocketDir::create(root.path()).expect("live run");
     let unowned = root.path().join(BROKER_DIR).join("unowned");
     fs::create_dir(&unowned).expect("directory without an owner file");
