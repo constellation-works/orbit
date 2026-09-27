@@ -285,10 +285,16 @@ fn active_git_checkout_root(
     let cwd = Path::new(cwd);
     let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
 
-    // Stable checkout fast path: the runtime's own tree does not need git
-    // probes. Linked worktrees and unrelated checkouts fall through.
+    // An ordinary path in the runtime checkout needs no git probes. A nested
+    // checkout has its own .git marker, even when it is inside this path.
     if canonical_cwd.starts_with(canonical_repo_root) {
-        return Some(canonical_repo_root.to_path_buf());
+        let nested_checkout = canonical_cwd
+            .ancestors()
+            .take_while(|ancestor| *ancestor != canonical_repo_root)
+            .any(|ancestor| ancestor.join(".git").exists());
+        if !nested_checkout {
+            return Some(canonical_repo_root.to_path_buf());
+        }
     }
 
     let checkout_root = git_checkout_root(cwd)?;
