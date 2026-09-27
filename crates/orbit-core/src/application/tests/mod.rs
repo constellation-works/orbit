@@ -2,6 +2,7 @@ mod audit_event;
 mod distributed;
 mod epic_retirement;
 mod executor;
+mod gc;
 mod job_pipeline;
 mod job_submission;
 mod managed_asset_manifest;
