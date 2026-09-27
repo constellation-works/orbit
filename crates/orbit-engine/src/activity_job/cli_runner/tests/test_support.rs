@@ -527,6 +527,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec(
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        proc_disallowed_programs: None,
         trusted_host_execution: false,
     }
 }
@@ -566,6 +567,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        proc_disallowed_programs: None,
         trusted_host_execution: false,
     }
 }

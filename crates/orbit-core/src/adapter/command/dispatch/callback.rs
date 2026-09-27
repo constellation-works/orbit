@@ -361,6 +361,17 @@ pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Only a complete, explicit deny envelope selects the new program mode.
+/// Missing or unknown markers retain the legacy allowlist boundary.
+pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
+    if std::env::var("ORBIT_PROC_PROGRAM_POLICY").ok().as_deref() != Some("deny") {
+        return None;
+    }
+    std::env::var("ORBIT_PROC_DISALLOWED_PROGRAMS")
+        .ok()
+        .map(|raw| split_env_list(&raw))
+}
+
 pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
     #[cfg(test)]
     if let Some(policy) = TEST_ACTIVITY_TOOLS.with(|tools| tools.borrow().clone()) {

@@ -115,6 +115,23 @@ fn load_activity_asset_accepts_explicit_empty_program_allowlist() {
     assert_eq!(asset.name, "deny_all_spawn");
 }
 
+#[test]
+fn load_activity_asset_accepts_program_disallow_mode_and_rejects_both_modes() {
+    let yaml = format!(
+        "{}\n  proc_disallowed_programs: []\n",
+        agent_loop_activity_yaml("deny_mode_spawn", "    - proc.spawn\n")
+    );
+    let asset = load_activity_asset(&yaml).expect("explicit empty disallow list loads");
+    let orbit_types::workflow::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("expected agent loop")
+    };
+    assert_eq!(spec.proc_disallowed_programs, Some(Vec::new()));
+
+    let both = format!("{yaml}  proc_allowed_programs: []\n");
+    let error = load_activity_asset(&both).expect_err("two program modes are ambiguous");
+    assert!(error.to_string().contains("mutually exclusive"), "{error}");
+}
+
 /// [ORB-11354] The unsandboxed execution mode is legal on exactly one built-in
 /// activity name. Asset load is where that is enforced, because activity assets
 /// live in a workspace directory an operator can edit — a key in YAML must

@@ -9,10 +9,29 @@ use std::path::Path;
 use serde_json::json;
 
 use super::super::ORBIT_PLUGIN_ENV;
+use super::super::callback::read_proc_disallowed_programs_from_env;
 use super::super::execute::ToolEntryPoint;
 use crate::OrbitRuntime;
 use crate::adapter::command::tests::support::{env_guard, fresh_runtime};
 use crate::runtime::plugin::paths::plugin_install_path;
+
+#[test]
+fn incomplete_program_policy_envelope_preserves_legacy_allowlist_mode() {
+    let _guard = orbit_common::test_env::scoped([
+        ("ORBIT_PROC_PROGRAM_POLICY", Some("deny")),
+        ("ORBIT_PROC_DISALLOWED_PROGRAMS", None),
+    ]);
+    assert_eq!(read_proc_disallowed_programs_from_env(), None);
+    drop(_guard);
+    let _guard = orbit_common::test_env::scoped([
+        ("ORBIT_PROC_PROGRAM_POLICY", Some("deny")),
+        ("ORBIT_PROC_DISALLOWED_PROGRAMS", Some("sudo,ssh")),
+    ]);
+    assert_eq!(
+        read_proc_disallowed_programs_from_env(),
+        Some(vec!["sudo".to_string(), "ssh".to_string()])
+    );
+}
 
 fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
     let root = plugin_install_path(&runtime.global_root(), "callback", "1.0.0");

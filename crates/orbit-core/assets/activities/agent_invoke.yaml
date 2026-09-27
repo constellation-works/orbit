@@ -13,7 +13,7 @@
 #   - It grants the child no Orbit capability. The subprocess still carries
 #     managed-run provenance, so it resolves as an agent at every capability
 #     chokepoint and cannot perform a governed operation.
-#   - `proc_allowed_programs` below is Orbit's own `proc.spawn` allowlist. The
+#   - `proc_disallowed_programs` below is Orbit's own `proc.spawn` disallow list. The
 #     provider harness owns its native shell tool and Orbit does not enforce
 #     the list against it, so treat the list as documentation of intent rather
 #     than as a control.
@@ -125,21 +125,29 @@ spec:
     - orbit.friction.add
     - orbit.friction.update
     - orbit.friction.rehome
-  proc_allowed_programs:
-    - awk
-    - bash
-    - cargo
-    - cat
-    - find
-    - git
-    - grep
-    - jq
-    - ls
-    - make
-    - ps
-    - python3
-    - rg
-    - sed
-    - sh
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
   on_denial: terminate
   wall_clock_timeout_seconds: 1800

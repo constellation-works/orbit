@@ -254,6 +254,7 @@ impl BrokerHost {
             require_response_envelope: false,
             require_completion_envelope: false,
             proc_allowed_programs: None,
+            proc_disallowed_programs: None,
             trusted_host_execution: false,
         };
         run_cli_backend(

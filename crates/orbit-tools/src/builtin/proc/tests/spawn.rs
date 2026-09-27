@@ -6,8 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use orbit_exec::StdinMode;
 
-use super::{MAX_TIMEOUT_MS, path_argument, proc_spawn_timeout_ms, spawn_request};
+use super::{
+    MAX_TIMEOUT_MS, enforce_program_allowlist, path_argument, proc_spawn_timeout_ms, spawn_request,
+};
 use crate::{TIMEOUT_DEFAULT_MS, ToolContext};
+use orbit_common::OrbitError;
 
 // Used only by the child-execution test below, which runs a real Unix `cat`.
 #[cfg(unix)]
@@ -89,6 +92,46 @@ fn option_value_paths_are_recognized_without_treating_flags_as_paths() {
         Some(cwd.join("./secret.txt"))
     );
     assert_eq!(path_argument("--verbose", cwd), None);
+}
+
+#[test]
+fn disallow_mode_denies_only_listed_programs_and_legacy_allowlist_still_denies_all() {
+    let deny = ToolContext {
+        proc_spawn_activity_scoped: true,
+        proc_disallowed_programs: Some(vec!["sudo".to_string(), "ssh".to_string()]),
+        ..Default::default()
+    };
+    for program in ["sudo", "/usr/bin/ssh"] {
+        let error = enforce_program_allowlist(&deny, "proc.spawn", program)
+            .expect_err("listed program denied");
+        assert!(matches!(error, OrbitError::PolicyDenied(message)
+            if message.contains("activity disallow list") && message.contains("sudo, ssh")));
+    }
+    enforce_program_allowlist(&deny, "proc.spawn", "uv").expect("granted uv is not listed");
+    enforce_program_allowlist(&deny, "plugin tool", "cargo").expect("ordinary tool admitted");
+
+    let legacy = ToolContext {
+        proc_spawn_activity_scoped: true,
+        ..Default::default()
+    };
+    assert!(enforce_program_allowlist(&legacy, "proc.spawn", "uv").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn disallow_mode_checks_canonical_symlink_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("sudo");
+    std::fs::write(&target, b"fixture").expect("target");
+    let link = dir.path().join("alias");
+    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+    let ctx = ToolContext {
+        proc_disallowed_programs: Some(vec!["sudo".to_string()]),
+        ..Default::default()
+    };
+    let error = enforce_program_allowlist(&ctx, "proc.spawn", link.to_str().expect("utf8 path"))
+        .expect_err("alias to listed executable must be denied");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)));
 }
 
 /// Run `action` with a warning-level subscriber installed for this thread and

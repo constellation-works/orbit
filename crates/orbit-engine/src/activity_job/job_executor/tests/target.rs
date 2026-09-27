@@ -110,6 +110,7 @@ fn inline_agent_loop_spec() -> AgentLoopSpec {
         require_response_envelope: false,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        proc_disallowed_programs: None,
         trusted_host_execution: false,
     }
 }

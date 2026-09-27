@@ -76,6 +76,8 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_NAME_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_PROC_PROGRAM_POLICY",
+    "ORBIT_PROC_DISALLOWED_PROGRAMS",
 ];
 
 /// Exact envelope names a managed run exports or forwards into a child.
@@ -103,6 +105,8 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
     "ORBIT_STEP_INDEX",
     "ORBIT_TASK_ACTOR_KIND",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
+    "ORBIT_PROC_PROGRAM_POLICY",
+    "ORBIT_PROC_DISALLOWED_PROGRAMS",
 ];
 
 /// Envelope families admitted by prefix because the engine treats them as

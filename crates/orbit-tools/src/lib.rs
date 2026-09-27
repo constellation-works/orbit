@@ -32,7 +32,7 @@
 //! git and GitHub helpers, Orbit task/job commands, process spawning,
 //! network fetches, and time utilities. Each tool executes inside a
 //! [`ToolContext`] that carries workspace boundaries, agent metadata,
-//! process allowlists, and the narrow Orbit host surface used by Orbit builtins.
+//! process policies, and the narrow Orbit host surface used by Orbit builtins.
 //!
 //! # Dependency direction
 //! orbit-common / orbit-exec / orbit-policy → `orbit-tools` → orbit-engine, orbit-core, orbit-mcp
@@ -245,8 +245,8 @@ pub struct ActivityBinding {
 pub enum ToolCaller {
     /// An agent, an interactive client, or any context no host attested
     /// otherwise. A plugin's declared programs are held to
-    /// `proc_allowed_programs` exactly as `proc.spawn` is, so an
-    /// activity-scoped context with an empty list denies every one.
+    /// the activity's program policy exactly as `proc.spawn` is, so a
+    /// legacy activity-scoped context with an empty allowlist denies every one.
     #[default]
     Agent,
     /// A deterministic job step: the activity asset fixed the call, and no
@@ -304,19 +304,21 @@ pub struct ToolContext {
     /// from agent-controlled tool input so human and system writes do not
     /// weaken canonical agent-family validation at the public tool boundary.
     pub trusted_actor_label: Option<String>,
-    /// Program allowlist for `proc.spawn`. When `proc_spawn_activity_scoped`
-    /// is `true`, an empty list denies every program (fail-closed). When
-    /// `proc_spawn_activity_scoped` is `false`, an empty list preserves the
-    /// legacy unrestricted behaviour for direct CLI / v1 callers.
+    /// Legacy program allowlist for `proc.spawn`. In the absence of
+    /// `proc_disallowed_programs`, an empty scoped list denies every program.
+    /// An empty unscoped list preserves direct CLI / v1 behavior.
     pub proc_allowed_programs: Vec<String>,
+    /// Present only for an activity that selects program deny mode. An empty
+    /// list admits every program; absence preserves the legacy allowlist.
+    pub proc_disallowed_programs: Option<Vec<String>>,
     /// Complete environment for `proc.spawn`, resolved from the operator's
     /// execution environment policy by the runtime. `None` uses Orbit's
     /// credential-free child baseline.
     pub proc_spawn_environment: Option<Vec<(String, String)>>,
     /// True when `proc.spawn` runs inside an activity-scoped context. Every v2
-    /// activity context sets it, so an empty `proc_allowed_programs` denies
-    /// every program (fail-closed) rather than degrading to allow-all when an
-    /// asset omits the key ([ORB-10959]). Only direct CLI / v1 callers leave it
+    /// activity context sets it, so a missing program policy denies every
+    /// program (fail-closed) rather than degrading to allow-all when an asset
+    /// omits the key ([ORB-10959]). Only direct CLI / v1 callers leave it
     /// `false`.
     pub proc_spawn_activity_scoped: bool,
     /// Who chose this call. Only a host that dispatches a deterministic step

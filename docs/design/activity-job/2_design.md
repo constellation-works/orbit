@@ -491,7 +491,7 @@ The six seeded agent loops (`agent_implement`, `agent_invoke`,
 `task_pilot`) now declare `tool_disallow_list`. They refuse registered
 control-plane mutations and `orbit.agent.invoke`; the read-only
 `agent_invoke` and `task_pilot` also refuse task and friction writes. Their
-`proc.spawn` program lists are unchanged here. The tool registry currently has
+`proc.spawn` program lists now use `proc_disallowed_programs`. The tool registry currently has
 no tool for run cancellation, plugin administration, config mutation, or
 crew/workspace mutation; those operations retain their separate governance.
 The disallow lists contain only registered tool names, so an activity asset
@@ -521,7 +521,25 @@ continues to pass registry validation when loaded.
   registered names, and wildcards only on `V2_TOOL_WILDCARD_ROOTS`. The
   [ORB-10959] pairing rule also carries over. Deny mode grants `proc.spawn`
   unless the list covers it, so an activity that leaves it callable must
-  declare `proc_allowed_programs`.
+  declare exactly one of `proc_allowed_programs` or `proc_disallowed_programs`.
+
+**Program policy.** `proc_allowed_programs` retains its legacy exact-match
+semantics for custom and persisted activities, including `[]` denying every
+program. The optional `proc_disallowed_programs` selects deny mode: programs
+outside that list may run, subject to the filesystem sandbox and plugin
+grants. Declaring both lists is a load error. The disallow gate compares the
+requested program's basename and an available canonical path or canonical
+basename, so spelling a listed executable as an absolute path or symlink does
+not bypass it. This list is defense in depth; the OS sandbox remains the
+containment boundary. Managed CLI agents stamp `ORBIT_PROC_PROGRAM_POLICY=deny`
+and `ORBIT_PROC_DISALLOWED_PROGRAMS` (including an empty value) for nested
+Orbit CLI and MCP calls. Without a complete marker and list, the nested
+server applies `ORBIT_PROC_ALLOWED_PROGRAMS` exactly as before.
+For the six shipped activities, a deny-mode run also stamps each activity's
+last shipped program allowlist as a fallback for an older MCP server. That
+server therefore preserves the pre-migration permissions during a deploy;
+the new server applies the disallow list. A custom deny-mode activity has no
+legacy program contract and supplies an empty fallback list to old servers.
 
 A task's `required_tools` cannot override a disallow entry. Admission checks
 each requirement as in allowlist mode. A requirement the list covers fails

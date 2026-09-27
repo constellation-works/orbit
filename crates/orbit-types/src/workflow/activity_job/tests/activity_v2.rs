@@ -457,6 +457,34 @@ fn agent_loop_spec_proc_allowed_programs_accepts_empty_seq() {
     assert_eq!(parsed.proc_allowed_programs, Some(Vec::<String>::new()));
 }
 
+#[test]
+fn program_disallow_policy_is_optional_and_round_trips() {
+    let legacy: AgentLoopSpec =
+        serde_yaml::from_str("instruction: hi\nproc_allowed_programs: []\n").expect("legacy spec");
+    assert_eq!(legacy.proc_disallowed_programs, None);
+    assert!(
+        serde_json::to_value(&legacy)
+            .expect("serialize legacy")
+            .get("proc_disallowed_programs")
+            .is_none()
+    );
+
+    let deny: AgentLoopSpec =
+        serde_yaml::from_str("instruction: hi\nproc_disallowed_programs:\n  - sudo\n")
+            .expect("deny spec");
+    assert_eq!(
+        deny.proc_disallowed_programs,
+        Some(vec!["sudo".to_string()])
+    );
+    let round_trip: AgentLoopSpec =
+        serde_json::from_value(serde_json::to_value(&deny).expect("serialize deny"))
+            .expect("deserialize deny");
+    assert_eq!(
+        round_trip.proc_disallowed_programs,
+        deny.proc_disallowed_programs
+    );
+}
+
 /// [ORB-13315] An asset written before deny mode existed parses unchanged,
 /// stays in allowlist mode, and re-serializes without the new key, so stored
 /// activity snapshots keep their exact shape.

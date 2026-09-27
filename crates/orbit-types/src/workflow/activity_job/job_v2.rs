@@ -82,6 +82,10 @@ pub struct JobV2Step {
 /// load time. A `TargetRef` that survives into dispatch is a caller bug —
 /// the job executor should never have to look up an activity by name.
 #[derive(Debug, Clone, Serialize, PartialEq)]
+// The resolved Target carries the activity snapshot inline in persisted job
+// steps. Boxing it would churn every executor reader for a size heuristic;
+// the additive optional program policy makes this enum cross that threshold.
+#[allow(clippy::large_enum_variant)]
 #[serde(untagged)]
 pub enum JobV2StepBody {
     Parallel {

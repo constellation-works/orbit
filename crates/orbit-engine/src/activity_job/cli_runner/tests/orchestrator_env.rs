@@ -650,6 +650,35 @@ fn run_cli_backend_stamps_deny_mode_policy_for_the_managed_child() {
     );
 }
 
+#[test]
+fn run_cli_backend_forwards_program_deny_mode_with_legacy_mcp_fallback() {
+    let temp = tempdir().expect("tempdir");
+    let script = policy_checking_script(
+        temp.path(),
+        r#"[ "$ORBIT_PROC_PROGRAM_POLICY" = "deny" ] || fail program_policy_marker
+[ "$ORBIT_PROC_DISALLOWED_PROGRAMS" = "sudo,su,doas,pkexec,ssh,scp,sftp,rsync,nc,ncat,netcat,socat,systemctl,loginctl,shutdown,reboot,mount,umount,chroot,nsenter,unshare,docker,podman" ] || fail program_disallow_list
+[ "$ORBIT_PROC_ALLOWED_PROGRAMS" = "awk,bash,cargo,cat,find,git,grep,jq,ls,make,ps,python3,rg,sed,sh" ] || fail legacy_mcp_fallback"#,
+    );
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-program-deny",
+        "grok:grok-build",
+        Arc::new(RecordingSink::default()) as Arc<dyn AuditSink>,
+    ));
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.proc_disallowed_programs = Some("sudo,su,doas,pkexec,ssh,scp,sftp,rsync,nc,ncat,netcat,socat,systemctl,loginctl,shutdown,reboot,mount,umount,chroot,nsenter,unshare,docker,podman".split(',').map(str::to_string).collect());
+    let outcome = run_cli_backend(
+        &policy_test_host(&script, &[]),
+        &spec,
+        "agent_invoke",
+        "job-program-deny",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+    assert!(outcome.success, "{:?}", outcome.output);
+}
+
 /// [ORB-13315] A task requirement never overrides a disallow entry: the run
 /// is refused before any provider launch.
 #[test]
