@@ -286,6 +286,13 @@ pub(crate) fn attach_bound_workspace_identity(
     if input.get("field").is_some() || input.get("fields").is_some() {
         return Ok(output);
     }
+    // A routed worker read (`_worker_read`) answers a claimed leaf's owner
+    // coordination with the typed value it asked for — history, comments, a
+    // task list — not a task record, and the reader deserializes exactly that
+    // shape [ORB-13625]. Decorating it would break every non-object answer.
+    if input.get("_worker_read").is_some() {
+        return Ok(output);
+    }
     if let Some(owner) = owner {
         insert_workspace_identity(&mut output, owner)?;
     }
