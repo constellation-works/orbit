@@ -192,11 +192,43 @@ pub struct HandoffLandingUpdate {
     pub evidence: String,
 }
 
+/// Environment name that tells a sandboxed agent where its run's plugin broker
+/// listens. The value locates the socket and proves nothing: the broker
+/// authenticates each connection by the kernel's peer identity.
+pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
+
+/// A per-run plugin broker a host started for one sandboxed provider launch
+/// (`docs/design/plugins/2_agent_call_broker.md`).
+///
+/// The listener runs until the handle is dropped. Dropping it stops the
+/// listener and removes the socket and the directory holding it.
+pub trait PluginBrokerHandle: Send {
+    /// Absolute socket path exported to the agent as [`PLUGIN_BROKER_ENV`].
+    fn socket_path(&self) -> &Path;
+
+    /// Anchor peer authentication to the sandbox process just spawned for
+    /// this run: the `bwrap` child on Linux, the `sandbox-exec` child on
+    /// macOS. Until this succeeds, the broker refuses every connection.
+    fn bind_sandbox(&self, sandbox_pid: u32) -> Result<(), OrbitError>;
+}
+
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
 pub trait RuntimeHost: Send + Sync {
+    /// Start this run's plugin broker before a sandboxed provider is spawned.
+    ///
+    /// `Ok(None)` means the host offers no broker. An error names why a
+    /// broker-capable host could not bind one; the step still runs without
+    /// it.
+    fn start_plugin_broker(
+        &self,
+        _run_id: &str,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        Ok(None)
+    }
+
     fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
         if self.worker_invocation().is_some() {
             return Err(OrbitError::Execution(

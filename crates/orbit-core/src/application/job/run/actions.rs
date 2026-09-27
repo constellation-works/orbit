@@ -119,6 +119,11 @@ impl OrbitRuntime {
             match signal(&run) {
                 Ok(outcome) => {
                     self.record_cancellation_signal_acknowledgement(&run, &request_id, &outcome)?;
+                    // A signalled worker never runs its own teardown, so the
+                    // plugin broker socket of the step it was running would
+                    // outlive it. Only directories whose owner is gone go.
+                    #[cfg(unix)]
+                    crate::runtime::plugin::broker::sweep_orphaned(&self.global_root());
                     Some(outcome)
                 }
                 Err(error) => {

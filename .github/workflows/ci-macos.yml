@@ -44,6 +44,11 @@ on:
       # plugin profile intersected with the agent's; proven through
       # sandbox-exec.
       - "crates/orbit-tools/src/plugin/tests/backend/brokered.rs"
+      # [ORB-13236] The agent-call broker authenticates peers by their
+      # ancestry to the spawned sandbox-exec, read through Darwin's
+      # LOCAL_PEERTOKEN and libproc.
+      - "crates/orbit-core/src/runtime/plugin/broker/**"
+      - "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs"
       - "crates/orbit-tools/tests/fixtures/plugins/uv-example/**"
       - "crates/orbit-cli/tests/plugin_cli_group.rs"
       - "Cargo.lock"
@@ -108,6 +113,12 @@ jobs:
 
       - name: Run orbit-core sandbox tests
         run: cargo test --no-fail-fast -p orbit-core --locked sandbox
+
+      # [ORB-13236] Darwin peer credentials and the ancestry walk: a client
+      # inside the run's sandbox-exec is answered, another run's client and a
+      # same-UID host process are refused.
+      - name: Run agent-call broker tests (real sandbox-exec)
+        run: cargo test --no-fail-fast -p orbit-core --locked runtime::plugin::broker
 
       # [ORB-12553] Generation admission turns on Darwin descriptor and flock
       # behavior: a sandboxed child joins the recorded generation through a

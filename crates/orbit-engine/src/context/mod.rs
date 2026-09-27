@@ -18,8 +18,9 @@ mod tests;
 pub(crate) use env::{ProvenanceEnv, provenance_env};
 pub use hosts::{
     ClaimExecutionContext, CrewConfig, HandoffLandingContext, HandoffLandingStep,
-    HandoffLandingUpdate, PrConfig, ResolvedActivityTools, ReviewLandingRequest, RuntimeHost,
-    StepRecoveryAdmission, TaskActivityUpdate, TaskAutomationUpdate,
+    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PrConfig, ResolvedActivityTools,
+    ReviewLandingRequest, RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate,
+    TaskAutomationUpdate,
 };
 pub use outcome::{
     AGENT_INVOCATION_FAILED, AGENT_TIMEOUT, ActivityInvocationResult, WORKFLOW_RUN_FAILED_EVENT,

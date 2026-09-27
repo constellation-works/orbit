@@ -43,7 +43,7 @@ const AUTHORITY_FILE_MODE: u32 = 0o600;
 
 /// The kernel process table every binding probe reads.
 #[cfg(target_os = "linux")]
-const PROC_ROOT: &str = "/proc";
+pub(crate) const PROC_ROOT: &str = "/proc";
 
 /// PID of the namespace leader a sandboxed worker shares with its host record.
 #[cfg(target_os = "linux")]
@@ -600,8 +600,12 @@ pub(crate) fn current_worker_binding(
     Ok(None)
 }
 
+/// The identity of `pid`'s PID namespace as seen through `proc_root`: the
+/// namespace link, the start time of `pid` and the boot ID. For a namespace
+/// leader this names one namespace for its whole life, because the namespace
+/// ends when its leader does and a recycled inode comes with a new leader.
 #[cfg(target_os = "linux")]
-fn namespace_key(proc_root: &Path, pid: u32) -> Result<String, OrbitError> {
+pub(crate) fn namespace_key(proc_root: &Path, pid: u32) -> Result<String, OrbitError> {
     let process = proc_root.join(pid.to_string());
     let namespace = std::fs::read_link(process.join("ns/pid"))?;
     let stat = std::fs::read_to_string(process.join("stat"))?;
@@ -615,6 +619,45 @@ fn namespace_key(proc_root: &Path, pid: u32) -> Result<String, OrbitError> {
     Ok(format!("{}:{}:{}", namespace.display(), start, boot.trim()))
 }
 
+/// Host PID of the PID-namespace leader Bubblewrap creates beneath `root_pid`
+/// (the spawned `bwrap`). Waits up to five seconds for the namespace to exist.
+#[cfg(target_os = "linux")]
+pub(crate) fn worker_namespace_leader(root_pid: u32) -> Result<u32, OrbitError> {
+    let own = std::fs::read_link("/proc/self/ns/pid")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut pending = vec![root_pid];
+        for _ in 0..256 {
+            let Some(pid) = pending.pop() else { break };
+            if let Ok(namespace) = std::fs::read_link(format!("/proc/{pid}/ns/pid"))
+                && namespace != own
+                && std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| {
+                    status.lines().any(|line| {
+                        line.starts_with("NSpid:") && line.split_whitespace().last() == Some("1")
+                    })
+                })
+            {
+                return Ok(pid);
+            }
+            if let Ok(children) =
+                std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+            {
+                pending.extend(
+                    children
+                        .split_whitespace()
+                        .filter_map(|value| value.parse::<u32>().ok()),
+                );
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(OrbitError::PolicyDenied(
+                "worker PID namespace authority unavailable".into(),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 impl RecoveryAuthority {
     /// Bind Bubblewrap's namespace leader as observed from the host. A process
     /// inside that namespace sees this same kernel namespace, boot and start
@@ -625,43 +668,8 @@ impl RecoveryAuthority {
         root_pid: u32,
         binding: &orbit_types::tool::WorkerInvocation,
     ) -> Result<(), OrbitError> {
-        let own = std::fs::read_link("/proc/self/ns/pid")?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let mut pending = vec![root_pid];
-            for _ in 0..256 {
-                let Some(pid) = pending.pop() else { break };
-                if let Ok(namespace) = std::fs::read_link(format!("/proc/{pid}/ns/pid"))
-                    && namespace != own
-                    && std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| {
-                        status.lines().any(|line| {
-                            line.starts_with("NSpid:")
-                                && line.split_whitespace().last() == Some("1")
-                        })
-                    })
-                {
-                    return self.record_worker_namespace(
-                        &namespace_key(Path::new(PROC_ROOT), pid)?,
-                        binding,
-                    );
-                }
-                if let Ok(children) =
-                    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-                {
-                    pending.extend(
-                        children
-                            .split_whitespace()
-                            .filter_map(|value| value.parse::<u32>().ok()),
-                    );
-                }
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(OrbitError::PolicyDenied(
-                    "worker PID namespace authority unavailable".into(),
-                ));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        let leader = worker_namespace_leader(root_pid)?;
+        self.record_worker_namespace(&namespace_key(Path::new(PROC_ROOT), leader)?, binding)
     }
 
     #[cfg(target_os = "linux")]

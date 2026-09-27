@@ -5,8 +5,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    CrewConfig, DispatchError, ResolvedActivityTools, ResolvedCliExecutor, ResolvedSandbox,
-    ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
+    CrewConfig, DispatchError, PluginBrokerHandle, ResolvedActivityTools, ResolvedCliExecutor,
+    ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+    V2AuditWriter,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -32,6 +33,23 @@ use super::task_automation::apply_locked_task_automation_update;
 use super::{activity_tools, checkpoints, crew, invocation};
 
 impl RuntimeHost for OrbitRuntime {
+    fn start_plugin_broker(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+        #[cfg(unix)]
+        {
+            let broker =
+                crate::runtime::plugin::broker::PluginBroker::start(&self.global_root(), run_id)?;
+            Ok(Some(Box::new(broker)))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = run_id;
+            Ok(None)
+        }
+    }
+
     fn register_worker_pid_namespace(&self, pid: u32) -> Result<(), OrbitError> {
         #[cfg(target_os = "linux")]
         if let Some(binding) = self.worker_invocation() {

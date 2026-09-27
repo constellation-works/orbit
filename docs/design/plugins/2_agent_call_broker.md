@@ -5,7 +5,7 @@ summary: "Design: a per-run host broker runs plugin backends for sandboxed agent
 owner: claude
 status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-tools/src/plugin/backend/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, F2026-09-230]
 last_updated: 2026-09-27
@@ -14,9 +14,11 @@ last_validated: 2026-09-26
 
 # Design: host-side broker for agent-initiated plugin calls
 
-Status: proposal, partly implemented. The §5 profile compilation exists
-(`PluginBackendSpec::brokered_sandbox_profile`); nothing calls it until the broker and forwarding
-slices land. The follow-up tasks listed at the end deliver the rest.
+Status: proposal, partly implemented. The broker server exists (§4, "As implemented"): every
+sandboxed agent step gets a per-run socket with kernel peer authentication, and every
+authenticated request is answered `not_implemented`. The §5 profile compilation exists
+(`PluginBackendSpec::brokered_sandbox_profile`). Nothing forwards a call or applies the mask
+until the client and mask slices land; the follow-up tasks listed at the end deliver the rest.
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
@@ -166,11 +168,14 @@ dashboard, host MCP servers, and an operator's shell.
 
 ### 4.1 Socket and discovery
 
-- The host binds a `SOCK_STREAM` Unix socket at `<global_root>/state/plugin-broker/<token>.sock`.
-  `<token>` is 16 random hex characters, fresh per run, and serves only to avoid collisions; it
-  is not a credential. The directory is host-owned and mode `0700`, and it is not in any agent
-  profile's write inventory, so no agent can replace or unlink another run's socket. The host
-  refuses a directory that is a symlink.
+- The host binds a `SOCK_STREAM` Unix socket at
+  `<global_root>/state/plugin-broker/<token>/broker.sock`. `<token>` is 16 random hex
+  characters, fresh per run, and serves only to avoid collisions; it is not a credential. Each
+  run owns its own `<token>` directory, so tearing one run down removes the socket and its
+  directory without racing another run. Both directories are host-owned and mode `0700`, and
+  neither is in any agent profile's write inventory, so no agent can replace or unlink another
+  run's socket. The host refuses a `state` or `plugin-broker` directory that is a symlink or
+  is owned by another UID.
 - The socket path is exported to the agent as `ORBIT_PLUGIN_BROKER=<path>`, next to the existing
   managed-run envelope names (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`, …). The value tells
   the client where to connect and proves nothing: authentication is the kernel's peer identity
@@ -209,10 +214,34 @@ processes too, so a bearer token would authenticate nothing.
 A refused connection is closed with no reply, and the refusal is logged with the peer PID and
 the reason. Nothing reveals whether the socket belongs to a live run.
 
+**As implemented** (`crates/orbit-core/src/runtime/plugin/broker/`, started from
+`crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs`):
+
+- `run_cli_backend` asks the host for a broker through `RuntimeHost::start_plugin_broker`
+  only when the provider runs under `linux-bwrap` or `macos-sandbox-exec`. It exports
+  `ORBIT_PLUGIN_BROKER` only when the socket bound, and drops any value the environment
+  allowlist forwarded. A bind failure (symlinked or foreign-owned directory, over-long path,
+  `EACCES`) is a warning naming the cause, and the step runs without the variable.
+- The broker listens before the provider is spawned. Connections that arrive before the host
+  has identified the sandbox wait up to 10 seconds for it. On Linux the anchor is the PID
+  namespace of the leader found beneath the spawned `bwrap`; on macOS it is the spawned
+  `sandbox-exec` process. If the sandbox cannot be identified, the broker refuses every
+  connection for the rest of the run.
+- The broker is dropped as soon as the provider exits, times out or fails to start, which
+  stops the listener and removes the socket and its `<token>` directory. A worker killed by
+  cancellation never runs that teardown, so each run directory carries an `owner` file (the
+  host PID and its start time). Cancelling a run, and starting any broker, removes directories
+  whose owner is gone.
+- A nested PID namespace inside the sandbox (an agent running its own `bwrap` or
+  `unshare --pid`) is a different namespace, so its processes are refused. This fails closed.
+
 ### 4.3 Protocol
 
-Length-prefixed JSON frames. There is one request and one response per connection, a 4 MiB
-request cap, and the response is capped at the host's existing tool-output limits.
+Length-prefixed JSON frames: a 4-byte big-endian length, then that many bytes of JSON. There
+is one request and one response per connection, a 4 MiB request cap, and the response is
+capped at the host's existing tool-output limits. The broker checks the declared length
+against the cap before it reads any of the body, so an oversized request is refused
+(`plugin_broker_request_too_large`) without being buffered.
 
 ```text
 request:  {"schema_version":1,"tool":"pulsar.post","input":{…},"cwd":"…","workspace":…|null,
@@ -395,7 +424,8 @@ The mask ships last, only once every call it would break has a broker to go to:
 
 1. **Broker server and peer authentication.** The per-run listener in the CLI step runner, the
    wire protocol, Linux PID-namespace and macOS ancestry authentication, limits, teardown, and
-   `ORBIT_PLUGIN_BROKER` export. It serves nothing until the client exists. [ORB-13236]
+   `ORBIT_PLUGIN_BROKER` export. It serves nothing until the client exists. Landed; see §4.2
+   "As implemented". [ORB-13236]
 2. **Brokered backend confinement.** Compile the plugin profile against the calling run's
    agent profile (§5) on both platforms, with `{{plugin_state}}` as the only widening. This is a
    pure profile-compilation change, testable without the broker. [ORB-13237]

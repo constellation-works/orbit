@@ -19,6 +19,12 @@ pub fn process_start_key(pid: u32) -> Option<ProcessStartKey> {
     inspect_process(pid).map(|(starttime, _ppid)| ProcessStartKey { pid, starttime })
 }
 
+/// The start key and parent pid of `pid`, read together so a caller walking
+/// ancestry can check each parent against the child it came from.
+pub fn process_start_and_parent(pid: u32) -> Option<(ProcessStartKey, u32)> {
+    inspect_process(pid).map(|(starttime, ppid)| (ProcessStartKey { pid, starttime }, ppid))
+}
+
 /// Walk from this process toward pid 1, including self. Stops on a kernel
 /// read failure, a self-parent, or a bounded depth so a pid cycle cannot
 /// loop the caller.
