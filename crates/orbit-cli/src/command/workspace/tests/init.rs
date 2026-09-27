@@ -106,7 +106,21 @@ fn workspace_init_before_machine_identity_is_repaired_after_orbit_init() {
     let CommandOutput::Payload(payload) = output else {
         panic!("doctor must return a payload");
     };
-    assert_eq!(payload.exit_code(), 0, "doctor reported a failure");
+    let (document, _) = payload.into_view();
+    let rows = document.as_array().expect("doctor rows");
+    let unexpected_failures = rows
+        .iter()
+        .filter(|row| {
+            row["status"] == "error"
+                && !row["check"]
+                    .as_str()
+                    .is_some_and(|check| check.starts_with("provider:"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        unexpected_failures.is_empty(),
+        "doctor found failures beyond provider CLI availability: {unexpected_failures:?}"
+    );
 }
 
 #[test]
