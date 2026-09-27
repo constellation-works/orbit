@@ -114,14 +114,14 @@ pub(super) fn run_tail<W: Write + ?Sized>(
         ));
     }
 
-    let initial_offset = print_initial_window(path, args, filters, use_color, writer)?;
+    let initial = print_initial_window(path, args, filters, use_color, writer)?;
     if !args.follow {
         return Ok(());
     }
 
     follow_file(
         path,
-        initial_offset,
+        initial,
         filters,
         args.json,
         use_color,
@@ -134,12 +134,26 @@ pub(super) fn run_tail<W: Write + ?Sized>(
 pub(super) struct FollowTestControl {
     ready: Sender<()>,
     stop: Receiver<()>,
+    initial_read_pause: Option<(Sender<()>, Receiver<()>)>,
 }
 
 #[cfg(test)]
 impl FollowTestControl {
     pub(super) fn new(ready: Sender<()>, stop: Receiver<()>) -> Self {
-        Self { ready, stop }
+        Self {
+            ready,
+            stop,
+            initial_read_pause: None,
+        }
+    }
+
+    pub(super) fn pause_during_initial_read(
+        mut self,
+        reached: Sender<()>,
+        resume: Receiver<()>,
+    ) -> Self {
+        self.initial_read_pause = Some((reached, resume));
+        self
     }
 }
 
@@ -159,7 +173,15 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
         ));
     }
 
-    let initial_offset = print_initial_window(path, args, filters, use_color, writer)?;
+    let initial = print_initial_window_with_hook(path, args, filters, use_color, writer, || {
+        if let Some((reached, resume)) = control.initial_read_pause.as_ref() {
+            reached.send(()).map_err(|_| io::ErrorKind::BrokenPipe)?;
+            resume
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| io::ErrorKind::TimedOut)?;
+        }
+        Ok(())
+    })?;
     control.ready.send(()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
@@ -172,7 +194,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
 
     follow_file(
         path,
-        initial_offset,
+        initial,
         filters,
         args.json,
         use_color,
@@ -187,18 +209,44 @@ fn print_initial_window<W: Write + ?Sized>(
     filters: &Filters,
     use_color: bool,
     writer: &mut W,
-) -> io::Result<u64> {
+) -> io::Result<InitialWindow> {
+    print_initial_window_with_hook(path, args, filters, use_color, writer, || Ok(()))
+}
+
+struct InitialWindow {
+    offset: u64,
+    pending: Vec<u8>,
+}
+
+fn print_initial_window_with_hook<W: Write + ?Sized>(
+    path: &Path,
+    args: &TailArgs,
+    filters: &Filters,
+    use_color: bool,
+    writer: &mut W,
+    after_first_read: impl FnOnce() -> io::Result<()>,
+) -> io::Result<InitialWindow> {
     let file = File::open(path)?;
-    let total_bytes = file.metadata()?.len();
     let mut reader = BufReader::new(file);
     let mut buf = Vec::new();
+    let mut pending = Vec::new();
     let mut matching_lines = MatchingLineWindow::new(args.lines);
+    let mut after_first_read = Some(after_first_read);
     loop {
         buf.clear();
         // Bytes, not `read_line`: one torn or non-UTF-8 line must not end the
         // whole tail.
         let n = reader.read_until(b'\n', &mut buf)?;
         if n == 0 {
+            break;
+        }
+        if let Some(hook) = after_first_read.take() {
+            hook()?;
+        }
+        if args.follow && buf.last() != Some(&b'\n') {
+            // The final record may be completed after follow starts. Its
+            // bytes belong to the follow reader, even with zero history.
+            pending = std::mem::take(&mut buf);
             break;
         }
         let line = String::from_utf8_lossy(&buf);
@@ -210,10 +258,11 @@ fn print_initial_window<W: Write + ?Sized>(
         }
     }
 
+    let offset = reader.stream_position()?;
     for line in matching_lines.into_lines() {
         emit_line(&line, args.json, use_color, writer)?;
     }
-    Ok(total_bytes)
+    Ok(InitialWindow { offset, pending })
 }
 
 /// A chronological tail window whose storage never exceeds its requested
@@ -253,7 +302,7 @@ impl MatchingLineWindow {
 
 fn follow_file<W: Write + ?Sized>(
     path: &Path,
-    initial_offset: u64,
+    initial: InitialWindow,
     filters: &Filters,
     json: bool,
     use_color: bool,
@@ -261,11 +310,11 @@ fn follow_file<W: Write + ?Sized>(
     control: FollowControl,
 ) -> io::Result<()> {
     let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(initial_offset))?;
+    file.seek(SeekFrom::Start(initial.offset))?;
     let mut reader = BufReader::new(file);
     // Bytes of a line still being written. Kept undecoded so a write that
     // ends inside a multi-byte character is completed, not rejected.
-    let mut pending = Vec::new();
+    let mut pending = initial.pending;
 
     loop {
         if control.should_stop() {
