@@ -1,5 +1,39 @@
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    static FAIL_AFTER_BLOBS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn fail_artifact_upsert_after_blobs(count: usize) {
+    FAIL_AFTER_BLOBS.with(|remaining| remaining.set(count));
+}
+
+fn after_artifact_blob_write() -> Result<(), OrbitError> {
+    #[cfg(test)]
+    {
+        let fail = FAIL_AFTER_BLOBS.with(|remaining| {
+            let count = remaining.get();
+            remaining.set(count.saturating_sub(1));
+            count == 1
+        });
+        if fail {
+            return Err(OrbitError::Store("injected artifact upsert failure".into()));
+        }
+    }
+    Ok(())
+}
+
+fn immutable_artifact_blob(path: &str, sha256: &str) -> String {
+    // Keep new blobs in the already-durable files directory. The path digest
+    // distinguishes equal contents at different logical artifact paths.
+    format!(
+        "{TASK_ARTIFACT_FILES_DIR_NAME}/.blob-{:x}-{sha256}",
+        Sha256::digest(path.as_bytes())
+    )
+}
+
 impl TaskV2Store {
     pub(crate) fn get_task_artifacts(
         &self,
@@ -80,7 +114,7 @@ impl TaskV2Store {
             return Ok(None);
         };
         let bundle_dir = self.bundle_store.bundle_path(id)?;
-        let Some(artifact_file) = resolve_v2_artifact_file_path(&bundle_dir, &file.path)? else {
+        let Some(artifact_file) = resolve_v2_artifact_file_path(&bundle_dir, &file.blob)? else {
             return Ok(None);
         };
         let content = fs::read(&artifact_file).map_err(|err| OrbitError::Io(err.to_string()))?;
@@ -158,17 +192,31 @@ impl TaskV2Store {
             let now = Utc::now();
             for artifact in &artifacts {
                 let path = normalize_v2_artifact_path(&artifact.path)?;
-                let blob = format!("{TASK_ARTIFACT_FILES_DIR_NAME}/{path}");
-                let destination = files_dir.join(&path);
-                atomic_write_bytes(&destination, &artifact.content)
-                    .map_err(|err| OrbitError::Io(err.to_string()))?;
+                let sha256 = format!("{:x}", Sha256::digest(&artifact.content));
+                let blob = immutable_artifact_blob(&path, &sha256);
+                let destination = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&blob);
+                match fs::read(&destination) {
+                    Ok(existing) if existing == artifact.content => {}
+                    Ok(_) => {
+                        return Err(OrbitError::Store(format!(
+                            "artifact blob {} has unexpected content",
+                            destination.display()
+                        )));
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        atomic_write_bytes(&destination, &artifact.content)
+                            .map_err(|err| OrbitError::from_write_io(&destination, err))?;
+                    }
+                    Err(err) => return Err(OrbitError::Io(err.to_string())),
+                }
+                after_artifact_blob_write()?;
                 by_path.insert(
                     path.clone(),
                     ArtifactManifestFileV2 {
                         origin: fields.origin.clone(),
                         path: path.clone(),
                         blob,
-                        sha256: format!("{:x}", Sha256::digest(&artifact.content)),
+                        sha256,
                         media_type: artifact.media_type.clone(),
                         size_bytes: artifact.content.len() as u64,
                         created_by: fields.actor.clone(),
