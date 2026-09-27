@@ -209,6 +209,17 @@ fn has_failed_jobs(failure: &Value) -> bool {
         .is_some_and(|jobs| !jobs.is_empty())
 }
 
+/// Expansion listed a job that is not a zero-step cancellation.
+fn has_observed_failed_step(failure: &Value) -> bool {
+    failure
+        .get("failed_jobs")
+        .and_then(Value::as_array)
+        .is_some_and(|jobs| {
+            jobs.iter()
+                .any(|job| !job_is_cancelled_without_failed_steps(job))
+        })
+}
+
 pub(super) fn is_actionable_current_failure(failure: &Value) -> bool {
     if run_is_completed(failure) {
         return run_is_unsuccessful(failure);
@@ -234,7 +245,9 @@ fn retired_ref_entry(refs: &[ScannedRef], run: &Value) -> Value {
 /// current evidence for that workflow/ref. Older unresolved findings of the
 /// same identity then become stale — the same rule partition already applies
 /// to ordinary failures, which a zero-step cancellation is not allowed to
-/// trigger on its own.
+/// trigger on its own. A cancellation whose expansion failed or was skipped by
+/// the investigation budget has no observed failed step either, so it stays
+/// retryable beside the older failure instead of hiding it.
 pub(super) fn supersede_older_when_cancelled_run_is_actionable(
     findings: Vec<Value>,
     stale: &mut Vec<Value>,
@@ -242,7 +255,7 @@ pub(super) fn supersede_older_when_cancelled_run_is_actionable(
     let mut newest_cancelled: std::collections::BTreeMap<(String, String), (String, u64, Value)> =
         std::collections::BTreeMap::new();
     for finding in &findings {
-        if !run_is_cancelled(finding) {
+        if !run_is_cancelled(finding) || !has_observed_failed_step(finding) {
             continue;
         }
         let key = workflow_ref_key(finding);
