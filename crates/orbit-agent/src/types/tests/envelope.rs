@@ -260,6 +260,8 @@ fn structured_output_still_outranks_result_for_envelopes_and_declared_failures()
         parse_and_validate_response(&exec(&stdout, Some(0))).expect("preferred key wins");
     assert_eq!(status, AgentResponseStatus::Success);
     assert_eq!(envelope.result.expect("result")["ok"], true);
+    assert_eq!(peek_response_status(&stdout).as_deref(), Some("success"));
+    assert_eq!(peek_declared_response_failure(&stdout), None);
 
     let stdout = json!({
         "result": failed_envelope(),
@@ -269,6 +271,61 @@ fn structured_output_still_outranks_result_for_envelopes_and_declared_failures()
     let declared = peek_declared_response_failure(&stdout).expect("preferred failure");
     assert_eq!(declared.status, "timeout");
     assert_eq!(declared.error.expect("error").code, "deadline");
+}
+
+#[test]
+fn selected_success_does_not_discover_failures_in_its_result() {
+    for example in [failed_envelope(), json!(failed_envelope().to_string())] {
+        let stdout = json!({
+            "schemaVersion": 1,
+            "status": "success",
+            "result": {"example": example},
+            "error": null,
+        })
+        .to_string();
+
+        assert_eq!(peek_response_status(&stdout).as_deref(), Some("success"));
+        assert_eq!(peek_declared_response_failure(&stdout), None);
+        assert_eq!(
+            parse_and_validate_response(&exec(&stdout, Some(0)))
+                .expect("selected success validates")
+                .1,
+            AgentResponseStatus::Success
+        );
+    }
+}
+
+#[test]
+fn latest_jsonl_success_outranks_an_earlier_failure() {
+    let stdout = format!("{}\n{}", failed_envelope(), success_envelope());
+    assert_eq!(peek_response_status(&stdout).as_deref(), Some("success"));
+    assert_eq!(peek_declared_response_failure(&stdout), None);
+    assert_eq!(
+        parse_and_validate_response(&exec(&stdout, Some(0)))
+            .expect("latest success validates")
+            .1,
+        AgentResponseStatus::Success
+    );
+}
+
+#[test]
+fn selected_malformed_failure_outranks_an_earlier_success() {
+    for status in ["failed", "timeout"] {
+        for error in [Value::Null, json!({"code": 42, "message": []})] {
+            let final_envelope = json!({
+                "schemaVersion": 1,
+                "status": status,
+                "result": {},
+                "error": error,
+            });
+            let stdout = format!("{}\n{final_envelope}", success_envelope());
+
+            assert_eq!(peek_response_status(&stdout).as_deref(), Some(status));
+            let declared = peek_declared_response_failure(&stdout).expect("selected failure");
+            assert_eq!(declared.status, status);
+            assert_eq!(declared.error, None);
+        }
+    }
 }
 
 #[test]

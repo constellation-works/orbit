@@ -619,6 +619,13 @@ validation state remain authoritative. **This preserves the doctrine's actual
 boundary**: protocol termination and status outcome are control flow; agent prose
 and payload content are not evidence that can satisfy durable workflow guards.
 
+Status and failure diagnostics use the same selected terminal envelope. A valid
+success stops discovery before a failed example nested in its `result`;
+`structured_output` takes precedence over a secondary `result`, and the latest
+JSONL envelope takes precedence over earlier ones. A selected `failed` or
+`timeout` still fails the invocation when its `error` is missing or malformed;
+valid error details are retained for the diagnostic.
+
 Every agent invocation is prompted with the response-envelope contract
 (`render_prompt_with_embedded_envelope`), so exiting 0 without one is a protocol
 violation, not a stylistic choice.
