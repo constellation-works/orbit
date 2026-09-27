@@ -69,7 +69,7 @@ use rules::{
     is_exact_or_subtree, is_narrow_reallow, mount_paths_for_rule, overlaps_writable_root,
     positive_mount_roots, post_run_deny_rules,
 };
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 use spawn::inherit_mount_sources;
 use spawn::prepare_mount_source;
 use write_grants::{CompiledModifyRules, compile_rule_regex, render_glob_path};

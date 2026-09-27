@@ -26,6 +26,8 @@ impl Sleeper {
         process_start_key(self.0.id()).expect("sleeper start key")
     }
 
+    // Only the Linux namespace-anchor tests end a leader early.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn end(mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
