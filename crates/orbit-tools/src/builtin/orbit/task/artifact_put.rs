@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_common::tracing;
 use orbit_policy::resolve_symlinks;
 use orbit_types::policy::FsOperation;
@@ -66,6 +67,7 @@ impl Tool for OrbitTaskArtifactPutTool {
                         .to_string(),
                 ));
             }
+            reject_unknown_tool_fields(&input, &["id", "artifacts", "model"])?;
             return super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskUpdate);
         }
 
@@ -79,6 +81,21 @@ impl Tool for OrbitTaskArtifactPutTool {
 /// by the spoke connector. The source path is consumed locally and never
 /// appears in the returned coordination frame.
 pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<Value, OrbitError> {
+    // This helper also runs on the worker before the private spoke payload is
+    // sent, so validate here rather than relying on the local execute path.
+    reject_unknown_tool_fields(
+        &input,
+        &[
+            "id",
+            "source_path",
+            "sourcePath",
+            "source-path",
+            "path",
+            "artifact_path",
+            "artifactPath",
+            "model",
+        ],
+    )?;
     let id = super::super::required_string(&input, &["id"], "id")?;
     let source_path = super::super::required_string(
         &input,
@@ -93,14 +110,15 @@ pub(crate) fn prepare_remote_payload(input: Value, ctx: &ToolContext) -> Result<
     )?;
     let artifact = read_bounded_artifact(&resolved_source_path, artifact_path.as_deref())?;
 
-    let mut update_input = input.as_object().cloned().unwrap_or_else(Map::new);
+    // Build the TaskUpdate input from attachment and transport fields only.
+    // Future TaskUpdate fields cannot silently widen artifact.put authority.
+    let mut update_input = Map::new();
     update_input.insert("id".to_string(), Value::String(id));
-    update_input.remove("source_path");
-    update_input.remove("sourcePath");
-    update_input.remove("source-path");
-    update_input.remove("path");
-    update_input.remove("artifact_path");
-    update_input.remove("artifactPath");
+    for key in ["model", "workspace", "_meta"] {
+        if let Some(value) = input.get(key) {
+            update_input.insert(key.to_string(), value.clone());
+        }
+    }
     update_input.insert(
         "artifacts".to_string(),
         json!([{

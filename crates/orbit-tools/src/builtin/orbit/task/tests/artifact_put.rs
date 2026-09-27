@@ -84,7 +84,9 @@ fn artifact_put_reads_relative_source_and_delegates_to_task_update() {
                 "id": "ORB-00001",
                 "source_path": "summary.md",
                 "path": "reports/summary.md",
-                "model": "gpt-5"
+                "model": "gpt-5",
+                "workspace": "ws_orbit",
+                "_meta": {"orbit": {"workspace": "ws_orbit"}}
             }),
         )
         .expect("execute tool");
@@ -94,13 +96,51 @@ fn artifact_put_reads_relative_source_and_delegates_to_task_update() {
     assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
     assert_eq!(call.agent.as_deref(), Some("codex"));
     assert_eq!(call.model.as_deref(), Some("gpt-5"));
-    assert_eq!(call.input["id"], "ORB-00001");
-    assert_eq!(call.input["artifacts"][0]["path"], "reports/summary.md");
     assert_eq!(
-        call.input["artifacts"][0]["content"],
-        json!([100, 111, 110, 101, 10])
+        call.input,
+        json!({
+            "id": "ORB-00001",
+            "model": "gpt-5",
+            "workspace": "ws_orbit",
+            "_meta": {"orbit": {"workspace": "ws_orbit"}},
+            "artifacts": [{
+                "path": "reports/summary.md",
+                "media_type": "text/markdown",
+                "content": [100, 111, 110, 101, 10]
+            }]
+        })
     );
-    assert!(call.input.get("source_path").is_none());
+}
+
+#[test]
+fn artifact_put_rejects_task_updates_before_host_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("summary.md"), "done\n").expect("write source");
+    let host = RecordingHost::default();
+    let ctx = context_in(dir.path(), host.clone());
+
+    for field in ["title", "status", "plan", "description", "job_run_id"] {
+        let mut input = json!({"id": "ORB-00001", "source_path": "summary.md"});
+        input[field] = json!("unexpected update");
+        let error = OrbitTaskArtifactPutTool
+            .execute(&ctx, input)
+            .expect_err("task metadata must not pass through attachment");
+        assert_invalid_input(error);
+        assert!(host.call.lock().expect("host call").is_none(), "{field}");
+    }
+}
+
+#[test]
+fn remote_artifact_preparation_rejects_task_updates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("summary.md"), "done\n").expect("write source");
+    let ctx = context_in(dir.path(), RecordingHost::default());
+    let error = prepare_remote_payload(
+        json!({"id": "ORB-00001", "source_path": "summary.md", "title": "changed"}),
+        &ctx,
+    )
+    .expect_err("worker preparation must reject metadata before sending to hub");
+    assert_invalid_input(error);
 }
 
 #[test]
@@ -300,13 +340,24 @@ fn preloaded_artifact_payload_is_private_to_authenticated_ssh_mcp() {
             json!({
                 "id": "ORB-00001",
                 "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}],
-                "model": "codex"
+                "model": "codex",
+                "workspace": "ws_orbit",
+                "_meta": {"orbit": {"workspace": "ws_orbit"}}
             }),
         )
         .expect("authenticated hub accepts path-free connector payload");
     let call = host.call.lock().expect("recorded call").take().unwrap();
     assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
-    assert_eq!(call.input["artifacts"][0]["path"], "reports/result.txt");
+    assert_eq!(
+        call.input,
+        json!({
+            "id": "ORB-00001",
+            "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}],
+            "model": "codex",
+            "workspace": "ws_orbit",
+            "_meta": {"orbit": {"workspace": "ws_orbit"}}
+        })
+    );
 
     let local = ToolContext {
         orbit_host: Some(Arc::new(RecordingHost::default())),
@@ -322,4 +373,30 @@ fn preloaded_artifact_payload_is_private_to_authenticated_ssh_mcp() {
         )
         .expect_err("ordinary local/model calls cannot inject the private payload");
     assert!(error.to_string().contains("authenticated ssh-mcp"));
+}
+
+#[test]
+fn preloaded_artifact_rejects_task_updates_before_host_write() {
+    let host = RecordingHost::default();
+    let ctx = ToolContext {
+        session_context: ToolSessionContext {
+            transport: Some(McpTransport::SshMcp),
+            ..ToolSessionContext::default()
+        },
+        orbit_host: Some(Arc::new(host.clone())),
+        ..ToolContext::default()
+    };
+
+    for field in ["title", "status", "plan", "description", "job_run_id"] {
+        let mut input = json!({
+            "id": "ORB-00001",
+            "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}]
+        });
+        input[field] = json!("unexpected update");
+        let error = OrbitTaskArtifactPutTool
+            .execute(&ctx, input)
+            .expect_err("preloaded attachment must reject task metadata");
+        assert_invalid_input(error);
+        assert!(host.call.lock().expect("host call").is_none(), "{field}");
+    }
 }
