@@ -64,6 +64,110 @@ pub fn redact_sensitive_env_text(raw: &str) -> String {
     redacted
 }
 
+/// Replace complete sensitive environment values in `bytes`.
+///
+/// Returns how many trailing bytes the caller must keep. That suffix is the
+/// longest proper prefix of a sensitive value that is also a suffix of the
+/// redacted buffer, so a value split across chunks is still replaced once it
+/// completes. Complete values are removed first, and the held suffix does not
+/// cut through one that was already whole. Invalid UTF-8 is copied through
+/// unchanged; only valid segments are matched as text.
+pub fn redact_sensitive_env_bytes(bytes: &mut Vec<u8>) -> usize {
+    if !bytes.is_empty() {
+        redact_complete_env_values(bytes);
+    }
+    sensitive_value_holdback(bytes)
+}
+
+fn redact_complete_env_values(bytes: &mut Vec<u8>) {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut rest = bytes.as_slice();
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(text) => {
+                out.extend_from_slice(redact_sensitive_env_text(text).as_bytes());
+                break;
+            }
+            Err(err) => {
+                let valid = err.valid_up_to();
+                if let Ok(text) = std::str::from_utf8(&rest[..valid]) {
+                    out.extend_from_slice(redact_sensitive_env_text(text).as_bytes());
+                } else {
+                    out.extend_from_slice(&rest[..valid]);
+                }
+                let Some(invalid) = err.error_len().filter(|len| *len > 0) else {
+                    out.extend_from_slice(&rest[valid..]);
+                    break;
+                };
+                let skip = valid + invalid;
+                out.extend_from_slice(&rest[valid..skip]);
+                rest = &rest[skip..];
+            }
+        }
+    }
+    *bytes = out;
+}
+
+/// Longest suffix of `text` that is a proper prefix of a sensitive value.
+///
+/// `0` when nothing is pending. A full value is not a holdback: callers redact
+/// complete values before asking, so a border of a value that already occurred
+/// is not reported as if the value were still incomplete.
+fn sensitive_value_holdback(text: &[u8]) -> usize {
+    let secrets = sensitive_env_values();
+    let mut best = 0usize;
+    for secret in secrets.iter() {
+        best = best.max(proper_prefix_suffix_len(text, secret.as_bytes()));
+    }
+    best
+}
+
+/// Length of the longest proper prefix of `pat` that is a suffix of `text`.
+fn proper_prefix_suffix_len(text: &[u8], pat: &[u8]) -> usize {
+    if pat.len() < 2 || text.is_empty() {
+        return 0;
+    }
+    let max = pat.len() - 1;
+    let window = if text.len() > max {
+        &text[text.len() - max..]
+    } else {
+        text
+    };
+    let lps = proper_prefix_table(pat);
+    let mut state = 0usize;
+    for &byte in window {
+        while state > 0 && pat[state] != byte {
+            state = lps[state - 1];
+        }
+        if pat[state] == byte {
+            state += 1;
+            if state == pat.len() {
+                state = lps[state - 1];
+            }
+        }
+    }
+    state
+}
+
+fn proper_prefix_table(pat: &[u8]) -> Vec<usize> {
+    let mut table = vec![0usize; pat.len()];
+    let mut len = 0usize;
+    let mut index = 1usize;
+    while index < pat.len() {
+        if pat[index] == pat[len] {
+            len += 1;
+            table[index] = len;
+            index += 1;
+        } else if len > 0 {
+            len = table[len - 1];
+        } else {
+            table[index] = 0;
+            index += 1;
+        }
+    }
+    table
+}
+
 pub fn redact_sensitive_env_option(raw: Option<String>) -> Option<String> {
     raw.map(|value| redact_sensitive_env_text(&value))
 }
