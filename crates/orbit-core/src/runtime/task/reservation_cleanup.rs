@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    ActiveTaskReservation, ReleasedTaskReservation, TaskReservationOwnedConflictsParams,
-    TaskReservationReleaseByOwnerParams, TaskReservationReleaseParams,
-    TaskReservationReleaseReason,
+    ActiveTaskReservation, JobRunFinalization, ReleasedTaskReservation,
+    TaskReservationOwnedConflictsParams, TaskReservationReleaseByOwnerParams,
+    TaskReservationReleaseParams, TaskReservationReleaseReason,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRunState;
@@ -223,17 +223,39 @@ impl OrbitRuntime {
         release_reason: TaskReservationReleaseReason,
         diagnostic: Option<(&str, &str)>,
     ) -> Result<bool, OrbitError> {
-        // Capture the state the run was in *before* finalizing:
-        // `finalize_run` reports `changed == true` even when re-finalizing an
-        // already-terminal run, so it can't distinguish the terminalizing write
-        // from a replay. The coupling-out block must fire only on the actual
-        // transition into a terminal failure state.
-        let prior_state = self.get_job_run_backend(run_id)?.map(|run| run.state);
-        let was_terminal_before = prior_state.is_some_and(JobRunState::is_terminal);
-        let changed =
-            self.stores()
-                .jobs()
-                .finalize_job_run(run_id, state, finished_at, duration_ms)?;
+        self.finalize_job_run_with_cleanup_after_prior_read(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+            release_reason,
+            (diagnostic, || {}),
+        )
+    }
+
+    // The callback lets a synchronized test put a competing finalization
+    // between this caller's old snapshot and the atomic store decision.
+    pub(crate) fn finalize_job_run_with_cleanup_after_prior_read(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+        release_reason: TaskReservationReleaseReason,
+        diagnostic_and_after_read: (Option<(&str, &str)>, impl FnOnce()),
+    ) -> Result<bool, OrbitError> {
+        let (diagnostic, after_prior_read) = diagnostic_and_after_read;
+        // This snapshot is observational only. A competing caller can write a
+        // terminal state before our own write, so it grants no side-effect
+        // authority. The store returns that decision from its transaction.
+        let _prior_state = self.get_job_run_backend(run_id)?.map(|run| run.state);
+        after_prior_read();
+        let outcome = self.stores().jobs().finalize_job_run_with_outcome(
+            run_id,
+            state,
+            finished_at,
+            duration_ms,
+        )?;
         // [ORB-10597] The store keeps the first terminal state and drops this
         // one. An identical re-finalization is an ordinary idempotent replay; a
         // *different* terminal outcome is a real contradiction — most sharply,
@@ -245,27 +267,28 @@ impl OrbitRuntime {
         // reported to the caller as `already_terminal`; it did not produce a
         // second durable outcome. The inverse remains a real contradiction: a
         // worker reporting success/failure after `cancelled` is still recorded.
-        if let Some(prior) = prior_state.filter(|prior| {
-            prior.is_terminal() && *prior != state && state != JobRunState::Cancelled
-        }) {
+        if let JobRunFinalization::AlreadyTerminal(prior) = outcome
+            && prior != state
+            && state != JobRunState::Cancelled
+        {
             self.record_terminal_outcome_conflict(run_id, prior, state, finished_at);
         }
         if state.is_terminal() {
             self.best_effort_release_task_reservations_for_owner_run_id(run_id, release_reason);
             // Coupling-out: block the run's coupled tasks only on the first
             // terminalization into a failure or interrupted state. Gating on
-            // `!was_terminal_before` keeps this idempotent — a replayed
+            // the atomic `Finalized` outcome keeps this idempotent — a replayed
             // terminalization is a no-op and never clobbers a task a human
             // already moved on. Blocking is best-effort so a status-write
             // failure never blocks the run from terminalizing or its
             // reservations/file locks from being released.
-            if !was_terminal_before
+            if outcome == JobRunFinalization::Finalized
                 && super::block_on_run_failure::run_state_blocks_coupled_tasks(state)
             {
                 self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
             }
         }
-        Ok(changed)
+        Ok(outcome != JobRunFinalization::Missing)
     }
 
     pub(crate) fn release_task_reservations_for_owner_run_id(

@@ -18,8 +18,8 @@ use super::queries::{
 };
 use crate::Store;
 use crate::contracts::{
-    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunQuery, JobRunStepParams,
-    JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
+    JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -635,15 +635,17 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         })
     }
 
-    fn finalize_job_run(
+    fn finalize_job_run_with_outcome(
         &self,
         run_id: &str,
         state: JobRunState,
         finished_at: DateTime<Utc>,
         duration_ms: Option<u64>,
-    ) -> Result<bool, OrbitError> {
+    ) -> Result<JobRunFinalization, OrbitError> {
+        let mut outcome = JobRunFinalization::Missing;
         self.update_run(run_id, |run| {
             if run.state.is_terminal() {
+                outcome = JobRunFinalization::AlreadyTerminal(run.state);
                 return Ok(());
             }
             let event = match state {
@@ -664,8 +666,10 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 .map_err(OrbitError::JobRunStateTransition)?;
             run.finished_at = Some(finished_at);
             run.duration_ms = duration_ms;
+            outcome = JobRunFinalization::Finalized;
             Ok(())
-        })
+        })?;
+        Ok(outcome)
     }
 
     fn repair_terminal_job_run_timing(
