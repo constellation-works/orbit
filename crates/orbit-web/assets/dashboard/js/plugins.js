@@ -8,7 +8,7 @@
 // the dashboard uses, so plugin-authored text cannot introduce script or
 // event handlers.
 
-import { el, fetchJson, getWorkspace, isAggregateView, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, getWorkspace, isAggregateView, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -19,6 +19,8 @@ const $ = (id) => document.getElementById(id);
 const panelCache = new Map();
 const panelBodies = new Map();
 let lastPlugins = [];
+const pendingChanges = new Set();
+const changeErrors = new Map();
 
 export async function fetchAndRenderPlugins() {
   if (isAggregateView()) {
@@ -57,7 +59,7 @@ function render(plugins) {
 function pluginCard(plugin) {
   const card = el('div', { class: `plugin-card plugin-${plugin.status}` });
   card.dataset.key = plugin.name;
-  card.dataset.hash = JSON.stringify([plugin.status, plugin.version, plugin.diagnostic, plugin.certified_orbit_version, (plugin.panels || []).map(panel => panel.id), (plugin.links || []).map(link => link.url)]);
+  card.dataset.hash = JSON.stringify([plugin.status, plugin.version, plugin.diagnostic, plugin.certified_orbit_version, plugin.host_enabled, plugin.workspace_toggle, plugin.disabled_by, plugin.capabilities, pendingChanges.has(plugin.name), changeErrors.get(plugin.name), (plugin.panels || []).map(panel => panel.id), (plugin.links || []).map(link => link.url)]);
   card.appendChild(el('div', { class: 'plugin-head' }, [
     el('span', { class: 'plugin-name', text: plugin.name }),
     el('span', { class: 'plugin-version', text: `v${plugin.version || '—'}` }),
@@ -69,6 +71,8 @@ function pluginCard(plugin) {
   if (plugin.description) card.appendChild(el('p', { class: 'plugin-description', text: plugin.description }));
   // The diagnostic is the whole reason a non-active plugin is listed at all.
   if (plugin.diagnostic) card.appendChild(el('p', { class: 'plugin-diagnostic', text: plugin.diagnostic }));
+  card.appendChild(pluginEnablement(plugin));
+  if (changeErrors.has(plugin.name)) card.appendChild(el('p', { class: 'plugin-change-error', text: changeErrors.get(plugin.name) }));
   const tools = plugin.tools || [];
   if (tools.length) {
     card.appendChild(el('div', { class: 'plugin-tools' }, tools.map(tool =>
@@ -86,6 +90,48 @@ function pluginCard(plugin) {
   }
   for (const panel of plugin.panels || []) card.appendChild(panelNode(plugin, panel));
   return card;
+}
+
+function pluginEnablement(plugin) {
+  const section = el('div', { class: 'plugin-enablement' });
+  const states = [
+    ['host', plugin.host_enabled === true],
+    ['workspace', plugin.workspace_toggle !== false],
+  ];
+  for (const [scope, enabled] of states) {
+    const row = el('div', { class: `plugin-scope plugin-scope-${scope}` });
+    row.appendChild(el('span', { text: `${scope === 'host' ? 'Host' : 'Workspace'}: ${enabled ? 'enabled' : 'disabled'}${scope === 'workspace' && plugin.workspace_toggle == null ? ' (inherited)' : ''}` }));
+    const action = enabled ? 'disable' : 'enable';
+    if (plugin.capabilities?.[action]?.authorized === true) {
+      const button = el('button', { class: 'plugin-toggle', text: `${action === 'enable' ? 'Enable' : 'Disable'} ${scope}` });
+      button.type = 'button';
+      button.disabled = pendingChanges.has(plugin.name);
+      button.addEventListener('click', () => changePlugin(plugin, scope, action, section));
+      row.appendChild(button);
+    }
+    section.appendChild(row);
+  }
+  if (plugin.disabled_by) section.appendChild(el('span', { class: 'plugin-disabled-by', text: `Effective: disabled by ${plugin.disabled_by}` }));
+  return section;
+}
+
+async function changePlugin(plugin, scope, action, section) {
+  if (pendingChanges.has(plugin.name)) return;
+  if (scope === 'host' && action === 'disable' && !window.confirm(`Disable ${plugin.name} on this host? It will be unavailable in every workspace on this host.`)) return;
+  pendingChanges.add(plugin.name);
+  changeErrors.delete(plugin.name);
+  const buttons = Array.from(section.children).flatMap(row => Array.from(row.children)).filter(node => node.tagName === 'BUTTON');
+  for (const button of buttons) button.disabled = true;
+  try {
+    await postJson(`/api/plugins/${encodeURIComponent(plugin.name)}/${action}`, { scope });
+    await fetchAndRenderPlugins();
+  } catch (error) {
+    changeErrors.set(plugin.name, error.message || String(error));
+  } finally {
+    pendingChanges.delete(plugin.name);
+    for (const button of buttons) button.disabled = false;
+    render(lastPlugins);
+  }
 }
 
 function panelNode(plugin, panel) {

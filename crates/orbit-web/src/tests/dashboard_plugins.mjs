@@ -21,6 +21,8 @@ const withClass = name => descendants(body()).filter(node => hasClass(node, name
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const XSS_MARKDOWN = '# Report\n\n<img src=x onerror="alert(1)"> <script>alert(2)</script>\n';
+const allowed = { authorized: true, reason: null };
+const denied = { authorized: false, reason: 'Operator session required' };
 
 const plugins = [
   {
@@ -28,6 +30,10 @@ const plugins = [
     version: '0.4.1',
     status: 'active',
     enabled: true,
+    host_enabled: true,
+    workspace_toggle: null,
+    disabled_by: null,
+    capabilities: { enable: allowed, disable: allowed },
     description: 'Leakage-safe recommendations.',
     pinned: true,
     unsandboxed: false,
@@ -50,6 +56,10 @@ const plugins = [
     version: '0.1.0',
     status: 'inactive',
     enabled: false,
+    host_enabled: false,
+    workspace_toggle: false,
+    disabled_by: 'host',
+    capabilities: { enable: allowed, disable: allowed },
     description: 'A plugin this host cannot serve.',
     pinned: false,
     unsandboxed: true,
@@ -69,9 +79,20 @@ const panelOutputs = {
 };
 
 const requested = [];
-globalThis.fetch = async path => {
+const confirmations = [];
+window.confirm = message => { confirmations.push(message); return true; };
+globalThis.fetch = async (path, options = {}) => {
   const url = String(path);
   requested.push(url);
+  const change = /\/api\/plugins\/([^/?]+)\/(enable|disable)/.exec(url);
+  if (change && options.method === 'POST') {
+    const plugin = plugins.find(item => item.name === decodeURIComponent(change[1]));
+    const { scope } = JSON.parse(options.body);
+    assert(plugin, 'mutation names a listed plugin');
+    if (scope === 'host') plugin.host_enabled = change[2] === 'enable';
+    else plugin.workspace_toggle = change[2] === 'enable';
+    return { ok: true, status: 200, text: async () => JSON.stringify({ plugin }) };
+  }
   const panel = /\/api\/plugins\/([^/]+)\/panels\/([^?]+)/.exec(url);
   const payload = panel
     ? {
@@ -157,5 +178,27 @@ assert(inactive.textContent.includes('unsandboxed'), 'an unsandboxed plugin says
 // The certified version reads back from the plugin record.
 const active = cards.find(card => card.dataset.key === 'graph');
 assert(active.textContent.includes('certified for 0.23.0'), `certification is shown: ${active.textContent}`);
+
+// Each scope shows its state and an operator control. A write sends exactly
+// the selected scope and rereads the list so the button follows the new state.
+const button = (name, label) => descendants(withClass('plugin-card').find(card => card.dataset.key === name))
+  .find(node => node.tagName === 'BUTTON' && node.textContent === label);
+assert(button('graph', 'Disable host') && button('graph', 'Disable workspace'), 'operator sees controls for both enabled scopes');
+assert(button('stale', 'Enable host') && button('stale', 'Enable workspace'), 'operator sees controls for both disabled scopes');
+assert(inactive.textContent.includes('disabled by host'), 'the effective disabled layer is visible');
+button('graph', 'Disable workspace').click();
+await tick();
+await tick();
+assert(requested.some(url => url.includes('/api/plugins/graph/disable')), 'workspace disable posts to plugin endpoint');
+assert(button('graph', 'Enable workspace'), 'workspace control refreshes to enable after write');
+button('graph', 'Disable host').click();
+await tick();
+await tick();
+assert(confirmations[0].includes('every workspace'), 'host disable asks about its host-wide effect');
+assert(button('graph', 'Enable host'), 'host state refreshes without a page restart');
+
+for (const plugin of plugins) plugin.capabilities = { enable: denied, disable: denied };
+await fetchAndRenderPlugins();
+assert(withClass('plugin-toggle').length === 0, 'non-operator session sees no mutation controls');
 
 console.log('dashboard plugins panel assertions passed');

@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-22
 ---
 
@@ -838,6 +838,15 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 
 ### 4.7 Dashboard
 
+**Decision (2026-09-27):** Reverse the original read-only dashboard boundary for
+enable and disable at host and workspace scope. Operators need to switch an
+already installed plugin off or back on while viewing its state, and the runtime
+already rebuilds the tool surface when those states change. Keep install,
+remove, upgrade and grant decisions on the CLI: those actions introduce new
+code or authority and need an explicit command review. Dashboard host re-enable
+is limited to the recorded grant set and program paths; changed or absent
+consent must be reviewed with `orbit plugin enable`.
+
 The `plugins` tab lists every installed or pinned plugin from `GET /api/plugins` (enable
 state, diagnostics, tools, panels, links) and draws each panel with one generic renderer:
 
@@ -853,7 +862,20 @@ Mismatched output falls back to `json`; `group` is a presentation hint.
 - `GET /api/plugins/<ns>/panels/<id>` runs the panel source through the audited tool dispatch
   with no caller input, for any dashboard session. This is safe because a panel source must be
   a `read_only` tool: `validate_structure` refuses a manifest whose panel names a mutating tool,
-  and the read re-checks the loaded manifest. Writes (install, enable, grants) stay on the CLI.
+  and the read re-checks the loaded manifest.
+- `POST /api/plugins/<ns>/enable` and `/disable` accept `{scope: "workspace"|"host"}`
+  only from operator sessions; every attempt, including a denied one, is audited.
+  Workspace writes change `[plugin_enablement]` in the served workspace;
+  host writes change the host plugin row. A workspace enable under a disabled
+  host is a structured `PluginDisabledOnHost` refusal.
+- Host re-enable preserves the recorded grants and program paths. It refuses if
+  the requested grant set differs from the recorded set, if freshly resolved
+  program paths differ from the recorded paths, or if the witness is absent.
+  The refusal names the grants or paths and the `orbit plugin enable` command
+  for reviewing consent. Dashboard controls never expose `force`.
+- The tab shows both states and an enable or disable control for each scope to
+  operators only. Host disable asks for confirmation because all workspaces
+  lose that plugin. Install, remove, upgrade and grant editing remain CLI actions.
 - The server single-flights each workspace/plugin/panel and caches a success for `refresh_ms`
   (default 30 s; 1–3600 s). Failures are not cached. Serialized output is capped at 256 KiB
   (`PANEL_OUTPUT_LIMIT_BYTES`); a larger value becomes a bounded JSON prefix with

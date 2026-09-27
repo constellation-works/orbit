@@ -140,11 +140,12 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             get(diagnostics::diagnostics_implement_one),
         )
         .route("/diagnostics/denials", get(denials::list_denials))
-        // Installed plugins and their declared panels [§4.7]. Read-only: a
-        // panel source is a `read_only` tool, and nothing here enables,
-        // disables or configures a plugin — that stays on the CLI, where the
-        // grant decision is made.
+        // Installed plugins and their declared panels [§4.7]. Panel reads
+        // remain safe for every session; operator-only enable/disable writes
+        // preserve recorded consent. Install and grant decisions stay on CLI.
         .route("/plugins", get(plugins::list_plugins))
+        .route("/plugins/:namespace/enable", post(plugins::enable_plugin))
+        .route("/plugins/:namespace/disable", post(plugins::disable_plugin))
         .route(
             "/plugins/:namespace/panels/:panel",
             get(plugins::read_panel),
