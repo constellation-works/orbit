@@ -195,7 +195,7 @@ mod args {
                 "--config",
                 "mcp_servers.orbit.enabled=true",
                 "--config",
-                "mcp_servers.orbit.env_vars=[\"ORBIT_MANAGED_RUN_CONTEXT\",\"ORBIT_RUN_ID\",\"ORBIT_SESSION_ID\",\"ORBIT_WORKSPACE\",\"ORBIT_REGISTRY_ROOT\"]",
+                "mcp_servers.orbit.env_vars=[\"ORBIT_MANAGED_RUN_CONTEXT\",\"ORBIT_RUN_ID\",\"ORBIT_SESSION_ID\",\"ORBIT_WORKSPACE\",\"ORBIT_REGISTRY_ROOT\",\"ORBIT_AGENT_NAME\",\"ORBIT_AGENT_MODEL\",\"ORBIT_TASK_ACTOR_KIND\",\"ORBIT_ACTIVITY_TOOLS\",\"ORBIT_ACTIVITY_FS_PROFILE\",\"ORBIT_PROC_ALLOWED_PROGRAMS\"]",
                 "--config",
                 "approval_policy=\"never\"",
                 "--model",
@@ -228,7 +228,7 @@ mod args {
                 "--config",
                 "mcp_servers.orbit.enabled=true",
                 "--config",
-                "mcp_servers.orbit.env_vars=[\"ORBIT_MANAGED_RUN_CONTEXT\",\"ORBIT_RUN_ID\",\"ORBIT_SESSION_ID\",\"ORBIT_WORKSPACE\",\"ORBIT_REGISTRY_ROOT\"]",
+                "mcp_servers.orbit.env_vars=[\"ORBIT_MANAGED_RUN_CONTEXT\",\"ORBIT_RUN_ID\",\"ORBIT_SESSION_ID\",\"ORBIT_WORKSPACE\",\"ORBIT_REGISTRY_ROOT\",\"ORBIT_AGENT_NAME\",\"ORBIT_AGENT_MODEL\",\"ORBIT_TASK_ACTOR_KIND\",\"ORBIT_ACTIVITY_TOOLS\",\"ORBIT_ACTIVITY_FS_PROFILE\",\"ORBIT_PROC_ALLOWED_PROGRAMS\"]",
                 "--model",
                 TEST_CODEX_MODEL,
                 "--config",
@@ -240,7 +240,7 @@ mod args {
     }
 
     #[test]
-    fn codex_mcp_override_forwards_only_shared_binding_names() {
+    fn codex_mcp_override_forwards_managed_binding_and_activity_names() {
         let args =
             CodexCliTransport::new(None, None, "workspace-write".into(), None, vec![]).args();
         let value = args[7]

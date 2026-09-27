@@ -3141,6 +3141,64 @@ fn managed_mcp_env_binding_updates_without_a_workspace_argument() {
     assert_no_shadow_task_store(&worktree);
 }
 
+/// A nested Codex server receives these names via its configured `env_vars`.
+/// Exercise the real MCP entry point with the resulting managed environment:
+/// an allowed task write succeeds, while an omitted tool is refused before
+/// dispatch, and the write is audited as an agent action.
+#[test]
+fn managed_codex_mcp_env_enforces_activity_tools_and_agent_actor_kind() {
+    let workspace = McpWorkspace::init();
+    let task_id = author_task(&workspace, "Managed Codex activity policy");
+    let mut client = workspace.serve_with_args_and_env(
+        &[],
+        &[
+            ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+            ("ORBIT_RUN_ID", "jrun-codex-policy-test"),
+            ("ORBIT_AGENT_NAME", "codex"),
+            ("ORBIT_AGENT_MODEL", "gpt-6-sol"),
+            ("ORBIT_TASK_ACTOR_KIND", "agent"),
+            ("ORBIT_ACTIVITY_TOOLS", "orbit.task.show,orbit.task.update"),
+        ],
+    );
+
+    let shown = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(shown["id"], task_id);
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({
+            "id": task_id,
+            "comment": "Allowed managed Codex write",
+            "model": "codex",
+        }),
+    );
+    assert_eq!(updated["id"], task_id);
+
+    let denied = client.call_tool_err(
+        "orbit_search",
+        json!({ "query": "policy test", "model": "codex" }),
+    );
+    assert_eq!(denied["code"], "policy_denied", "{denied}");
+    assert!(
+        denied["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("not in the activity allowlist")),
+        "an omitted tool must be refused by the managed activity policy: {denied}"
+    );
+    drop(client);
+
+    let connection =
+        Connection::open(workspace.home.join(".orbit/orbit.db")).expect("open audit store");
+    let actor_kind: String = connection
+        .query_row(
+            "SELECT actor_kind FROM audit_events WHERE tool_name = 'orbit.task.update'
+             ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read managed task-write actor kind");
+    assert_eq!(actor_kind, "agent");
+}
+
 /// ORB-11117: production-shaped managed CLI from a disposable linked worktree.
 #[test]
 fn managed_cli_from_linked_worktree_updates_canonical_workspace() {
