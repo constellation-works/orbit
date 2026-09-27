@@ -485,6 +485,8 @@ fn unpack_into(
 /// hardlink's target against `dest` and validates it stays inside that
 /// directory before calling `fs::hard_link`, so unlike a symlink there is no
 /// separate escape for this code to guard against.
+/// The stream bound also needs a logical output bound: GNU sparse members can
+/// create holes with `seek`/`set_len` without reading those bytes from the tar.
 pub(super) fn unpack_tar<R: Read>(
     reader: R,
     dest: &Path,
@@ -500,6 +502,7 @@ pub(super) fn unpack_tar<R: Read>(
         .entries()
         .map_err(|error| unpack_failure(source_name, &error))?;
     let mut count = 0usize;
+    let mut remaining_output = limits.unpacked_bytes;
     for entry in entries {
         let mut entry = entry.map_err(|error| unpack_failure(source_name, &error))?;
         count += 1;
@@ -518,6 +521,14 @@ pub(super) fn unpack_tar<R: Read>(
             )));
         }
         refuse_escaping_member(&path, source_name)?;
+        // `Entry::size` includes sparse holes, unlike the bytes read from the
+        // archive. Check before `unpack_in` can create an oversized file.
+        remaining_output = remaining_output.checked_sub(entry.size()).ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "plugin archive '{source_name}' unpacks to more than {} bytes",
+                limits.unpacked_bytes
+            ))
+        })?;
         entry
             .unpack_in(dest)
             .map_err(|error| unpack_failure(source_name, &error))?;
