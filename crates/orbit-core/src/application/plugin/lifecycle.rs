@@ -247,7 +247,7 @@ pub fn enable_plugin_in_workspace(
     // Load before any write, so a manifest that no longer loads fails closed
     // with the toggle untouched.
     let plugin = load_plugin_dir(&install_path)?;
-    write_workspace_toggle(&workspace_config, name, true)?;
+    write_workspace_toggle(&workspace_config, &runtime.global_root(), name, true)?;
     let contributions = apply_enabled_contributions(runtime, &install_path, force)?;
     let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
         runtime.global_root(),
@@ -279,7 +279,7 @@ pub fn disable_plugin_in_workspace(
 ) -> Result<PluginSummary, OrbitError> {
     let workspace_config = workspace_config_path(runtime)?;
     let installed = installed_plugin(runtime, name)?;
-    write_workspace_toggle(&workspace_config, name, false)?;
+    write_workspace_toggle(&workspace_config, &runtime.global_root(), name, false)?;
     let plugin = verified_install_path(runtime, &installed)
         .ok()
         .and_then(|path| load_plugin_dir(&path).ok());
@@ -317,13 +317,18 @@ fn workspace_config_path(runtime: &OrbitRuntime) -> Result<PathBuf, OrbitError> 
 /// Creating the file for a toggle is safe: a file holding only the toggle
 /// table is not a policy layer, so the replace-only security settings keep
 /// inheriting from global.
-fn write_workspace_toggle(path: &Path, name: &str, enabled: bool) -> Result<(), OrbitError> {
+fn write_workspace_toggle(
+    path: &Path,
+    global_root: &Path,
+    name: &str,
+    enabled: bool,
+) -> Result<(), OrbitError> {
     let mut store = ConfigStore::open(ConfigScope::Workspace, path)?;
     store.set_document_value(
         &orbit_config::plugin_enablement_key(name),
         if enabled { "true" } else { "false" },
     )?;
-    store.validate()?;
+    store.validate_workspace_with_global(global_root)?;
     store.save()
 }
 
@@ -964,7 +969,7 @@ fn reopen_workspace_toggle(
         return (status, "");
     }
     let path = runtime.shared_root().join("config.toml");
-    match write_workspace_toggle(&path, name, true) {
+    match write_workspace_toggle(&path, &runtime.global_root(), name, true) {
         Ok(()) => (status, "; switched back on in this workspace"),
         Err(error) => {
             tracing::warn!(

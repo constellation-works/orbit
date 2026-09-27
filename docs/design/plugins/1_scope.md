@@ -189,6 +189,9 @@ orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold 
 `--scope workspace` writes `[plugin_enablement] <ns> = true|false` into the selected
 workspace's `config.toml` and nothing else. The effective state in a workspace is the host
 state AND the toggle, and an unset toggle inherits (on).
+The staged workspace file is validated with the host config underneath it before the toggle
+is saved. A workspace crew pool may name a host-defined crew; a crew absent from both files
+still prevents the write.
 
 - A workspace disable takes the plugin's whole surface off in that workspace only: tools
   (listed and `orbit <ns>` calls refuse with `plugin_disabled_in_workspace`), job and activity
