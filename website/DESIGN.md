@@ -28,9 +28,9 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
 2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
 3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Zero JS by default. The homepage's copy control, its
-   command-terminal tabs, and its narrow-viewport Menu (Escape and breakpoint
-   close) are the scripted exceptions; every other interaction is CSS. Hundreds of pages should feel identical in
+4. **Static and fast.** Zero JS by default. The homepage's narrow-viewport
+   Menu (Escape and breakpoint close) is the scripted exception; every other
+   interaction is CSS. Hundreds of pages should feel identical in
    performance to ten.
 5. **Dark-default, light-available.** Theme toggle persists per user; neither mode is an afterthought.
 
@@ -105,21 +105,13 @@ the provider strip: the shipped CLI executors as a plain list under a
 hairline, with the legacy Gemini executor named in a footnote rather than
 implied current.
 
-**Hero, right column** — two stacked panels:
-
-- **Command terminal.** One tab per way of running Orbit: Install, From your
-  agent, From the CLI, Drain a backlog, On a schedule. Every workflow tab
-  starts from `orbit init` and `orbit workspace init --mcp`. The tab row and
-  the Copy control are served `hidden` and revealed by the page script, which
-  implements the WAI-ARIA tabs pattern (roving tabindex, arrow keys, Home and
-  End) and points Copy at the active panel's commands. Without JavaScript every
-  panel shows under its own label.
-- **Session preview** — a `figure` of one exchange between the reader, their
-  agent, and Orbit, laid out as a conversation with receipts: `orbit.task.add`
-  (task in `proposed`), the go-ahead, `orbit.task.update` and
-  `orbit.workflow.ship`, then `orbit.workflow.run.show` with the task in
-  `review`. Tool names are real and identifiers are placeholders; the
-  `figcaption` says so and `role="img"` marks it illustrative.
+**Hero, right column** — one **session preview**: a `figure` of one exchange
+between the reader, their agent, and Orbit, laid out as a conversation with
+receipts: `orbit.task.add` (task in `proposed`), the go-ahead,
+`orbit.task.update` and `orbit.workflow.ship`, then
+`orbit.workflow.run.show` with the task in `review`. Tool names are real and
+identifiers are placeholders; the `figcaption` says so and `role="img"`
+marks it illustrative.
 
 Below the hero, in order:
 
@@ -147,11 +139,8 @@ Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
 and publishes no live metric.
 
-Scripts are limited to the copy control, the terminal tabs, and the homepage
-Menu's Escape / breakpoint close. Copy buttons are served `hidden` and unhidden by that script,
-so a page without JavaScript shows the command text and no dead control; a
-clipboard that is
-unavailable or refuses the write reports failure rather than a false success.
+Scripts are limited to the homepage Menu's Escape / breakpoint close. The
+Quickstart section below the hero retains the install and setup commands.
 
 Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.
 
