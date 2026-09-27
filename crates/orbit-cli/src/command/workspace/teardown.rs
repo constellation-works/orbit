@@ -8,7 +8,7 @@ use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 
 use crate::command::{CommandOut, CommandOutput, Execute};
 
-use super::support::{is_dir_empty, remove_symlinks_in};
+use super::support::{LEGACY_SKILL_DISCOVERY_DIRS, remove_owned_skill_links};
 
 #[derive(Args)]
 pub struct WorkspaceTeardownArgs {
@@ -87,22 +87,21 @@ impl Execute for WorkspaceTeardownArgs {
                 removed.push(format_deleted_partition(&partition, &workspace_name));
             }
 
-            // 3. Remove legacy repo-local skill symlinks from .agents/skills/ and .claude/skills/
-            for dir_name in &[".agents", ".claude"] {
-                let skills_dir = repo_root.join(dir_name).join("skills");
-                if skills_dir.is_dir() {
-                    remove_symlinks_in(&skills_dir)?;
-                    removed.push(format!("removed symlinks from {}/skills/", dir_name));
-
-                    if is_dir_empty(&skills_dir) {
-                        std::fs::remove_dir(&skills_dir)
-                            .map_err(|e| OrbitError::Io(e.to_string()))?;
-                    }
-                    let parent = repo_root.join(dir_name);
-                    if parent.is_dir() && is_dir_empty(&parent) {
-                        std::fs::remove_dir(&parent).map_err(|e| OrbitError::Io(e.to_string()))?;
-                        removed.push(format!("removed empty {}/", dir_name));
-                    }
+            // 3. Remove the legacy repo-local skill links workspace init wrote
+            //    into .agents/skills/ and .claude/skills/. Only links into this
+            //    checkout's .orbit/skills/ are Orbit-owned; must run before step 4
+            //    deletes that target.
+            for dir_name in LEGACY_SKILL_DISCOVERY_DIRS {
+                let cleanup = remove_owned_skill_links(&repo_root, &orbit_dir, dir_name)?;
+                if cleanup.removed_links > 0 {
+                    removed.push(format!(
+                        "removed {} Orbit skill link{} from {dir_name}/skills/",
+                        cleanup.removed_links,
+                        if cleanup.removed_links == 1 { "" } else { "s" }
+                    ));
+                }
+                for dir in &cleanup.removed_dirs {
+                    removed.push(format!("removed empty {}", dir.display()));
                 }
             }
 
