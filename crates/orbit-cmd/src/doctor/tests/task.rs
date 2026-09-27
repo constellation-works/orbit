@@ -79,6 +79,94 @@ fn retired_graph_cleanup_unlinks_boundaries_without_following_them() {
     assert!(fs::symlink_metadata(shared_graph).is_err());
 }
 
+/// `knowledge` pointing outside the resolved root must not let
+/// `--remove-graph` delete that directory's `graph` child. The link is
+/// reported, external files stay, and a real local `graph/` directory is
+/// still removed.
+#[cfg(unix)]
+#[test]
+fn retired_graph_cleanup_reports_intermediate_symlink_and_preserves_external_files() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = split_root_runtime(&temp);
+    let outside = temp.path().join("outside");
+    let outside_graph = outside.join("graph");
+    fs::create_dir_all(&outside_graph).expect("create outside graph");
+    let graph_marker = outside_graph.join("keep.db");
+    let sibling_marker = outside.join("keep.txt");
+    fs::write(&graph_marker, b"keep-graph").expect("write graph marker");
+    fs::write(&sibling_marker, b"keep-sibling").expect("write sibling marker");
+
+    let knowledge = runtime.shared_root().join("knowledge");
+    std::os::unix::fs::symlink(&outside, &knowledge).expect("link knowledge outside the root");
+
+    let local_graph = runtime.local_root().join("graph");
+    fs::create_dir_all(&local_graph).expect("create local graph");
+    fs::write(local_graph.join("local.db"), b"retired").expect("write local graph");
+
+    let error = runtime
+        .remove_retired_graph_state()
+        .expect_err("intermediate symlink is reported");
+    let message = error.to_string();
+    assert!(
+        message.contains(&knowledge.display().to_string()),
+        "the unsafe path is named: {message}"
+    );
+    assert!(
+        graph_marker.is_file(),
+        "external graph contents must survive"
+    );
+    assert!(
+        sibling_marker.is_file(),
+        "external files beside graph must survive"
+    );
+    assert!(
+        fs::symlink_metadata(&knowledge)
+            .expect("knowledge link metadata")
+            .file_type()
+            .is_symlink(),
+        "the intermediate link itself must remain"
+    );
+    assert!(
+        !local_graph.exists(),
+        "a direct retired graph directory is still removed"
+    );
+}
+
+/// An intermediate symlink whose retired target is already gone is a no-op.
+/// The link and every other external file stay.
+#[cfg(unix)]
+#[test]
+fn retired_graph_cleanup_skips_missing_target_behind_intermediate_symlink() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = split_root_runtime(&temp);
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside).expect("create outside");
+    let sibling_marker = outside.join("keep.txt");
+    fs::write(&sibling_marker, b"keep-sibling").expect("write sibling marker");
+
+    let knowledge = runtime.shared_root().join("knowledge");
+    std::os::unix::fs::symlink(&outside, &knowledge).expect("link knowledge outside the root");
+
+    assert_eq!(
+        runtime
+            .remove_retired_graph_state()
+            .expect("missing target behind an intermediate symlink is a no-op"),
+        0
+    );
+    assert!(sibling_marker.is_file(), "external files must survive");
+    assert!(
+        fs::symlink_metadata(&knowledge)
+            .expect("knowledge link metadata")
+            .file_type()
+            .is_symlink(),
+        "the intermediate link itself must remain"
+    );
+    assert!(
+        !outside.join("graph").exists(),
+        "cleanup must not create the missing external graph directory"
+    );
+}
+
 #[test]
 fn workspace_retired_backend_warns_artifacts_activities_with_repair_command() {
     let temp = tempfile::tempdir().expect("tempdir");

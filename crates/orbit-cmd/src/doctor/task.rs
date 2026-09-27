@@ -430,42 +430,138 @@ pub(super) fn remove_stale_lock_file(path: &Path) -> Result<bool, OrbitError> {
     Ok(true)
 }
 
-/// Remove one fixed workspace-relative subtree without following a symlink at
-/// the subtree boundary. The relative path is validated even though current
-/// callers pass constants, keeping future cleanup additions inside the
-/// resolved Orbit root by construction.
+/// Remove one fixed workspace-relative subtree.
+///
+/// The relative path is validated even though current callers pass constants,
+/// so a later target cannot escape the resolved Orbit root by name. Ancestors
+/// are inspected with `symlink_metadata` one component at a time.
+/// `symlink_metadata` on the joined path follows every ancestor, and
+/// `remove_dir_all` would then delete a directory reached through an
+/// intermediate link (`knowledge` pointing outside the root). That link is
+/// not followed: a missing final entry is a no-op, and a present one is
+/// reported and left in place. A symlink at the final component is unlinked
+/// without being followed.
 pub(super) fn remove_workspace_subtree(root: &Path, relative: &Path) -> Result<bool, OrbitError> {
-    if relative.is_absolute()
-        || relative.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir
-                    | std::path::Component::RootDir
-                    | std::path::Component::Prefix(_)
-            )
-        })
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "cleanup path '{}' must remain relative to Orbit root '{}'",
-            relative.display(),
-            root.display()
-        )));
+    let names = subtree_components(root, relative)?;
+    let Some((final_name, ancestors)) = names.split_last() else {
+        return Err(subtree_path_error(root, relative));
+    };
+
+    let mut current = root.to_path_buf();
+    for name in ancestors {
+        current.push(name);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return refuse_intermediate_symlink(root, relative, &current);
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect retired graph state {}: not a directory",
+                    current.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect retired graph state {}: {error}",
+                    current.display()
+                )));
+            }
+        }
     }
-    let target = root.join(relative);
-    let metadata = match std::fs::symlink_metadata(&target) {
+
+    current.push(final_name);
+    let metadata = match std::fs::symlink_metadata(&current) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => {
             return Err(OrbitError::Io(format!(
                 "inspect retired graph state {}: {error}",
-                target.display()
+                current.display()
             )));
         }
     };
+    remove_final_entry(&current, &metadata)
+}
+
+/// Normal components of a relative subtree path.
+///
+/// `..`, absolute paths, and an empty path (which would name `root` itself)
+/// are refused. `.` is ignored because it does not move the walk.
+fn subtree_components<'a>(
+    root: &Path,
+    relative: &'a Path,
+) -> Result<Vec<&'a std::ffi::OsStr>, OrbitError> {
+    if relative.is_absolute() {
+        return Err(relative_path_error(root, relative));
+    }
+    let mut names = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(name) => names.push(name),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(relative_path_error(root, relative));
+            }
+        }
+    }
+    if names.is_empty() {
+        return Err(subtree_path_error(root, relative));
+    }
+    Ok(names)
+}
+
+fn relative_path_error(root: &Path, relative: &Path) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "cleanup path '{}' must remain relative to Orbit root '{}'",
+        relative.display(),
+        root.display()
+    ))
+}
+
+fn subtree_path_error(root: &Path, relative: &Path) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "cleanup path '{}' must name a subtree of Orbit root '{}'",
+        relative.display(),
+        root.display()
+    ))
+}
+
+/// An ancestor is a symlink. Do not delete through it.
+///
+/// A missing joined target is the same no-op as an absent directory. A target
+/// that exists is refused: stating it is read-only and is not permission to
+/// remove it, because that removal would follow the link.
+fn refuse_intermediate_symlink(
+    root: &Path,
+    relative: &Path,
+    link: &Path,
+) -> Result<bool, OrbitError> {
+    let target = root.join(relative);
+    match std::fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OrbitError::Io(format!(
+            "inspect retired graph state {}: {error}",
+            target.display()
+        ))),
+        Ok(_) => Err(OrbitError::InvalidInput(format!(
+            "cleanup path '{}' resolves through intermediate symbolic link '{}'; retired graph \
+             cleanup does not follow links above the final component of Orbit root '{}'",
+            relative.display(),
+            link.display(),
+            root.display()
+        ))),
+    }
+}
+
+fn remove_final_entry(target: &Path, metadata: &std::fs::Metadata) -> Result<bool, OrbitError> {
     let result = if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        std::fs::remove_file(&target)
+        std::fs::remove_file(target)
     } else {
-        std::fs::remove_dir_all(&target)
+        std::fs::remove_dir_all(target)
     };
     match result {
         Ok(()) => Ok(true),

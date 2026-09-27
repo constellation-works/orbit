@@ -208,10 +208,13 @@ idempotent across every activity catalog directory in the workspace.
 
 Graph is retired under the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) and is not inspected by ordinary health checks. To remove
 leftover state explicitly, run `orbit doctor --remove-graph`. This deletes only the current
-worktree's `.orbit/graph` and the shared workspace's `.orbit/knowledge/graph`; it is
-idempotent when either is absent. Combine it with `--json` for a single JSON result with no
-cleanup prose on stdout. Without `--remove-graph`, `orbit doctor` leaves both locations
-untouched.
+worktree's `.orbit/graph` and the shared workspace's `.orbit/knowledge/graph`, and only when
+each path stays inside its resolved root. An intermediate symlink is not followed: a missing
+target is left alone, and a target that exists is reported and preserved, including files
+outside the root. A symlink at the final `graph` component is unlinked without being followed.
+The command is idempotent when either location is absent. Combine it with `--json` for a
+single JSON result with no cleanup prose on stdout. Without `--remove-graph`, `orbit doctor`
+leaves both locations untouched.
 
 ## Probe dashboard health
 
