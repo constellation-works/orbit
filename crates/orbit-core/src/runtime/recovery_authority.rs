@@ -500,6 +500,29 @@ pub(crate) fn current_worker_binding(
     current_worker_binding_in(global_root, Path::new(PROC_ROOT))
 }
 
+/// macOS resolves the same process-identity rows through libproc ancestry
+/// [ORB-13625]. There is no PID-namespace leg: macOS workers are confined by
+/// `sandbox-exec`, which shares the host PID space, so the host-recorded
+/// process identity of the worker or a live ancestor is what a child finds.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn current_worker_binding(
+    global_root: &Path,
+) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
+    resolve_worker_binding(global_root, &|| None, &|pid| {
+        Ok(
+            orbit_common::process::ancestry::process_start_and_parent(pid)
+                .map(|(_, parent)| parent),
+        )
+    })
+}
+
+#[cfg(not(unix))]
+pub(crate) fn current_worker_binding(
+    _global_root: &Path,
+) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
+    Ok(None)
+}
+
 /// Resolution against an explicit `/proc` mount. Tests inject a proc root that
 /// denies the namespace and ancestry probes; production always passes
 /// [`PROC_ROOT`].
@@ -507,6 +530,40 @@ pub(crate) fn current_worker_binding(
 fn current_worker_binding_in(
     global_root: &Path,
     proc_root: &Path,
+) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
+    // Both probes are identity discovery, not authorization: a `/proc` entry
+    // this process may not read (`EACCES` on a root-owned PID 1, a
+    // `hidepid=2` mount, a restricted ancestor) means "no binding here",
+    // never a refusal to open the runtime. `restore_process_binding` is what
+    // fails closed for a managed child that requires one.
+    resolve_worker_binding(
+        global_root,
+        &|| namespace_key(proc_root, NAMESPACE_LEADER_PID).ok(),
+        &|pid| {
+            let Ok(stat) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat"))
+            else {
+                // An ancestor that has exited or that this process may not
+                // read ends the walk with no binding.
+                return Ok(None);
+            };
+            stat.rsplit_once(')')
+                .and_then(|(_, fields)| fields.split_whitespace().nth(1))
+                .and_then(|value| value.parse::<u32>().ok())
+                .map(Some)
+                .ok_or_else(|| OrbitError::Execution("worker process ancestry unavailable".into()))
+        },
+    )
+}
+
+/// The platform-neutral walk: the namespace leg when the platform has one,
+/// then this process and each live ancestor by pid plus kernel start
+/// identity. `parent_of` answers `Ok(None)` when an ancestor cannot be read,
+/// which ends the walk unbound.
+#[cfg(unix)]
+fn resolve_worker_binding(
+    global_root: &Path,
+    namespace_key_probe: &dyn Fn() -> Option<String>,
+    parent_of: &dyn Fn(u32) -> Result<Option<u32>, OrbitError>,
 ) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
     if !global_root.try_exists()? {
         return Ok(None);
@@ -528,12 +585,7 @@ fn current_worker_binding_in(
     let namespace_table: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_namespace_binding')", [], |row| row.get(0),
     ).map_err(|error| authority_error("inspect namespace authority", error))?;
-    // Both probes below are identity discovery, not authorization: a `/proc`
-    // entry this process may not read (`EACCES` on a root-owned PID 1, a
-    // `hidepid=2` mount, a restricted ancestor) means "no binding here", never
-    // a refusal to open the runtime. `restore_process_binding` is what fails
-    // closed for a managed child that requires one.
-    if namespace_table && let Ok(key) = namespace_key(proc_root, NAMESPACE_LEADER_PID) {
+    if namespace_table && let Some(key) = namespace_key_probe() {
         let value: Option<String> = connection
             .query_row(
                 "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
@@ -573,16 +625,9 @@ fn current_worker_binding_in(
                 return Ok(Some(binding));
             }
         }
-        let Ok(stat) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) else {
-            // An ancestor that has exited or that this process may not read
-            // ends the walk with no binding.
+        let Some(parent) = parent_of(pid)? else {
             return Ok(None);
         };
-        let parent = stat
-            .rsplit_once(')')
-            .and_then(|(_, fields)| fields.split_whitespace().nth(1))
-            .and_then(|value| value.parse::<u32>().ok())
-            .ok_or_else(|| OrbitError::Execution("worker process ancestry unavailable".into()))?;
         if parent == 0 || parent == pid {
             return Ok(None);
         }
@@ -591,13 +636,6 @@ fn current_worker_binding_in(
     Err(OrbitError::Execution(
         "worker process ancestry limit exceeded".into(),
     ))
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn current_worker_binding(
-    _global_root: &Path,
-) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
-    Ok(None)
 }
 
 /// The identity of `pid`'s PID namespace as seen through `proc_root`: the

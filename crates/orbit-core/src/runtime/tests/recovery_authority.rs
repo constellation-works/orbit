@@ -607,6 +607,92 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
     );
 }
 
+/// [ORB-13625] macOS resolves the host-recorded process binding through
+/// libproc ancestry: the bound child and its grandchild both find it, a forged
+/// run id in the environment changes nothing, and once the bound process has
+/// exited nothing resolves.
+#[cfg(all(unix, not(target_os = "linux")))]
+#[test]
+fn worker_process_binding_resolves_through_process_ancestry_off_linux() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    const NAME: &str = "runtime::recovery_authority::tests::worker_process_binding_resolves_through_process_ancestry_off_linux";
+    if let Some(root) = std::env::var_os("ORBIT_BINDING_FIXTURE_ROOT") {
+        if std::env::var_os("ORBIT_BINDING_GRANDCHILD").is_none() {
+            std::io::stdin()
+                .read_exact(&mut [0u8; 1])
+                .expect("parent binding barrier");
+        }
+        let binding = super::current_worker_binding(Path::new(&root))
+            .expect("resolve authority")
+            .expect("bound ancestor");
+        assert_eq!(binding.bound_run_id, "immutable-leaf");
+        assert_eq!(binding.execution.machine_id, "execution-machine");
+        assert_ne!(
+            binding.bound_run_id,
+            std::env::var("ORBIT_RUN_ID").expect("forged env")
+        );
+        if std::env::var_os("ORBIT_BINDING_GRANDCHILD").is_none() {
+            let mut command = Command::new(std::env::current_exe().expect("test binary"));
+            orbit_common::test_env::clear_inherited_authority(|key| {
+                command.env_remove(key);
+            });
+            let output = command
+                .args(["--exact", NAME, "--nocapture"])
+                .env("ORBIT_BINDING_FIXTURE_ROOT", root)
+                .env("ORBIT_BINDING_GRANDCHILD", "1")
+                .env("ORBIT_RUN_ID", "forged-grandchild-run")
+                .output()
+                .expect("grandchild");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+        return;
+    }
+    let root = TempDir::new().expect("authority root");
+    let authority = RecoveryAuthority::open(root.path()).expect("authority");
+    let binding = worker_binding();
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let mut child = command
+        .args(["--exact", NAME, "--nocapture"])
+        .env("HOME", root.path())
+        .env("USERPROFILE", root.path())
+        .env("ORBIT_BINDING_FIXTURE_ROOT", root.path())
+        .env("ORBIT_RUN_ID", "forged-run")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("child");
+    authority
+        .bind_worker_process(child.id(), &binding)
+        .expect("bind");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"1")
+        .expect("release child");
+    let output = child.wait_with_output().expect("child output");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        super::current_worker_binding(root.path())
+            .expect("no matching live process")
+            .is_none()
+    );
+}
+
 /// Identity discovery, not authorization: a `/proc` entry the caller cannot
 /// read leaves the process unbound instead of refusing every runtime open on a
 /// machine that already has worker binding rows.
@@ -673,7 +759,7 @@ fn a_denied_proc_probe_leaves_the_process_unbound_instead_of_refusing() {
     assert!(refused.expect("a denied probe is not a refusal").is_none());
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn worker_binding() -> orbit_types::tool::WorkerInvocation {
     orbit_types::tool::WorkerInvocation {
         owner_machine_id: "owner-machine".into(),
