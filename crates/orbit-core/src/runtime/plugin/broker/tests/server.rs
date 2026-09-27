@@ -192,10 +192,16 @@ fn call_when(running: &Running, accept: impl Fn(&Value) -> bool) -> Value {
     loop {
         let mut stream = connect(running);
         // A full broker answers without reading the request. It can close
-        // before this write completes; a broken pipe does not imply its busy
-        // reply was lost. Read that reply from the same connection.
+        // before this write completes; a peer-closed write error does not
+        // imply its busy reply was lost. Read that reply from the same connection.
         if let Err(error) = write_frame(&mut stream, &tool_request()) {
-            assert_eq!(error.kind(), ErrorKind::BrokenPipe, "send request: {error}");
+            assert!(
+                matches!(
+                    error.kind(),
+                    ErrorKind::BrokenPipe | ErrorKind::NotConnected | ErrorKind::ConnectionReset
+                ),
+                "send request: {error}"
+            );
         }
         let response = reply(&mut stream);
         if accept(&response) || Instant::now() >= deadline {
