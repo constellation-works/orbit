@@ -665,7 +665,9 @@ fn untracked_content_identities(
         match untracked_path_kind(root, path)? {
             UntrackedPathKind::Missing => {}
             UntrackedPathKind::Symlink => record_per_path(path)?,
-            UntrackedPathKind::File if path.contains('\n') => record_per_path(path)?,
+            UntrackedPathKind::File if path.contains('\n') || path.starts_with('"') => {
+                record_per_path(path)?
+            }
             UntrackedPathKind::File => batch_paths.push(path.clone()),
         }
     }
