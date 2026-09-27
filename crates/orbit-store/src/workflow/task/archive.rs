@@ -91,12 +91,22 @@ pub(super) fn write_archive(
 }
 
 /// Append one canonical bundle while its shared lock is held. Pending-write
-/// recovery records are rejected before packing and excluded here as defense in
-/// depth; all other dotfiles remain eligible payloads and round-trip unchanged.
+/// recovery records are rejected before packing and the bundle-root sidecar is
+/// excluded here as defense in depth; nested same-named artifacts and other
+/// dotfiles remain eligible payloads and round-trip unchanged.
 pub(super) fn append_bundle_tree<W: std::io::Write>(
     builder: &mut tar::Builder<W>,
     archive_dir: &str,
     source_dir: &Path,
+) -> Result<(), OrbitError> {
+    append_bundle_tree_level(builder, archive_dir, source_dir, true)
+}
+
+fn append_bundle_tree_level<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
+    archive_dir: &str,
+    source_dir: &Path,
+    is_bundle_root: bool,
 ) -> Result<(), OrbitError> {
     builder
         .append_dir(archive_dir, source_dir)
@@ -110,7 +120,7 @@ pub(super) fn append_bundle_tree<W: std::io::Write>(
 
     for entry in entries {
         let name = entry.file_name();
-        if name == PENDING_WRITE_FILE_NAME {
+        if is_bundle_root && name == PENDING_WRITE_FILE_NAME {
             continue;
         }
 
@@ -121,7 +131,7 @@ pub(super) fn append_bundle_tree<W: std::io::Write>(
             .map_err(map_io("inspect bundle entry"))?
             .is_dir()
         {
-            append_bundle_tree(builder, &archive_path, &source)?;
+            append_bundle_tree_level(builder, &archive_path, &source, false)?;
         } else {
             builder
                 .append_path_with_name(&source, archive_path)
