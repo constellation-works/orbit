@@ -10,7 +10,8 @@ use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::runtime::run_input::{
-    managed_run_context_from_env, managed_run_context_run_id_from_env,
+    managed_dispatch_context_from_env, managed_run_context_from_env,
+    managed_run_context_run_id_from_env,
 };
 
 use super::execute::ToolEntryPoint;
@@ -18,6 +19,7 @@ use super::execute::ToolEntryPoint;
 /// Trusted audit-correlation fields at the MCP/CLI dispatch seam.
 #[derive(Debug, Default, Clone)]
 pub struct AuditContext {
+    pub session_id: Option<String>,
     pub task_id: Option<String>,
     pub job_run_id: Option<String>,
     pub activity_id: Option<String>,
@@ -53,6 +55,7 @@ pub(super) fn resolve_audit_context(
     }
 
     AuditContext {
+        session_id: None,
         task_id: input_str(input, "task_id").or_else(|| env_str("ORBIT_TASK_ID")),
         job_run_id: input_str(input, "job_run_id")
             .or_else(|| input_str(input, "run_id"))
@@ -76,10 +79,11 @@ pub fn trusted_mcp_audit_context() -> AuditContext {
             .filter(|value| !value.is_empty())
     }
 
-    if managed_run_context() {
+    if managed_dispatch_context_from_env() {
         AuditContext {
+            session_id: env_str("ORBIT_SESSION_ID"),
             task_id: env_str("ORBIT_TASK_ID"),
-            job_run_id: env_str("ORBIT_RUN_ID"),
+            job_run_id: managed_run_context_run_id_from_env(),
             activity_id: env_str("ORBIT_ACTIVITY_ID"),
             step_index: env_str("ORBIT_STEP_INDEX").and_then(|value| value.parse().ok()),
         }

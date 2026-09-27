@@ -1,4 +1,5 @@
 use crate::providers::common::render_prompt_with_embedded_envelope;
+use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_types::identity::ReasoningEffort;
 
 fn codex_config_string_arg(key: &str, value: &str) -> String {
@@ -31,10 +32,27 @@ impl CodexCliTransport {
         }
     }
 
-    // Static Codex CLI flags live in the executor definition; this transport
-    // only adds per-request toggles.
+    // The transport supplies a complete Orbit MCP entry so its env_vars
+    // override is valid even when the user's Codex config has no entry.
+    // Managed dispatch replaces the fallback command with its selected binary.
     pub(crate) fn args(&self) -> Vec<String> {
         let mut args = Vec::new();
+        let names = MCP_MANAGED_BINDING_ENV_VARS
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        args.push("--config".to_string());
+        args.push(codex_config_string_arg(
+            "mcp_servers.orbit.command",
+            "orbit",
+        ));
+        args.push("--config".to_string());
+        args.push("mcp_servers.orbit.args=[\"mcp\",\"serve\"]".to_string());
+        args.push("--config".to_string());
+        args.push("mcp_servers.orbit.enabled=true".to_string());
+        args.push("--config".to_string());
+        args.push(format!("mcp_servers.orbit.env_vars=[{names}]"));
         if let Some(approval_policy) = &self.approval_policy {
             args.push("--config".to_string());
             args.push(codex_config_string_arg("approval_policy", approval_policy));

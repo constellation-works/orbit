@@ -1,3 +1,4 @@
+use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use tempfile::tempdir;
 
 use super::super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
@@ -42,6 +43,16 @@ fn codex_workspace_scope_init_and_remove_preserve_unrelated_entries() {
     assert_eq!(args.len(), 2);
     assert_eq!(args[0].as_str(), Some("mcp"));
     assert_eq!(args[1].as_str(), Some("serve"));
+    let env_vars = parsed["mcp_servers"]["orbit"]["env_vars"]
+        .as_array()
+        .expect("codex forwarded env names");
+    assert_eq!(
+        env_vars
+            .iter()
+            .map(|value| value.as_str().expect("env name"))
+            .collect::<Vec<_>>(),
+        MCP_MANAGED_BINDING_ENV_VARS
+    );
     assert!(parsed["mcp_servers"]["orbit"].get("cwd").is_none());
     assert_eq!(
         parsed["mcp_servers"]["other"]["command"].as_str(),
@@ -80,6 +91,12 @@ fn workspace_scope_codex_init_is_idempotent() {
     let home = tempdir().expect("home tempdir");
     let orbit_root = repo.path().join(".orbit");
     std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    std::fs::create_dir_all(repo.path().join(".codex")).expect("create codex config dir");
+    std::fs::write(
+        repo.path().join(".codex/config.toml"),
+        "[mcp_servers.orbit]\ncommand = \"old-orbit\"\nargs = [\"mcp\", \"serve\"]\n",
+    )
+    .expect("write existing orbit entry");
 
     run_action(
         McpAction::Init(ServerLaunch::default()),
@@ -92,6 +109,20 @@ fn workspace_scope_codex_init_is_idempotent() {
     .expect("init codex");
     let first = std::fs::read_to_string(repo.path().join(".codex").join("config.toml"))
         .expect("read first config");
+    let parsed: toml::Value = toml::from_str(&first).expect("parse refreshed config");
+    assert_eq!(
+        parsed["mcp_servers"]["orbit"]["command"].as_str(),
+        Some("orbit")
+    );
+    assert_eq!(
+        parsed["mcp_servers"]["orbit"]["env_vars"]
+            .as_array()
+            .expect("refreshed env names")
+            .iter()
+            .map(|value| value.as_str().expect("env name"))
+            .collect::<Vec<_>>(),
+        MCP_MANAGED_BINDING_ENV_VARS
+    );
 
     run_action(
         McpAction::Init(ServerLaunch::default()),

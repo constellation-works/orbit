@@ -1,6 +1,7 @@
 //! Providers whose MCP servers live under `[mcp_servers.<id>]` in a TOML
 //! config: Codex and Grok share the exact shape.
 
+use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_core::OrbitError;
 use toml_edit::{Array, Item, Table, value};
 
@@ -13,10 +14,22 @@ const SERVERS_KEY: &str = "mcp_servers";
 pub(in crate::command::mcp::setup) fn apply_toml_init(
     target: &ConfigTarget,
     launch: ServerLaunch<'_>,
+    codex: bool,
 ) -> Result<(), OrbitError> {
     let mut doc = load_toml_document(&target.mcp_path)?;
-    ensure_toml_table(&mut doc, SERVERS_KEY)?
-        .insert(server_id(launch), Item::Table(mcp_server_table(launch)));
+    let mut table = mcp_server_table(launch);
+    if codex && matches!(launch, ServerLaunch::Local { .. }) {
+        table.insert(
+            "env_vars",
+            value(
+                MCP_MANAGED_BINDING_ENV_VARS
+                    .iter()
+                    .copied()
+                    .collect::<Array>(),
+            ),
+        );
+    }
+    ensure_toml_table(&mut doc, SERVERS_KEY)?.insert(server_id(launch), Item::Table(table));
     write_toml_document(&target.mcp_path, &doc)
 }
 

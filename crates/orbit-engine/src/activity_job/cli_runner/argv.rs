@@ -52,6 +52,20 @@ pub(super) fn audit_argv_for_dispatch(
     }
 }
 
+/// Pin the complete Codex transport MCP entry to the same selected ORBIT_BIN
+/// dispatched to the managed child.
+pub(super) fn codex_mcp_server_launch_args(
+    orbit_bin: &str,
+) -> Result<Vec<String>, serde_json::Error> {
+    Ok(vec![
+        "--config".to_string(),
+        format!(
+            "mcp_servers.orbit.command={}",
+            serde_json::to_string(orbit_bin)?
+        ),
+    ])
+}
+
 pub(super) fn try_audit_argv_for_dispatch(
     program: &str,
     args: &[String],

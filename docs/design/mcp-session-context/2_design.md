@@ -3,13 +3,13 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-08-30
-last_validated: 2026-09-19
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: mcp-session-context
 doc_role: design
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/command/**", "crates/orbit-store/src/driver/sqlite/audit_event_store/**"]
+paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/command/**", "crates/orbit-store/src/driver/sqlite/audit_event_store/**", "crates/orbit-agent/src/providers/codex/**", "crates/orbit-engine/src/activity_job/cli_runner/**", "crates/orbit-common/src/security/child_env.rs"]
 related_features: ["mcp-session-context"]
 related_artifacts: []
 ---
@@ -61,6 +61,8 @@ Steps 2 and 3 are one session field, resolved once at initialize: an announced w
 
 Process cwd is not an MCP fallback. The server resolves the selector against its registry, opens the selected local runtime, writes the resolved workspace_id into context, and normalizes an explicit workspace argument to the selected checkout path before Core dispatch.
 
+For Codex, `orbit mcp setup` writes `env_vars` on the local `[mcp_servers.orbit]` entry. The list forwards only `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_RUN_ID`, `ORBIT_SESSION_ID`, `ORBIT_WORKSPACE`, and `ORBIT_REGISTRY_ROOT` from Codex's environment. A managed Codex launch overrides that list and supplies a complete enabled orbit MCP entry: `command` is the selected `ORBIT_BIN` and `args` are `mcp serve`. This works when the user's Codex config has no orbit entry and does not put managed envelope values in argv. A job run exports `ORBIT_RUN_ID`; a source inspection exports `ORBIT_SESSION_ID` instead. Either identity, together with the managed marker, allows `ORBIT_WORKSPACE` to bind the nested server. The selector remains subject to registry resolution and per-call override.
+
 Global tools do not require a workspace selector.
 
 orbit.task.show and orbit.task.artifact.get are the ID-resolved exceptions to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
@@ -82,6 +84,8 @@ For a plugin tool that does not declare `workspace` in its input schema, the MCP
 The server passes a resolved workspace call to Core through execute_tool_command_dispatch_with_session_context. Global calls use Core's global in-process dispatch seam. Unknown or unadvertised raw names use that same global seam and produce one denied row. Every tools/call therefore crosses one Core audit boundary exactly once with its per-call context.
 
 Audit records include resolved workspace when applicable, caller/process metadata, transport, trace ID, and caller IP when present.
+
+The managed MCP audit row records `job_run_id` from `ORBIT_RUN_ID` for a job run or `session_id` from `ORBIT_SESSION_ID` for a source inspection. The session ID is read only when the managed marker and a run or inspection identity are present.
 
 Model-authored fields with names resembling audit fields do not override the supplied ToolSessionContext.
 
