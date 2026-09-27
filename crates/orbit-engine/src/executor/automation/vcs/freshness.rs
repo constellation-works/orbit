@@ -439,7 +439,7 @@ fn abort_owned_rebase(workspace_path: &Path) -> Result<(), OrbitError> {
     })
 }
 
-fn rebase_belongs_to_attempt(
+pub(super) fn rebase_belongs_to_attempt(
     workspace_path: &Path,
     head: &str,
     head_sha_before: &str,
@@ -456,7 +456,7 @@ fn rebase_belongs_to_attempt(
     Ok(orig_ok && onto_ok && head_ok)
 }
 
-fn rebase_provenance_summary(workspace_path: &Path) -> String {
+pub(super) fn rebase_provenance_summary(workspace_path: &Path) -> String {
     let orig_head = read_rebase_state(workspace_path, "orig-head")
         .ok()
         .flatten()

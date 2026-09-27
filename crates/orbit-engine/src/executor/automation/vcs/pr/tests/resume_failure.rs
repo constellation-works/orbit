@@ -826,3 +826,232 @@ fn resumed_delivery_tail_preserves_the_published_pr() {
     assert_eq!(git(&workspace.repo, &["rev-parse", "HEAD"]), head_before);
     assert!(host.vcs_calls().is_empty());
 }
+
+/// A task-PR tail whose `sync_base` failure goes straight to the terminal
+/// `pr_failure_handoff`, with no conflict-recovery leaf in between.
+fn sync_base_failure_job() -> JobV2 {
+    let mut job = resumed_pr_job();
+    job.steps = vec![
+        deterministic_step("worktree", "unused_worktree_setup", None),
+        deterministic_step(
+            "prepare_branch",
+            "pr_prepare",
+            Some(json!({
+                "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                "completed_task_ids": [TASK_ID],
+                "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                "base": "agent-main",
+                "base_sync": "local",
+            })),
+        ),
+        deterministic_step(
+            "sync_base",
+            "git_rebase",
+            Some(json!({
+                "job_run_id": "{{ steps.worktree.output.job_run_id }}",
+                "completed_task_ids": [TASK_ID],
+                "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                "head": "{{ steps.prepare_branch.output.head }}",
+                "head_sha": "{{ steps.prepare_branch.output.head_sha }}",
+                "base": "{{ steps.prepare_branch.output.base }}",
+                "base_ref": "{{ steps.prepare_branch.output.base_ref }}",
+                "base_sha": "{{ steps.prepare_branch.output.base_sha }}",
+                "remote_sha": "{{ steps.prepare_branch.output.remote_sha }}",
+                "commits_behind": "{{ steps.prepare_branch.output.commits_behind }}",
+                "sync_required": "{{ steps.prepare_branch.output.sync_required }}",
+            })),
+        ),
+    ];
+    job
+}
+
+fn deliverable_task_owned_by(run_id: &str) -> Task {
+    let mut task = batch_task(
+        TASK_ID,
+        "Synchronize candidate",
+        "Outcome: success\nChanges:\n- Candidate is ready for delivery.",
+    );
+    task.job_run_id = Some(run_id.to_string());
+    task
+}
+
+/// Run [`sync_base_failure_job`] as the task's owning run, resuming after
+/// the worktree checkpoint, and return the authoritative step error.
+fn run_sync_base_failure(host: &ResumeFailureHost, repo: &Path) -> DispatchError {
+    let state = completed_worktree_checkpoint(CHECKPOINT_RUN_ID, repo);
+    host.write_state(state.clone());
+    let writer = Arc::new(V2AuditWriter::new(
+        CHECKPOINT_RUN_ID,
+        "test-agent",
+        Arc::new(NullSink),
+    ));
+    execute_job_with_resume(
+        &sync_base_failure_job(),
+        json!({
+            "task_ids": [TASK_ID],
+            "base_branch": "agent-main",
+            "base_sync": "local",
+        }),
+        CHECKPOINT_RUN_ID,
+        writer,
+        host,
+        Some(&state),
+    )
+    .expect_err("sync_base failure stays authoritative")
+}
+
+fn failure_handoff_output(host: &ResumeFailureHost) -> Value {
+    host.read_run_state(CHECKPOINT_RUN_ID)
+        .expect("read run state")
+        .expect("run state exists")
+        .failure_activity_checkpoint
+        .expect("terminal failure hook ran and was checkpointed")
+        .output
+}
+
+fn advance_agent_main(repo: &Path, file: &str, contents: &str) {
+    git(repo, &["checkout", "agent-main"]);
+    fs::create_dir_all(repo.join(file).parent().expect("parent")).expect("create base dir");
+    fs::write(repo.join(file), contents).expect("write base advance");
+    git(repo, &["add", file]);
+    git(repo, &["commit", "-m", "advance base"]);
+    git(repo, &["checkout", "orbit/test-batch"]);
+}
+
+fn rebase_state_files(repo: &Path) -> Vec<(String, String)> {
+    let dir = repo.join(".git/rebase-merge");
+    let mut files = fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .map(|entry| {
+                    let entry = entry.expect("rebase state entry");
+                    (
+                        entry.file_name().to_string_lossy().into_owned(),
+                        fs::read_to_string(entry.path()).expect("read rebase state"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
+}
+
+#[test]
+fn terminal_handoff_leaves_a_foreign_rebase_refused_by_sync_base_intact() {
+    let workspace = pr_workspace();
+    let repo = &workspace.repo;
+    advance_agent_main(repo, "BASE_ADVANCE.md", "new base\n");
+    let head_before = git(repo, &["rev-parse", "HEAD"]);
+    let onto = git(repo, &["rev-parse", "agent-main"]);
+    // Rebase metadata another actor left behind: it names neither this run's
+    // prepared head SHA nor its branch.
+    let state_dir = repo.join(".git/rebase-merge");
+    fs::create_dir_all(&state_dir).expect("create foreign rebase state");
+    for (name, contents) in [
+        (
+            "orig-head",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n".to_string(),
+        ),
+        ("onto", format!("{onto}\n")),
+        ("head-name", "refs/heads/foreign-branch\n".to_string()),
+        ("git-rebase-todo", String::new()),
+        ("end", "1\n".to_string()),
+        ("msgnum", "1\n".to_string()),
+    ] {
+        fs::write(state_dir.join(name), contents).expect("write foreign rebase state");
+    }
+    fs::write(repo.join("src/lib.rs"), "pub fn staged_foreign() {}\n").expect("stage edit");
+    git(repo, &["add", "src/lib.rs"]);
+    fs::write(repo.join("README.md"), "unstaged foreign edit\n").expect("worktree edit");
+    let rebase_state = rebase_state_files(repo);
+    let index = git(repo, &["ls-files", "--stage"]);
+    let status = git(repo, &["status", "--porcelain"]);
+    let host = ResumeFailureHost::new(
+        PrOpenTestHost::new(
+            vec![deliverable_task_owned_by(CHECKPOINT_RUN_ID)],
+            repo.clone(),
+        )
+        .with_job_run(CHECKPOINT_RUN_ID, None),
+    );
+
+    let error = run_sync_base_failure(&host, repo);
+
+    assert!(
+        error.to_string().contains("pre-existing rebase"),
+        "sync_base refuses the foreign rebase first: {error}"
+    );
+    let handoff = failure_handoff_output(&host);
+    assert_eq!(handoff["decision"], json!("foreign_rebase_refused"));
+    assert!(
+        handoff["rebase_provenance"]
+            .as_str()
+            .is_some_and(|provenance| provenance.contains("refs/heads/foreign-branch")),
+        "the refusal records the foreign provenance: {handoff}"
+    );
+    assert_eq!(
+        rebase_state_files(repo),
+        rebase_state,
+        "the terminal hook must not abort or rewrite foreign rebase metadata"
+    );
+    assert_eq!(git(repo, &["ls-files", "--stage"]), index, "index kept");
+    assert_eq!(git(repo, &["status", "--porcelain"]), status, "edits kept");
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).expect("read worktree edit"),
+        "unstaged foreign edit\n"
+    );
+    assert_eq!(git(repo, &["rev-parse", "HEAD"]), head_before);
+    assert!(
+        host.inner.vcs_calls().is_empty(),
+        "a refused foreign rebase is neither pushed nor published"
+    );
+    assert_eq!(host.inner.task_status(TASK_ID), TaskStatus::Blocked);
+    let (_, update) = host
+        .inner
+        .automation_updates()
+        .into_iter()
+        .find(|(_, update)| update.status == Some(TaskStatus::Blocked))
+        .expect("the refusal is recorded on the task");
+    assert_eq!(
+        update.status_event.as_deref(),
+        Some("pr_foreign_rebase_refused")
+    );
+}
+
+#[test]
+fn terminal_handoff_aborts_the_conflicted_rebase_its_sync_base_started() {
+    let workspace = rebase_conflict_pr_workspace();
+    let repo = &workspace.repo;
+    let pre_rebase_sha = git(repo, &["rev-parse", "HEAD"]);
+    let host = ResumeFailureHost::new(
+        PrOpenTestHost::new(
+            vec![deliverable_task_owned_by(CHECKPOINT_RUN_ID)],
+            repo.clone(),
+        )
+        .with_job_run(CHECKPOINT_RUN_ID, None),
+    );
+
+    let error = run_sync_base_failure(&host, repo);
+
+    assert!(
+        matches!(error, DispatchError::RecoverableVcsConflict { .. }),
+        "the owned rebase stops on the fixture conflict: {error}"
+    );
+    let handoff = failure_handoff_output(&host);
+    assert_eq!(handoff["decision"], json!("blocked_conflict_pr"));
+    assert_eq!(handoff["conflicting_paths"], json!(["src/lib.rs"]));
+    assert!(
+        !repo.join(".git/rebase-merge").exists() && !repo.join(".git/rebase-apply").exists(),
+        "the rebase this run started is aborted"
+    );
+    assert_eq!(git(repo, &["rev-parse", "HEAD"]), pre_rebase_sha);
+    assert!(git(repo, &["status", "--porcelain"]).is_empty());
+    assert!(
+        host.inner
+            .vcs_calls()
+            .iter()
+            .any(|call| call.operation == PR_CREATE_OPERATION),
+        "the owned candidate is published as a blocked PR"
+    );
+    assert_eq!(host.inner.task_status(TASK_ID), TaskStatus::Blocked);
+}
