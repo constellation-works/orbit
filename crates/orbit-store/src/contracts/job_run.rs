@@ -124,6 +124,23 @@ pub trait JobRunStoreBackend: Send + Sync {
     ) -> Result<JobRun, OrbitError> {
         Err(OrbitError::Store("resume admission unavailable".into()))
     }
+    /// Atomically resolve or admit a run submitted under a caller retry key.
+    ///
+    /// The key is the string `params.input[params.retry_key_field]`. Within
+    /// the newest `params.scan_limit` runs of `params.job_id` (newest first),
+    /// the first whose input carries the same key is returned as
+    /// [`KeyedJobRunAdmission::Existing`] and nothing is written. Otherwise a
+    /// fresh pending run is inserted and returned as
+    /// [`KeyedJobRunAdmission::Admitted`]. The probe and the insert share one
+    /// immediate transaction, so concurrent submissions of one key from any
+    /// process admit exactly one run. A key older than the window is not
+    /// recognized: the key is a retry handle, not a permanent constraint.
+    fn insert_keyed_job_run(
+        &self,
+        _params: &KeyedJobRunParams,
+    ) -> Result<KeyedJobRunAdmission, OrbitError> {
+        Err(OrbitError::Store("keyed job admission unavailable".into()))
+    }
     /// Atomically admit and link a child run unless its parent has stopped
     /// admissions.
     ///
@@ -237,6 +254,29 @@ pub struct ChildJobRunAdmissionParams {
 pub enum ChildJobRunAdmissionOutcome {
     Admitted(Box<JobRun>),
     AdmissionsStopped,
+}
+
+/// One keyed top-level submission; see
+/// [`JobRunStoreBackend::insert_keyed_job_run`].
+#[derive(Debug, Clone)]
+pub struct KeyedJobRunParams {
+    pub job_id: String,
+    /// Input field whose string value is the retry key. It must be present
+    /// and non-blank so the admitted run is visible to later probes.
+    pub retry_key_field: String,
+    /// How many of the job's newest runs the key is matched against.
+    pub scan_limit: usize,
+    pub scheduled_at: DateTime<Utc>,
+    pub input: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyedJobRunAdmission {
+    /// No run in the window carried the key; this one was inserted.
+    Admitted(Box<JobRun>),
+    /// The newest run in the window already carrying the key. Nothing was
+    /// written.
+    Existing(Box<JobRun>),
 }
 
 #[derive(Debug, Clone)]

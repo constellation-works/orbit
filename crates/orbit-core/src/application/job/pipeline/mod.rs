@@ -22,7 +22,7 @@ use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
     AuditEventInsertParams, ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams,
-    JobRunStepParams, TaskReservationReleaseReason,
+    JobRunStepParams, KeyedJobRunAdmission, KeyedJobRunParams, TaskReservationReleaseReason,
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
@@ -58,7 +58,7 @@ mod wait;
 mod worker;
 
 pub(crate) use admission::input_hash;
-pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
+pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
 pub(crate) use wait::{PIPELINE_WAIT_MAX_TIMEOUT_SECONDS, PipelineWaitClock};

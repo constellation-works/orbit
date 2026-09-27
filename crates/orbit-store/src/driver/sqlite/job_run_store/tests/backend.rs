@@ -12,6 +12,7 @@ use super::super::SqliteJobRunStore;
 use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunStepParams, JobRunStoreBackend,
+    KeyedJobRunAdmission, KeyedJobRunParams,
 };
 
 #[test]
@@ -1189,4 +1190,119 @@ fn concurrent_resume_inserts_of_one_source_admit_exactly_one_run() {
     }
     let resumes = seed.job_run_retries(&source, 100).expect("retries");
     assert_eq!(resumes.len(), 1, "one resume persisted: {resumes:?}");
+}
+
+fn keyed(job_id: &str, key: &str, scan_limit: usize) -> KeyedJobRunParams {
+    KeyedJobRunParams {
+        job_id: job_id.to_string(),
+        retry_key_field: "idempotency_key".to_string(),
+        scan_limit,
+        scheduled_at: Utc::now(),
+        input: serde_json::json!({ "prompt": "why", "idempotency_key": key }),
+    }
+}
+
+/// [ORB-13560] Concurrent keyed submissions from independent connections
+/// admit exactly one run, and every racer is handed that run.
+#[test]
+fn concurrent_keyed_inserts_of_one_key_admit_exactly_one_run() {
+    const RACERS: usize = 8;
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("orbit.db");
+    let seed = SqliteJobRunStore::new(Store::open(&db_path).expect("seed store"), "ws_a");
+    let backends = (0..RACERS)
+        .map(|_| SqliteJobRunStore::new(Store::open(&db_path).expect("racer store"), "ws_a"))
+        .collect::<Vec<_>>();
+    let barrier = Arc::new(Barrier::new(RACERS));
+
+    let racers = backends
+        .into_iter()
+        .map(|backend| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                backend.insert_keyed_job_run(&keyed("job-keyed", "incident-1", 200))
+            })
+        })
+        .collect::<Vec<_>>();
+    let outcomes = racers
+        .into_iter()
+        .map(|racer| racer.join().expect("racer thread").expect("keyed insert"))
+        .collect::<Vec<_>>();
+
+    let admitted = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            KeyedJobRunAdmission::Admitted(run) => Some(run.run_id.clone()),
+            KeyedJobRunAdmission::Existing(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(admitted.len(), 1, "exactly one racer admits: {outcomes:?}");
+    for outcome in &outcomes {
+        let (KeyedJobRunAdmission::Admitted(run) | KeyedJobRunAdmission::Existing(run)) = outcome;
+        assert_eq!(run.run_id, admitted[0], "every racer resolves the winner");
+    }
+    assert_eq!(seed.list_job_runs("job-keyed").expect("runs").len(), 1);
+}
+
+/// [ORB-13560] Keys are scoped to one job, independent of each other, and
+/// matched only over the bounded window of that job's newest runs.
+#[test]
+fn keyed_insert_is_scoped_to_its_job_key_and_window() {
+    let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+    let KeyedJobRunAdmission::Admitted(first) = backend
+        .insert_keyed_job_run(&keyed("job-keyed", "incident-1", 2))
+        .expect("first")
+    else {
+        panic!("an unseen key admits");
+    };
+    assert!(matches!(
+        backend.insert_keyed_job_run(&keyed("job-keyed", "incident-1", 2)).expect("retry"),
+        KeyedJobRunAdmission::Existing(run) if run.run_id == first.run_id
+    ));
+    assert!(
+        matches!(
+            backend
+                .insert_keyed_job_run(&keyed("job-other", "incident-1", 2))
+                .expect("other job"),
+            KeyedJobRunAdmission::Admitted(_)
+        ),
+        "a key is scoped to its job"
+    );
+    assert!(
+        matches!(
+            backend
+                .insert_keyed_job_run(&keyed("job-keyed", "incident-2", 2))
+                .expect("other key"),
+            KeyedJobRunAdmission::Admitted(_)
+        ),
+        "a different key is independent"
+    );
+    // A newer unkeyed run pushes the first out of a two-run window.
+    backend
+        .insert_job_run("job-keyed", 1, Utc::now(), None, None)
+        .expect("unkeyed run");
+    assert!(
+        matches!(
+            backend.insert_keyed_job_run(&keyed("job-keyed", "incident-1", 2)).expect("aged key"),
+            KeyedJobRunAdmission::Admitted(run) if run.run_id != first.run_id
+        ),
+        "a key older than the window is not recognized"
+    );
+}
+
+#[test]
+fn keyed_insert_refuses_input_without_its_key() {
+    let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+    let mut params = keyed("job-keyed", "  ", 200);
+    assert!(matches!(
+        backend.insert_keyed_job_run(&params),
+        Err(orbit_common::OrbitError::InvalidInput(_))
+    ));
+    params.input = serde_json::json!({ "prompt": "why" });
+    assert!(matches!(
+        backend.insert_keyed_job_run(&params),
+        Err(orbit_common::OrbitError::InvalidInput(_))
+    ));
+    assert!(backend.list_job_runs("job-keyed").expect("runs").is_empty());
 }

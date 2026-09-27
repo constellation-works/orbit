@@ -53,7 +53,7 @@ pub(super) fn invoke(
         )?),
     };
     match result {
-        ChildSubmission::Submitted(result) => {
+        ChildSubmission::Submitted(result) | ChildSubmission::Resolved(result) => {
             serde_json::to_value(result).map_err(serialize_error("serialize pipeline invoke"))
         }
         ChildSubmission::Skipped(reason) => Ok(serde_json::json!({

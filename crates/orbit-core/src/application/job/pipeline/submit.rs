@@ -26,6 +26,8 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) resume: Option<&'a ResumePlan>,
     pub(crate) actor: Option<&'a str>,
     pub(crate) action_key: Option<&'a str>,
+    /// Caller retry key admitted atomically with the run [ORB-13560].
+    pub(crate) retry_key: Option<RetryKey<'a>>,
     /// Whether this submission is the canonical trusted-host admission
     /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
     /// input; every other submission is refused for supplying it.
@@ -34,10 +36,23 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) trigger: JobRunTrigger,
 }
 
+/// Where a keyed submission's retry key lives and how far back it is matched.
+///
+/// The key is the string at `input[field]`; it is matched against the job's
+/// newest `scan_limit` runs in the same store transaction that would insert.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RetryKey<'a> {
+    pub(crate) field: &'a str,
+    pub(crate) scan_limit: usize,
+}
+
 /// What a parent-authorized child submission produced.
 #[derive(Debug, Clone)]
 pub(crate) enum ChildSubmission {
     Submitted(PipelineInvokeResult),
+    /// A keyed submission resolved the run an earlier submission of the same
+    /// retry key admitted. Nothing was written and no worker was spawned.
+    Resolved(PipelineInvokeResult),
     /// The atomic admission refused the child; `reason` is
     /// `admissions_stopped`.
     Skipped(String),
@@ -46,7 +61,9 @@ pub(crate) enum ChildSubmission {
 impl ChildSubmission {
     pub(super) fn run_id(&self) -> Option<&str> {
         match self {
-            ChildSubmission::Submitted(result) => Some(result.run_id.as_str()),
+            ChildSubmission::Submitted(result) | ChildSubmission::Resolved(result) => {
+                Some(result.run_id.as_str())
+            }
             ChildSubmission::Skipped(_) => None,
         }
     }
@@ -63,6 +80,7 @@ impl<'a> PipelineSubmission<'a> {
             resume: None,
             actor,
             action_key: None,
+            retry_key: None,
             trusted_host: false,
             trigger: JobRunTrigger::cli(),
         }
