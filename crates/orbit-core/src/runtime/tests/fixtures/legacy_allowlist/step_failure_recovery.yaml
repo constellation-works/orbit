@@ -263,18 +263,10 @@ spec:
     - pr_url: string or null
     - task_moved_to_review: boolean
     - friction_id: string or null
-  tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.delete
-    - orbit.auto_task.mint
-    - orbit.auto_task.toggle
-    - orbit.auto_task.update
-    - orbit.command.exec
-    - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.workers
-    - orbit.workflow.ship
+  tools:
+    - orbit.task.*
+    - orbit.friction.*
+    - proc.spawn
   proc_allowed_programs:
     - git
     - gh

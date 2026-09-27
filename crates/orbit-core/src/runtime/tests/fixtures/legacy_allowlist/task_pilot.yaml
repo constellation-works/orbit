@@ -328,24 +328,11 @@ spec:
     Define `evidence_gaps` as rating-changing unknowns only, leaving it empty
     for `high` confidence, and never populate it with unexecuted validation
     checks or read-only lane limitations.
-  tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.delete
-    - orbit.auto_task.mint
-    - orbit.auto_task.toggle
-    - orbit.auto_task.update
-    - orbit.command.exec
-    - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.workers
-    - orbit.workflow.ship
-    - orbit.task.add
-    - orbit.task.update
-    - orbit.task.artifact.put
-    - orbit.friction.add
-    - orbit.friction.update
-    - orbit.friction.rehome
+  tools:
+    - orbit.task.show
+    - orbit.task.list
+    - orbit.search
+    - proc.spawn
   proc_allowed_programs:
     - git
     - rg
