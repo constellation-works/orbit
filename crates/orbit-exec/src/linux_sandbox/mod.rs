@@ -37,6 +37,17 @@ pub use write_grants::{
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
 };
 
+/// Every existing path matched by any of `rules`: absolute globs in the
+/// profile grammar, resolved canonically from one walk per search root.
+///
+/// A kernel ruleset binds inodes, so a caller compiling one from glob rules
+/// needs the paths those rules name today: the plugin backend's boundary
+/// ([`crate::linux_landlock::LandlockBoundary::read_exclusions`]) and the
+/// write roots a brokered backend may keep.
+pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
+    expand_rules(rules)
+}
+
 use argv::base_namespace_args;
 use mounts::{
     append_cargo_download_cache_mounts, append_stable_toolchain_mounts, cargo_home_dir,

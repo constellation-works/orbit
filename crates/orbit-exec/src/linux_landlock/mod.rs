@@ -196,6 +196,19 @@ pub struct LandlockBoundary {
     /// [`Self::read`] that sits inside a denied directory grants that one
     /// file and nothing else beside it.
     pub read_denies: Vec<PathBuf>,
+    /// Absolute glob rules, in the profile grammar, naming paths beneath
+    /// [`Self::read`] the child must not read: the read exclusions of the
+    /// agent run a brokered backend serves (design
+    /// `docs/design/plugins/2_agent_call_broker.md` §5). Carved out the way
+    /// the activity ruleset carves an agent's own exclusions: the directory
+    /// holding an excluded path stays listable, the path itself keeps no
+    /// readable ancestor, and a read root at or beneath one is not granted.
+    ///
+    /// An exact or `<path>/**` rule is carved whether or not its path exists,
+    /// so it holds for a name created after spawn. A rule with a wildcard is
+    /// carved at the paths it matches when the ruleset is compiled; a name it
+    /// matches afterwards is not held, and the spawn reports that rule.
+    pub read_exclusions: Vec<String>,
     /// Directories or files the child may also modify. A directory that does
     /// not exist yet is created before spawn: the grant names it, and a rule
     /// cannot bind to an inode that is not there.
@@ -243,11 +256,15 @@ pub fn linux_landlock_boundary_grants(
         .iter()
         .map(|path| crate::path_identity::physical_with_missing_tail(path))
         .collect();
+    let excluded = read_exclusion_paths(&boundary.read_exclusions, &boundary.read)?;
     for root in &boundary.read {
         let Some(path) = existing_canonical(root) else {
             continue;
         };
-        grants.extend(workspace::carve_out_unlistable(&path, &denied)?);
+        if excluded.iter().any(|excluded| path.starts_with(excluded)) {
+            continue;
+        }
+        grants.extend(workspace::carve_out_boundary(&path, &denied, &excluded)?);
     }
     for root in &boundary.write {
         // The same resolution the grant was validated under, materialised
@@ -277,6 +294,51 @@ pub fn linux_landlock_boundary_grants(
         grants.push(LandlockPathGrant::write_file(path));
     }
     Ok(dedupe(grants))
+}
+
+/// The paths [`LandlockBoundary::read_exclusions`] names now: an exact or
+/// subtree rule's own path, present or not, and every existing match of a
+/// wildcard rule that can reach a read root. A wildcard rule whose literal
+/// prefix shares no line of descent with any root carves nothing, so its tree
+/// is not walked.
+fn read_exclusion_paths(
+    rules: &[String],
+    read: &[PathBuf],
+) -> Result<BTreeSet<PathBuf>, OrbitError> {
+    let roots: Vec<PathBuf> = read
+        .iter()
+        .map(|root| crate::path_identity::physical_with_missing_tail(root))
+        .collect();
+    let mut excluded = BTreeSet::new();
+    let mut wildcard = Vec::new();
+    for rule in rules {
+        let body = rule.strip_suffix("/**").unwrap_or(rule);
+        if body.contains(['*', '?']) {
+            let literal = &rule[..rule.find(['*', '?']).unwrap_or(rule.len())];
+            let prefix = Path::new(&literal[..literal.rfind('/').unwrap_or(0).max(1)]);
+            if roots
+                .iter()
+                .any(|root| root.starts_with(prefix) || prefix.starts_with(root))
+            {
+                wildcard.push(rule.clone());
+            }
+        } else {
+            excluded.insert(crate::path_identity::physical_with_missing_tail(Path::new(
+                body,
+            )));
+        }
+    }
+    if wildcard.is_empty() {
+        return Ok(excluded);
+    }
+    excluded.extend(crate::linux_sandbox::existing_glob_matches(&wildcard)?);
+    tracing::warn!(
+        target: "orbit.sandbox.landlock",
+        exclusions = wildcard.join(" ").as_str(),
+        "landlock holds these read exclusions for the paths they match at spawn; a name they \
+         match that is created afterwards is not carved out",
+    );
+    Ok(excluded)
 }
 
 /// Spawn `req` confined to an explicit boundary.

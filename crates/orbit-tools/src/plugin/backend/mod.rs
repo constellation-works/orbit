@@ -29,11 +29,13 @@ use super::loader::physical_with_missing_tail;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext, upsert_env};
 
+mod brokered;
 mod execution;
 mod model;
 mod programs;
 mod sandbox;
 
+pub use self::brokered::*;
 pub use self::model::*;
 pub use self::programs::*;
 pub use self::sandbox::*;

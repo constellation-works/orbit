@@ -8,13 +8,15 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, F2026-09-230]
-last_updated: 2026-09-26
+last_updated: 2026-09-27
 last_validated: 2026-09-26
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
 
-Status: proposal. Nothing here is implemented; the follow-up tasks listed at the end deliver it.
+Status: proposal, partly implemented. The §5 profile compilation exists
+(`PluginBackendSpec::brokered_sandbox_profile`); nothing calls it until the broker and forwarding
+slices land. The follow-up tasks listed at the end deliver the rest.
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
@@ -273,6 +275,35 @@ On Linux the backend still runs under Landlock with no Bubblewrap wrapper
 so the write intersection is computed when the ruleset is compiled. On macOS the intersection
 is compiled into one SBPL profile. The compiler stays `compile_macos_sandbox_profile`, fed the
 intersected roots.
+
+**As implemented.** `PluginBackendSpec::brokered_sandbox_profile` takes a `BrokeredCaller`: the
+run's worktree, the resolved profile the agent was sandboxed with (including the absolute
+runtime write roots the host appends for its nested `orbit`), and its `proc.spawn` allowlist.
+It returns the plugin profile with these changes:
+
+- A write root or store file is kept only if the caller's `modify` rules allow it, evaluated
+  last-match-wins at that path. It is also dropped when an exact or subtree exclusion names a
+  path beneath it, or a wildcard exclusion already matches one there. A kernel write grant
+  cannot carve such a path out of a writable tree. Each drop is logged. Roots at or beneath
+  `{{plugin_state}}` are exempt.
+- A read root at or beneath a caller read exclusion or a default credential location is
+  dropped. The credential locations join the host read denies. The caller's read exclusions
+  are carried as absolute globs.
+- A declared program that is not on the caller's allowlist refuses the call, as
+  `enforce_programs` does for any restricted caller.
+
+Landlock carves each read exclusion out beneath every remaining read root. The directory that
+holds an excluded path stays listable, as in the activity ruleset. An exact or subtree
+exclusion holds even for a name created after spawn. A wildcard exclusion (`**/.env`) is held
+only at the paths it matches when the ruleset is compiled. The same limit applies to a wildcard
+`modify` exclusion inside a kept write root, and both gaps are logged at spawn. The Bubblewrap
+agent has the same limit for a name created after spawn.
+
+The seatbelt profile replays the caller's `modify` rules in their own order, after the
+plugin's grants. Each exclusion is replayed as written. Each grant is clipped to the roots the
+backend kept, so a root the agent re-allows beneath an exclusion stays writable and nothing
+else is re-allowed. `{{plugin_state}}` is re-allowed last. Read exclusions follow the default
+credential denies. Without a caller, both lists are empty and the profile is unchanged.
 
 A backend that runs unsandboxed (`backend.sandbox: none`, `unsandboxed` grant) runs on the host
 without restrictions, as it does from a clock tick. The operator already accepted that when

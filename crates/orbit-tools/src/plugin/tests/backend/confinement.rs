@@ -561,6 +561,7 @@ fn the_landlock_ruleset_refuses_every_denied_orbit_path() {
     };
     let boundary = LandlockBoundary {
         read_denies: profile.read_denies.clone(),
+        read_exclusions: Vec::new(),
         read: profile.read.clone(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
@@ -665,6 +666,7 @@ fn the_landlock_ruleset_hides_callback_sessions_and_grant_witnesses() {
     let boundary = LandlockBoundary {
         read: profile.read.clone(),
         read_denies: profile.read_denies.clone(),
+        read_exclusions: Vec::new(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
         deny_tcp: true,
@@ -770,6 +772,7 @@ fn the_landlock_ruleset_hides_the_plugin_secret_store() {
     let boundary = LandlockBoundary {
         read: profile.read.clone(),
         read_denies: profile.read_denies.clone(),
+        read_exclusions: Vec::new(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
         deny_tcp: true,

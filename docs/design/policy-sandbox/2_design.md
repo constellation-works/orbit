@@ -3,7 +3,7 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-09-10
+last_updated: 2026-09-27
 last_validated: 2026-09-21
 status: Draft
 feature: policy-sandbox
@@ -173,6 +173,8 @@ A plugin backend has no activity profile and no Bubblewrap wrapper: the operator
 
 - **Writes are handled here.** The ruleset additionally takes over `WRITE_FILE | REMOVE_* | MAKE_* | TRUNCATE`, so a path without a write grant is read-only to the backend and its descendants. There is no second write answer to reconcile — a plugin backend never runs inside the mount namespace of §7.1, which exists for CLI-backed agents. `TRUNCATE` is masked off below Landlock ABI 3, where the kernel does not know it.
 - **`network: none` is held at the kernel.** `ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP` are handled with no rule, refusing every TCP endpoint. That needs ABI 4; an older kernel fails closed rather than running the backend with the network open. Landlock has no address filter, so `loopback` and `any` both leave TCP open and the filesystem grants remain the boundary the design claims.
+
+A backend the host spawns on an agent's behalf ([plugins agent call broker §5](../plugins/2_agent_call_broker.md#5-confinement-of-a-brokered-backend)) also carries the agent's read exclusions (`LandlockBoundary::read_exclusions`). They are carved out beneath every read root the way this module carves an activity's own exclusions: their directory stays listable, and a read root at or beneath one gets no grant. The host trees in `read_denies` keep no granted ancestor at all. Write roots the agent may not write never reach the boundary, because the profile is compiled down before spawn.
 
 Granted write roots are created before the child spawns, because a rule binds to an inode: a grant naming a directory that does not exist yet would otherwise silently grant nothing. `/dev/null` and the other write-side character devices are always granted, so an ordinary `>/dev/null` in a backend script is not a denial. The full manifest-to-profile mapping, including the macOS half, is in [plugins §4.3](../plugins/1_scope.md#43-sandboxing). [ORB-12736]
 

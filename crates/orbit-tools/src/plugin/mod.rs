@@ -22,11 +22,11 @@ mod tool;
 mod tests;
 
 pub use backend::{
-    DeliveredPluginSecret, DroppedFsRoot, PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR,
-    PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginConfigSection, PluginProgramStatus,
-    PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation, PluginSecretSource,
-    RenderedFsRoots, plugin_grant_witness_relative, program_statuses, render_fs_roots,
-    resolve_declared_programs,
+    BrokeredCaller, DeliveredPluginSecret, DroppedFsRoot, PLUGIN_GRANT_WITNESS_DIR,
+    PLUGIN_SECRET_STORE_DIR, PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginConfigSection,
+    PluginProgramStatus, PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation,
+    PluginSecretSource, RenderedFsRoots, plugin_grant_witness_relative, program_statuses,
+    render_fs_roots, resolve_declared_programs,
 };
 pub use callback::{
     CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV,
