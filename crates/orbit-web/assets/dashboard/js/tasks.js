@@ -2150,12 +2150,12 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     return;
   }
   if (forced && !confirmForcedStatusChange(task, nextStatus)) {
-    if (typeof window.confirm !== "function") {
-      statusFeedback.set(task.id, {
-        kind: "error",
-        text: `status update unavailable: forcing ${task.status} → ${nextStatus} needs a confirmation`,
-      });
-    }
+    statusFeedback.set(task.id, {
+      kind: "error",
+      text: typeof window.confirm === "function"
+        ? "status update cancelled"
+        : `status update unavailable: forcing ${task.status} → ${nextStatus} needs a confirmation`,
+    });
     renderTasks(taskList(context), context);
     return;
   }
@@ -2189,6 +2189,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
     statusFeedback.set(task.id, feedback);
+    expandedTaskIds.delete(task.id);
   } catch (error) {
     statusFeedback.set(task.id, {
       kind: "error",
