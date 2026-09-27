@@ -240,3 +240,83 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
     assert_eq!(binding.job_run_id, "jrun-host");
     assert_eq!(binding.task_id, None, "a step serving no task names none");
 }
+
+/// [ORB-13270] A deterministic step's context says so explicitly: the caller
+/// kind changes, while `proc.spawn` keeps the activity context's empty,
+/// fail-closed list. Nothing is inferred from `proc_allowed_programs`.
+#[test]
+fn a_deterministic_step_context_attests_no_agent_and_keeps_proc_spawn_fail_closed() {
+    use std::sync::{Arc, Mutex};
+
+    use orbit_agent::loop_engine::audit::{AuditSink, NullSink};
+    use orbit_tools::{DeterministicStepPrograms, ToolCaller, ToolContext};
+    use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec};
+    use serde_json::{Value, json};
+
+    use super::super::audit_writer::V2AuditWriter;
+    use super::super::dispatcher::{DispatchError, V2DispatchInput, dispatch_v2_activity};
+    use crate::context::RuntimeHost;
+
+    #[derive(Default)]
+    struct CallerHost {
+        seen: Mutex<Option<ToolContext>>,
+    }
+
+    impl RuntimeHost for CallerHost {
+        fn tool_context_for_activity(
+            &self,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            programs: Option<&[String]>,
+        ) -> ToolContext {
+            ToolContext {
+                proc_allowed_programs: programs.map(<[String]>::to_vec).unwrap_or_default(),
+                proc_spawn_activity_scoped: true,
+                ..ToolContext::default()
+            }
+        }
+
+        fn run_deterministic(
+            &self,
+            _: &str,
+            _: &Value,
+            _: &Value,
+            tool_context: ToolContext,
+        ) -> Result<Value, DispatchError> {
+            *self.seen.lock().expect("seen") = Some(tool_context);
+            Ok(json!({}))
+        }
+    }
+
+    let spec = ActivityV2Spec::Deterministic(DeterministicSpec {
+        action: "plugin.tool_call".to_string(),
+        config: Value::Null,
+    });
+    let sink: Arc<dyn AuditSink> = Arc::new(NullSink);
+    let host = CallerHost::default();
+    dispatch_v2_activity(V2DispatchInput {
+        activity_name: "refresh",
+        spec: &spec,
+        fs_profile: None,
+        input: json!({ "tool": "graph.maintain" }),
+        audit: Arc::new(V2AuditWriter::new("jrun-host", "test", sink)),
+        run_id: "jrun-host",
+        host: Some(&host),
+    })
+    .expect("dispatch");
+    let context = host
+        .seen
+        .lock()
+        .expect("seen")
+        .take()
+        .expect("the step reached the host");
+    assert_eq!(
+        context.caller,
+        ToolCaller::DeterministicStep(DeterministicStepPrograms::default()),
+        "a deterministic activity declares no allowlist, and the dispatching action, not the \
+         dispatcher, supplies the plugin's witnessed grant"
+    );
+    assert!(context.proc_spawn_activity_scoped);
+    assert!(context.proc_allowed_programs.is_empty());
+}

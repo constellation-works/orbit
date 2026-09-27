@@ -652,7 +652,7 @@ reliability view.
 | `network: any` | `network` | TCP left open | `(allow network*)` stands |
 | `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files literally; the unreadable trees stay denied as in the first row |
 | `permissions.env_pass` | `env_pass` | Named vars copied into the allowlisted child env via `allowlisted_child_env`; `ORBIT_*` names are refused by `validate_structure`, so `ORBIT_OPERATOR` or `ORBIT_WORKSPACE_CLAIM_TOKEN` never reach a child | same |
-| `requires.programs` | — (resolved at enable) | Each program's recorded path as a read-and-execute file, whatever the caller's `PATH`; also checked against a restricted caller's `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | The same path as a read `subpath` (the compiler already allows `process*`) |
+| `requires.programs` | — (resolved at enable) | Each program's recorded path as a read-and-execute file, whatever the caller's `PATH`; also bounded per caller (below) and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | The same path as a read `subpath` (the compiler already allows `process*`) |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset | No `sandbox-exec` wrapper |
 
 **Declared programs.** Landlock executes only out of the caller's `PATH` directories and
@@ -676,6 +676,30 @@ the consenting operator's `PATH`:
   `orbit plugin doctor` reports every program of an active plugin that will not be granted,
   including those with no recorded path (unresolved at enable, or enabled by an Orbit that did
   not record them).
+
+**Who bounds the declared programs.** Before a call runs, every `requires.programs` entry is
+checked against a bound chosen by who chose the call. The tool context names the caller kind
+explicitly (`ToolCaller`). The kind is never inferred from an empty or missing
+`proc_allowed_programs`.
+
+- **Agent or unattested caller** (an `agent_loop` activity, the agent call broker, MCP, the
+  CLI). When the caller's context restricts programs, every declared program must be on its
+  `proc.spawn` allowlist, through the gate `proc.spawn` uses. A direct CLI or MCP caller with
+  no restriction imposes none. An activity context with no allowlist denies every program, so
+  an agent whose activity does not allow `git` cannot reach a tool whose plugin declares it.
+- **Deterministic job step** (a `deterministic` activity, such as `plugin.tool_call`). The
+  activity asset fixes the call, and no agent chooses it or its input, so the bound is the
+  operator's grant. `plugin.tool_call` reads the plugin's row and grants witness again for the
+  call (the row must still be enabled, and its grants must match the witness). Each declared
+  program must then have a recorded path that is still granted under the rules above, and the
+  path in the witness read now must equal the one the loaded plugin was built with. When the
+  step's activity declares a program allowlist, the program must also be on it. Deterministic
+  activities declare none today, so the grant alone bounds them. The refusal names the program
+  and the reason. A deterministic action other than `plugin.tool_call` reaches a plugin tool
+  with no witnessed grant, so any declared program is refused.
+- In both cases `proc.spawn` itself keeps the activity's allowlist, which fails closed when
+  absent. A deterministic step widens only what a granted plugin backend may spawn.
+- A plugin that declares no programs is unaffected by either bound.
 
 **The `orbit_tools` inventory.** A callback *is* `orbit tool run`, which needs `config.toml`,
 the recorded install and `workspaces.json`, so the global root and the workspace `.orbit/`
@@ -789,7 +813,8 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   valid plugin keeps the name, a later one is refused with a diagnostic naming both.
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action
   `plugin.tool_call { tool: <ns>.<verb>, input: {…} }` — the only addition to the closed
-  action enums.
+  action enums. Such a step may spawn the plugin's granted `requires.programs` (§4.3), even
+  though its own `proc.spawn` list is empty.
 - Seeded routines and auto-tasks are `enabled: false`; enabling one is the same reviewed edit
   as for a shipped default. Provenance is a `# provenance: plugin:<ns>@<version>` header
   comment, since `RoutineDefinition` and `AutoTaskDefinition` are `deny_unknown_fields`.
@@ -947,9 +972,10 @@ All landed. Extension points the standard opened: `PluginLoader` registers manif
 `PluginBackend::{Exec,Mcp}` replaces the unsandboxed `ExternalTool` path for plugins; one
 skipped `PluginGroup` `Commands` variant carries the derived clap tree; dynamic
 `plugins.<ns>.<key>` config admission; two generic `GOVERNED_OPERATIONS` rows (§4.1);
-`plugin.tool_call` in `DeterministicAction`; a provenance-aware disabled-plugin skip beside
-`RETIRED_ROUTINE_JOBS`; `.orbit-managed-plugin-assets.json`; and one `plugins` dashboard group
-with a generic renderer.
+`plugin.tool_call` in `DeterministicAction`, with the `ToolCaller` kind on `ToolContext` that
+bounds a deterministic step's declared programs by the call-time grant (§4.3); a
+provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
+`.orbit-managed-plugin-assets.json`; and one `plugins` dashboard group with a generic renderer.
 
 ## 7. Phases (each its own PR into agent-main)
 

@@ -246,6 +246,123 @@ fn declared_programs_are_bounded_by_a_restricted_caller() {
     assert_eq!(allowed, Some(""), "always stamped, empty without the grant");
 }
 
+/// [ORB-13270] A deterministic step has no agent allowlist to bound a
+/// plugin's declared programs, so the operator's grant does: each program
+/// must be recorded at consent, still that executable, identical in the
+/// witness re-read for this call, and on the step activity's list when it has
+/// one. An agent context keeps the fail-closed `proc.spawn` bound.
+#[test]
+fn a_deterministic_step_bounds_declared_programs_by_the_call_time_grant() {
+    use std::collections::BTreeMap;
+
+    use crate::{DeterministicStepPrograms, ToolCaller, WitnessedProgramGrant};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let program = temp.path().join("bin/git");
+    std::fs::create_dir_all(program.parent().expect("bin dir")).expect("bin dir");
+    std::fs::write(&program, "#!/bin/sh\n").expect("write program");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod program");
+    }
+    let program = program.canonicalize().expect("canonical program");
+    let recorded = BTreeMap::from([("git".to_string(), program.clone())]);
+
+    let mut declared = (*spec(root.join("bin"), &root, PluginPermissions::default(), &[])).clone();
+    declared.programs = vec!["git".into()];
+    declared.program_paths = recorded.clone();
+
+    let step = |witnessed: Option<Result<BTreeMap<String, PathBuf>, String>>,
+                activity_allowed_programs: Option<Vec<String>>| ToolContext {
+        // The activity context's own `proc.spawn` list stays empty and
+        // scoped: the caller kind, not this list, is what changes.
+        proc_spawn_activity_scoped: true,
+        caller: ToolCaller::DeterministicStep(DeterministicStepPrograms {
+            activity_allowed_programs,
+            witnessed: witnessed.map(|programs| WitnessedProgramGrant {
+                plugin: "demo".into(),
+                programs,
+            }),
+        }),
+        ..context(temp.path())
+    };
+    let refusal = |spec: &PluginBackendSpec, ctx: &ToolContext| {
+        let error = spec
+            .enforce_programs(ctx, "demo.hello")
+            .expect_err("refused");
+        assert!(
+            matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
+            "{error:?}"
+        );
+        let error = error.to_string();
+        assert!(
+            error.contains("'git'"),
+            "the refusal names the program: {error}"
+        );
+        error
+    };
+
+    declared
+        .enforce_programs(&step(Some(Ok(recorded.clone())), None), "demo.hello")
+        .expect("a granted program is allowed to a deterministic step");
+    declared
+        .enforce_programs(
+            &step(Some(Ok(recorded.clone())), Some(vec!["git".into()])),
+            "demo.hello",
+        )
+        .expect("an activity allowlist naming the program admits it");
+
+    refusal(&declared, &step(None, None));
+    let error = refusal(
+        &declared,
+        &step(Some(Err("the row is disabled".into())), None),
+    );
+    assert!(error.contains("the row is disabled"), "{error}");
+    refusal(&declared, &step(Some(Ok(BTreeMap::new())), None));
+    let moved = BTreeMap::from([("git".to_string(), temp.path().join("elsewhere/git"))]);
+    refusal(&declared, &step(Some(Ok(moved)), None));
+    refusal(
+        &declared,
+        &step(Some(Ok(recorded.clone())), Some(vec!["uv".into()])),
+    );
+    let other_plugin = ToolContext {
+        caller: ToolCaller::DeterministicStep(DeterministicStepPrograms {
+            activity_allowed_programs: None,
+            witnessed: Some(WitnessedProgramGrant {
+                plugin: "other".into(),
+                programs: Ok(recorded.clone()),
+            }),
+        }),
+        ..context(temp.path())
+    };
+    refusal(&declared, &other_plugin);
+
+    // Declared but never resolved at consent: refused however the witness reads.
+    let mut unresolved = declared.clone();
+    unresolved.program_paths = BTreeMap::new();
+    refusal(&unresolved, &step(Some(Ok(BTreeMap::new())), None));
+
+    // An agent context with the same grant is still held to its own empty,
+    // activity-scoped `proc.spawn` list.
+    let agent = ToolContext {
+        proc_spawn_activity_scoped: true,
+        ..context(temp.path())
+    };
+    let error = refusal(&declared, &agent);
+    assert!(error.contains("not in the allowed list"), "{error}");
+
+    // A plugin declaring no programs needs no witness at all.
+    let mut none_declared = declared.clone();
+    none_declared.programs = Vec::new();
+    none_declared.program_paths = BTreeMap::new();
+    none_declared
+        .enforce_programs(&step(None, None), "demo.hello")
+        .expect("nothing to bound");
+}
+
 #[test]
 fn env_pass_cannot_forward_a_privilege_bearing_orbit_name_even_if_requested() {
     let temp = tempfile::tempdir().expect("tempdir");

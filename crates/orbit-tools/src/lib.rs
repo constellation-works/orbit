@@ -236,6 +236,51 @@ pub struct ActivityBinding {
     pub task_id: Option<String>,
 }
 
+/// Who chose a tool call, as the host that built the context attests it.
+///
+/// It decides one thing today: what bounds the programs a plugin backend
+/// declares it spawns (`requires.programs`, design
+/// `docs/design/plugins/1_scope.md` §4.3). Tool input never sets it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ToolCaller {
+    /// An agent, an interactive client, or any context no host attested
+    /// otherwise. A plugin's declared programs are held to
+    /// `proc_allowed_programs` exactly as `proc.spawn` is, so an
+    /// activity-scoped context with an empty list denies every one.
+    #[default]
+    Agent,
+    /// A deterministic job step: the activity asset fixed the call, and no
+    /// agent chooses it or its input. A plugin's declared programs are bounded
+    /// by what the operator granted at `orbit plugin enable`, re-read from the
+    /// grants witness for this call, instead of by `proc_allowed_programs`,
+    /// which stays the fail-closed `proc.spawn` list.
+    DeterministicStep(DeterministicStepPrograms),
+}
+
+/// The program bound of a [`ToolCaller::DeterministicStep`] call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeterministicStepPrograms {
+    /// The step activity's own program allowlist, when it declares one; a
+    /// plugin's granted programs are intersected with it. `None` adds no
+    /// bound beyond the grant.
+    pub activity_allowed_programs: Option<Vec<String>>,
+    /// The called plugin's program grant as the dispatching host re-read it.
+    /// `None` until a dispatcher that knows the plugin verified it, which
+    /// refuses every declared program.
+    pub witnessed: Option<WitnessedProgramGrant>,
+}
+
+/// One plugin's program grant, read back from its grants witness at call
+/// time rather than taken from the registry built at load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessedProgramGrant {
+    /// The plugin namespace the witness was read for.
+    pub plugin: String,
+    /// Declared program name → the canonical path recorded at consent, or why
+    /// the host could not verify the grant for this call.
+    pub programs: Result<std::collections::BTreeMap<String, PathBuf>, String>,
+}
+
 #[derive(Clone, Default)]
 pub struct ToolContext {
     pub cwd: Option<String>,
@@ -271,6 +316,9 @@ pub struct ToolContext {
     /// asset omits the key ([ORB-10959]). Only direct CLI / v1 callers leave it
     /// `false`.
     pub proc_spawn_activity_scoped: bool,
+    /// Who chose this call. Only a host that dispatches a deterministic step
+    /// sets anything but [`ToolCaller::Agent`].
+    pub caller: ToolCaller,
     /// Filesystem policy engine used by Orbit-managed agent runtimes.
     pub policy_engine: Option<Arc<PolicyEngine>>,
     /// Active activity fsProfile name. Used by the CLI sandbox compiler and
@@ -309,6 +357,7 @@ impl std::fmt::Debug for ToolContext {
                 "proc_spawn_activity_scoped",
                 &self.proc_spawn_activity_scoped,
             )
+            .field("caller", &self.caller)
             .field("has_policy_engine", &self.policy_engine.is_some())
             .field("fs_profile", &self.fs_profile)
             .field("reservation_owner", &self.reservation_owner)

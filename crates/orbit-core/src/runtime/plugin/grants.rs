@@ -256,6 +256,34 @@ pub fn witnessed_program_paths(
         .map(|witness| witness.programs)
 }
 
+/// The programs `name` may spawn from a call no agent chose — a
+/// deterministic `plugin.tool_call` step — read back now rather than taken
+/// from the registry the runtime built at load [ORB-13270].
+///
+/// The row is read again and must still be enabled and hold the grant set its
+/// witness authorizes ([`verify_recorded_grants`]), so a plugin disabled,
+/// re-scoped or tampered with since load grants nothing. A verified row with
+/// no witness (enabled without `--grant` on an Orbit that did not record
+/// programs) grants no program. `Err` is the diagnostic the refusal names.
+pub fn call_time_program_grants(
+    global_root: &Path,
+    name: &str,
+    installed: Option<&InstalledPlugin>,
+) -> Result<BTreeMap<String, PathBuf>, String> {
+    let Some(installed) = installed.filter(|installed| installed.name == name) else {
+        return Err(format!(
+            "plugin '{name}' is no longer installed on this host"
+        ));
+    };
+    if !installed.enabled {
+        return Err(format!(
+            "plugin '{name}' has been disabled since this runtime loaded it"
+        ));
+    }
+    verify_recorded_grants(global_root, installed)?;
+    Ok(witnessed_program_paths(global_root, installed).unwrap_or_default())
+}
+
 /// Drop the witness when the install goes away, so a later reinstall of the
 /// same namespace starts with no authority rather than the old one.
 pub fn forget_authorized_grants(global_root: &Path, name: &str) {

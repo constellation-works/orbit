@@ -1,4 +1,5 @@
 use super::*;
+use crate::{DeterministicStepPrograms, ToolCaller};
 
 impl PluginBackendSpec {
     pub fn granted(&self, grant: PluginGrant) -> bool {
@@ -388,13 +389,80 @@ impl PluginBackendSpec {
             .collect()
     }
 
-    /// A caller whose own context restricts programs (an activity-scoped
-    /// run) bounds what the plugin may spawn: every program the manifest
-    /// declares must be on the caller's list, checked through the same gate
-    /// `proc.spawn` uses.
+    /// Bound what the plugin may spawn by who chose the call (§4.3).
+    ///
+    /// For an agent or unattested caller, a context that restricts programs
+    /// (an activity-scoped run) bounds it: every program the manifest declares
+    /// must be on the caller's list, checked through the same gate
+    /// `proc.spawn` uses. A deterministic step has no agent to bound, so the
+    /// operator's grant does instead ([`Self::enforce_granted_programs`]).
     pub fn enforce_programs(&self, ctx: &ToolContext, tool_name: &str) -> Result<(), OrbitError> {
-        for program in &self.programs {
-            enforce_program_allowlist(ctx, tool_name, program)?;
+        match &ctx.caller {
+            ToolCaller::Agent => {
+                for program in &self.programs {
+                    enforce_program_allowlist(ctx, tool_name, program)?;
+                }
+                Ok(())
+            }
+            ToolCaller::DeterministicStep(step) => self.enforce_granted_programs(step, tool_name),
+        }
+    }
+
+    /// Every declared program must be granted: recorded at consent, still
+    /// the executable recorded there, recorded identically in the witness the
+    /// dispatcher re-read for this call, and on the step activity's own
+    /// allowlist when it declares one [ORB-13270].
+    fn enforce_granted_programs(
+        &self,
+        step: &DeterministicStepPrograms,
+        tool_name: &str,
+    ) -> Result<(), OrbitError> {
+        let plugin = &self.provenance.name;
+        for status in self.program_statuses() {
+            let program = status.name.as_str();
+            let refuse = |reason: &str| {
+                tracing::warn!(
+                    target: "orbit.policy.deny",
+                    tool = tool_name,
+                    path = program,
+                    profile = "plugin.requires.programs",
+                    matched_rule = reason,
+                );
+                Err(OrbitError::PolicyDenied(format!(
+                    "program '{program}' is not granted to plugin '{plugin}' for a deterministic \
+                     step: {reason}"
+                )))
+            };
+            if let Some(problem) = &status.problem {
+                return refuse(&format!(
+                    "{problem}; re-run `orbit plugin enable {plugin}` where it resolves"
+                ));
+            }
+            let witnessed = match &step.witnessed {
+                Some(grant) if grant.plugin == *plugin => match &grant.programs {
+                    Ok(programs) => programs,
+                    Err(reason) => return refuse(reason),
+                },
+                Some(_) | None => {
+                    return refuse("no grant was verified for this call");
+                }
+            };
+            if witnessed.get(program) != status.path.as_ref() {
+                return refuse(&format!(
+                    "the grant recorded now differs from the one this plugin was loaded with; \
+                     re-run `orbit plugin enable {plugin}` to consent to the current one"
+                ));
+            }
+            if let Some(allowed) = &step.activity_allowed_programs
+                && !allowed.iter().any(|entry| entry == program)
+            {
+                let listed = if allowed.is_empty() {
+                    "<no allowed programs>".to_string()
+                } else {
+                    allowed.join(", ")
+                };
+                return refuse(&format!("the step's activity allows only [{listed}]"));
+            }
         }
         Ok(())
     }
