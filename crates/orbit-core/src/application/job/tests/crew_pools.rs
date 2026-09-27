@@ -1067,7 +1067,7 @@ hard_complexity_crews = ["sol"]
         crew_assigned_notes(&runtime, &created.id),
         vec![
             "assigned crew `astra` from explicit".to_string(),
-            "assigned crew `sol` from pool:hard".to_string(),
+            "crew changed from `astra` to `sol` via pool draw (pool:hard)".to_string(),
         ],
     );
 }
