@@ -77,6 +77,8 @@ impl Fixture {
             ("ORBIT_RUN_ID", Some(DECOY_RUN)),
             ("ORBIT_AGENT_NAME", None),
             ("ORBIT_AGENT_MODEL", None),
+            ("ORBIT_OPERATOR", None),
+            ("ORBIT_TASK_ACTOR_KIND", None),
             (
                 crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV,
                 None,
@@ -598,7 +600,10 @@ fn a_masked_process_without_a_broker_refuses_plugin_calls() {
             None,
             None,
             super::super::execute::ToolEntryPoint::Cli,
-            orbit_types::tool::ToolSessionContext::default(),
+            orbit_types::tool::ToolSessionContext {
+                transport: Some(orbit_types::tool::McpTransport::Local),
+                ..orbit_types::tool::ToolSessionContext::default()
+            },
         )
     };
 
