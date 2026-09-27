@@ -77,3 +77,36 @@ fn task_show_help_advertises_the_authoritative_field_vocabulary() {
         "task show help must not advertise removed docs context:\n{help}"
     );
 }
+
+/// [ORB-13625] A claimed leaf's routed owner read returns the typed value it
+/// asked for. History, comments and task lists are arrays, so decorating them
+/// with the owning workspace would fail every one of them.
+#[test]
+fn worker_reads_are_returned_undecorated() {
+    use crate::command::task::show::attach_bound_workspace_identity;
+    use orbit_cmd::task_owner::WorkspaceIdentity;
+    use serde_json::json;
+
+    let owner = WorkspaceIdentity {
+        id: "ws_orbit".into(),
+        name: "orbit".into(),
+    };
+    let history = json!([{"event": "created"}]);
+    let answered = attach_bound_workspace_identity(
+        "orbit.task.show",
+        &json!({"id": "ORB-1", "_worker_read": "history"}),
+        Some(&owner),
+        history.clone(),
+    )
+    .expect("a worker read passes through");
+    assert_eq!(answered, history);
+
+    let record = attach_bound_workspace_identity(
+        "orbit.task.show",
+        &json!({"id": "ORB-1"}),
+        Some(&owner),
+        json!({"id": "ORB-1"}),
+    )
+    .expect("an ordinary show is decorated");
+    assert_eq!(record["workspace"]["id"], "ws_orbit");
+}
