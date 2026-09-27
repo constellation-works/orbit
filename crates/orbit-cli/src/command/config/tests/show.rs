@@ -552,6 +552,11 @@ enabled = false
 model = "gpt-6-sol"
 provider = "codex"
 effort = "medium"
+
+[crews.grok]
+enabled = false
+model = "grok-4.7"
+provider = "grok"
 "#,
         ),
         None,

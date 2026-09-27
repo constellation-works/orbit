@@ -514,6 +514,7 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
         "effort" => serde_json::json!(crew.assignment.effort),
         "description" => serde_json::json!(crew.description),
         "tags" => serde_json::json!(crew.tags),
+        "enabled" => serde_json::json!(crew.enabled),
         _ => JsonValue::Null,
     }))
 }

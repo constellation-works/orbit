@@ -2,7 +2,8 @@
 //! crew and which is the system crew during `orbit init`.
 //!
 //! Every option comes from the [`ConfigSeed`] the detection step built, so a
-//! prompt can only name a crew the seeded file defines. Recommendations are
+//! prompt can only name a crew the seeded file defines and enables: crews of
+//! an undetected provider are seeded `enabled = false` and are not offered. Recommendations are
 //! the seed's own — the same ones `--non-interactive` writes — so answering
 //! every prompt with Enter produces exactly the non-interactive file.
 
@@ -38,14 +39,14 @@ impl Prompter for StdinPrompter {
 }
 
 /// Choose the seeded crew written as `workflow.default_crew`. Returns `None`
-/// when the seed writes no crews, in which case there is nothing to choose
+/// when the seed enables no crews, in which case there is nothing to choose
 /// and no prompt runs.
 pub fn collect_default_crew(
     detected: &DetectedAgents,
     seed: &ConfigSeed,
     prompter: &mut dyn Prompter,
 ) -> io::Result<Option<String>> {
-    let crews = seed.seeded_crews();
+    let crews = seed.enabled_crews();
     let Some(recommended) = seed.recommended_default_crew() else {
         prompter.message(&no_crew_text(detected))?;
         return Ok(None);
@@ -95,7 +96,7 @@ pub(crate) fn collect_system_crew(
     prompter.message(&format_crew_options(
         "Choose the crew for bounded system work (recovery, task pilot, qa-sweep):",
         &options,
-        &seed.seeded_crews(),
+        &seed.enabled_crews(),
     ))?;
     choose_crew(options, "System crew [1]: ", prompter).map(Some)
 }
@@ -190,7 +191,7 @@ fn intro_text(detected: &DetectedAgents, recommended: &Crew) -> String {
 
 fn no_crew_text(detected: &DetectedAgents) -> String {
     format!(
-        "Detected agents:\n{}\n\nNo agent CLI Orbit ships a crew for was found, so config.toml is written with an empty [crews] registry and no default crew. Define crews under [crews.<name>] and set workflow.default_crew once an agent CLI is installed.",
+        "Detected agents:\n{}\n\nNo agent CLI Orbit ships a crew for was found, so config.toml lists every built-in crew with `enabled = false` and dispatch refuses them. Once an agent CLI is installed, enable its crews with `orbit config set crews.<name>.enabled true` and point workflow.default_crew and workflow.system_crew at enabled crews.",
         detection_lines(detected)
     )
 }

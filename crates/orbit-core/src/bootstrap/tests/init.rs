@@ -616,8 +616,14 @@ fn global_init_writes_chosen_crews_by_name_to_config_toml() {
         .get("crews")
         .and_then(|v| v.as_table())
         .expect("crews table");
+    // Every built-in crew is written; only the detected families are enabled.
+    assert_eq!(crews.len(), 14);
     assert_eq!(
-        crews.keys().map(String::as_str).collect::<Vec<_>>(),
+        crews
+            .iter()
+            .filter(|(_, crew)| crew.get("enabled").and_then(|v| v.as_bool()) == Some(true))
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
         vec!["astra", "fable", "luna", "opus", "sol", "sonnet", "terra"]
     );
     let astra = crews
@@ -685,7 +691,20 @@ fn global_init_without_crew_settings_writes_clean_template() {
             "unexpected uncommented agent section: {line}",
         );
     }
-    assert!(!contents.contains("[crews."));
+    // Nothing detected: every built-in crew is written disabled and no lane
+    // crew is named, so nothing dispatches until an operator enables one.
+    let parsed: toml::Value = toml::from_str(&contents).expect("parse");
+    let crews = parsed
+        .get("crews")
+        .and_then(|v| v.as_table())
+        .expect("crews table");
+    assert!(!crews.is_empty());
+    assert!(
+        crews
+            .values()
+            .all(|crew| crew.get("enabled").and_then(|v| v.as_bool()) == Some(false)),
+        "every seeded crew is disabled:\n{contents}"
+    );
     assert!(!contents.contains("default_crew ="));
     assert!(!contents.contains("system_crew ="));
 }

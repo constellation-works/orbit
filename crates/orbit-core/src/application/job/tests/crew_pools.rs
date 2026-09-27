@@ -1139,3 +1139,101 @@ fn the_in_progress_transition_never_changes_the_crew() {
         "no surface writes a crew_stamped entry any more"
     );
 }
+
+const DISABLED_POOL_CONFIG: &str = r#"
+[workflow]
+default_crew = "opus"
+medium_complexity_crews = ["sol:3", "opus:1"]
+hard_complexity_crews = ["sol", "luna"]
+
+[crews.opus]
+model = "opus"
+provider = "claude"
+
+[crews.sol]
+enabled = false
+model = "gpt-6-sol"
+provider = "codex"
+
+[crews.luna]
+enabled = false
+model = "gpt-6-luna"
+provider = "codex"
+"#;
+
+/// A disabled pool member holds no ticket: every draw lands on an enabled
+/// member, at creation and at admission alike.
+#[test]
+fn a_disabled_crew_is_never_drawn_from_a_pool() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(DISABLED_POOL_CONFIG);
+    let parent = coordinator(&runtime, json!({}));
+    for ticket in 0..8 {
+        let admitted = admit(
+            &runtime,
+            &parent,
+            &task(&runtime, TaskComplexity::Medium, None),
+            ticket,
+        );
+        assert_eq!(admitted["crew"], "opus", "ticket {ticket}");
+        assert_eq!(
+            admitted["crew_selection"]["source"],
+            "workflow.medium_complexity_crews"
+        );
+        assert_eq!(
+            admitted["crew_selection"]["eligible_pool"],
+            json!([{"name": "opus", "weight": 1}]),
+            "the disabled crew is not an eligible member"
+        );
+    }
+    let created = added_task(&runtime, TaskComplexity::Medium, None);
+    assert_eq!(created.crew.as_deref(), Some("opus"));
+}
+
+/// Chosen behaviour for a pool whose members are all disabled: it is treated
+/// like an empty pool and routes to `workflow.default_crew`.
+#[test]
+fn an_all_disabled_pool_falls_through_to_the_default_crew() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(DISABLED_POOL_CONFIG);
+    let parent = coordinator(&runtime, json!({}));
+    let admitted = admit(
+        &runtime,
+        &parent,
+        &task(&runtime, TaskComplexity::Hard, None),
+        0,
+    );
+    assert_eq!(admitted["crew"], "opus");
+    assert_eq!(admitted["crew_selection"]["source"], "default");
+
+    let created = added_task(&runtime, TaskComplexity::Hard, None);
+    assert_eq!(created.crew.as_deref(), Some("opus"));
+    assert_eq!(
+        crew_assigned_notes(&runtime, &created.id),
+        vec!["assigned crew `opus` from default".to_string()],
+    );
+}
+
+/// Admission of a task that names a disabled crew is refused with the crew
+/// and the command that enables it; nothing is substituted.
+#[test]
+fn admission_refuses_a_task_pinned_to_a_disabled_crew() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(DISABLED_POOL_CONFIG);
+    let parent = coordinator(&runtime, json!({}));
+    let pinned = task(&runtime, TaskComplexity::Medium, Some("sol"));
+    let mut input = json!({"task_ids": [pinned.id]});
+    let error = runtime
+        .install_auto_crew_admission(
+            "task_auto_pipeline",
+            &mut input,
+            Some(&parent),
+            false,
+            &mut no_draw,
+        )
+        .expect_err("a disabled task crew is refused")
+        .to_string();
+    assert!(
+        error.contains("crew `sol`, which is disabled")
+            && error.contains("orbit config set crews.sol.enabled true"),
+        "{error}"
+    );
+    assert!(input.get("crew").is_none(), "no crew is substituted");
+}

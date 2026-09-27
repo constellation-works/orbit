@@ -293,6 +293,7 @@ pub(crate) fn build_context_from_roots(
             default_crew,
             runtime_config.complexity_crews.clone(),
             system_crew,
+            runtime_config.system_crew_alias.clone(),
             operation,
             runtime_config.snapshot.worker_containment(),
         ),

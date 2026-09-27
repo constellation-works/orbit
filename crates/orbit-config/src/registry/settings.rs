@@ -462,6 +462,7 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
             },
             description: None,
             tags: Vec::new(),
+            enabled: true,
         },
     )])
 }

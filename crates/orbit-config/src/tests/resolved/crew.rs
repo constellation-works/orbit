@@ -835,3 +835,160 @@ fn an_unknown_custom_system_crew_does_not_fall_back_to_qa() {
         "an unknown custom crew must not be masked by the legacy qa fallback"
     );
 }
+
+/// A config written before `[crews.<name>] enabled` existed carries no such
+/// key. It must resolve exactly as it did: the same crews (all enabled), the
+/// same pools, and the same lane crews — identical to spelling
+/// `enabled = true` on every table.
+#[test]
+fn config_without_enabled_keys_resolves_unchanged() {
+    let legacy = r#"
+[workflow]
+default_crew = "sol"
+system_crew = "luna"
+medium_complexity_crews = ["sol:3", "opus:1"]
+hard_complexity_crews = ["opus"]
+
+[crews.sol]
+model = "gpt-6-sol"
+provider = "codex"
+
+[crews.luna]
+model = "gpt-6-luna"
+provider = "codex"
+effort = "low"
+
+[crews.opus]
+model = "opus"
+provider = "claude"
+tags = ["deep"]
+"#;
+    let explicit = legacy
+        .replace("[crews.sol]\n", "[crews.sol]\nenabled = true\n")
+        .replace("[crews.luna]\n", "[crews.luna]\nenabled = true\n")
+        .replace("[crews.opus]\n", "[crews.opus]\nenabled = true\n");
+
+    let resolved = load_config(legacy).expect("legacy config loads");
+    let enabled = load_config(&explicit).expect("explicitly enabled config loads");
+
+    assert_eq!(
+        resolved
+            .crews
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["luna", "opus", "sol", "system"]
+    );
+    assert!(resolved.crews.values().all(|crew| crew.enabled));
+    assert_eq!(resolved.default_crew.as_deref(), Some("sol"));
+    assert_eq!(resolved.system_crew, "luna");
+    assert_eq!(resolved.system_crew_alias.as_deref(), Some("luna"));
+    assert_eq!(
+        resolved.complexity_crews.medium.as_deref(),
+        Some(&["opus:1".to_string(), "sol:3".to_string()][..])
+    );
+    assert_eq!(
+        resolved.complexity_crews.hard.as_deref(),
+        Some(&["opus".to_string()][..])
+    );
+    assert!(resolved.ignored_crew_properties.is_empty());
+    assert!(resolved.disabled_lane_crews().is_empty());
+
+    assert_eq!(resolved.crews, enabled.crews);
+    assert_eq!(resolved.complexity_crews, enabled.complexity_crews);
+    assert_eq!(resolved.default_crew, enabled.default_crew);
+    assert_eq!(resolved.system_crew, enabled.system_crew);
+
+    // The serialized crew keeps its pre-flag shape while enabled.
+    let sol = serde_json::to_value(&resolved.crews["sol"]).expect("serialize crew");
+    assert!(sol.get("enabled").is_none(), "{sol}");
+}
+
+#[test]
+fn enabled_is_admitted_as_a_bool_and_never_reported_ignored() {
+    let resolved = load_config(
+        r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol", "grok"]
+
+[crews.sol]
+model = "gpt-6-sol"
+provider = "codex"
+
+[crews.grok]
+enabled = false
+model = "grok-4.7"
+provider = "grok"
+"#,
+    )
+    .expect("a disabled crew is valid config, pooled or not");
+    assert!(!resolved.crews["grok"].enabled);
+    assert!(resolved.crews["sol"].enabled);
+    assert!(resolved.ignored_crew_properties.is_empty());
+    assert_eq!(
+        serde_json::to_value(&resolved.crews["grok"]).expect("serialize")["enabled"],
+        serde_json::json!(false)
+    );
+
+    let error = load_config(
+        r#"
+[workflow]
+default_crew = "sol"
+
+[crews.sol]
+enabled = "yes"
+model = "gpt-6-sol"
+provider = "codex"
+"#,
+    )
+    .expect_err("a non-bool enabled fails the load");
+    assert!(error.to_string().contains("expected a boolean"), "{error}");
+}
+
+/// The synthesized `system` entry mirrors its source crew's enabled state,
+/// and both lanes that land on a disabled crew are reported with the table
+/// that enables them.
+#[test]
+fn disabled_lane_crews_name_the_table_that_enables_them() {
+    let resolved = load_config(
+        r#"
+[workflow]
+default_crew = "opus"
+system_crew = "luna"
+
+[crews.opus]
+enabled = false
+model = "opus"
+provider = "claude"
+
+[crews.luna]
+enabled = false
+model = "gpt-6-luna"
+provider = "codex"
+"#,
+    )
+    .expect("config loads even when both lanes are disabled");
+    assert!(!resolved.crews["system"].enabled);
+    let lanes = resolved.disabled_lane_crews();
+    assert_eq!(
+        lanes
+            .iter()
+            .map(|lane| (lane.key, lane.crew.as_str(), lane.enable_target.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("workflow.default_crew", "opus", "opus"),
+            ("workflow.system_crew", "luna", "luna"),
+        ]
+    );
+    assert_eq!(
+        lanes[1].remediation(),
+        "orbit config set crews.luna.enabled true (or point workflow.system_crew at an enabled crew)"
+    );
+    let message = crate::disabled_crew_message("system", Some("luna"));
+    assert!(
+        message.contains("crew `system`, which mirrors crew `luna`")
+            && message.contains("orbit config set crews.luna.enabled true"),
+        "{message}"
+    );
+}

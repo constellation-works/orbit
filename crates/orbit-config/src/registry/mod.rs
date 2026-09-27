@@ -48,8 +48,14 @@ const CONSTELLATION_DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER
 ///
 /// The crew name is not known at compile time, so these are not registry
 /// rows. `orbit config keys` still lists only the fixed settings.
-pub(crate) const CREW_CONFIG_FIELDS: &[&str] =
-    &["description", "effort", "model", "provider", "tags"];
+pub(crate) const CREW_CONFIG_FIELDS: &[&str] = &[
+    "description",
+    "effort",
+    "enabled",
+    "model",
+    "provider",
+    "tags",
+];
 
 /// One live field on a named crew, as used by `orbit config get`/`set`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

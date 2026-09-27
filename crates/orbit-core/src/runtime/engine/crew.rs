@@ -180,6 +180,8 @@ pub struct ConfiguredCrewProjection {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub is_default: bool,
+    /// Whether dispatch may run the crew (`[crews.<name>] enabled`).
+    pub enabled: bool,
 }
 
 impl ConfiguredCrewProjection {
@@ -191,6 +193,7 @@ impl ConfiguredCrewProjection {
             description: crew.description.clone(),
             tags: crew.tags.clone(),
             is_default,
+            enabled: crew.enabled,
         }
     }
 }
@@ -346,11 +349,58 @@ impl OrbitRuntime {
             .map_err(Into::into)
     }
 
+    /// Resolve the crew a dispatch will run, refusing a disabled one.
+    ///
+    /// Every path that launches a provider — task start, run and activity
+    /// dispatch, the system lane, pool candidates — resolves through here, so
+    /// a crew with `enabled = false` is refused with the table and command
+    /// that enable it. There is no fallback to another crew: an operator who
+    /// disabled a provider did not ask Orbit to spend a different one.
     pub fn resolve_crew_for_task(
         &self,
         cli_override: Option<&str>,
         task_crew: Option<&str>,
     ) -> Result<Crew, OrbitError> {
+        let (crew, source) = self.select_configured_crew(cli_override, task_crew)?;
+        if crew.enabled {
+            return Ok(crew);
+        }
+        // Only the synthesized `system` entry carries an alias, so any other
+        // crew name is its own table.
+        let mirrors = self
+            .context
+            .settings()
+            .system_crew_alias()
+            .filter(|_| crew.name == "system");
+        let origin = match source {
+            ProviderSource::TaskConfig => "task.crew selects ",
+            ProviderSource::WorkspaceDefault => "workflow.default_crew selects ",
+            _ => "",
+        };
+        Err(OrbitError::InvalidInput(format!(
+            "{origin}{}",
+            orbit_config::disabled_crew_message(&crew.name, mirrors)
+        )))
+    }
+
+    /// Look up the crew a task names, or the configured default, without the
+    /// enabled check. For read surfaces and material fingerprints only: they
+    /// describe the configured crew, disabled or not, and must never launch
+    /// it.
+    pub fn lookup_crew_for_task(
+        &self,
+        cli_override: Option<&str>,
+        task_crew: Option<&str>,
+    ) -> Result<Crew, OrbitError> {
+        self.select_configured_crew(cli_override, task_crew)
+            .map(|(crew, _)| crew)
+    }
+
+    fn select_configured_crew(
+        &self,
+        cli_override: Option<&str>,
+        task_crew: Option<&str>,
+    ) -> Result<(Crew, ProviderSource), OrbitError> {
         // Runtime precedence is explicit > task_config > the default projected
         // by RuntimeConfig. That projection has already resolved workspace >
         // environment > system-default precedence, so lower tiers are not
@@ -363,13 +413,14 @@ impl OrbitRuntime {
             None,
         );
 
-        let Some((selected, _source)) = selection else {
+        let Some((selected, source)) = selection else {
             return Err(OrbitError::InvalidInput(
                 "no crew selected; set [workflow].default_crew, task.crew, or pass crew"
                     .to_string(),
             ));
         };
-        resolve_crew(selected, self.context.settings().crews()).map_err(Into::into)
+        let crew = resolve_crew(selected, self.context.settings().crews())?;
+        Ok((crew, source))
     }
 
     pub(crate) fn resolve_crew_for_run_input(&self, input: &Value) -> Result<Crew, OrbitError> {
@@ -413,7 +464,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
 
-        self.resolve_crew_for_task(None, task.crew.as_deref())
+        self.lookup_crew_for_task(None, task.crew.as_deref())
             .map(ResolvedCrewProjection::from_crew)
             .map(Some)
     }

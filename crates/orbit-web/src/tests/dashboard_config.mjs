@@ -16,7 +16,7 @@ let refusal = null;
 const effective = () => ({
   scope: 'effective',
   config_set: { authorized: true, reason: null },
-  crew_fields: ['provider', 'model', 'effort', 'tags', 'description'],
+  crew_fields: ['enabled', 'provider', 'model', 'effort', 'tags', 'description'],
   workspace_file_exists: true,
   write_scope_default: 'workspace',
   layers: {
@@ -126,7 +126,8 @@ const effective = () => ({
     { token: 'housekeeping', title: 'Housekeeping', blurb: 'logs, scoring, ids, and PR links', key_prefix: null, kind: 'keys', counts: { set: 0, default: 0, unset: 0, total: 0 }, not_inherited: 0, keys: [] },
   ],
   crews: [
-    { name: 'opus', provider: 'claude', model: 'opus', effort: null, tags: [], description: null, source: 'built-in', referenced_by: ['workflow.default_crew'] },
+    { name: 'opus', enabled: true, provider: 'claude', model: 'opus', effort: null, tags: [], description: null, source: 'built-in', referenced_by: ['workflow.default_crew'] },
+    { name: 'grok', enabled: false, provider: 'grok', model: 'grok-4.7', effort: null, tags: [], description: null, source: 'workspace', referenced_by: [] },
   ],
   paths: [{ label: 'global root', value: '/home/op/.orbit' }],
 });
@@ -185,6 +186,14 @@ assert(bodyText.includes('/repo/.orbit/config.toml'), 'the layers strip names th
 assert(bodyText.includes('matches workflow.base_branch'), 'the registry strip confirms the branch agreement');
 assert(bodyText.includes('referenced by workflow.default_crew'), 'a crew names the keys that point at it');
 
+// A disabled crew stays listed, marked disabled; an enabled one is not marked.
+const crewRows = withClass('config-body', 'config-crew-row');
+const grokRow = crewRows.find(node => node.dataset.key === 'crews.grok');
+const opusRow = crewRows.find(node => node.dataset.key === 'crews.opus');
+assert(grokRow && String(grokRow.className).includes('disabled'), 'a disabled crew row is listed and marked disabled');
+assert(descendants(grokRow).some(node => node.textContent === 'disabled'), 'a disabled crew carries a disabled badge');
+assert(opusRow && !String(opusRow.className).includes('disabled'), 'an enabled crew row is not marked disabled');
+
 // Source chips carry provenance per row.
 const chips = withClass('config-body', 'config-source').map(node => node.textContent);
 assert(chips.includes('workspace') && chips.includes('default'), `source chips render per row, got ${JSON.stringify(chips)}`);
@@ -221,6 +230,34 @@ assert(
   panel('config-body').textContent.includes(refusal),
   'the admission error renders verbatim on the row',
 );
+
+// Enabling a crew from its editor writes a boolean `enabled`, and only that
+// toggle: an unchanged toggle never writes the key.
+refusal = null;
+const crewBefore = requests.length;
+const grokEdit = descendants(withClass('config-body', 'config-crew-row').find(node => node.dataset.key === 'crews.grok'))
+  .find(node => node.type === 'button' && node.listeners && node.listeners.click && String(node.className || '').includes('pencil'));
+assert(grokEdit, 'a disabled crew row offers an editor');
+grokEdit.listeners.click({ stopPropagation() {} });
+const toggle = descendants(panel('config-body')).find(node => node.type === 'checkbox');
+assert(toggle && toggle.checked === false, 'the editor shows the crew disabled');
+toggle.checked = true;
+button('config-body', 'Save').listeners.click({ stopPropagation() {} });
+await new Promise(resolve => setTimeout(resolve, 0));
+await new Promise(resolve => setTimeout(resolve, 0));
+const crewWrite = requests.slice(crewBefore).find(request => request.method === 'PUT');
+assert(crewWrite && crewWrite.path === '/api/config/crews/grok', `enabling writes the crew, got ${JSON.stringify(crewWrite)}`);
+assert(crewWrite.body.fields.enabled === true, `enabled is written as a boolean, got ${JSON.stringify(crewWrite.body.fields)}`);
+
+const opusBefore = requests.length;
+descendants(withClass('config-body', 'config-crew-row').find(node => node.dataset.key === 'crews.opus'))
+  .find(node => node.type === 'button' && node.listeners && node.listeners.click && String(node.className || '').includes('pencil'))
+  .listeners.click({ stopPropagation() {} });
+button('config-body', 'Save').listeners.click({ stopPropagation() {} });
+await new Promise(resolve => setTimeout(resolve, 0));
+await new Promise(resolve => setTimeout(resolve, 0));
+const opusWrite = requests.slice(opusBefore).find(request => request.method === 'PUT');
+assert(opusWrite && !('enabled' in opusWrite.body.fields), `an untouched toggle is not written, got ${JSON.stringify(opusWrite && opusWrite.body.fields)}`);
 
 // A caller without the operator capability sees the rows, not an editor.
 refusal = null;

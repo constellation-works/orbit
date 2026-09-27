@@ -211,7 +211,10 @@ fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, Aut
     dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());
 
     // The crew a task would actually run under is part of its material input.
-    let assignment = runtime.resolve_crew_for_task(None, task.crew.as_deref())?;
+    // Looked up, not dispatch-checked: enabling or disabling the crew does not
+    // change what the task would be prepared against, and dispatch refuses a
+    // disabled crew on its own.
+    let assignment = runtime.lookup_crew_for_task(None, task.crew.as_deref())?;
     dependencies.push(json!({"effective_assignment": {"crew": assignment.name,
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}));
 

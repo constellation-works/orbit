@@ -24,6 +24,7 @@ mod resolution {
                 assignment: assignment(TEST_CODEX_MODEL, "codex"),
                 description: None,
                 tags: Vec::new(),
+                enabled: true,
             },
         );
         registry.insert(
@@ -33,6 +34,7 @@ mod resolution {
                 assignment: assignment(TEST_CLAUDE_WEAK_MODEL, "claude"),
                 description: None,
                 tags: Vec::new(),
+                enabled: true,
             },
         );
         registry

@@ -25,22 +25,22 @@ Delivery (workflow.*)        how tasks are shipped
   xhard_complexity_crews           []                    default    Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
 
 Crews (crews.*)              15 defined, all from built-in
-  NAME         FROM      PROVIDER     MODEL                        EFFORT  TAGS  DESCRIPTION
-  antigravity  built-in  antigravity  gemini-3.8-flash-high        –       –
-  astra        built-in  codex        gpt-6-astra                  –       –
-  copilot      built-in  copilot      claude-sonnet-5              –       –
-  cursor       built-in  cursor       gpt-5                        –       –
-  fable        built-in  claude       fable                        –       –
-  gemini       built-in  gemini       gemini-3.8-flash             –       –
-  grok         built-in  grok         grok-4.7                     –       –
-  luna         built-in  codex        gpt-6-luna                   –       –
-  opencode     built-in  opencode     anthropic/claude-sonnet-4-5  –       –
-  opus         built-in  claude       opus                         –       –  ← workflow.default_crew
-  pi           built-in  pi           sonnet                       –       –
-  sol          built-in  codex        gpt-6-sol                    –       –
-  sonnet       built-in  claude       sonnet                       –       –
-  system       built-in  claude       sonnet                       –       –  ← workflow.system_crew
-  terra        built-in  codex        gpt-5.6-terra                –       –
+  NAME         ENABLED  FROM      PROVIDER     MODEL                        EFFORT  TAGS  DESCRIPTION
+  antigravity  true     built-in  antigravity  gemini-3.8-flash-high        –       –
+  astra        true     built-in  codex        gpt-6-astra                  –       –
+  copilot      true     built-in  copilot      claude-sonnet-5              –       –
+  cursor       true     built-in  cursor       gpt-5                        –       –
+  fable        true     built-in  claude       fable                        –       –
+  gemini       true     built-in  gemini       gemini-3.8-flash             –       –
+  grok         true     built-in  grok         grok-4.7                     –       –
+  luna         true     built-in  codex        gpt-6-luna                   –       –
+  opencode     true     built-in  opencode     anthropic/claude-sonnet-4-5  –       –
+  opus         true     built-in  claude       opus                         –       –  ← workflow.default_crew
+  pi           true     built-in  pi           sonnet                       –       –
+  sol          true     built-in  codex        gpt-6-sol                    –       –
+  sonnet       true     built-in  claude       sonnet                       –       –
+  system       true     built-in  claude       sonnet                       –       –  ← workflow.system_crew
+  terra        true     built-in  codex        gpt-5.6-terra                –       –
 
 Execution (execution.*)      how agent subprocesses run          ⚠ workspace file present: global execution values are ignored
   codex.sandbox                    workspace-write       default    Codex sandbox mode: one of read-only, workspace-write, danger-full-access.  (global sets danger-full-access — not inherited)

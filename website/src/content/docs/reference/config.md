@@ -51,6 +51,11 @@ tags = ["implementation", "review"]
 provider = "claude"
 model = "opus"
 
+[crews.gemini]
+enabled = false
+provider = "gemini"
+model = "gemini-3.8-flash"
+
 [workflow]
 base_branch = "main"
 default_crew = "sol"
@@ -60,6 +65,7 @@ default_crew = "sol"
 |---|---|
 | `provider` | Agent family. CLI-executable families are `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, and `opencode`. |
 | `model` | Model identifier passed to the provider CLI. |
+| `enabled` | Optional boolean, default `true`. `false` keeps the crew defined and listed but refuses to run it. See [Disabled crews](#disabled-crews). |
 | `effort` | Optional reasoning effort. See below. |
 | `description` | Optional human-facing summary. |
 | `tags` | Optional discovery labels. |
@@ -76,6 +82,33 @@ task's `crew` field, then `[workflow] default_crew`.
 
 Defining any `[crews.*]` table makes `[workflow] default_crew` mandatory, and
 it must name one of those crews.
+
+### Disabled crews
+
+`orbit init` writes every built-in crew and sets `enabled = true` on the crews
+whose provider CLI it detected, `enabled = false` on the rest. Turning a
+provider on later is one command:
+
+```bash
+orbit config set crews.gemini.enabled true
+```
+
+A crew table without `enabled` is enabled, so existing configs behave exactly
+as before. A disabled crew:
+
+- stays listed — `orbit config show` (`ENABLED` column), `orbit config get
+  crews.<name>.enabled`, `orbit.crew.list` (`enabled` per crew, schema
+  version 3) and the dashboard all show it;
+- is never drawn from a complexity pool. A pool whose members are all disabled
+  behaves like an empty pool and routes the task to `default_crew`;
+- is refused, never substituted, when a task's `crew`, an explicit crew,
+  `default_crew`, `system_crew` or a job step's `crew: system` selects it. The
+  error names the crew and the `orbit config set … enabled true` command;
+- is reported by `orbit doctor` when `default_crew` or `system_crew` points at
+  it. Config loading itself still succeeds.
+
+With no supported agent CLI detected, every crew is seeded disabled and no lane
+crew is written, so nothing dispatches until you enable a crew.
 
 ### Reasoning effort
 
@@ -123,7 +156,7 @@ reasoning budget inside it.
 `[workflow] system_crew` (default: `system`) names the crew for system
 activities that are synthesized at runtime and so have no job step to name a
 crew on — principally step-failure recovery. `orbit init` points it at the
-cheapest seeded crew of the preferred detected family (`luna` when Codex is
+cheapest enabled crew of the preferred detected family (`luna` when Codex is
 present, else `sonnet`, `grok`, …); interactive init offers those crews by
 name. Shipped job steps that name `crew: system` resolve onto this crew unless
 a user-authored `[crews.system]` table exists. System work never inherits a

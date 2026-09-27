@@ -90,20 +90,37 @@ globally defined crew. A `default_crew` or `system_crew` naming an undefined cre
 fails config load — deliberately, since the alternative is silently dispatching
 to the wrong model.
 
-`orbit init` seeds only the built-in crews for the agent CLIs it detects
-(Claude: `opus`, `sonnet`, `fable`; Codex: `astra`, `sol`, `terra`, `luna`;
-one crew each for Antigravity, Gemini, Grok, Copilot, Cursor, Pi, OpenCode)
-and points the two lane keys at real crews from that set:
+`enabled = false` on a crew keeps it defined and listed (`orbit config show`
+has an `ENABLED` column; `orbit.crew.list` returns `enabled`) but takes it out
+of execution. Omitting `enabled` means enabled, so older configs are unchanged.
+A disabled crew is never drawn from a complexity pool; a pool whose members are
+all disabled routes the task to `default_crew`, like an empty pool. A task
+`crew`, explicit crew, `default_crew`, `system_crew` or `crew: system` step that
+lands on a disabled crew refuses dispatch with an error naming the crew — no
+substitution. Config still loads; `orbit doctor` warns when a lane key names a
+disabled crew. Enable one with:
+
+```bash
+orbit config set crews.gemini.enabled true
+```
+
+`orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `fable`;
+Codex: `astra`, `sol`, `terra`, `luna`; one crew each for Antigravity, Gemini,
+Grok, Copilot, Cursor, Pi, OpenCode), with `enabled = true` on the crews whose
+agent CLI it detects and `enabled = false` on the rest, and points the two lane
+keys at enabled crews:
 `workflow.default_crew` is the preferred family's default (`opus` on a Claude
 host) and `workflow.system_crew` is the cheapest tier of the preferred family
 (`luna` when Codex is present, else `sonnet`, `grok`, …). Interactive init
-offers those seeded crews by name; `--non-interactive` writes the
+offers those enabled crews by name; `--non-interactive` writes the
 recommendations. Init does not write a `custom` or `system` crew table: the
 `system` name shipped job steps use resolves onto `system_crew` at load, and an
 explicit user-authored `[crews.system]` table wins if one exists. The four
 `workflow.*_complexity_crews` pools are scaffolded as `[]`. A user-authored
 legacy `qa` crew remains loadable, but init never creates it. To move system
-work, run `orbit config set workflow.system_crew <crew>`. Which provider CLIs
+work, run `orbit config set workflow.system_crew <crew>`. With no supported
+agent CLI, every crew is written disabled and no lane key is set, so nothing
+dispatches until you enable a crew. Which provider CLIs
 this machine can launch, and each executor's sandbox mode:
 
 ```bash

@@ -101,12 +101,12 @@ xhard_complexity_crews = []
 
 **What `orbit init` seeds.** Only the global file, and only when it is absent (or under `--force`):
 
-- the [built-in crews](#crewsname--which-provider-model-runs-the-task) for each detected provider CLI,
+- every [built-in crew](#crewsname--which-provider-model-runs-the-task), with `enabled = true` on the crews of each detected provider CLI and `enabled = false` on the rest,
 - `default_crew` set to the default crew of the first detected family in preference order,
 - `system_crew` set to the first detected of `luna`, `sonnet`, `grok`, `antigravity`, `gemini`, `copilot`, `cursor`, `pi`, `opencode` (cheapest tier first),
 - all four pools as `[]`.
 
-Interactive init asks for both crews by name, and skips the question when there is only one candidate. With no supported CLI detected, it writes an empty `[crews]` table (so the built-in crews are not used) and leaves both keys unset. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
+Interactive init asks for both crews by name, offering only enabled crews, and skips the question when there is only one candidate. With no supported CLI detected, every crew is written with `enabled = false` and both keys stay unset: `default_crew` then resolves to the disabled `opus`, so dispatch refuses until you enable a crew rather than silently running one. Turning a provider on later is one command, `orbit config set crews.<name>.enabled true`. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
 ---
 
@@ -118,6 +118,7 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 |---|---|---|
 | `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`. See [provider identity](#provider-identity-and-resolution). |
 | `model` | Yes | Model ID passed to the provider CLI. |
+| `enabled` | No | Boolean, default `true`. `false` keeps the crew defined and listed but refuses to run it; see [disabled crews](#disabled-crews). |
 | `effort` | No | Reasoning effort; see the table below. Omitted leaves the provider's default. |
 | `description` | No | Summary. Trimmed; blank becomes absent. |
 | `tags` | No | Discovery labels. Trimmed, blanks dropped, sorted and deduplicated. |
@@ -129,9 +130,14 @@ provider = "codex"
 effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]
+
+[crews.gemini]
+enabled = false
+model = "gemini-3.8-flash"
+provider = "gemini"
 ```
 
-**Built-in crews.** `orbit init` seeds a family's crews when it detects that family's binary. A config with no `[crews]` table at all uses the full set, plus a built-in `system` crew (`claude`, `sonnet`). Families are listed in init's preference order. Existing explicit model pins are kept as written.
+**Built-in crews.** `orbit init` seeds every family's crews and enables a family's crews when it detects that family's binary. A config with no `[crews]` table at all uses the full set, plus a built-in `system` crew (`claude`, `sonnet`). Families are listed in init's preference order. Existing explicit model pins are kept as written.
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
@@ -163,9 +169,21 @@ An invalid or unsupported `effort` (for example `max` on Grok, or `effort = "har
 ```bash
 orbit config set crews.sol.effort high
 orbit config get crews.sol.effort
+orbit config set crews.gemini.enabled true
 ```
 
-`config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.crew.list` returns the normalized crews of the selected checkout's effective config.
+`config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.crew.list` returns the normalized crews of the selected checkout's effective config, each with its `enabled` state (schema version 3).
+
+### Disabled crews
+
+`enabled = false` switches a crew off without deleting its definition. A table without the key is enabled, so configs written before the flag existed resolve exactly as they did.
+
+- **Listings show it.** `orbit config show` has an `ENABLED` column and counts disabled crews in the heading, `orbit config get crews.<name>.enabled` answers `true` or `false`, `orbit.crew.list` carries `enabled` per crew, and the dashboard's Config tab marks the row disabled and offers an enabled toggle.
+- **Pools skip it.** A disabled crew is never drawn from a complexity pool. A pool whose members are all disabled behaves like an empty pool: the task falls through to `default_crew`. A disabled crew may still be listed in a pool, so re-enabling it restores its share without editing the pool.
+- **Explicit references refuse.** Dispatch never substitutes another crew. A task's `crew`, an explicit run or activity crew, `workflow.default_crew`, `workflow.system_crew`, or a shipped job step's `crew: system` that resolves to a disabled crew fails with the crew's name and `orbit config set crews.<name>.enabled true`. When `system` mirrors `workflow.system_crew`, the message names the mirrored crew's table.
+- **Load still succeeds.** A lane key pointing at a disabled crew does not stop unrelated commands. `orbit doctor` reports it as a `config` warning with the enabling command.
+- **Task creation does not pin it.** A crew-less task created while `default_crew` is disabled keeps `crew` unset, so dispatch resolves and refuses the default by name.
+- **Reads still resolve.** `orbit task show` and the dashboard still report a task's configured crew when it is disabled.
 
 **Validation.**
 
@@ -329,7 +347,7 @@ xhard_complexity_crews = ["fable", "astra"]
 - **Crew is fixed when the task is created.** A task created without `crew` (via `orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, or an import) draws from the pool for its complexity, falling back to `default_crew`, and stores the result in `task.crew`. A `crew_assigned` history entry records the source: `explicit`, `pool:<complexity>` or `default`. A workspace with no crews configured leaves the field unset.
 - **Nothing re-routes afterward.** Status transitions never change `task.crew`, and neither does changing `--complexity`. Only [`task update --crew ""`](#setting-taskcrew) draws again.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
-- **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. Blank entries and unknown crew names fail before dispatch.
+- **Empty pool** (`[]`, the init scaffold) means no pool, so the task gets `default_crew`. A pool whose members are all [disabled](#disabled-crews) is treated the same way; disabled members of a mixed pool are skipped. Blank entries and unknown crew names fail before dispatch.
 - **Pools are preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and system, review and preparation jobs keep the crew they name.
 - **Legacy tasks.** At admission (drain or ship), a task still without a crew is routed through the pools as a fallback, and nothing is written back to the task.
 - **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that one pool for one drain, and the flag with no names disables it. `orbit run ship` has no override flags.
@@ -476,6 +494,8 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `crew '<x>' is not defined in [crews.*]` | Name a crew that exists. |
 | `[workflow].default_crew must be set when defining [crews.*]` | Set `default_crew`, or define an `opus` crew. |
 | `[crews.<name>].<field> must not be empty` | Give the crew a `model` and `provider`. |
+| ``crew `<x>`, which is disabled ([crews.<x>] enabled = false)`` | `orbit config set crews.<x>.enabled true`, or select an enabled crew. |
+| `invalid type: string "…", expected a boolean` for `enabled` | Write `enabled = true` or `enabled = false`, unquoted. |
 | `config schema no longer supports [agent.<role>] tables` | Migrate to `[crews.<name>]`. |
 | `execution.codex.sandbox has invalid value '<x>'` | Use `read-only`, `workspace-write` or `danger-full-access`. |
 | `[operation] has unknown key '<x>'`, `operation.review_policy has invalid value '<x>'` | The review keys are a closed set. |

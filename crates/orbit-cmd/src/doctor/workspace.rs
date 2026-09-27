@@ -78,23 +78,36 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
         runtime.global_root(),
         runtime.data_root(),
     )) {
-        Ok(config) if config.ignored_crew_properties.is_empty() => vec![check(
-            "config",
-            WorkspaceDoctorStatus::Ok,
-            format!("valid ({})", path.display()),
-        )],
-        Ok(config) => config
-            .ignored_crew_properties
-            .iter()
-            .map(|ignored| {
+        Ok(config) => {
+            let ignored = config.ignored_crew_properties.iter().map(|ignored| {
                 actionable_check(
                     "config",
                     WorkspaceDoctorStatus::Warning,
                     ignored.warning_message(),
                     ignored.remediation(),
                 )
-            })
-            .collect(),
+            });
+            // A lane pointed at a disabled crew loads fine but refuses every
+            // dispatch on that lane; say so before a run finds out.
+            let disabled_lanes = config.disabled_lane_crews().into_iter().map(|lane| {
+                actionable_check(
+                    "config",
+                    WorkspaceDoctorStatus::Warning,
+                    lane.warning_message(),
+                    lane.remediation(),
+                )
+            });
+            let warnings = ignored.chain(disabled_lanes).collect::<Vec<_>>();
+            if warnings.is_empty() {
+                vec![check(
+                    "config",
+                    WorkspaceDoctorStatus::Ok,
+                    format!("valid ({})", path.display()),
+                )]
+            } else {
+                warnings
+            }
+        }
         Err(error) => vec![check(
             "config",
             WorkspaceDoctorStatus::Error,

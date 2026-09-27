@@ -31,7 +31,14 @@ use crate::runtime::{CONFIG_TOML_FILE, OrbitRuntime, existing_config_file_path};
 pub use orbit_config::ConfigScope;
 
 /// Fields a crew table carries, in the order a crew row renders them.
-const CREW_FIELDS: &[&str] = &["provider", "model", "effort", "tags", "description"];
+const CREW_FIELDS: &[&str] = &[
+    "enabled",
+    "provider",
+    "model",
+    "effort",
+    "tags",
+    "description",
+];
 
 /// `workflow.*` keys that name a crew by name. Deleting the crew they point at
 /// leaves the workspace unable to resolve work, so the delete is refused with
@@ -798,6 +805,7 @@ fn crew_rows(values: &[EffectiveConfigValue]) -> Vec<JsonValue> {
                 .collect::<Vec<_>>();
             json!({
                 "name": name,
+                "enabled": cell("enabled"),
                 "provider": cell("provider"),
                 "model": cell("model"),
                 "effort": cell("effort"),

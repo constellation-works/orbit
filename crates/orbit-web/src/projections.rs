@@ -377,7 +377,7 @@ fn dashboard_resolved_crew_projection(
     task: &Task,
 ) -> Result<Option<ResolvedCrewProjection>, OrbitError> {
     if task_has_stale_explicit_crew(registry, task) {
-        let crew = runtime.resolve_crew_for_task(None, None)?;
+        let crew = runtime.lookup_crew_for_task(None, None)?;
         return Ok(Some(ResolvedCrewProjection {
             name: crew.name,
             model: crew.assignment.model,

@@ -550,6 +550,9 @@ fn effective_values(
             ("provider", serde_json::json!(crew.assignment.provider)),
             ("description", serde_json::json!(crew.description)),
             ("tags", serde_json::json!(crew.tags)),
+            // Always projected: a table without the key is enabled, and the
+            // listing shows that rather than hiding the state.
+            ("enabled", serde_json::json!(crew.enabled)),
         ];
         // Configured effort only. An omitted field keeps the provider default
         // and must not appear as a fabricated effective setting.

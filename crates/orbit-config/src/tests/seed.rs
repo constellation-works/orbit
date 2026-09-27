@@ -8,6 +8,25 @@ fn seed_for(families: &[&str]) -> ConfigSeed {
     ConfigSeed::from_families(families.iter().copied())
 }
 
+/// Every built-in crew a seed writes, whatever was detected. The `system`
+/// alias is never a seeded table.
+const ALL_SEEDED_CREWS: [&str; 14] = [
+    "antigravity",
+    "astra",
+    "copilot",
+    "cursor",
+    "fable",
+    "gemini",
+    "grok",
+    "luna",
+    "opencode",
+    "opus",
+    "pi",
+    "sol",
+    "sonnet",
+    "terra",
+];
+
 const POOL_KEYS: [&str; 4] = [
     "low_complexity_crews",
     "medium_complexity_crews",
@@ -56,8 +75,9 @@ fn claude_and_codex_seed_names_real_crews_and_empty_pools() {
     let contents = seed_contents(&seed_for(&["claude", "codex"]));
     let parsed = parsed_config(&contents);
 
+    assert_eq!(crew_names(&parsed), ALL_SEEDED_CREWS);
     assert_eq!(
-        crew_names(&parsed),
+        enabled_crew_names(&parsed),
         vec!["astra", "fable", "luna", "opus", "sol", "sonnet", "terra"]
     );
     assert_workflow_str(&parsed, "default_crew", Some("opus"));
@@ -90,12 +110,32 @@ fn claude_and_codex_seed_names_real_crews_and_empty_pools() {
     }
 }
 
+/// A Claude-only host writes every built-in crew and enables exactly the
+/// Claude ones; the rest load as defined-but-disabled crews.
 #[test]
-fn claude_only_seeds_the_claude_family() {
+fn claude_only_seeds_every_crew_and_enables_the_claude_family() {
     let contents = seed_contents(&seed_for(&["claude"]));
     let parsed = parsed_config(&contents);
 
-    assert_eq!(crew_names(&parsed), vec!["fable", "opus", "sonnet"]);
+    assert_eq!(crew_names(&parsed), ALL_SEEDED_CREWS);
+    assert_eq!(enabled_crew_names(&parsed), vec!["fable", "opus", "sonnet"]);
+    let resolved = load_seeded_config(&contents);
+    let enabled = resolved
+        .crews
+        .values()
+        .filter(|crew| crew.enabled)
+        .map(|crew| crew.name.as_str())
+        .collect::<Vec<_>>();
+    // `system` mirrors the enabled `sonnet` crew.
+    assert_eq!(enabled, vec!["fable", "opus", "sonnet", "system"]);
+    assert!(
+        resolved
+            .crews
+            .values()
+            .all(|crew| crew.enabled == (crew.assignment.provider == "claude")),
+        "exactly the Claude crews load enabled"
+    );
+    assert!(resolved.disabled_lane_crews().is_empty());
     assert_crew(&parsed, "opus", "claude", "opus");
     assert_crew(&parsed, "sonnet", "claude", "sonnet");
     assert_crew(&parsed, "fable", "claude", "fable");
@@ -109,7 +149,10 @@ fn codex_only_seeds_the_codex_family() {
     let contents = seed_contents(&seed_for(&["codex"]));
     let parsed = parsed_config(&contents);
 
-    assert_eq!(crew_names(&parsed), vec!["astra", "luna", "sol", "terra"]);
+    assert_eq!(
+        enabled_crew_names(&parsed),
+        vec!["astra", "luna", "sol", "terra"]
+    );
     assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
     assert_crew(&parsed, "sol", "codex", "gpt-6-sol");
     assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
@@ -132,7 +175,7 @@ fn single_crew_families_name_their_crew_for_both_lanes() {
         let contents = seed_contents(&seed_for(&[family]));
         let parsed = parsed_config(&contents);
 
-        assert_eq!(crew_names(&parsed), vec![family], "{family}");
+        assert_eq!(enabled_crew_names(&parsed), vec![family], "{family}");
         assert_crew(&parsed, family, family, model);
         assert_workflow_str(&parsed, "default_crew", Some(family));
         assert_workflow_str(&parsed, "system_crew", Some(family));
@@ -151,7 +194,7 @@ fn single_crew_families_name_their_crew_for_both_lanes() {
 #[test]
 fn antigravity_outranks_legacy_gemini_when_both_are_available() {
     let parsed = parsed_config(&seed_contents(&seed_for(&["antigravity", "gemini"])));
-    assert_eq!(crew_names(&parsed), vec!["antigravity", "gemini"]);
+    assert_eq!(enabled_crew_names(&parsed), vec!["antigravity", "gemini"]);
     assert_workflow_str(&parsed, "default_crew", Some("antigravity"));
     assert_workflow_str(&parsed, "system_crew", Some("antigravity"));
 }
@@ -175,29 +218,54 @@ fn appended_families_never_displace_an_earlier_family() {
 }
 
 /// Orbit ships no `ollama` crew, so a host whose only agent CLI is ollama
-/// seeds an explicitly empty registry rather than a dangling default.
+/// seeds every crew disabled and names no lane crew. The built-in default
+/// still resolves by name, but to a disabled crew, so dispatch refuses rather
+/// than silently running a provider this host never detected.
 #[test]
-fn no_supported_family_seeds_no_crews_or_dangling_default() {
+fn no_supported_family_seeds_every_crew_disabled() {
     let contents = seed_contents(&seed_for(&["ollama"]));
     let parsed = parsed_config(&contents);
 
-    assert!(crew_names(&parsed).is_empty());
+    assert_eq!(crew_names(&parsed), ALL_SEEDED_CREWS);
+    assert!(enabled_crew_names(&parsed).is_empty());
     assert_workflow_str(&parsed, "default_crew", None);
     assert_workflow_str(&parsed, "system_crew", None);
     assert_empty_pools(&parsed);
     assert!(!contents.contains("[duel"));
     toml::from_str::<RawRuntimeConfig>(&contents).expect("no-provider config parses");
     let resolved = load_seeded_config(&contents);
-    assert!(resolved.crews.is_empty());
-    assert_eq!(resolved.default_crew, None);
+    assert!(resolved.crews.values().all(|crew| !crew.enabled));
+    assert_eq!(resolved.default_crew.as_deref(), Some("opus"));
+    let lanes = resolved
+        .disabled_lane_crews()
+        .into_iter()
+        .map(|lane| (lane.key, lane.crew, lane.enable_target))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lanes,
+        vec![
+            (
+                "workflow.default_crew",
+                "opus".to_string(),
+                "opus".to_string()
+            ),
+            (
+                "workflow.system_crew",
+                "system".to_string(),
+                "opus".to_string()
+            ),
+        ],
+        "both lanes resolve to a disabled crew and name the table that enables it"
+    );
 }
 
 #[test]
 fn multi_provider_seed_includes_each_available_family_and_excludes_unavailable() {
     let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "codex", "grok"])));
 
+    assert_eq!(crew_names(&parsed), ALL_SEEDED_CREWS);
     assert_eq!(
-        crew_names(&parsed),
+        enabled_crew_names(&parsed),
         vec![
             "astra", "fable", "grok", "luna", "opus", "sol", "sonnet", "terra"
         ]
@@ -208,10 +276,9 @@ fn multi_provider_seed_includes_each_available_family_and_excludes_unavailable()
     for crew in crews(&parsed).values() {
         // [ORB-10801] Seeded crews no longer carry the retired backend key.
         assert!(crew.get("backend").is_none());
-        assert_ne!(
-            crew.get("provider").and_then(toml::Value::as_str),
-            Some("gemini")
-        );
+        if crew.get("provider").and_then(toml::Value::as_str) == Some("gemini") {
+            assert_eq!(crew.get("enabled"), Some(&toml::Value::Boolean(false)));
+        }
     }
     assert!(!crews(&parsed).contains_key("qa"));
 }
@@ -246,14 +313,14 @@ fn seed_with_no_families_keeps_static_template_content() {
     let contents = seed_contents(&ConfigSeed::default());
     assert!(no_active_role_section(&contents));
     let parsed = parsed_config(&contents);
-    assert!(crew_names(&parsed).is_empty());
+    assert!(enabled_crew_names(&parsed).is_empty());
     assert!(!contents.contains("default_crew ="));
     assert_empty_pools(&parsed);
     assert!(contents.contains("sandbox = \"danger-full-access\""));
 }
 
 /// Operator choices are written by name, exactly as chosen, and the seed
-/// offers only crews it writes.
+/// offers only crews it enables.
 #[test]
 fn chosen_crews_are_written_by_name() {
     let seed = seed_for(&["claude", "codex"])
@@ -263,7 +330,7 @@ fn chosen_crews_are_written_by_name() {
     assert_eq!(seed.recommended_system_crew(), Some("luna"));
     assert_eq!(seed.system_crew_options(), vec!["luna", "sonnet"]);
     assert_eq!(
-        seed.seeded_crews()
+        seed.enabled_crews()
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
@@ -287,16 +354,16 @@ fn chosen_crews_are_written_by_name() {
 }
 
 #[test]
-fn a_chosen_crew_the_host_does_not_seed_is_refused_before_writing() {
+fn a_chosen_crew_the_host_does_not_enable_is_refused_before_writing() {
     let dir = tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");
 
     let seed = seed_for(&["claude"]).with_default_crew("luna");
     let error = seed_default_config(&path, Some(&seed)).expect_err("unseeded default crew fails");
     assert!(
-        error
-            .to_string()
-            .contains("workflow.default_crew names crew `luna`, which this host does not seed"),
+        error.to_string().contains(
+            "workflow.default_crew names crew `luna`, which this host does not seed enabled"
+        ),
         "{error}"
     );
     assert!(!path.exists());
@@ -357,6 +424,20 @@ fn empty_toml_table() -> &'static toml::map::Map<String, toml::Value> {
 
 fn crew_names(parsed: &toml::Value) -> Vec<&str> {
     crews(parsed).keys().map(String::as_str).collect()
+}
+
+/// Seeded crews whose table says `enabled = true`. Every seeded table writes
+/// the key explicitly, so a missing one fails here rather than defaulting.
+fn enabled_crew_names(parsed: &toml::Value) -> Vec<&str> {
+    crews(parsed)
+        .iter()
+        .filter(|(name, crew)| {
+            crew.get("enabled")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or_else(|| panic!("seeded [crews.{name}] must write `enabled`"))
+        })
+        .map(|(name, _)| name.as_str())
+        .collect()
 }
 
 fn assert_crew(parsed: &toml::Value, name: &str, provider: &str, model: &str) {

@@ -29,7 +29,7 @@ fn empty_answer_accepts_the_recommended_default_crew() {
     }
 }
 
-/// [ORB-12719] Declining the recommendation lists every seeded crew by name,
+/// [ORB-12719] Declining the recommendation lists every enabled seeded crew by name,
 /// recommendation first, and writes the chosen name — never a `custom` table.
 #[test]
 fn declining_lists_seeded_crews_by_name_and_returns_the_chosen_one() {
@@ -81,7 +81,7 @@ fn no_seeded_crew_skips_the_prompt() {
     assert_eq!(result, None);
     let transcript = prompter.transcript();
     assert!(transcript.contains("Ollama CLI         found"));
-    assert!(transcript.contains("empty [crews] registry"));
+    assert!(transcript.contains("every built-in crew with `enabled = false`"));
     assert!(!transcript.contains("Use this default crew?"));
 }
 
