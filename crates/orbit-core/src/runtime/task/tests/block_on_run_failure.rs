@@ -10,9 +10,12 @@ use orbit_engine::{
 use orbit_store::{JobRunStepParams, TaskCreateParams, TaskReservationReleaseReason};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
+use std::sync::mpsc;
+use std::time::Duration;
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
+use crate::application::job::TERMINAL_OUTCOME_CONFLICT_CODE;
 
 const PIPELINE_JOB: &str = "task_pr_pipeline";
 const FAILING_STEP_MESSAGE: &str = "step `implement_one` completed with success=false";
@@ -478,6 +481,96 @@ fn successful_pipeline_run_does_not_block_coupled_task() {
 }
 
 #[test]
+fn success_winning_after_an_interrupters_prior_read_leaves_task_untouched() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task_id = create_backlog_task(&runtime, &repo_root, "racing-interrupt");
+    let run = insert_running_pipeline_run(&runtime);
+    couple_task(&runtime, &task_id, &run.run_id, TaskStatus::InProgress);
+    let history_before = runtime
+        .get_task_history(&task_id)
+        .expect("task history")
+        .len();
+    let (read_tx, read_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+
+    std::thread::scope(|scope| {
+        let runtime = &runtime;
+        let run_id = &run.run_id;
+        let loser = scope.spawn(move || {
+            runtime.finalize_job_run_with_cleanup_after_prior_read(
+                run_id,
+                JobRunState::Interrupted,
+                Utc::now(),
+                Some(1),
+                TaskReservationReleaseReason::StaleRunReconciled,
+                (
+                    Some(("process_not_found", "worker disappeared")),
+                    move || {
+                        read_tx.send(()).expect("signal prior read");
+                        resume_rx
+                            .recv_timeout(Duration::from_secs(10))
+                            .expect("wait for winning finalization");
+                    },
+                ),
+            )
+        });
+        read_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("loser read running state");
+        runtime
+            .finalize_job_run_with_reservation_cleanup(
+                &run.run_id,
+                JobRunState::Success,
+                Utc::now(),
+                Some(1),
+                TaskReservationReleaseReason::RunTerminal,
+            )
+            .expect("success wins");
+        resume_tx.send(()).expect("resume losing caller");
+        assert!(
+            loser
+                .join()
+                .expect("losing caller joins")
+                .expect("losing finalize")
+        );
+    });
+
+    let shown = runtime.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(shown.state, JobRunState::Success);
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::InProgress
+    );
+    assert_eq!(
+        runtime
+            .get_task_history(&task_id)
+            .expect("task history")
+            .len(),
+        history_before
+    );
+    assert!(failure_history_entries(&runtime, &task_id).is_empty());
+    assert!(interruption_history_entries(&runtime, &task_id).is_empty());
+    let conflicts = shown
+        .steps
+        .iter()
+        .filter(|step| step.error_code.as_deref() == Some(TERMINAL_OUTCOME_CONFLICT_CODE))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "the losing interruption is audited once"
+    );
+    let message = conflicts[0]
+        .error_message
+        .as_deref()
+        .expect("conflict message");
+    assert!(
+        message.contains("success") && message.contains("interrupted"),
+        "{message}"
+    );
+}
+
+#[test]
 fn re_running_terminalization_is_idempotent_and_respects_human_recovery() {
     let (_root, runtime, repo_root) = test_runtime();
     let task_id = create_backlog_task(&runtime, &repo_root, "idempotent");
@@ -492,13 +585,13 @@ fn re_running_terminalization_is_idempotent_and_respects_human_recovery() {
     );
 
     // A human/orchestrator moves the task on (here: back to backlog for a
-    // re-plan). The `changed` gate on terminalization is what protects this.
+    // re-plan). Only the winning terminal transition may block it.
     couple_task(&runtime, &task_id, &run.run_id, TaskStatus::Backlog);
 
     // Re-running terminalization on the already-terminal run does not re-fire
     // the block: it neither re-blocks the task a human moved on nor duplicates
-    // history. (The store reports the finalize write as applied even on replay,
-    // so the guard is the pre-finalize terminal check, not this return value.)
+    // history. The compatibility bool still reports an existing run on replay;
+    // the atomic store outcome is the guard for the side effect.
     finalize_failed(&runtime, &run.run_id);
     assert_eq!(
         runtime.get_task(&task_id).expect("task").status,

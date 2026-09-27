@@ -191,13 +191,29 @@ pub trait JobRunStoreBackend: Send + Sync {
         metrics: KnowledgeRunMetrics,
     ) -> Result<bool, OrbitError>;
     fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError>;
+    /// Finalize a run and report the decision made with the state write in one
+    /// transaction. Callers with side effects must use this outcome rather than
+    /// a state read taken before finalization.
+    fn finalize_job_run_with_outcome(
+        &self,
+        run_id: &str,
+        state: JobRunState,
+        finished_at: DateTime<Utc>,
+        duration_ms: Option<u64>,
+    ) -> Result<JobRunFinalization, OrbitError>;
+    /// Compatibility surface: `true` means the run exists, including replay.
     fn finalize_job_run(
         &self,
         run_id: &str,
         state: JobRunState,
         finished_at: DateTime<Utc>,
         duration_ms: Option<u64>,
-    ) -> Result<bool, OrbitError>;
+    ) -> Result<bool, OrbitError> {
+        Ok(!matches!(
+            self.finalize_job_run_with_outcome(run_id, state, finished_at, duration_ms)?,
+            JobRunFinalization::Missing
+        ))
+    }
     fn repair_terminal_job_run_timing(
         &self,
         run_id: &str,
@@ -235,6 +251,17 @@ pub trait JobRunStoreBackend: Send + Sync {
         run_id: &str,
         update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
     ) -> Result<RunStateUpdate, OrbitError>;
+}
+
+/// The authoritative result of one attempted terminal transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobRunFinalization {
+    /// The run did not exist.
+    Missing,
+    /// This call changed a live run to its requested terminal state.
+    Finalized,
+    /// An earlier terminal state won; this call did not change it.
+    AlreadyTerminal(JobRunState),
 }
 
 /// Durable inputs for one parent-authorized child admission.
