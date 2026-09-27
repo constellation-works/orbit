@@ -861,7 +861,7 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 | Property shape | Surface |
 |---|---|
 | `string` | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values |
-| `integer` / `number` | `--kebab-case <N>`, sent as a JSON number |
+| `integer` / `number` | `--kebab-case <N>`, sent as a JSON number; `NaN`, infinities and overflowing literals such as `1e999` are refused |
 | `boolean` | `--kebab-case` for true, or `--kebab-case=<true\|false>` (the `=` is required, so a boolean never swallows a following positional) |
 | `array` of scalars | `--kebab-case <VALUE>`, repeated |
 | `object`, `array` of objects, or untyped | `--kebab-case-json '<JSON>'` |

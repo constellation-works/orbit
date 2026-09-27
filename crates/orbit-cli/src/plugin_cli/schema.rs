@@ -6,7 +6,7 @@
 //! | Property shape | Surface |
 //! |---|---|
 //! | `string` (with or without `enum`) | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values |
-//! | `integer` / `number` | `--kebab-case <N>`, parsed and sent as a JSON number |
+//! | `integer` / `number` | `--kebab-case <N>`, parsed and sent as a JSON number; a `number` must be finite |
 //! | `boolean` | `--kebab-case` (true), or `--kebab-case=<true\|false>` |
 //! | `array` of scalars | `--kebab-case <VALUE>`, repeat once per element |
 //! | `object`, `array` of objects, or an untyped property | `--kebab-case-json '<JSON>'` |
@@ -234,7 +234,7 @@ pub(super) fn clap_arg(derived: &DerivedArg) -> Arg {
             }
         }
         FlagKind::Number | FlagKind::NumberList => {
-            let arg = arg.value_parser(clap::value_parser!(f64));
+            let arg = arg.value_parser(finite_number);
             if matches!(derived.kind, FlagKind::NumberList) && !derived.positional {
                 arg.action(ArgAction::Append)
             } else {
@@ -243,6 +243,43 @@ pub(super) fn clap_arg(derived: &DerivedArg) -> Arg {
         }
         FlagKind::StrList if !derived.positional => arg.action(ArgAction::Append),
         _ => arg,
+    }
+}
+
+/// Parse a `number` argument, refusing what JSON cannot carry.
+///
+/// Rust's `f64` parser accepts `NaN`, `inf` and overflowing literals such as
+/// `1e999` (which become infinite); none has a JSON number form, so passing
+/// them through would drop or alter a value the caller explicitly supplied.
+fn finite_number(raw: &str) -> Result<f64, String> {
+    let value: f64 = raw.parse().map_err(|error| format!("{error}"))?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err("not a finite number".to_string())
+    }
+}
+
+/// The JSON form of one parsed `number`, refusing — never dropping — a value
+/// with no JSON representation.
+fn json_number(arg: &DerivedArg, value: f64) -> Result<Value, OrbitError> {
+    serde_json::Number::from_f64(value)
+        .map(Value::Number)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "{} (property `{}`) is not a finite number: {value}",
+                display_name(arg),
+                arg.property
+            ))
+        })
+}
+
+/// How a diagnostic names the argument the caller actually typed.
+fn display_name(arg: &DerivedArg) -> String {
+    if arg.positional {
+        format!("<{}>", arg.long.to_uppercase())
+    } else {
+        format!("--{}", arg.long)
     }
 }
 
@@ -274,7 +311,8 @@ pub(super) fn input_from_matches(
                 .try_get_one::<f64>(&id)
                 .ok()
                 .flatten()
-                .and_then(|value| serde_json::Number::from_f64(*value).map(Value::Number)),
+                .map(|value| json_number(arg, *value))
+                .transpose()?,
             FlagKind::StrList => matches
                 .try_get_many::<String>(&id)
                 .ok()
@@ -296,14 +334,12 @@ pub(super) fn input_from_matches(
                 .ok()
                 .flatten()
                 .map(|values| {
-                    Value::Array(
-                        values
-                            .filter_map(|value| {
-                                serde_json::Number::from_f64(*value).map(Value::Number)
-                            })
-                            .collect(),
-                    )
-                }),
+                    values
+                        .map(|value| json_number(arg, *value))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(Value::Array)
+                })
+                .transpose()?,
             FlagKind::Json => match matches.try_get_one::<String>(&id).ok().flatten() {
                 Some(raw) => Some(serde_json::from_str(raw).map_err(|error| {
                     OrbitError::InvalidInput(format!("--{} is not valid JSON: {error}", arg.long))

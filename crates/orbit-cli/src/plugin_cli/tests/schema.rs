@@ -264,3 +264,92 @@ fn a_malformed_json_flag_names_the_flag() {
         "the diagnostic must name the flag: {error}"
     );
 }
+
+fn numeric_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "ratio": { "type": "number" },
+            "weights": { "type": "array", "items": { "type": "number" } },
+            "threshold": { "type": "number" }
+        }
+    })
+}
+
+fn numeric_command(args: &[super::super::schema::DerivedArg]) -> Command {
+    let mut command = Command::new("score").no_binary_name(true);
+    for arg in args {
+        command = command.arg(clap_arg(arg));
+    }
+    command
+}
+
+#[test]
+fn non_finite_numbers_are_refused_for_every_numeric_surface() {
+    // Regression: `f64` parsing accepts these, and input assembly used to
+    // drop them, so `--ratio NaN` sent `{}` and `--weights 1 --weights NaN
+    // --weights 2` sent `[1, 2]` — the backend ran on input the caller never
+    // gave.
+    let args = derive_args(&numeric_schema(), &["threshold".to_string()]);
+    for raw in ["NaN", "nan", "inf", "infinity", "1e999", "-1e999", "-inf"] {
+        let cases: [(Vec<String>, &str); 4] = [
+            (vec![format!("--ratio={raw}")], "--ratio"),
+            (vec![format!("--threshold={raw}")], "--threshold"),
+            (vec![raw.to_string()], "THRESHOLD"),
+            (
+                vec![
+                    "--weights".to_string(),
+                    "1".to_string(),
+                    format!("--weights={raw}"),
+                    "--weights".to_string(),
+                    "2".to_string(),
+                ],
+                "--weights",
+            ),
+        ];
+        for (argv, named) in cases {
+            if raw.starts_with('-') && !argv[0].starts_with("--") {
+                // A bare leading-dash token is a flag, not a positional value.
+                continue;
+            }
+            let error = numeric_command(&args)
+                .try_get_matches_from(&argv)
+                .expect_err("a non-finite number is refused before any input is assembled");
+            assert!(
+                error.to_string().contains(named),
+                "the refusal must name the argument {named} for {argv:?}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn finite_repeated_numbers_keep_their_order_and_count() {
+    let args = derive_args(&numeric_schema(), &["threshold".to_string()]);
+    let matches = numeric_command(&args)
+        .try_get_matches_from([
+            "0.25",
+            "--ratio",
+            "1e308",
+            "--weights",
+            "1.5",
+            "--weights=-2",
+            "--weights",
+            "1.5",
+            "--weights",
+            "0",
+            "--weights",
+            "2e3",
+        ])
+        .expect("finite numbers parse");
+
+    assert_eq!(
+        input_from_matches(&args, &matches).expect("assemble tool input"),
+        json!({
+            "threshold": 0.25,
+            "ratio": 1e308,
+            "weights": [1.5, -2.0, 1.5, 0.0, 2000.0]
+        }),
+        "every supplied element arrives, duplicates included, in the order given"
+    );
+}
