@@ -13,6 +13,10 @@
 # drain that admitted it. `orbit run auto --stop` closes the window early the
 # same way it does for the owner drain; live leaves keep running.
 #
+# A breaker stops new requests after three consecutive claims this run
+# admitted settle as failures, so a systemic executor fault cannot block the
+# owner's backlog one fast-failing task per poll. It resets with a new drain.
+#
 # `max_iterations` is the fail-closed ceiling, not the intended exit. Every
 # iteration that admits nothing waits at least `poll_sleep_seconds`, so 6000
 # covers a 24h window plus a long tail of in-flight leaves.
