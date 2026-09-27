@@ -99,7 +99,7 @@ fn compile_uses_regex_for_non_subpath_negated_read_glob() {
     resolved.read.push("!/Users/test/repo/**/*.env".to_string());
     let text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
     assert!(
-        text.contains("(deny file-read* (regex \"^/[Uu][Ss][Ee][Rr][Ss]/[Tt][Ee][Ss][Tt]/[Rr][Ee][Pp][Oo]/(?:.*/)?[^/]*\\\\.[Ee][Nn][Vv]$\"))"),
+        text.contains("(deny file-read* (regex \"^/[Uu][Ss][Ee][Rr][Ss]/[Tt][Ee][Ss][Tt]/[Rr][Ee][Pp][Oo]/([^/]+/)*[^/]*\\\\.[Ee][Nn][Vv]$\"))"),
         "missing regex read deny: {text}"
     );
     assert!(
@@ -117,7 +117,7 @@ fn compile_uses_regex_for_non_subpath_negated_modify_glob() {
     let text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
     assert!(
         text.contains(
-            "(deny file-write* (regex \"^/[Uu][Ss][Ee][Rr][Ss]/[Tt][Ee][Ss][Tt]/[Rr][Ee][Pp][Oo]/(?:.*/)?[^/]*\\\\.[Ee][Nn][Vv]$\"))"
+            "(deny file-write* (regex \"^/[Uu][Ss][Ee][Rr][Ss]/[Tt][Ee][Ss][Tt]/[Rr][Ee][Pp][Oo]/([^/]+/)*[^/]*\\\\.[Ee][Nn][Vv]$\"))"
         ),
         "missing regex deny for env glob: {text}"
     );
@@ -152,6 +152,141 @@ fn regex_deny_filters_match_case_variant_secret_paths() {
         orbit_regex.is_match("/Users/test/repo/.Orbit/state/task.json"),
         "orbit deny regex should match case-varied .orbit paths"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn compiled_read_glob_uses_the_physical_prefix_and_covers_future_files() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real = temp.path().join("real");
+    std::fs::create_dir(&real).expect("real directory");
+    let alias = temp.path().join("alias");
+    symlink(&real, &alias).expect("path alias");
+    let future = real.join("later/sub/.env");
+    assert!(
+        !future.exists(),
+        "the denied file must be absent at compile time"
+    );
+
+    let mut resolved = profile("default", &["/"], &[]);
+    resolved.read.push(format!("!{}/**/.env", alias.display()));
+    let text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    let regex = compiled_read_deny_regex(&text);
+    std::fs::create_dir_all(future.parent().expect("future parent")).expect("create parent");
+    std::fs::write(&future, "secret").expect("create file after compile");
+
+    assert!(
+        regex.is_match(&future.display().to_string()),
+        "the emitted deny must cover a future file under the physical path: {text}"
+    );
+    assert!(
+        !regex.is_match(&real.join("later/sub/public.txt").display().to_string()),
+        "the emitted deny must preserve the interior wildcard's narrow scope: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn compiled_default_credential_deny_and_keychain_reallow_share_physical_home() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real = temp.path().join("real");
+    std::fs::create_dir(&real).expect("real directory");
+    let alias = temp.path().join("alias");
+    symlink(&real, &alias).expect("path alias");
+    let home = alias.join("home");
+    let physical_home = real.join("home");
+    let home_text = home.display().to_string();
+    let text = compile_with_env(
+        &profile("default", &["/"], &[]),
+        "claude",
+        EnvOverrides {
+            home: Some(&home_text),
+            ..EnvOverrides::default()
+        },
+    );
+
+    let deny = compiled_subpath(&text, "deny", "Library/Keychains");
+    let reallow = compiled_subpath(&text, "allow", "Library/Keychains");
+    let keychains = physical_home.join("Library/Keychains/login.keychain-db");
+    assert!(
+        keychains.starts_with(&deny),
+        "default deny must bind to the physical keychain: {text}"
+    );
+    assert!(
+        keychains.starts_with(&reallow),
+        "provider re-allow must bind to the same physical keychain: {text}"
+    );
+    assert_eq!(
+        deny, reallow,
+        "the deny and re-allow must describe one directory"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn compiled_read_glob_denies_private_var_alias_even_for_future_files() {
+    let temp = tempfile::tempdir_in("/var/tmp").expect("tempdir under /var/tmp");
+    let physical = temp.path().canonicalize().expect("physical tempdir");
+    assert!(physical.starts_with("/private/var/tmp"));
+    let future = physical.join("later/.env");
+    assert!(
+        !future.exists(),
+        "the denied file must be absent at compile time"
+    );
+
+    let mut resolved = profile("default", &["/"], &[]);
+    resolved
+        .read
+        .push(format!("!{}/**/.env", temp.path().display()));
+    let text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    let regex = compiled_read_deny_regex(&text);
+    std::fs::create_dir_all(future.parent().expect("future parent")).expect("create parent");
+    std::fs::write(&future, "secret").expect("create file after compile");
+
+    assert!(
+        regex.is_match(&future.display().to_string()),
+        "the /var rule must deny the canonical /private/var file: {text}"
+    );
+
+    if sandbox_exec_can_apply() {
+        let public = physical.join("later/public.txt");
+        std::fs::write(&public, "public").expect("public file");
+        assert!(
+            can_read_under_profile(&text, &public),
+            "the sibling should remain readable under sandbox-exec: {text}"
+        );
+        assert!(
+            !can_read_under_profile(&text, &future),
+            "sandbox-exec must deny the nested file created after compile: {text}"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn compiled_read_deny_regex(text: &str) -> regex::Regex {
+    let filter = text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("(deny file-read* ")
+                .filter(|filter| filter.starts_with("(regex "))
+        })
+        .and_then(|line| line.strip_suffix(')'))
+        .expect("compiled read deny");
+    regex_from_filter(filter)
+}
+
+#[cfg(unix)]
+fn compiled_subpath(text: &str, action: &str, suffix: &str) -> std::path::PathBuf {
+    let prefix = format!("({action} file-read* (subpath \"");
+    text.lines()
+        .filter_map(|line| line.strip_prefix(&prefix)?.strip_suffix("\"))"))
+        .map(std::path::PathBuf::from)
+        .find(|path| path.ends_with(suffix))
+        .expect("compiled credential subpath")
 }
 
 fn regex_from_filter(filter: &str) -> regex::Regex {

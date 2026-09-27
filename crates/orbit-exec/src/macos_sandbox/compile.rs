@@ -43,9 +43,10 @@ use orbit_types::workflow::Provider;
 ///   runtime re-allows after their enclosing deny, preserving SBPL's
 ///   last-match-wins evaluation.
 ///
-/// Paths in `rules.modify` are emitted as-is. Callers must resolve
-/// workspace-relative globs to absolute paths before invoking this
-/// function — a relative `subpath` is meaningless to the kernel.
+/// Callers must resolve workspace-relative globs to absolute paths before
+/// invoking this function — a relative `subpath` is meaningless to the kernel.
+/// Each filter resolves the literal prefix of its absolute rule to the path
+/// Seatbelt sees; wildcard suffixes stay dynamic for future files.
 pub fn compile_macos_sandbox_profile(
     rules: &ResolvedFsProfile,
     provider: &str,
@@ -407,10 +408,10 @@ fn emit_provider_credential_read_reallow(provider: &str, home: Option<&OsStr>, o
     let Some(home) = super::provider_dirs::non_empty_env_path(home) else {
         return;
     };
-    let keychains = format!("{}/{USER_KEYCHAINS_SUBPATH}", home.display());
+    let keychains = crate::physical_with_missing_tail(&home.join(USER_KEYCHAINS_SUBPATH));
     out.push_str(&format!(
         "(allow file-read* (subpath \"{}\"))\n",
-        super::sbpl_filter::sbpl_escape(&keychains)
+        super::sbpl_filter::sbpl_escape(&keychains.display().to_string())
     ));
 }
 
@@ -424,7 +425,9 @@ fn emit_default_credential_read_denies(
     out: &mut String,
 ) {
     for deny in credential_read_denies(home, cargo_home) {
-        let path = deny.path.display().to_string();
+        let path = crate::physical_with_missing_tail(&deny.path)
+            .display()
+            .to_string();
         if deny.file {
             emit_read_deny_literal(&path, out);
         } else {

@@ -184,6 +184,13 @@ Granted write roots are created before the child spawns, because a rule binds to
 
 The `Sandbox` trait remains the seam for generic `run_process` callers, but CLI-backed `agent_loop` invocations use a separate executor wrapper when the executor declares `sandbox: macos-sandbox-exec` ([T20260427-51]). The v2 host resolves the activity `fsProfile`; the engine converts workspace-relative rules to absolute roots and compiles SBPL before spawning the provider CLI.
 
+The SBPL compiler resolves the literal path prefix of each rule to its physical
+location before emitting a `subpath` or glob `regex` filter. For example, a
+`/var/folders/.../**/.env` read exclusion binds under `/private/var/folders`
+on macOS, while the wildcard remains in the regex so names created after
+compilation are still denied. Default credential read denies and the matching
+provider keychain re-allow use the same physical path identity.
+
 Executor resources also accept `spec.sandbox: off` as a persistent operator
 opt-out. It survives ordinary `orbit init` (without `--force`), non-overwriting
 seeding, and normal resource sync, unlike omitted/null values on legacy Linux

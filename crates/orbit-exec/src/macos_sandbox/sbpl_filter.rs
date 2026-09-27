@@ -5,21 +5,23 @@ pub(super) fn sbpl_escape(value: &str) -> String {
 }
 
 pub(super) fn sbpl_filter_for_deny_rule(rule: &str) -> String {
-    if rule_can_use_subpath(rule) {
-        let path = subpath_root(rule);
+    let rule = physical_rule(rule);
+    if rule_can_use_subpath(&rule) {
+        let path = subpath_root(&rule);
         format!("(subpath \"{}\")", sbpl_escape(&path))
     } else {
-        let regex = glob_rule_to_regex(rule);
+        let regex = glob_rule_to_regex(&rule);
         format!("(regex \"{}\")", sbpl_escape(&regex))
     }
 }
 
 pub(super) fn sbpl_filter_for_allow_rule(rule: &str) -> String {
-    if rule_can_use_subpath(rule) {
-        let path = subpath_root(rule);
+    let rule = physical_rule(rule);
+    if rule_can_use_subpath(&rule) {
+        let path = subpath_root(&rule);
         format!("(subpath \"{}\")", sbpl_escape(&path))
     } else {
-        let regex = glob_rule_to_regex(rule);
+        let regex = glob_rule_to_regex(&rule);
         format!("(regex \"{}\")", sbpl_escape(&regex))
     }
 }
@@ -37,7 +39,26 @@ pub(super) fn sbpl_filter_for_allow_rule(rule: &str) -> String {
 /// credential path was denied, so over-approximating is the safe direction.
 /// [ORB-10931]
 pub(super) fn deny_rule_reaches_path(rule: &str, path: &Path) -> bool {
-    path.starts_with(subpath_root(rule))
+    crate::physical_with_missing_tail(path).starts_with(subpath_root(&physical_rule(rule)))
+}
+
+/// Seatbelt compares physical paths. Resolve only the literal directory above
+/// the first wildcard: the wildcard and its missing future matches must stay
+/// in the emitted regex. On macOS this turns `/var/folders/**/.env` into a
+/// `/private/var/folders`-rooted deny even before `.env` exists.
+fn physical_rule(rule: &str) -> String {
+    if !rule.starts_with('/') {
+        return rule.to_string();
+    }
+    let wildcard = rule.find(['*', '?']);
+    let prefix_end = wildcard
+        .and_then(|index| rule[..index].rfind('/'))
+        .unwrap_or(rule.len());
+    if prefix_end == 0 {
+        return rule.to_string();
+    }
+    let physical = crate::physical_with_missing_tail(Path::new(&rule[..prefix_end]));
+    format!("{}{}", physical.display(), &rule[prefix_end..])
 }
 
 fn rule_can_use_subpath(rule: &str) -> bool {
@@ -73,7 +94,9 @@ fn glob_rule_to_regex(rule: &str) -> String {
         match chars[i] {
             '*' if chars.get(i + 1) == Some(&'*') => {
                 if chars.get(i + 2) == Some(&'/') {
-                    out.push_str("(?:.*/)?");
+                    // Zero or more complete directory components, using
+                    // ordinary regex operators supported by Seatbelt.
+                    out.push_str("([^/]+/)*");
                     i += 3;
                 } else {
                     out.push_str(".*");
