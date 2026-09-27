@@ -603,21 +603,22 @@ fn refuse_in_repository_source(
 /// directory, and a reader that lands there gets a plain "not installed"
 /// error rather than half a plugin.
 ///
-/// The swap rolls back unless [`Self::commit`] is reached, so an install that
-/// fails after the copy leaves neither a tree without a `plugins` row — which
-/// the next `add` would demand `--force` for — nor a namespace whose row and
-/// tree disagree.
-struct StagedInstall {
+/// The swap rolls back unless [`Self::commit`] is reached. If restoration
+/// fails, the displaced tree stays at a reported recovery path rather than
+/// being deleted while the old row still names it.
+pub(super) struct StagedInstall {
     staging: PathBuf,
     install_path: PathBuf,
     /// Where the replaced tree was moved, held until the row names the new one.
     displaced: Option<PathBuf>,
     published: bool,
+    #[cfg(unix)]
+    published_identity: Option<(u64, u64)>,
     committed: bool,
 }
 
 impl StagedInstall {
-    fn begin(global_root: &Path, name: &str, version: &str) -> Result<Self, OrbitError> {
+    pub(super) fn begin(global_root: &Path, name: &str, version: &str) -> Result<Self, OrbitError> {
         let namespace_dir = plugin_namespace_dir(global_root, name);
         std::fs::create_dir_all(&namespace_dir).map_err(|error| {
             OrbitError::Io(format!("create {}: {error}", namespace_dir.display()))
@@ -627,18 +628,38 @@ impl StagedInstall {
             install_path: namespace_dir.join(version),
             displaced: None,
             published: false,
+            #[cfg(unix)]
+            published_identity: None,
             committed: false,
         })
     }
 
     /// Where the tree is copied before it is anything a reader can reach.
-    fn staging(&self) -> &Path {
+    pub(super) fn staging(&self) -> &Path {
         &self.staging
     }
 
     /// Move any tree already at `<version>/` aside, then make the staged one
     /// visible with one rename.
     fn publish(&mut self) -> Result<(), OrbitError> {
+        self.publish_with(|_, _| {})
+    }
+
+    /// The callback gives fault-path tests a deterministic point between the
+    /// two renames; production passes a no-op.
+    pub(super) fn publish_with(
+        &mut self,
+        after_displacement: impl FnOnce(&Path, &Path),
+    ) -> Result<(), OrbitError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            self.published_identity = self
+                .staging
+                .symlink_metadata()
+                .ok()
+                .map(|metadata| (metadata.dev(), metadata.ino()));
+        }
         if self.install_path.symlink_metadata().is_ok() {
             let displaced = self.install_path.with_file_name(scratch_name("replaced"));
             std::fs::rename(&self.install_path, &displaced).map_err(|error| {
@@ -646,11 +667,62 @@ impl StagedInstall {
             })?;
             self.displaced = Some(displaced);
         }
-        std::fs::rename(&self.staging, &self.install_path).map_err(|error| {
-            OrbitError::Io(format!("install {}: {error}", self.install_path.display()))
-        })?;
+        after_displacement(&self.staging, &self.install_path);
+        if let Err(error) = std::fs::rename(&self.staging, &self.install_path) {
+            let failure = format!("install {}: {error}", self.install_path.display());
+            return Err(match self.rollback() {
+                Ok(()) => OrbitError::Io(failure),
+                Err(rollback_error) => OrbitError::Io(format!("{failure}; {rollback_error}")),
+            });
+        }
         self.published = true;
         Ok(())
+    }
+
+    /// Undo either side of the publish boundary. If another actor occupies
+    /// the live path, keep both that path and the displaced tree untouched.
+    pub(super) fn rollback(&mut self) -> Result<(), OrbitError> {
+        if self.published {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let owned = self.published_identity.is_some_and(|identity| {
+                    self.install_path
+                        .symlink_metadata()
+                        .is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == identity)
+                });
+                if !owned {
+                    return Err(self.recovery_error("the published path changed"));
+                }
+            }
+            std::fs::remove_dir_all(&self.install_path)
+                .map_err(|error| self.recovery_error(&format!("remove published tree: {error}")))?;
+            self.published = false;
+        }
+        if let Some(displaced) = self.displaced.as_ref() {
+            if self.install_path.symlink_metadata().is_ok() {
+                return Err(self.recovery_error("the live path is occupied"));
+            }
+            std::fs::rename(displaced, &self.install_path)
+                .map_err(|error| self.recovery_error(&format!("restore previous tree: {error}")))?;
+            self.displaced = None;
+        }
+        Ok(())
+    }
+
+    fn recovery_error(&self, reason: &str) -> OrbitError {
+        let message = if let Some(displaced) = self.displaced.as_ref() {
+            format!(
+                "could not restore the previous plugin installation ({reason}); recover its bytes at {}",
+                displaced.display()
+            )
+        } else {
+            format!(
+                "could not roll back the plugin installation ({reason}); inspect {}",
+                self.install_path.display()
+            )
+        };
+        OrbitError::Io(message)
     }
 
     /// The row names the staged tree: keep it, and drop the replaced one.
@@ -667,26 +739,13 @@ impl Drop for StagedInstall {
         if self.committed {
             return;
         }
-        if self.published {
-            remove_install_scratch(&self.install_path);
-            // The replaced tree stays where it is if it cannot be put back:
-            // the row still names it, and leaving it under a scratch name the
-            // warning points at beats deleting the operator's only copy.
-            if let Some(displaced) = self.displaced.take()
-                && let Err(error) = std::fs::rename(&displaced, &self.install_path)
-            {
-                tracing::warn!(
-                    target: "orbit.core.plugin",
-                    path = %self.install_path.display(),
-                    replaced = %displaced.display(),
-                    "a failed install could not put the replaced plugin tree back: {error}",
-                );
-            }
+        if let Err(error) = self.rollback() {
+            tracing::warn!(
+                target: "orbit.core.plugin",
+                "a failed install could not put the replaced plugin tree back: {error}",
+            );
         }
         remove_install_scratch(&self.staging);
-        if let Some(displaced) = self.displaced.take() {
-            remove_install_scratch(&displaced);
-        }
     }
 }
 

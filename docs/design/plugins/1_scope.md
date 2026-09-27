@@ -225,8 +225,12 @@ by an older Orbit.
   publishes it with a single `rename`, so a concurrent reader (clock tick, MCP server,
   dashboard) never loads a half-written tree. Replacing a tree renames the old one aside
   first; in that window a reader gets "not installed", not half a plugin.
-- The swap rolls back if anything fails before the row is written, so no tree is left
-  without a row.
+- The swap rolls back if anything fails before the row is written, including failure to
+  rename the staged tree after displacing an existing install. The stored row is unchanged.
+  If the previous tree cannot be restored because the live path is occupied or an I/O
+  operation fails, Orbit keeps the displaced bytes under `.replaced-*` and reports that
+  recovery path; it does not delete the displaced tree or a competing occupant
+  of the live path.
 - Once the row names the new tree, everything else under `~/.orbit/plugins/<ns>/` (the
   replaced version, a stale `current`, crash scratch) is pruned: old trees are readable to
   every backend (§4.3). `remove` deletes the whole namespace directory after the same

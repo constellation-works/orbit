@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
+use super::super::install::StagedInstall;
 use super::super::{
     PluginAddOptions, PluginRemoveOptions, PluginUpgradeOptions, install_plugin, list_plugins,
     plugin_doctor, remove_plugin, show_plugin, upgrade_plugin, validate_plugin_dir,
@@ -1186,5 +1187,167 @@ fn a_forced_replace_that_fails_puts_the_previous_tree_back() {
         namespace_entries(&fixture.global_root.join("plugins/demo")),
         BTreeSet::from(["1.0.0".to_string()]),
         "the rolled-back install left no staging or replaced directory"
+    );
+}
+
+/// A missing staging tree fails the second rename, after the first rename
+/// displaced the recorded tree. The failed publication must restore that tree.
+#[test]
+fn a_failed_publish_restores_the_displaced_tree_and_keeps_its_row() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let installed = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install previous tree");
+    let row = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read row")
+        .expect("previous row");
+    let install_path = Path::new(&installed.install_path);
+    let previous = std::fs::read(install_path.join("plugin.yaml")).expect("previous bytes");
+
+    let mut staged =
+        StagedInstall::begin(&fixture.global_root, "demo", "1.0.0").expect("begin replacement");
+    std::fs::create_dir(staged.staging()).expect("stage candidate");
+    staged
+        .publish_with(|staging, _| {
+            std::fs::remove_dir(staging).expect("lose staged candidate after displacement");
+        })
+        .expect_err("second rename must fail");
+    drop(staged);
+
+    assert_eq!(
+        std::fs::read(install_path.join("plugin.yaml")).expect("restored bytes"),
+        previous
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .stores()
+            .plugins()
+            .get_plugin("demo")
+            .expect("read row after failed publish"),
+        Some(row),
+        "failed publication must not rewrite the stored row"
+    );
+    assert_eq!(
+        namespace_entries(&fixture.global_root.join("plugins/demo")),
+        BTreeSet::from(["1.0.0".to_string()]),
+        "the displaced tree returned to its recorded path"
+    );
+}
+
+/// If another actor occupies the live name after displacement, both trees
+/// survive the failed second rename and the error names the recovery path.
+#[test]
+fn failed_restore_keeps_the_displaced_tree_and_reports_its_path() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let installed = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install previous tree");
+    let row = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read row")
+        .expect("previous row");
+    let install_path = Path::new(&installed.install_path);
+    let previous = std::fs::read(install_path.join("plugin.yaml")).expect("previous bytes");
+    let mut staged =
+        StagedInstall::begin(&fixture.global_root, "demo", "1.0.0").expect("begin replacement");
+    std::fs::create_dir(staged.staging()).expect("stage candidate");
+    let error = staged
+        .publish_with(|staging, live| {
+            std::fs::remove_dir(staging).expect("lose staged candidate after displacement");
+            std::fs::create_dir(live).expect("other actor occupies live path");
+            std::fs::write(live.join("actor.txt"), "keep me").expect("actor file");
+        })
+        .expect_err("second rename and restoration must fail");
+    let namespace = fixture.global_root.join("plugins/demo");
+    let displaced = std::fs::read_dir(&namespace)
+        .expect("read namespace")
+        .map(|entry| entry.expect("entry").path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".replaced-"))
+        })
+        .expect("previous tree was displaced");
+    assert!(
+        error.to_string().contains(&displaced.display().to_string()),
+        "the error must report where to recover the old bytes: {error}"
+    );
+    drop(staged);
+    assert_eq!(
+        std::fs::read(displaced.join("plugin.yaml")).expect("recovery bytes"),
+        previous
+    );
+    assert_eq!(
+        std::fs::read_to_string(install_path.join("actor.txt")).expect("actor bytes"),
+        "keep me",
+        "rollback must not remove the other actor's path"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .stores()
+            .plugins()
+            .get_plugin("demo")
+            .expect("row"),
+        Some(row),
+        "a failed restore must not rewrite the row"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rollback_does_not_remove_a_new_occupant_of_the_published_path() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let installed = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install previous tree");
+    let install_path = Path::new(&installed.install_path);
+    let previous = std::fs::read(install_path.join("plugin.yaml")).expect("previous bytes");
+    let mut staged =
+        StagedInstall::begin(&fixture.global_root, "demo", "1.0.0").expect("begin replacement");
+    std::fs::create_dir(staged.staging()).expect("stage candidate");
+    staged.publish_with(|_, _| {}).expect("publish candidate");
+    let namespace = fixture.global_root.join("plugins/demo");
+    let displaced = std::fs::read_dir(&namespace)
+        .expect("read namespace")
+        .map(|entry| entry.expect("entry").path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".replaced-"))
+        })
+        .expect("previous tree was displaced");
+    std::fs::rename(install_path, fixture.sources.join("published-candidate"))
+        .expect("other actor moves published tree");
+    std::fs::create_dir(install_path).expect("other actor occupies live path");
+    std::fs::write(install_path.join("actor.txt"), "keep me").expect("actor file");
+
+    drop(staged);
+    assert_eq!(
+        std::fs::read_to_string(install_path.join("actor.txt")).expect("actor bytes"),
+        "keep me"
+    );
+    assert_eq!(
+        std::fs::read(displaced.join("plugin.yaml")).expect("recovery bytes"),
+        previous,
+        "rollback must preserve the old tree when the published path changes"
     );
 }
