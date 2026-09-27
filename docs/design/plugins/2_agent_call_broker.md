@@ -19,14 +19,14 @@ sandboxed agent step gets a per-run socket with kernel peer authentication. With
 `ORBIT_PLUGIN_BROKER` set, nested CLI and MCP plugin calls forward to it after checking the
 server UID. The broker executes authenticated requests for exec-backed plugin tools through
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
-The agent sandbox mask and the remaining lifecycle checks are follow-up slices.
+Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
 A plugin backend holds credentials for the service it wraps, either in its own
-`{{plugin_state}}` or in the host secret store. Today any sandboxed agent worker can read both,
-because the agent sandbox leaves the global root readable for the nested `orbit` its tool calls
-run. This note moves agent-initiated plugin calls out of the agent sandbox. The nested `orbit`
+`{{plugin_state}}` or in the host secret store. Without this design any sandboxed agent worker
+could read both, because the agent sandbox left the global root readable for the nested `orbit`
+its tool calls run. This note moves agent-initiated plugin calls out of the agent sandbox. The nested `orbit`
 forwards the call over an authenticated Unix socket to a broker in the host process that
 dispatched the agent. The broker spawns the confined backend, so the agent sandbox can then
 deny `state/plugins/` and `state/plugin-secrets/` outright.
@@ -412,6 +412,18 @@ surface) and `state/plugin-callbacks/`.
   `/private/var` rule the plugin profile uses) after every allow, so the deny is the last
   match.
 
+**As implemented.** The v2 host prepares the mask for every OS-sandboxed launch, a sandboxed
+`local_shell` step included, and carries it on the resolved sandbox beside, not inside, the
+agent's filesystem profile, so the §5 profile intersection is unchanged. Preparation creates
+each directory component without following links and refuses a link, a non-directory or a
+directory another user owns; the sentinel file is created once, never through a link. A host
+that cannot prepare the mask refuses the launch. On Linux the sentinel mounts follow the
+stable toolchain aliases too, and the audited argv is the same plan. The plan refuses to start
+when a tree is reachable through a second path: one of its own alias binds (a tree under the
+managed worktree would reappear under `/tmp/orbit-workspace`), or another host mount of the
+tree's filesystem listed in `/proc/self/mountinfo` whose path is confirmed by device and inode.
+Sandbox `off` and a bare fallback carry no mask.
+
 ### 6.3 Nested `orbit` behaviour inside a masked sandbox
 
 A broker-capable host masks every agent it sandboxes, and it exports `ORBIT_PLUGIN_BROKER` only
@@ -432,6 +444,11 @@ anything:
   state, `plugin doctor` state and secret checks, `plugin remove --purge-state`) report
   "not visible from an agent sandbox" and change nothing. These were never agent tasks:
   lifecycle verbs already need writes to `plugins/`, which the agent profile does not grant.
+  As implemented, `plugin secret set` and `rm` refuse the same way (`set` before it prompts),
+  and so does an ordinary `plugin remove`, because it deletes the plugin's secrets; only
+  `--record-only` proceeds. `plugin show` adds a "State and secrets: not visible" line and
+  `state_and_secrets_visible: false` in JSON. `plugin doctor` reports one informational row in
+  place of its unset-secret checks.
 
 ### 6.4 Honest limits
 
@@ -442,8 +459,8 @@ anything:
   macOS matches `subpath` on the physical path.
 - On macOS the guarantee also depends on the agent profile not granting another process's task
   port. The broker and the backend are not the agent's descendants, but they do run as the same
-  user. The implementation proves with a test that a process inside the agent profile cannot
-  read the broker's or the backend's memory.
+  user. A test that a process inside the agent profile cannot read the broker's or the
+  backend's memory is still owed; the mask slice did not add one.
 - An agent can still use a plugin however its allowlist lets it: post with the account, for
   example. Taking a credential and using a tool are separated. Tool authorization is not
   tightened here.
@@ -458,6 +475,7 @@ anything:
 
 | Situation | Behaviour |
 |---|---|
+| The host cannot prepare the mask (a tree is a link or foreign-owned, or reachable through a second mount) | The agent is not started. The step fails permanently, naming the path. |
 | The host cannot create the directory or bind the socket (path too long, `EACCES`, disk full) | The step still runs, with the mask applied and no `ORBIT_PLUGIN_BROKER`. Plugin calls fail with `plugin_broker_unavailable`, `retryable: false`, naming the cause. A broker failure costs plugin calls, never confidentiality. |
 | The executor runs unsandboxed (`sandbox: off`, bare fallback) | No mask and no broker. Plugin calls run in-process as they do today; the §1 non-goal covers this. |
 | The socket is gone or refuses the connection mid-run (step runner crashed or is shutting down) | `plugin_broker_unavailable`, `retryable: false`. The agent is being torn down anyway (`--die-with-parent`). |
@@ -499,8 +517,8 @@ The mask ships last, only once every call it would break has a broker to go to:
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent
    whether or not its broker bound, plus the §6.3 nested behaviour: the sentinel, no in-process fallback, the secret
    store refusing a masked directory, and operator commands degrading. This slice also updates
-   1_scope.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Blocked by 3.
-   [ORB-13239]
+   1_scope.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Implemented;
+   see §6.2 "As implemented". [ORB-13239]
 
 ## Task References
 

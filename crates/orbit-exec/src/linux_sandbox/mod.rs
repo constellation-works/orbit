@@ -2,9 +2,12 @@
 //!
 //! The backend deliberately keeps the host filesystem readable and materializes
 //! `ResolvedFsProfile::modify` as ordered bind mounts. It is therefore honest
-//! write confinement, not a general read-policy implementation.
+//! write confinement, not a general read-policy implementation. The one read
+//! boundary is an explicit mask: named directories hidden behind a read-only
+//! stand-in (see [`LinuxBwrapMask`]).
 
 mod argv;
+mod mask;
 mod mounts;
 mod probe;
 mod rules;
@@ -28,7 +31,7 @@ pub use argv::{compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority
 pub use probe::{bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message, probe_bwrap};
 pub use spawn::spawn_under_linux_bwrap;
 pub use types::{
-    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
+    BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
     LinuxBwrapSpawnRequest,
 };
@@ -49,6 +52,9 @@ pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, Orbi
 }
 
 use argv::base_namespace_args;
+use mask::append_mask_mounts;
+#[cfg(test)]
+use mask::{MountEntry, host_alias, parse_mountinfo, plan_alias};
 use mounts::{
     append_cargo_download_cache_mounts, append_stable_toolchain_mounts, cargo_home_dir,
     cwd_is_writable_root, profile_grants_write, push_mount,

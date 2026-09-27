@@ -65,6 +65,22 @@ pub struct LinuxBwrapMountEvidence {
     pub inode: u64,
 }
 
+/// Directories a sandboxed child must not read or write, each replaced by one
+/// read-only stand-in directory.
+///
+/// Both paths must exist before the plan is compiled: Bubblewrap cannot mount
+/// over a path the read-only bind of `/` does not already hold. The stand-in is
+/// bound over every target after all other mounts, and a Bubblewrap mount
+/// cannot be undone by a process without capabilities; a nested user
+/// namespace receives it locked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxBwrapMask {
+    /// The directory the child sees in place of each target.
+    pub sentinel: PathBuf,
+    /// The directories hidden from the child.
+    pub targets: Vec<PathBuf>,
+}
+
 /// A host object already validated and opened by the runtime owner. Sharing
 /// the handle avoids a parent-side `dup`: closing such a duplicate can release
 /// unrelated POSIX locks held by SQLite in the same process.

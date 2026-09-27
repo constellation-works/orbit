@@ -355,6 +355,7 @@ fn spawned_child_guard_retains_linux_mount_descriptors() {
             destination: target,
             source,
         }],
+        None,
     )
     .expect("descriptor plan");
     let source_fd = plan.mount_evidence()[0].source_fd;
@@ -418,6 +419,7 @@ fn linux_runtime_mount_authority_shares_host_descriptor() {
                 wal_file_set_lease: None,
             },
         ],
+        mask: None,
     };
 
     let authority = linux_bwrap_mount_authority(&sandbox);
@@ -458,6 +460,7 @@ fn linux_bwrap_spawn_returns_mount_descriptor_ownership() {
                 wal_file_set_lease: None,
             },
         ],
+        mask: None,
     };
     let mut spawned = super::super::spawn::spawn_child_with_optional_sandbox(
         "/bin/sh",
@@ -679,4 +682,145 @@ impl Drop for EnvVarGuard {
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+struct MaskedHost {
+    _temp: tempfile::TempDir,
+    root: std::path::PathBuf,
+    sentinel: std::path::PathBuf,
+    trees: Vec<std::path::PathBuf>,
+}
+
+#[cfg(target_os = "linux")]
+fn masked_host() -> MaskedHost {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let sentinel = root.join("global/state/plugin-broker/masked");
+    let trees = vec![
+        root.join("global/state/plugins"),
+        root.join("global/state/plugin-secrets"),
+    ];
+    for dir in std::iter::once(&sentinel).chain(&trees) {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    std::fs::write(sentinel.join(".orbit-brokered"), b"masked").expect("sentinel file");
+    std::fs::write(trees[1].join("demo.json"), b"{\"token\":\"host-only\"}").expect("secret");
+    MaskedHost {
+        _temp: temp,
+        root,
+        sentinel,
+        trees,
+    }
+}
+
+/// A masked tree the plan would also expose through the managed worktree's
+/// stable alias refuses the launch; the provider never starts.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_spawn_refuses_a_mask_it_cannot_complete_before_the_provider_starts() {
+    let host = masked_host();
+    let worktree = host.root.join("worktree");
+    let aliased = worktree.join("state/plugins");
+    std::fs::create_dir_all(&aliased).expect("tree inside worktree");
+    let marker = host.root.join("started");
+    let sandbox = ResolvedSandbox {
+        fs_profile: orbit_types::policy::ResolvedFsProfile {
+            name: "test".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![format!("{}/**", worktree.display())],
+        },
+        managed_worktree: true,
+        mask: Some(super::super::super::dispatcher::SandboxMask {
+            sentinel: host.sentinel.clone(),
+            targets: vec![aliased],
+        }),
+        ..linux_sandbox_for_test(false)
+    };
+
+    let error = super::super::spawn::spawn_child_with_optional_sandbox(
+        "/bin/sh",
+        &sh_args(&format!("touch '{}'", marker.display())),
+        &[],
+        Some(&worktree),
+        Some(&sandbox),
+        "codex",
+    )
+    .expect_err("an incomplete mask must refuse the launch");
+
+    assert!(error.permanent, "a mask alias is deterministic: {error:?}");
+    assert!(
+        error.message.contains("/tmp/orbit-workspace/state/plugins"),
+        "the refusal names where the tree would stay reachable: {}",
+        error.message
+    );
+    assert!(!marker.exists(), "the provider must not have started");
+}
+
+/// Criterion-level check of the Linux mask against a real Bubblewrap: the
+/// agent sees only the sentinel in each tree, cannot write there even with a
+/// write grant over the global root, and cannot peel the mask off from a
+/// nested user namespace.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a Linux host with working Bubblewrap user/mount namespaces"]
+fn linux_bwrap_mask_hides_plugin_trees_from_the_agent() {
+    let probe = probe_bwrap();
+    assert!(
+        probe.available,
+        "live boundary unvalidated: {}",
+        probe.detail
+    );
+    let host = masked_host();
+    let worktree = host.root.join("worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let secrets = &host.trees[1];
+    let sandbox = ResolvedSandbox {
+        fs_profile: orbit_types::policy::ResolvedFsProfile {
+            name: "test".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![
+                format!("{}/**", worktree.display()),
+                format!("{}/global/**", host.root.display()),
+            ],
+        },
+        managed_worktree: true,
+        mask: Some(super::super::super::dispatcher::SandboxMask {
+            sentinel: host.sentinel.clone(),
+            targets: host.trees.clone(),
+        }),
+        ..linux_sandbox_for_test(false)
+    };
+    let secrets_text = secrets.display();
+    let script = format!(
+        "set -u\n\
+         ls -A '{secrets_text}'\n\
+         cat '{secrets_text}/demo.json' && echo LEAK-READ\n\
+         echo x > '{secrets_text}/planted' && echo LEAK-WRITE\n\
+         if command -v unshare >/dev/null; then\n\
+           unshare -Urm sh -c \"umount '{secrets_text}' && cat '{secrets_text}/demo.json'\" && echo LEAK-UMOUNT\n\
+         fi\n\
+         exit 0\n"
+    );
+    let spawned = super::super::spawn::spawn_child_with_optional_sandbox(
+        "/bin/sh",
+        &sh_args(&script),
+        &[],
+        Some(&worktree),
+        Some(&sandbox),
+        "codex",
+    )
+    .expect("sandboxed spawn");
+    let output = spawned.child.wait_with_output().expect("wait");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        stdout.lines().next(),
+        Some(".orbit-brokered"),
+        "the tree lists only the sentinel: {stdout}"
+    );
+    assert!(!stdout.contains("LEAK"), "the mask leaked: {stdout}");
+    assert!(!stdout.contains("host-only"), "the secret leaked: {stdout}");
+    assert!(!secrets.join("planted").exists());
 }

@@ -74,6 +74,7 @@ fn supervisor_retains_linux_mount_plan_through_wait_and_cleanup() {
             destination: target,
             source: authority,
         }],
+        None,
     )
     .expect("descriptor plan");
     let SpawnedChild {

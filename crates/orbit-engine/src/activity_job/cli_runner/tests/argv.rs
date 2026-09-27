@@ -183,6 +183,7 @@ fn task_pilot_reviewer_profile_starts_direct_linux_invocation_with_env_denies() 
         allow_fallback: false,
         managed_worktree: false,
         runtime_write_authority: Vec::new(),
+        mask: None,
     };
     let argv = try_audit_argv_for_dispatch("/bin/true", &[], Some(&sandbox), Some(&workspace))
         .expect("direct task-pilot Bubblewrap plan must compile");
@@ -308,6 +309,7 @@ fn reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths() {
         allow_fallback: false,
         managed_worktree: false,
         runtime_write_authority: Vec::new(),
+        mask: None,
     };
     let argv = try_audit_argv_for_dispatch("/bin/true", &[], Some(&sandbox), Some(&workspace))
         .expect("direct reviewer Bubblewrap plan must compile");
@@ -653,5 +655,44 @@ fn neutralize_inner_sandbox_leaves_claude_args_unchanged() {
     assert!(
         config.is_empty(),
         "claude provider_config must remain untouched"
+    );
+}
+
+/// The audited Bubblewrap argv is the plan the launcher mounts, mask included,
+/// so a run's audit record shows which trees were hidden.
+#[cfg(target_os = "linux")]
+#[test]
+fn audited_linux_plan_carries_the_plugin_mask() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    let sentinel = root.join("global/state/plugin-broker/masked");
+    let tree = root.join("global/state/plugins");
+    for dir in [&workspace, &sentinel, &tree] {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    let sandbox = ResolvedSandbox {
+        fs_profile: orbit_types::policy::ResolvedFsProfile {
+            name: "test".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![format!("{}/**", workspace.display())],
+        },
+        mask: Some(crate::activity_job::SandboxMask {
+            sentinel: sentinel.clone(),
+            targets: vec![tree.clone()],
+        }),
+        ..super::test_support::linux_sandbox_for_test(false)
+    };
+
+    let argv = try_audit_argv_for_dispatch("/bin/true", &[], Some(&sandbox), Some(&workspace))
+        .expect("masked plan compiles");
+
+    assert!(
+        argv.windows(3).any(|triple| {
+            triple[0] == "--ro-bind"
+                && triple[1] == sentinel.display().to_string()
+                && triple[2] == tree.display().to_string()
+        }),
+        "audited argv lacks the mask: {argv:?}"
     );
 }

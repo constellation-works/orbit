@@ -25,6 +25,20 @@ fn unavailable(message: impl Into<String>) -> OrbitError {
     }
 }
 
+/// Refuse a plugin call that has no broker to go to from inside a masked agent
+/// sandbox (design §6.3). The mask hides the backend's state and the secret
+/// store reads as unavailable, so the nested process never runs the call
+/// itself; it is refused before anything is spawned.
+pub(crate) fn refuse_unbrokered_call(global_root: &Path, tool: &str) -> Result<(), OrbitError> {
+    if crate::runtime::plugin::sandbox_mask::plugin_trees_masked(global_root) {
+        return Err(unavailable(format!(
+            "plugin tool '{tool}' runs only through this run's plugin broker: the agent sandbox \
+             hides plugin state and secrets, and ORBIT_PLUGIN_BROKER is not set"
+        )));
+    }
+    Ok(())
+}
+
 /// Send one plugin call. A failed connection never falls back to execution in
 /// the nested process, since its sandbox cannot read the plugin's secrets.
 pub(crate) fn forward_call(

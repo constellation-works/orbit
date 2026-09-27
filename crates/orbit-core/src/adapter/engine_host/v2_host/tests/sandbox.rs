@@ -1826,3 +1826,60 @@ fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
         "sandbox preparation must not create runtime stores at a redirect target"
     );
 }
+
+/// Every OS-sandboxed agent launch carries the plugin mask, with both trees
+/// and the sentinel already on disk: Bubblewrap can only mount over a path
+/// that exists, and a tree created later by the agent would escape the mask.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn sandboxed_agent_launch_carries_the_prepared_plugin_mask() {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(target_os = "linux")]
+    let kind = orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap;
+    #[cfg(target_os = "macos")]
+    let kind = orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec;
+    let runtime = seeded_runtime_with_executor(Some(kind));
+    let resolved = runtime
+        .resolve_executor_sandbox("codex", None, None)
+        .expect("resolve")
+        .expect("descriptor");
+
+    let mask = resolved.mask.expect("sandboxed agents are masked");
+    let global = runtime.global_root().canonicalize().expect("global root");
+    assert_eq!(
+        mask.targets,
+        vec![
+            global.join("state/plugins"),
+            global.join("state/plugin-secrets")
+        ]
+    );
+    for tree in &mask.targets {
+        let mode = std::fs::metadata(tree)
+            .expect("tree exists")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "{} is host-private", tree.display());
+    }
+    assert_eq!(mask.sentinel, global.join("state/plugin-broker/masked"));
+    assert!(mask.sentinel.join(".orbit-brokered").is_file());
+}
+
+/// Sandbox off keeps today's behavior: nothing hidden, nothing created.
+#[test]
+fn sandbox_off_carries_no_plugin_mask() {
+    let runtime =
+        seeded_runtime_with_executor(Some(orbit_types::workflow::ExecutorSandboxKind::Off));
+    let resolved = runtime
+        .resolve_executor_sandbox("codex", None, None)
+        .expect("resolve")
+        .expect("descriptor");
+
+    assert!(resolved.mask.is_none());
+    assert!(
+        !runtime
+            .global_root()
+            .join("state/plugin-broker/masked")
+            .exists()
+    );
+}

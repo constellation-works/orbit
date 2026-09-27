@@ -12,6 +12,7 @@ pub mod grants;
 pub mod host;
 pub mod paths;
 pub mod requirements;
+pub mod sandbox_mask;
 pub mod secrets;
 
 #[cfg(test)]

@@ -3,13 +3,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_exec::{
-    bwrap_program_for_audit, claude_state_dir_from_env, compile_linux_bwrap_argv,
+    bwrap_program_for_audit, claude_state_dir_from_env, compile_linux_bwrap_argv_with_authority,
     sandbox_exec_program_for_audit,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
 use serde_json::Value;
 
 use super::super::dispatcher::ResolvedSandbox;
+use super::spawn::linux_bwrap_mask;
 
 /// Build the argv we audit-log. When wrapped, the parent process the kernel
 /// sees is the trusted `sandbox-exec`, so we prepend
@@ -74,8 +75,16 @@ pub(super) fn try_audit_argv_for_dispatch(
 ) -> Result<Vec<String>, orbit_common::OrbitError> {
     match sandbox {
         Some(sb) if sb.kind == ExecutorSandboxKind::LinuxBwrap => {
-            let plan =
-                compile_linux_bwrap_argv(&sb.fs_profile, program, args, cwd, sb.managed_worktree)?;
+            // The audited plan carries the same mask the launcher mounts.
+            let plan = compile_linux_bwrap_argv_with_authority(
+                &sb.fs_profile,
+                program,
+                args,
+                cwd,
+                sb.managed_worktree,
+                Vec::new(),
+                linux_bwrap_mask(sb).as_ref(),
+            )?;
             let mut out = Vec::with_capacity(plan.args.len() + 1);
             out.push(plan.wrapper);
             out.extend(plan.args);

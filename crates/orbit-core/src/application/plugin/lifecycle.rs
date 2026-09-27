@@ -24,6 +24,7 @@ use crate::runtime::plugin::grants::{
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir, read_pin_file};
+use crate::runtime::plugin::sandbox_mask::{not_visible, plugin_trees_masked};
 
 use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
 use super::secrets::{delete_plugin_secrets, unset_secret_warnings};
@@ -607,6 +608,12 @@ pub fn remove_plugin(
         ));
     }
     let installed = installed_plugin(runtime, name)?;
+    // An ordinary removal deletes the plugin's secrets, and `--purge-state`
+    // its state. Inside an agent sandbox both trees are masked, so either
+    // would find nothing there and report it gone; refuse before any change.
+    if !options.record_only && plugin_trees_masked(&runtime.global_root()) {
+        return Err(not_visible("this plugin's state and secrets"));
+    }
     if !options.record_only && !is_valid_namespace(name) {
         return Err(OrbitError::PolicyDenied(format!(
             "refusing to remove plugin with invalid namespace '{name}'; use --record-only to clear its record"

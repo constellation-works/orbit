@@ -27,6 +27,7 @@ use crate::runtime::plugin::config::plugin_config_section;
 use crate::runtime::plugin::grants::recorded_program_paths;
 use crate::runtime::plugin::paths::{plugin_state_dir, read_pin_file};
 use crate::runtime::plugin::requirements::{host_api_deprecation, unmet_requirement};
+use crate::runtime::plugin::sandbox_mask::plugin_trees_masked;
 
 /// One plugin tool as the CLI reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +231,20 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let scoped_out = scoped_out_fs_root_rows(runtime)?;
     let ungranted_programs = ungranted_program_rows(&summaries);
     let host_api_deprecated = host_api_deprecation_rows(runtime);
-    let unset_secrets = super::secrets::unset_secret_rows(runtime, &summaries)?;
+    // Inside an agent sandbox the secret store is masked: one row says so,
+    // rather than one unreadable-store row per plugin or a false "not set".
+    let unset_secrets = if plugin_trees_masked(&runtime.global_root()) {
+        vec![PluginDoctorResult {
+            intentional: true,
+            plugin: "plugin state".to_string(),
+            status: PluginStatus::Inactive,
+            message: "plugin state and secrets are not visible from an agent sandbox; run \
+                      `orbit plugin doctor` on the host to check them"
+                .to_string(),
+        }]
+    } else {
+        super::secrets::unset_secret_rows(runtime, &summaries)?
+    };
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).

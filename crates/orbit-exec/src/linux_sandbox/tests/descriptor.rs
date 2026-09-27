@@ -76,6 +76,7 @@ fn descriptor_mount_plan_shares_the_validated_authority_without_duplication() {
             destination: target.clone(),
             source: std::sync::Arc::clone(&source),
         }],
+        None,
     )
     .expect("descriptor-backed plan");
     let retained_fd = plan.mount_sources[0].as_raw_fd();
@@ -171,6 +172,7 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
         Some(&root),
         false,
         authority,
+        None,
     )
     .expect("compile descriptor-backed plan");
     let inherited_fds = plan
@@ -231,6 +233,7 @@ fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
             destination: target,
             source: std::sync::Arc::new(source),
         }],
+        None,
     )
     .expect_err("replacement must fail closed");
 
@@ -300,6 +303,7 @@ fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
             destination: target,
             source: std::sync::Arc::new(source),
         }],
+        None,
     )
     .expect_err("directory replacement must fail closed");
 

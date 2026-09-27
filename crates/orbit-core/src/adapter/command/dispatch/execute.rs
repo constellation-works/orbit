@@ -139,6 +139,8 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         mark_tool_audit_recorded();
         return result;
     }
+    #[cfg(unix)]
+    crate::runtime::plugin::broker::refuse_unbrokered_call(global_root, name)?;
     let execution_kind = registry
         .execution_kind(name)
         .unwrap_or(ToolExecutionKind::Mutating);
@@ -358,6 +360,10 @@ impl OrbitRuntime {
                 value,
                 audit_recorded: false,
             });
+        }
+        #[cfg(unix)]
+        if self.tool_registry().plugin_binding(name).is_some() {
+            crate::runtime::plugin::broker::refuse_unbrokered_call(&self.global_root(), name)?;
         }
         let audit_session_context = session_context.clone();
         self.execute_tool_dispatch_with(

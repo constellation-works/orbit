@@ -68,8 +68,16 @@ impl Execute for PluginShowArgs {
         if let Some(diagnostic) = &plugin.diagnostic {
             header.push_str(&format!("\n{} {diagnostic}", bold("Diagnostic:")));
         }
+        let state_visible = runtime.ensure_plugin_state_visible().is_ok();
+        if !state_visible {
+            header.push_str(&format!(
+                "\n{} not visible from an agent sandbox",
+                bold("State and secrets:")
+            ));
+        }
 
-        let doc = plugin_record(&plugin);
+        let mut doc = plugin_record(&plugin);
+        doc["state_and_secrets_visible"] = state_visible.into();
         let mut blocks = vec![Block::text(header)];
 
         // Requested versus granted side by side: the manifest asks, the

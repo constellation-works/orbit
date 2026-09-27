@@ -37,8 +37,8 @@ mod tests;
 
 pub use compile::{
     MacosLoginKeychainAccess, MacosNetworkAccess, append_macos_network_access,
-    append_macos_read_boundary, compile_macos_sandbox_profile, default_credential_read_denies,
-    macos_login_keychain_access,
+    append_macos_read_boundary, append_macos_subpath_mask, compile_macos_sandbox_profile,
+    default_credential_read_denies, macos_login_keychain_access,
 };
 pub use provider_dirs::{claude_state_dir_from_env, grok_state_dir_from_env};
 pub use spawn::{
