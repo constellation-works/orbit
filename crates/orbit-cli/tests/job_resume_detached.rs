@@ -4,6 +4,10 @@
 //! A CLI resume must hand ownership to a worker before its caller exits.
 
 #[cfg(unix)]
+#[path = "support/fixture_crew.rs"]
+mod fixture_crew;
+
+#[cfg(unix)]
 mod unix {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -14,6 +18,8 @@ mod unix {
     use orbit_common::test_env;
     use serde_json::Value;
     use tempfile::{TempDir, tempdir};
+
+    use super::fixture_crew;
 
     struct Fixture {
         _temp: TempDir,
@@ -55,24 +61,7 @@ mod unix {
                 .args(["workspace", "init", "--name", "resume-test"])
                 .assert()
                 .success();
-            let config_path = fixture.home.join(".orbit/config.toml");
-            let mut config = fs::read_to_string(&config_path).expect("global config");
-            if !config.contains("[crews.sol]") {
-                config.push_str(
-                    "\n[crews.sol]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\nbackend = \"cli\"\n",
-                );
-            }
-            // `orbit init` only seeds `[workflow].default_crew` when it detects an
-            // agent CLI on PATH. On a host with none (e.g. CI), the appended
-            // `[crews.sol]` above would otherwise leave every crew undeclared as
-            // the default, which config validation refuses. Force it here so the
-            // fixture is independent of the host's PATH.
-            if !config.contains("default_crew = ") {
-                let marker = "[workflow]\n";
-                let insertion = config.find(marker).expect("workflow table") + marker.len();
-                config.insert_str(insertion, "default_crew = \"sol\"\n");
-            }
-            fs::write(config_path, config).expect("configure crew");
+            fixture_crew::configure_sol(&fixture.home.join(".orbit"));
             let jobs = fixture.home.join(".orbit/resources/jobs");
             fs::create_dir_all(&jobs).expect("job catalog");
             fs::write(
