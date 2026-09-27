@@ -272,8 +272,6 @@ html:not([data-has-sidebar]) header.header {
 .orbit-card-row > *,
 .orbit-card-body > *,
 .orbit-hero-side > *,
-.orbit-terminal > *,
-.orbit-terminal-panels > *,
 .orbit-guarantees > *,
 .orbit-guarantee > *,
 .orbit-guarantee > div > *,
@@ -324,50 +322,7 @@ html:not([data-has-sidebar]) header.header {
   text-wrap: pretty;
 }
 
-/* Copy-to-clipboard control for the hero install bar. It is delivered
-   `hidden` and unhidden by the inline script, so a page without JavaScript
-   shows the command text and no dead button. */
-.orbit-copy {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  color: var(--sl-color-gray-3);
-  cursor: pointer;
-  flex: 0 0 auto;
-  font: inherit;
-  font-size: 0.75rem;
-  margin-left: 0.75rem;
-  padding: 0.15rem 0.4rem;
-  transition: color 120ms ease, border-color 120ms ease;
-  /* The label swaps between "Copy", "Copied" and "Failed"; reserving the
-     width keeps the surrounding row from reflowing on feedback. */
-  min-width: 3.75rem;
-  text-align: center;
-}
-
-.orbit-copy:hover {
-  color: var(--sl-color-text-accent);
-}
-
-.orbit-copy:focus-visible {
-  border-color: var(--sl-color-accent);
-  color: var(--sl-color-text-accent);
-  outline: 2px solid var(--sl-color-accent);
-  outline-offset: 2px;
-}
-
-.orbit-copy[data-state='ok'] {
-  color: var(--sl-color-text-accent);
-}
-
-.orbit-copy[data-state='error'] {
-  color: var(--orbit-color-danger);
-}
-
-/* The full success/failure sentence, announced rather than shown: the visible
-   channel is the button label, which cannot carry a sentence without
-   reflowing its row. */
-.orbit-copy-status,
+/* Visually hidden text remains available to screen readers. */
 .orbit-sr-only {
   border: 0;
   clip-path: inset(50%);
@@ -1474,114 +1429,6 @@ a.orbit-card:focus-visible h3 {
   min-width: 0;
 }
 
-/* A terminal with one tab per way of running Orbit. The tab row and the Copy
-   control are served `hidden` and revealed by the page script; without
-   JavaScript every panel shows, each under its own label. */
-.orbit-terminal {
-  background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.orbit-terminal-bar {
-  align-items: center;
-  background: var(--sl-color-bg-inline-code);
-  border-bottom: 1px solid var(--sl-color-hairline);
-  display: flex;
-  gap: 0.5rem;
-  min-height: 0.75rem;
-  padding: 0 0.5rem 0 0.375rem;
-}
-
-.orbit-terminal-tabs:not([hidden]) {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.orbit-terminal-tab {
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  color: var(--sl-color-gray-3);
-  cursor: pointer;
-  flex: 0 0 auto;
-  font: inherit;
-  font-size: 0.8125rem;
-  min-height: 2.75rem;
-  padding: 0 0.7rem;
-  white-space: nowrap;
-}
-
-.orbit-terminal-tab:hover {
-  color: var(--sl-color-white);
-}
-
-.orbit-terminal-tab[aria-selected='true'] {
-  border-bottom-color: var(--sl-color-accent);
-  color: var(--sl-color-white);
-  font-weight: 500;
-}
-
-.orbit-terminal-tab:focus-visible {
-  outline: 2px solid var(--sl-color-accent);
-  outline-offset: -2px;
-}
-
-.orbit-terminal-copy {
-  flex: 0 0 auto;
-  margin-inline-start: auto;
-}
-
-.orbit-terminal-label {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.6875rem;
-  letter-spacing: 0.08em;
-  margin: 0;
-  padding: 0.875rem 1.125rem 0;
-  text-transform: uppercase;
-}
-
-.orbit-terminal[data-tabs] .orbit-terminal-label {
-  display: none;
-}
-
-.orbit-terminal[data-tabs] .orbit-terminal-panels {
-  min-height: 12.25rem;
-}
-
-.orbit-landing .orbit-terminal pre {
-  background: transparent;
-  border: 0;
-  margin: 0;
-  overflow-x: auto;
-  padding: 1rem 1.125rem 1.125rem;
-}
-
-.orbit-landing .orbit-terminal code {
-  color: var(--sl-color-white);
-  font-size: 0.8125rem;
-  line-height: 1.75;
-  white-space: pre;
-}
-
-.orbit-terminal-prompt {
-  color: var(--sl-color-gray-4);
-  user-select: none;
-}
-
-.orbit-terminal-comment {
-  color: var(--sl-color-gray-3);
-}
-
-.orbit-terminal-say {
-  color: var(--sl-color-text-accent);
-}
-
 /* ------------------------------------------------------------------------
    Guarantees: the three promises, straight under the hero
    ------------------------------------------------------------------------ */
@@ -1874,7 +1721,6 @@ a.orbit-card:focus-visible h3 {
 @media (prefers-reduced-motion: reduce) {
   .orbit-card,
   .orbit-card h3,
-  .orbit-copy,
   .orbit-stack-layer,
   .orbit-stack-name {
     transition: none;
