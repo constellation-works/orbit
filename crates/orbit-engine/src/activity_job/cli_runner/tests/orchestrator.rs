@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 
+use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 
@@ -12,6 +13,7 @@ use super::super::super::crew::{apply_resolved_settings, resolve_crew_settings};
 use super::super::super::dispatcher::DispatchError;
 #[cfg(target_os = "linux")]
 use super::super::super::dispatcher::ResolvedSandbox;
+use super::super::argv::codex_mcp_server_launch_args;
 use super::super::orchestrator::{provider_child_environment, resolved_activity_fs_profile_name};
 use super::cli_run::CliRun;
 #[cfg(target_os = "linux")]
@@ -543,19 +545,49 @@ fn run_cli_backend_passes_provider_config_to_codex_runtime_args() {
         })
         .expect("cli.invocation.started event");
 
+    assert_eq!(argv[0], out.script.display().to_string());
+    let managed_override_start = argv
+        .len()
+        .checked_sub(2)
+        .expect("managed Codex command override follows transport args");
+    let managed_override_value = argv[managed_override_start + 1]
+        .split_once('=')
+        .expect("managed Codex command config entry")
+        .1;
+    let managed_binary: String =
+        serde_json::from_str(managed_override_value).expect("managed Codex command JSON");
     assert_eq!(
-        argv,
-        &vec![
-            out.script.display().to_string(),
-            "--config".to_string(),
-            "approval_policy=\"never\"".to_string(),
-            "--sandbox".to_string(),
-            "danger-full-access".to_string(),
-            "--add-dir".to_string(),
-            "/tmp/orbit-a".to_string(),
-            "--add-dir".to_string(),
-            "/tmp/orbit-b".to_string(),
-        ]
+        &argv[managed_override_start..],
+        codex_mcp_server_launch_args(&managed_binary)
+            .expect("encode managed Codex command")
+            .as_slice(),
+        "the selected managed binary override must follow the transport defaults"
+    );
+
+    let default_env_vars = serde_json::to_string(MCP_MANAGED_BINDING_ENV_VARS)
+        .expect("managed MCP environment names serialize");
+    let mut expected_runtime_args =
+        codex_mcp_server_launch_args("orbit").expect("encode default Codex MCP command");
+    expected_runtime_args.extend([
+        "--config".to_string(),
+        "mcp_servers.orbit.args=[\"mcp\",\"serve\"]".to_string(),
+        "--config".to_string(),
+        "mcp_servers.orbit.enabled=true".to_string(),
+        "--config".to_string(),
+        format!("mcp_servers.orbit.env_vars={default_env_vars}"),
+        "--config".to_string(),
+        "approval_policy=\"never\"".to_string(),
+        "--sandbox".to_string(),
+        "danger-full-access".to_string(),
+        "--add-dir".to_string(),
+        "/tmp/orbit-a".to_string(),
+        "--add-dir".to_string(),
+        "/tmp/orbit-b".to_string(),
+    ]);
+    assert_eq!(
+        &argv[1..managed_override_start],
+        expected_runtime_args,
+        "managed Codex MCP defaults must precede provider runtime config"
     );
 }
 

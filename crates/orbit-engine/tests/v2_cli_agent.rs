@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_engine::activity_job::load_activity_asset;
 use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
@@ -343,15 +344,55 @@ fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::
         })
         .expect("cli.invocation.started event");
 
+    let managed_env_vars = serde_json::to_string(MCP_MANAGED_BINDING_ENV_VARS)?;
+    let injected_defaults = [
+        "--config".to_string(),
+        "mcp_servers.orbit.command=\"orbit\"".to_string(),
+        "--config".to_string(),
+        "mcp_servers.orbit.args=[\"mcp\",\"serve\"]".to_string(),
+        "--config".to_string(),
+        "mcp_servers.orbit.enabled=true".to_string(),
+        "--config".to_string(),
+        format!("mcp_servers.orbit.env_vars={managed_env_vars}"),
+    ];
     assert_eq!(
-        argv,
-        &vec![
+        &argv[..3],
+        &[
             fake.cli_path().display().to_string(),
             "exec".to_string(),
             "--json".to_string(),
-            "--sandbox".to_string(),
-            "workspace-write".to_string(),
-        ]
+        ],
+        "executor static args must remain present in the audited argv"
+    );
+    assert_eq!(
+        &argv[3..3 + injected_defaults.len()],
+        injected_defaults,
+        "the audited argv must retain every injected managed MCP default"
+    );
+
+    let command_overrides = argv
+        .windows(2)
+        .enumerate()
+        .filter(|(_, pair)| pair[0] == "--config")
+        .filter_map(|(index, pair)| {
+            pair[1]
+                .strip_prefix("mcp_servers.orbit.command=")
+                .map(|value| (index + 1, value))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        command_overrides.len(),
+        2,
+        "Codex transport default and selected managed binary override must both be audited"
+    );
+    let selected_binary: String = serde_json::from_str(command_overrides[1].1)?;
+    assert!(
+        !selected_binary.is_empty(),
+        "the later managed command override must name the selected Orbit binary"
+    );
+    assert!(
+        command_overrides[0].0 < command_overrides[1].0,
+        "the managed binary override must follow the injected MCP default so the later Codex config wins"
     );
     Ok(())
 }
