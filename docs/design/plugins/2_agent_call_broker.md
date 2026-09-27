@@ -374,6 +374,7 @@ It returns the plugin profile with these changes:
   are carried as absolute globs.
 - A declared program that is not on the caller's allowlist refuses the call, as
   `enforce_programs` does for any restricted caller.
+- A plugin profile that runs unsandboxed refuses the call (below).
 
 Landlock carves each read exclusion out beneath every remaining read root. The directory that
 holds an excluded path stays listable, as in the activity ruleset. An exact or subtree
@@ -388,9 +389,14 @@ backend kept, so a root the agent re-allows beneath an exclusion stays writable 
 else is re-allowed. `{{plugin_state}}` is re-allowed last. Read exclusions follow the default
 credential denies. Without a caller, both lists are empty and the profile is unchanged.
 
-A backend that runs unsandboxed (`backend.sandbox: none`, `unsandboxed` grant) runs on the host
-without restrictions, as it does from a clock tick. The operator already accepted that when
-granting `unsandboxed`. `orbit plugin doctor` notes that agents can reach it.
+A backend that runs unsandboxed (`backend.sandbox: none`, `unsandboxed` grant) has no
+confinement that could carry the agent profile, so a brokered call to it is refused before
+spawn with `plugin_broker_refused`, for `exec` and `mcp` backends alike. The `unsandboxed`
+grant waives the plugin's own sandbox, not the calling agent's.
+`brokered_sandbox_profile` refuses it, and both backends build their brokered profile there.
+A non-brokered call, from the operator or a deterministic step such as a clock tick, still
+runs such a backend on the host without restrictions. The operator accepted that when
+granting `unsandboxed`.
 
 ## 6. Denying the trees to the agent sandbox
 

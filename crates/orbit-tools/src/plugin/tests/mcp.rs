@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::{
-    PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions, PluginSecretUpdateStatus,
+    PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions, PluginSandbox,
+    PluginSecretUpdateStatus,
 };
 use serde_json::{Value, json};
 
@@ -903,4 +904,102 @@ fn cancelling_a_broker_call_retires_its_mcp_session_promptly() {
     assert!(!fixture.backend.is_running());
     // SAFETY: signal zero checks existence only.
     assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+}
+
+/// An `mcp` backend that runs unsandboxed is refused before spawn to a
+/// brokered caller, whatever the calling agent may reach; the operator's own
+/// call still starts it on the host.
+#[cfg(unix)]
+#[test]
+fn an_unsandboxed_mcp_backend_is_refused_to_an_agent_but_still_spawns_for_the_operator() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let base = temp.path().canonicalize().expect("canonical tempdir");
+    let worktree = base.join("checkout");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    let sentinel = worktree.join("secret.txt");
+    std::fs::write(&sentinel, "secret").expect("sentinel");
+    let root = base.join("plugin");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    // Touches the sentinel on start, then exits without a handshake.
+    let command = super::support::stub_backend(
+        &root,
+        "#!/bin/sh\necho overwritten > \"$SENTINEL\" 2>/dev/null\nexit 0\n",
+    );
+    let global_root = base.join("global");
+    let grants = vec![PluginGrant::Unsandboxed];
+    let spec = Arc::new(super::super::backend::PluginBackendSpec {
+        provenance: provenance(&grants),
+        plugin_root: root.clone(),
+        state_dir: global_root.join("state/plugins/demo"),
+        global_root,
+        command,
+        args: Vec::new(),
+        timeout_ms: Some(5_000),
+        sandbox: PluginSandbox::None,
+        permissions: PluginPermissions::default(),
+        programs: Vec::new(),
+        program_paths: Default::default(),
+        config: super::super::backend::PluginConfigSection::new(json!({})),
+        grants: PluginGrantSet::from_grants(grants),
+        secrets: Default::default(),
+    });
+    let backend = Arc::new(McpBackend::new(spec, Vec::new()));
+    let tool = PluginTool {
+        name: "demo.echo".to_string(),
+        verb: "echo".to_string(),
+        description: String::new(),
+        parameters: Vec::new(),
+        input_schema: None,
+        execution_kind: PluginExecutionKind::ReadOnly,
+        output_schema: None,
+        binding: Arc::new(PluginToolBinding {
+            provenance: provenance(&[]),
+            execution_kind: PluginExecutionKind::ReadOnly,
+            diagnostic: None,
+        }),
+        backend: PluginBackend::Mcp(Arc::clone(&backend)),
+    };
+    let operator = ToolContext {
+        proc_spawn_environment: Some(vec![
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            (
+                "SENTINEL".to_string(),
+                sentinel.to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..context(&worktree)
+    };
+    let mut agent = operator.clone();
+    agent.brokered_caller = Some(super::super::BrokeredCaller {
+        worktree: worktree.clone(),
+        fs_profile: orbit_types::policy::ResolvedFsProfile {
+            name: "broker-fixture".to_string(),
+            read: vec!["**".to_string(), "!secret.txt".to_string()],
+            modify: vec!["**".to_string(), "!secret.txt".to_string()],
+        },
+        proc_allowed_programs: Vec::new(),
+        proc_disallowed_programs: None,
+    });
+    agent.broker_call = Some(super::super::BrokerCall {
+        sessions: Arc::new(super::super::BrokerSessions::default()),
+        cancelled: Default::default(),
+    });
+
+    let error = tool
+        .execute(&agent, json!({}))
+        .expect_err("a brokered call cannot start an unsandboxed backend");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error:?}");
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("sentinel"),
+        "secret",
+        "the refused backend never spawned, so the agent-denied file is untouched"
+    );
+
+    // The stub never completes a handshake; that it ran at all is the point.
+    let _ = tool.execute(&operator, json!({}));
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("sentinel"),
+        "overwritten\n",
+        "a non-brokered call keeps the operator's unsandboxed grant"
+    );
 }
