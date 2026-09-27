@@ -316,8 +316,7 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
         "CLEAN" | "HAS_HOOKS" | "UNSTABLE" => PrMergeState::Mergeable,
         // Required checks still running.
         "PENDING" => PrMergeState::Pending,
-        // Requires human action this run is not authorized to substitute for.
-        "BLOCKED" => PrMergeState::Blocked("required reviews or checks are not satisfied".into()),
+        "BLOCKED" => classify_blocked_pr(pull_request),
         "DIRTY" => PrMergeState::Conflict,
         "BEHIND" => {
             PrMergeState::Blocked("the branch is behind its base and must be updated".into())
@@ -326,5 +325,87 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
         // An empty or unrecognized merge state is treated as still settling:
         // GitHub reports UNKNOWN while it computes mergeability.
         _ => PrMergeState::Pending,
+    }
+}
+
+/// GitHub also reports BLOCKED while required checks are still running. Wait
+/// only when the rollup proves that a check is in flight and no review gate or
+/// failed check is visible. An absent or unfamiliar provider shape refuses.
+fn classify_blocked_pr(pull_request: &Value) -> PrMergeState {
+    match pull_request.get("reviewDecision") {
+        Some(Value::String(decision))
+            if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
+        {
+            return PrMergeState::Blocked(format!("review is required ({decision})"));
+        }
+        Some(Value::Null) => {} // GitHub uses null when no review decision applies.
+        Some(Value::String(decision)) if decision == "APPROVED" => {}
+        _ => return PrMergeState::Blocked("review decision is unavailable".into()),
+    }
+
+    let Some(checks) = pull_request
+        .get("statusCheckRollup")
+        .and_then(Value::as_array)
+    else {
+        return PrMergeState::Blocked("status check rollup is unreadable".into());
+    };
+    let mut pending = false;
+    for check in checks {
+        let name = check
+            .get("name")
+            .or_else(|| check.get("context"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let Some(name) = name else {
+            return PrMergeState::Blocked("status check rollup is unreadable".into());
+        };
+        match classify_check(check) {
+            Some(CheckState::Failed) => {
+                return PrMergeState::Blocked(format!("status check '{name}' failed"));
+            }
+            Some(CheckState::Pending) => pending = true,
+            Some(CheckState::Passed) => {}
+            None => {
+                return PrMergeState::Blocked(format!(
+                    "status check rollup is unreadable for '{name}'"
+                ));
+            }
+        }
+    }
+
+    if pending {
+        PrMergeState::Pending
+    } else {
+        PrMergeState::Blocked("required reviews or checks are not satisfied".into())
+    }
+}
+
+enum CheckState {
+    Pending,
+    Passed,
+    Failed,
+}
+
+/// `statusCheckRollup` contains both CheckRun (`status`/`conclusion`) and
+/// StatusContext (`state`) entries. Unknown values cannot authorize waiting.
+fn classify_check(check: &Value) -> Option<CheckState> {
+    if let Some(state) = check.get("state").and_then(Value::as_str) {
+        return match state {
+            "PENDING" | "EXPECTED" => Some(CheckState::Pending),
+            "SUCCESS" => Some(CheckState::Passed),
+            "FAILURE" | "ERROR" => Some(CheckState::Failed),
+            _ => None,
+        };
+    }
+    match check.get("status").and_then(Value::as_str)? {
+        "QUEUED" | "IN_PROGRESS" | "PENDING" | "REQUESTED" | "WAITING" => Some(CheckState::Pending),
+        "COMPLETED" => match check.get("conclusion").and_then(Value::as_str)? {
+            "SUCCESS" | "NEUTRAL" | "SKIPPED" => Some(CheckState::Passed),
+            "FAILURE" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
+            | "STALE" => Some(CheckState::Failed),
+            _ => None,
+        },
+        _ => None,
     }
 }
