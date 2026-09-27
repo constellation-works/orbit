@@ -1,6 +1,35 @@
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
 };
+use serde::Serialize;
+
+/// A failed run with no failed descendant, in child-dispatch traversal order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct RunRootCause {
+    pub(crate) run_id: String,
+    pub(crate) step: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+pub(crate) fn format_root_cause_lines(causes: &[RunRootCause]) -> Vec<String> {
+    causes
+        .iter()
+        .enumerate()
+        .map(|(index, cause)| {
+            let label = if index == 0 {
+                "Root cause:"
+            } else {
+                "Additional root cause:"
+            };
+            format!(
+                "{label} run={} step={} error={}",
+                cause.run_id,
+                cause.step.as_deref().unwrap_or("-"),
+                cause.message.as_deref().unwrap_or("-"),
+            )
+        })
+        .collect()
+}
 
 /// Which side of a parent/child relationship a run id declares.
 ///

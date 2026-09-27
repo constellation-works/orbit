@@ -130,6 +130,14 @@ minute, `-c2` for a second child — is what keeps sibling runs from reading as 
 Ids minted before role markers existed report `unmarked`; use `orbit run show <parent>`, which
 names each child it dispatched, to establish their lineage.
 
+For a failed pipeline, `orbit run show <top-level-run-id>` follows those child dispatches and
+prints a `Root cause:` line with the failed leaf run ID, step, and complete error. If separate
+branches failed, `Additional root cause:` lines list the other failed leaves in child dispatch
+order. The parent and child wrapper errors remain in the usual run header and step records.
+`orbit run show <top-level-run-id> --json` exposes the same details in `root_cause` and
+`additional_root_causes`; `step` or `message` is null when a failed leaf has no corresponding
+step detail. The compact child-dispatch lines can still shorten wrapper errors.
+
 ## Cancel a conclusively stuck run
 
 After verifying that the owner is gone or that the run should no longer continue:
