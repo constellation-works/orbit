@@ -6,7 +6,9 @@ use std::thread;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_store::compose::auto_task::{cursor_state_path, load_cursor_state, upsert_cursor};
+use orbit_store::compose::auto_task::{
+    cursor_lock_path, cursor_state_path, load_cursor_state, upsert_cursor, with_cursor_lock,
+};
 use orbit_types::workflow::automation::AutomationDiagnostic;
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, DedupePolicy,
@@ -17,6 +19,7 @@ use crate::auto_tasks::loader::auto_tasks_dir;
 use crate::auto_tasks::scheduler::{
     AutoTaskDispatch, ChangeProbe, SchedulerFault, SchedulerOptions, UNCHANGED_SINCE_LAST_SWEEP,
     inject_scheduler_fault, run_auto_task_scheduler_at, set_admission_overlap_barrier,
+    set_after_load_barriers,
 };
 
 struct TestDispatch {
@@ -25,6 +28,8 @@ struct TestDispatch {
     minted: AtomicUsize,
     mint_ids: Mutex<Vec<String>>,
     mint_should_fail: AtomicBool,
+    delivery_enabled: AtomicBool,
+    delivery_evaluations: AtomicUsize,
     open_instance: Mutex<Option<String>>,
     probe: Mutex<Option<Result<ChangeProbe, String>>>,
 }
@@ -37,6 +42,8 @@ impl TestDispatch {
             minted: AtomicUsize::new(0),
             mint_ids: Mutex::new(Vec::new()),
             mint_should_fail: AtomicBool::new(false),
+            delivery_enabled: AtomicBool::new(false),
+            delivery_evaluations: AtomicUsize::new(0),
             open_instance: Mutex::new(None),
             probe: Mutex::new(None),
         }
@@ -58,7 +65,19 @@ impl AutoTaskDispatch for TestDispatch {
         _dry_run: bool,
         _now: DateTime<Utc>,
     ) -> Result<AutomationDiagnostic, OrbitError> {
-        panic!("interval fixtures must not take the delivery path")
+        assert!(
+            self.delivery_enabled.load(Ordering::SeqCst),
+            "delivery evaluation must not run for this fixture"
+        );
+        self.delivery_evaluations.fetch_add(1, Ordering::SeqCst);
+        Ok(AutomationDiagnostic {
+            reason: "delivery fixture evaluated".to_string(),
+            state: None,
+            receipts: Vec::new(),
+            waivers: Vec::new(),
+            ownership: None,
+            batch: Vec::new(),
+        })
     }
 
     fn definition_root(&self) -> PathBuf {
@@ -122,6 +141,30 @@ template:
         ),
     )
     .expect("definition fixture");
+}
+
+fn write_delivery_definition(root: &std::path::Path, name: &str) -> PathBuf {
+    let definitions = auto_tasks_dir(root);
+    fs::create_dir_all(&definitions).expect("definitions dir");
+    let path = definitions.join(format!("{name}.yaml"));
+    fs::write(
+        &path,
+        format!(
+            r#"schemaVersion: 1
+name: {name}
+schedule:
+  deliveries_landed:
+    branch: agent-main
+    threshold: 1
+    max_wait_minutes: 60
+    coverage: integrated_qa_v1
+template:
+  title: Delivery fixture
+"#
+        ),
+    )
+    .expect("delivery definition");
+    path
 }
 
 fn cursor(baseline: &str, last_slot: Option<&str>) -> AutoTaskCursor {
@@ -393,6 +436,130 @@ fn overlapping_due_passes_mint_one_task() {
 }
 
 #[test]
+fn loaded_definition_deleted_before_admission_cannot_recreate_cursor() {
+    let root = tempdir().expect("temporary root");
+    let definition_root = root.path().join("definitions");
+    let state_dir = root.path().join("state");
+    write_interval_definition(&definition_root, "removed", "always");
+    write_interval_definition(&definition_root, "survivor", "always");
+    let dispatch = TestDispatch::new(definition_root.clone(), state_dir);
+    let t0 = at(2026, 1, 1, 0, 0);
+    let state_path = cursor_state_path(&dispatch.state_dir);
+    for name in ["removed", "survivor"] {
+        upsert_cursor(&state_path, name, cursor(&t0.to_rfc3339(), None)).expect("seed cursor");
+    }
+    let loaded = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+
+    thread::scope(|scope| {
+        let loaded_for_pass = Arc::clone(&loaded);
+        let resume_for_pass = Arc::clone(&resume);
+        let pass = scope.spawn(|| {
+            set_after_load_barriers(Some((loaded_for_pass, resume_for_pass)));
+            let outcome = run_auto_task_scheduler_at(
+                &dispatch,
+                t0 + Duration::minutes(65),
+                SchedulerOptions::default(),
+            );
+            set_after_load_barriers(None);
+            outcome.expect("scheduler pass")
+        });
+        loaded.wait();
+        with_cursor_lock(&state_path, |session| {
+            fs::remove_file(auto_tasks_dir(&definition_root).join("removed.yaml"))
+                .expect("delete loaded definition");
+            assert!(session.state.definitions.remove("removed").is_some());
+            session.save()
+        })
+        .expect("delete cursor under admission lock");
+        resume.wait();
+
+        let outcome = pass.join().expect("scheduler thread");
+        assert_eq!(outcome.reports.len(), 2, "both definitions were loaded");
+        assert_eq!(outcome.reports[0].name, "removed");
+        assert_eq!(outcome.reports[0].action, "skipped");
+        assert_eq!(
+            outcome.reports[0].reason.as_deref(),
+            Some("definition_removed")
+        );
+        assert_eq!(outcome.reports[1].name, "survivor");
+        assert_eq!(outcome.reports[1].action, "fired");
+        assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
+        let state = load_cursor_state(&state_path).expect("cursor state");
+        assert!(!state.definitions.contains_key("removed"));
+        assert_eq!(
+            state.definitions["survivor"].last_task_id.as_deref(),
+            Some("ORB-00001")
+        );
+    });
+}
+
+#[test]
+fn loaded_delivery_deleted_before_admission_is_not_evaluated() {
+    let root = tempdir().expect("temporary root");
+    let definition_root = root.path().join("definitions");
+    let path = write_delivery_definition(&definition_root, "delivery");
+    let dispatch = TestDispatch::new(definition_root, root.path().join("state"));
+    let loaded = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+
+    thread::scope(|scope| {
+        let loaded_for_pass = Arc::clone(&loaded);
+        let resume_for_pass = Arc::clone(&resume);
+        let pass = scope.spawn(|| {
+            set_after_load_barriers(Some((loaded_for_pass, resume_for_pass)));
+            let outcome = run_auto_task_scheduler_at(
+                &dispatch,
+                at(2026, 1, 1, 0, 0),
+                SchedulerOptions::default(),
+            );
+            set_after_load_barriers(None);
+            outcome.expect("scheduler pass")
+        });
+        loaded.wait();
+        with_cursor_lock(&cursor_state_path(&dispatch.state_dir), |_session| {
+            fs::remove_file(&path).expect("delete loaded delivery");
+            Ok(())
+        })
+        .expect("delete under admission lock");
+        resume.wait();
+
+        let outcome = pass.join().expect("scheduler thread");
+        assert_eq!(outcome.reports.len(), 1, "delivery definition was loaded");
+        assert_eq!(outcome.reports[0].action, "skipped");
+        assert_eq!(
+            outcome.reports[0].reason.as_deref(),
+            Some("definition_removed")
+        );
+        assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
+        assert_eq!(dispatch.delivery_evaluations.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn live_delivery_ignores_unrelated_malformed_cursor_state() {
+    let root = tempdir().expect("temporary root");
+    let definition_root = root.path().join("definitions");
+    write_delivery_definition(&definition_root, "delivery");
+    let dispatch = TestDispatch::new(definition_root, root.path().join("state"));
+    dispatch.delivery_enabled.store(true, Ordering::SeqCst);
+    fs::create_dir_all(&dispatch.state_dir).expect("state dir");
+    let state_path = cursor_state_path(&dispatch.state_dir);
+    fs::write(&state_path, "{not json").expect("malformed cursor fixture");
+
+    let outcome =
+        run_auto_task_scheduler_at(&dispatch, at(2026, 1, 1, 0, 0), SchedulerOptions::default())
+            .expect("delivery pass");
+    assert_eq!(outcome.reports.len(), 1);
+    assert_eq!(outcome.reports[0].action, "delivery");
+    assert_eq!(dispatch.delivery_evaluations.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fs::read_to_string(&state_path).expect("raw cursor"),
+        "{not json"
+    );
+}
+
+#[test]
 fn mint_failure_does_not_consume_the_slot_and_retry_can_fire() {
     let (_root, dispatch, t0) = due_fixture("chore");
     dispatch.mint_should_fail.store(true, Ordering::SeqCst);
@@ -571,6 +738,7 @@ fn dry_run_creates_nothing_and_persists_no_cursor() {
     assert_eq!(outcome.reports[0].action, "would_baseline");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
     assert!(!cursor_state_path(&dispatch.state_dir).exists());
+    assert!(!cursor_lock_path(&cursor_state_path(&dispatch.state_dir)).exists());
 
     let again = run_auto_task_scheduler_at(&dispatch, t0, SchedulerOptions { dry_run: true })
         .expect("dry run 2");
