@@ -77,9 +77,26 @@ pub(crate) fn resolve_executor_sandbox(
                         "resolve fsProfile for sandbox: {err}"
                     ))
                 })?;
-                append_codex_side_write_roots(runtime, provider, &mut resolved)?;
-                append_orbit_child_runtime_write_roots(runtime, &mut resolved);
-                append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
+                // Same boundary as linux-bwrap: an activity profile with an
+                // empty modify surface stays a non-writer of the source tree
+                // and the primary workspace. Every positive entry below compiles
+                // to an SBPL write allow, so Codex side roots, workspace
+                // `.orbit` stores, and the active managed worktree are gated on
+                // the profile itself. Provider state directories come from the
+                // SBPL compiler and global Orbit runtime stores stay available.
+                let grants_workspace_modify =
+                    resolved.modify.iter().any(|rule| !rule.starts_with('!'));
+                if grants_workspace_modify {
+                    append_codex_side_write_roots(runtime, provider, &mut resolved)?;
+                }
+                append_orbit_child_runtime_write_roots(
+                    runtime,
+                    grants_workspace_modify,
+                    &mut resolved,
+                );
+                if grants_workspace_modify {
+                    append_active_worktree_root(runtime, subprocess_cwd, &mut resolved);
+                }
                 deny_registered_auto_task_definition_writes(runtime, &mut resolved);
                 append_recovery_authority_deny(runtime, &mut resolved)?;
                 Ok(Some(ResolvedSandbox {
@@ -282,9 +299,14 @@ fn append_codex_side_write_roots(
 /// stay denied until the corresponding tools are added to those activity
 /// allowlists. Keep the grants path-shaped instead of re-allowing the whole
 /// home directory or workspace `.orbit` tree.
+///
+/// Global runtime stores are always granted. The host cache and workspace
+/// stores are granted only when `grants_workspace_modify` is set, so a
+/// read-only activity profile never becomes a primary-workspace writer.
 #[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
 pub(super) fn append_orbit_child_runtime_write_roots(
     runtime: &OrbitRuntime,
+    grants_workspace_modify: bool,
     resolved: &mut ResolvedFsProfile,
 ) {
     let global_root = runtime
@@ -306,9 +328,18 @@ pub(super) fn append_orbit_child_runtime_write_roots(
         format!("{global}/state/audit/**"),
         format!("{global}/orbit.db*"),
         format!("{global}/tasks/**"),
+    ] {
+        append_unique_modify_root(resolved, root);
+    }
+
+    if !grants_workspace_modify {
+        return;
+    }
+
+    for root in [
         // Language-neutral host cache seam shared across worktrees. Not an
         // activity-tool store and not a shared Cargo target directory.
-        // [ORB-11259]
+        // Implementer-only, as on Linux. [ORB-11259]
         format!("{global}/cache/**"),
         format!("{workspace}/tasks/**"),
         format!("{workspace}/frictions/**"),

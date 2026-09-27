@@ -52,7 +52,8 @@ root. Managed worktrees also bind the checkout at `/tmp/orbit-workspace` and
 sccache keys do not include the `jrun-*` path. Workspace `.orbit/**`
 protected-path denies are unchanged. Reviewer and other read-only profiles do
 not receive the cache grant. macOS already allows `$HOME/Library/Caches` and
-also grants `$HOME/.orbit/cache/**` so the same default directory works. The
+also grants `$HOME/.orbit/cache/**` to write-capable profiles so the same
+default directory works; macOS read-only profiles do not receive it either. The
 stable `/tmp` mounts are Linux Bubblewrap-only.
 
 The provider **agent cwd stays on the real worktree**. Bubblewrap `--chdir` is

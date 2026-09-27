@@ -58,6 +58,73 @@ fn reviewer_read_rules_follow_inspection_cwd_without_primary_write_grants() {
     }));
 }
 
+/// [ORB-13458] Every positive macOS `modify` entry compiles to an SBPL write
+/// allow, so provider and runtime conveniences must not hand a reviewer the
+/// source checkout, its managed worktree, or primary workspace `.orbit` stores.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let canonical_repo = repo_root.canonicalize().expect("canonical repo");
+    let worktree = canonical_repo.join(".orbit/state/worktrees/orbit-jrun-orb-13458");
+    std::fs::create_dir_all(&worktree).expect("create managed worktree");
+    let inspection = tempfile::tempdir().expect("inspection checkout");
+    let inspection_root = inspection
+        .path()
+        .canonicalize()
+        .expect("canonical inspection");
+    let global = runtime
+        .paths()
+        .global_dir
+        .canonicalize()
+        .expect("canonical global root")
+        .display()
+        .to_string();
+    let protected = [
+        canonical_repo.display().to_string(),
+        inspection_root.display().to_string(),
+    ];
+
+    for provider in ["claude", "codex"] {
+        seed_executor(
+            &runtime,
+            provider,
+            Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+        );
+        for cwd in [&inspection_root, &worktree] {
+            let sandbox = runtime
+                .resolve_executor_sandbox(provider, Some("reviewer"), Some(cwd))
+                .expect("resolve reviewer sandbox")
+                .expect("macOS sandbox");
+            let writes = sandbox
+                .fs_profile
+                .modify
+                .iter()
+                .filter(|rule| !rule.starts_with('!'))
+                .collect::<Vec<_>>();
+            for root in &protected {
+                assert!(
+                    writes.iter().all(|rule| !rule.starts_with(root.as_str())),
+                    "{provider} reviewer from {} must not write under {root}: {writes:?}",
+                    cwd.display()
+                );
+            }
+            assert!(
+                writes
+                    .iter()
+                    .any(|rule| *rule == &format!("{global}/tasks/**")),
+                "{provider} reviewer keeps the global task store for nested Orbit calls: {writes:?}"
+            );
+            assert!(
+                !writes
+                    .iter()
+                    .any(|rule| rule.starts_with(&format!("{global}/cache"))),
+                "{provider} reviewer must not gain the implementer host cache: {writes:?}"
+            );
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn reviewer_runtime_database_grants_hold_one_wal_file_set_lease() {
@@ -755,7 +822,7 @@ fn resolve_executor_sandbox_appends_gemini_orbit_runtime_roots_without_home_real
 fn macos_child_profile_denies_registered_auto_task_definitions() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let mut resolved = resolve_fs_profile_absolute(&runtime, None, None).expect("resolve profile");
-    append_orbit_child_runtime_write_roots(&runtime, &mut resolved);
+    append_orbit_child_runtime_write_roots(&runtime, true, &mut resolved);
     deny_registered_auto_task_definition_writes(&runtime, &mut resolved);
 
     let workspace_orbit = runtime
