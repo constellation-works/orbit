@@ -375,6 +375,226 @@ fn untracked_symlinks_fingerprint_from_link_text() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn untracked_quote_leading_files_fingerprint_without_aliasing() {
+    let fixture = linked_worktree_fixture();
+    let root = &fixture.assigned;
+
+    let unbalanced_quote = "\"unbalanced.txt";
+    let balanced_quote = "\"balanced.txt\"";
+    let plain_alias = "balanced.txt";
+
+    fs::write(root.join(unbalanced_quote), "unbalanced content\n")
+        .expect("write unbalanced quote file");
+    fs::write(root.join(balanced_quote), "quote content\n").expect("write balanced quote file");
+    fs::write(root.join(plain_alias), "plain content\n").expect("write plain alias file");
+
+    let first = git_fingerprint(root).expect("fingerprint with quote-leading files");
+
+    // Acceptance criterion 1: A worktree fingerprint succeeds for an untracked regular
+    // file whose name begins with a literal double quote, and its identity equals hashing
+    // that exact file through argv.
+    let expected_unbalanced_identity = untracked_file_identity(root, unbalanced_quote)
+        .expect("unbalanced untracked identity")
+        .expect("unbalanced file exists");
+    let expected_unbalanced_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", unbalanced_quote],
+        ))
+        .trim()
+    );
+    assert_eq!(
+        first.untracked_content.get(unbalanced_quote),
+        Some(&expected_unbalanced_identity)
+    );
+    assert_eq!(
+        first.untracked_content.get(unbalanced_quote),
+        Some(&expected_unbalanced_argv)
+    );
+
+    // Acceptance criterion 2: A balanced quote-leading filename does not alias another
+    // existing filename when their contents differ; changing either file changes only its
+    // own content identity.
+    let expected_balanced_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", balanced_quote],
+        ))
+        .trim()
+    );
+    let expected_plain_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", plain_alias],
+        ))
+        .trim()
+    );
+    assert_ne!(
+        expected_balanced_argv, expected_plain_argv,
+        "precondition: file contents differ"
+    );
+    assert_eq!(
+        first.untracked_content.get(balanced_quote),
+        Some(&expected_balanced_argv)
+    );
+    assert_eq!(
+        first.untracked_content.get(plain_alias),
+        Some(&expected_plain_argv)
+    );
+    assert_ne!(
+        first.untracked_content.get(balanced_quote),
+        first.untracked_content.get(plain_alias),
+        "balanced quote-leading filename must not alias plain filename"
+    );
+
+    // Mutate the plain file: changing it must change only its own content identity.
+    fs::write(root.join(plain_alias), "plain content modified\n").expect("modify plain file");
+    let after_plain_change =
+        git_fingerprint(root).expect("fingerprint after plain file modification");
+
+    let new_plain_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", plain_alias],
+        ))
+        .trim()
+    );
+    assert_ne!(new_plain_argv, expected_plain_argv);
+    assert_eq!(
+        after_plain_change.untracked_content.get(plain_alias),
+        Some(&new_plain_argv)
+    );
+    assert_eq!(
+        after_plain_change.untracked_content.get(balanced_quote),
+        Some(&expected_balanced_argv),
+        "modifying plain file must not change balanced quote file identity"
+    );
+    assert_eq!(
+        after_plain_change.untracked_content.get(unbalanced_quote),
+        Some(&expected_unbalanced_argv),
+        "modifying plain file must not change unbalanced quote file identity"
+    );
+
+    // Mutate the quote-leading file: changing it must change only its own content identity.
+    fs::write(root.join(balanced_quote), "quote content modified\n").expect("modify quote file");
+    let after_quote_change =
+        git_fingerprint(root).expect("fingerprint after quote file modification");
+
+    let new_balanced_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", balanced_quote],
+        ))
+        .trim()
+    );
+    assert_ne!(new_balanced_argv, expected_balanced_argv);
+    assert_eq!(
+        after_quote_change.untracked_content.get(balanced_quote),
+        Some(&new_balanced_argv)
+    );
+    assert_eq!(
+        after_quote_change.untracked_content.get(plain_alias),
+        Some(&new_plain_argv),
+        "modifying quote file must not change plain file identity"
+    );
+    assert_eq!(
+        after_quote_change.untracked_content.get(unbalanced_quote),
+        Some(&expected_unbalanced_argv),
+        "modifying quote file must not change unbalanced quote file identity"
+    );
+
+    // Vanished quote-leading untracked file is benign
+    let vanished_quote = "\"vanished.txt";
+    assert_eq!(
+        untracked_file_identity(root, vanished_quote).expect("vanished file check"),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn untracked_newline_and_symlink_pathnames_fingerprint_correctly() {
+    let fixture = linked_worktree_fixture();
+    let root = &fixture.assigned;
+
+    let newline_path = "newline\npath.txt";
+    let ordinary_path = "ordinary.txt";
+    fs::write(root.join(newline_path), "newline content\n").expect("write newline file");
+    fs::write(root.join(ordinary_path), "ordinary content\n").expect("write ordinary file");
+    seed_untracked_symlink_shapes(root);
+
+    let first = git_fingerprint(root).expect("fingerprint with newline path and symlinks");
+
+    let expected_newline_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", newline_path],
+        ))
+        .trim()
+    );
+    let expected_ordinary_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", ordinary_path],
+        ))
+        .trim()
+    );
+
+    assert_eq!(
+        first.untracked_content.get(newline_path),
+        Some(&expected_newline_argv)
+    );
+    assert_eq!(
+        first.untracked_content.get(ordinary_path),
+        Some(&expected_ordinary_argv)
+    );
+    assert_eq!(
+        first
+            .untracked_content
+            .get("link-to-file")
+            .map(String::as_str),
+        Some(expected_symlink_blob(root, "link-to-file").as_str())
+    );
+
+    // Modify newline file and verify identity updates without affecting ordinary or symlink files
+    fs::write(root.join(newline_path), "newline content modified\n").expect("modify newline file");
+    let second = git_fingerprint(root).expect("fingerprint after newline file modification");
+
+    let new_newline_argv = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            root,
+            &["hash-object", "--no-filters", "--", newline_path],
+        ))
+        .trim()
+    );
+    assert_ne!(new_newline_argv, expected_newline_argv);
+    assert_eq!(
+        second.untracked_content.get(newline_path),
+        Some(&new_newline_argv)
+    );
+    assert_eq!(
+        second.untracked_content.get(ordinary_path),
+        Some(&expected_ordinary_argv)
+    );
+    assert_eq!(
+        second
+            .untracked_content
+            .get("link-to-file")
+            .map(String::as_str),
+        Some(expected_symlink_blob(root, "link-to-file").as_str())
+    );
+}
+
 #[test]
 fn clean_fingerprint_skips_index_enumeration_and_diffs() {
     let Some(shim) = GitShim::install(
