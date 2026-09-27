@@ -121,6 +121,8 @@ The precedence above covers everything decidable **before** the destination sees
 
 **A lost answer after dispatch is `outcome_unknown`, not `unreachable_destination`.** Once the request is on the wire the destination may have run and committed it, and killing the SSH child does not undo remote work. `unreachable_destination` means a delivery miss, which invites a retry; retrying a possibly-committed `orbit.task.add` or `orbit.workflow.ship` duplicates it. A loss *before* the request is written — including a failed write — is still `unreachable_destination`, because nothing was delivered. `outcome_unknown` is a post-dispatch outcome and does not enter the precedence ladder.
 
+**Each budget covers the write as well as the answer.** A destination that stops draining stdin, or a stalled transport, would otherwise hold a large request's write forever, with the deadline consulted only afterwards. A write still blocked at its deadline kills the session so the write ends; it is `unreachable_destination` when the request line provably never fully left, and otherwise — for a routed `tools/call` — `outcome_unknown`. The deadline is also checked before each queued message is read, so a destination streaming unrelated messages cannot keep a read alive past it.
+
 ## 7. Operator-configured control-plane uniqueness
 
 A single control-plane per repository is an operator configuration responsibility, not a mux invariant. The mux does not check it. The would-be signal is matching `git_remote` across destinations with differing `owner_machine_id`. Independently inited checkouts have different `ws_*`, so the mux cannot observe the collision without fleet discovery. A violation surfaces as two independent control planes, not an error.

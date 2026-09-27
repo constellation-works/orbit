@@ -10,7 +10,7 @@ use std::io::Read;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
@@ -27,6 +27,12 @@ const PROBE_LINE_QUEUE: usize = 64;
 /// Longest single line the probe reader accepts from a destination. Every
 /// MCP message is one JSON line; anything past this is not a message.
 const MAX_PROBE_LINE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How long a write that outlived its budget gets to settle once the session
+/// is killed. Killing the child closes the pipe, so the blocked write fails at
+/// once; this only bounds a transport whose pipe some other process still
+/// holds open.
+const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(1);
 
 /// How long one destination gets to answer everything that decides *where* a
 /// call goes.
@@ -452,11 +458,14 @@ impl LostAnswer<'_> {
 ///
 /// The deadline is a budget for the request in flight, not for the session:
 /// [`DestinationSession::restart_budget`] re-stamps it when a phase with its
-/// own budget begins.
+/// own budget begins. It covers writing the request as well as reading the
+/// answer.
 pub(super) struct DestinationSession {
     destination: Destination,
     child: Child,
-    stdin: std::process::ChildStdin,
+    /// `None` once a write failed or outlived its budget: the destination may
+    /// hold a partial line, so nothing more can be framed after it.
+    writer: Option<RequestWriter>,
     lines: Receiver<String>,
     deadline: Instant,
     next_id: i64,
@@ -477,6 +486,7 @@ impl DestinationSession {
             .stdout
             .take()
             .ok_or_else(|| unreachable(&destination, "SSH session has no stdout".to_string()))?;
+        let writer = RequestWriter::spawn(stdin);
         // A reader thread is what makes the deadline real: a blocking read on
         // an unresponsive host cannot otherwise be abandoned, and the thread
         // ends on its own when the killed child closes the pipe. It is also
@@ -508,7 +518,7 @@ impl DestinationSession {
         Ok(Self {
             destination,
             child,
-            stdin,
+            writer: Some(writer),
             lines,
             deadline: Instant::now() + timeout,
             next_id: 0,
@@ -631,31 +641,100 @@ impl DestinationSession {
     ) -> Result<Value, OrbitError> {
         self.next_id += 1;
         let id = self.next_id;
-        // A failed write is pre-dispatch by construction: the destination
-        // never saw the request, so it stays an unreachable host even for a
-        // delivery.
-        self.send(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params,
-        }))?;
+        self.send(
+            method,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params,
+            }),
+            |destination, reason| lost.classify(destination, id, reason),
+        )?;
         self.await_response(method, id, lost)
     }
 
     fn notify(&mut self, method: &str) -> Result<(), OrbitError> {
-        self.send(&json!({ "jsonrpc": "2.0", "method": method }))
+        self.send(
+            method,
+            &json!({ "jsonrpc": "2.0", "method": method }),
+            unreachable,
+        )
     }
 
-    fn send(&mut self, message: &Value) -> Result<(), OrbitError> {
-        let mut line = serde_json::to_string(message).map_err(|error| {
+    /// Write one message line within the current deadline.
+    ///
+    /// A failed write is pre-dispatch by construction: the destination never
+    /// saw a whole request, so it stays an unreachable host even for a
+    /// delivery. A write still blocked at the deadline — a destination that
+    /// stopped reading, or a stalled transport — kills the session so the
+    /// write can end, and `landed` names the loss only if the whole line may
+    /// have reached the destination before that.
+    fn send(
+        &mut self,
+        method: &str,
+        message: &Value,
+        landed: impl FnOnce(&Destination, String) -> OrbitError,
+    ) -> Result<(), OrbitError> {
+        let mut line = serde_json::to_vec(message).map_err(|error| {
             OrbitError::Execution(format!("serialize federated probe request: {error}"))
         })?;
-        line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|()| self.stdin.flush())
-            .map_err(|error| unreachable(&self.destination, format!("write failed: {error}")))
+        line.push(b'\n');
+        if Instant::now() >= self.deadline {
+            return Err(unreachable(
+                &self.destination,
+                format!("budget spent before '{method}' was written"),
+            ));
+        }
+        let writer = self.writer.take().ok_or_else(|| {
+            unreachable(
+                &self.destination,
+                "session closed after an earlier write failed".to_string(),
+            )
+        })?;
+        if writer.outbox.send(line).is_err() {
+            return Err(unreachable(
+                &self.destination,
+                "write failed: session input closed".to_string(),
+            ));
+        }
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        match writer.acks.recv_timeout(remaining) {
+            Ok(Ok(())) => {
+                self.writer = Some(writer);
+                Ok(())
+            }
+            Ok(Err(error)) => Err(unreachable(
+                &self.destination,
+                format!("write failed: {error}"),
+            )),
+            Err(RecvTimeoutError::Disconnected) => Err(unreachable(
+                &self.destination,
+                "write failed: session input closed".to_string(),
+            )),
+            Err(RecvTimeoutError::Timeout) => {
+                // Killing the child closes its end of the pipe, which is the
+                // only way to end a write the destination is not draining.
+                if let Err(error) = self.child.kill() {
+                    tracing::debug!(
+                        machine_id = %self.destination.machine_id,
+                        %error,
+                        "federated probe session was already gone"
+                    );
+                }
+                let reason = format!("timed out writing '{method}'");
+                match writer.acks.recv_timeout(WRITE_SETTLE_GRACE) {
+                    // The line never fully left, so nothing ran.
+                    Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => {
+                        Err(unreachable(&self.destination, reason))
+                    }
+                    // Finished at the deadline, or unconfirmed either way.
+                    Ok(Ok(())) | Err(RecvTimeoutError::Timeout) => {
+                        Err(landed(&self.destination, reason))
+                    }
+                }
+            }
+        }
     }
 
     /// Read until the response with this id arrives or the deadline passes.
@@ -668,8 +747,16 @@ impl DestinationSession {
         lost: LostAnswer<'_>,
     ) -> Result<Value, OrbitError> {
         loop {
+            // Checked before every read: a zero-length wait still returns a
+            // line that is already queued, so a destination streaming
+            // unrelated messages would otherwise outlast any deadline.
             let remaining = self.deadline.saturating_duration_since(Instant::now());
-            let line = match self.lines.recv_timeout(remaining) {
+            let received = if remaining.is_zero() {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                self.lines.recv_timeout(remaining)
+            };
+            let line = match received {
                 Ok(line) => line,
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(lost.classify(
@@ -708,6 +795,34 @@ impl DestinationSession {
                 return Ok(message);
             }
         }
+    }
+}
+
+/// The session's stdin, owned by a thread so a write the destination never
+/// drains cannot hold the caller past its deadline.
+///
+/// Each line is acknowledged once fully written and flushed; the thread ends
+/// after the first failed write or when the session drops its sender, and a
+/// write blocked on a killed child fails as soon as the pipe closes.
+struct RequestWriter {
+    outbox: SyncSender<Vec<u8>>,
+    acks: Receiver<std::io::Result<()>>,
+}
+
+impl RequestWriter {
+    fn spawn(mut stdin: std::process::ChildStdin) -> Self {
+        let (outbox, pending) = sync_channel::<Vec<u8>>(1);
+        let (acknowledge, acks) = sync_channel(1);
+        std::thread::spawn(move || {
+            for line in pending {
+                let written = stdin.write_all(&line).and_then(|()| stdin.flush());
+                let failed = written.is_err();
+                if acknowledge.send(written).is_err() || failed {
+                    break;
+                }
+            }
+        });
+        Self { outbox, acks }
     }
 }
 
