@@ -1,0 +1,61 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pull_refill
+spec:
+  type: deterministic
+  description: >
+    One iteration of a follower's pull drain. Carries every earlier
+    admission for the bound owner forward first — retrying an unanswered
+    request, creating and binding the one local leaf per claim, launching it
+    under the claim's trusted worker binding, and delivering a finished leaf's
+    durable settlement to the owner. Then, while the window is open, no host
+    shutdown is pending and the owner's probe admits this executor, it tops the
+    free slots up with new pull requests, each persisted before it is sent. An
+    owner refusal is reconciled against the owner's receipt before the request
+    is closed. An unreachable or refusing owner is reported in `error` or
+    `refusal` rather than failing the drain, because settlements of work
+    already running must keep flowing. `unsettled` counts admissions still
+    holding a slot; the drain runs past its window until it is zero. There is
+    no local fallback: a runtime without a federated owner route refuses.
+  input_schema_json:
+    type: object
+    required: [destination]
+    properties:
+      destination:
+        type: object
+        required: [owner_machine_id, owner_workspace_id, selector, execution_machine_id]
+        properties:
+          owner_machine_id:
+            type: string
+          owner_workspace_id:
+            type: string
+          selector:
+            type: string
+          execution_machine_id:
+            type: string
+      window_expired: {}
+      max_active_leaf_runs: {}
+      poll_sleep_seconds: {}
+      idle_sleep_seconds: {}
+  output_schema_json:
+    type: object
+    required: [admitted, unsettled, done, wait, sleep_seconds]
+    properties:
+      admitted:
+        type: integer
+      unsettled:
+        type: integer
+      admitting:
+        type: boolean
+      refusal: {}
+      error: {}
+      host_shutdown: {}
+      done:
+        type: boolean
+      wait:
+        type: boolean
+      sleep_seconds:
+        type: integer
+  action: pull_refill
+  config: {}

@@ -1,4 +1,4 @@
-//! Tool-boundary adapter for the distributed drain's read-only surface.
+//! Tool-boundary adapter for the distributed drain's owner surface.
 //!
 //! Every authority fact these handlers use comes from the trusted session
 //! envelope the transport built, never from the tool payload: a caller cannot
@@ -8,6 +8,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
+use orbit_store::contracts::{AdmissionRequest, ClaimMutation};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -66,6 +67,110 @@ pub(super) fn receipt_lookup(
         lookup_schema,
     )?;
     serde_json::to_value(lookup).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// `orbit.task.pull`. The request is the caller's durable admission request,
+/// parsed whole so the owner's replay comparison sees exactly what was sent.
+pub(super) fn pull(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: Value,
+) -> Result<Value, OrbitError> {
+    reject_unknown_tool_fields(
+        &input,
+        &[
+            "request_id",
+            "caller_version",
+            "caller_schema",
+            "caller_review_policy",
+            "run_context",
+            "ship",
+            "workspace",
+            "agent",
+            "model",
+        ],
+    )?;
+    let request: AdmissionRequest = parse_fields(
+        &input,
+        &[
+            "request_id",
+            "caller_version",
+            "caller_schema",
+            "caller_review_policy",
+            "run_context",
+            "ship",
+        ],
+    )?;
+    let response = runtime.serve_task_pull(session, &request)?;
+    serde_json::to_value(response).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// `orbit.drain.claim.bind`.
+pub(super) fn claim_bind(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: Value,
+) -> Result<Value, OrbitError> {
+    reject_unknown_tool_fields(
+        &input,
+        &["claim_id", "run_id", "ship", "workspace", "agent", "model"],
+    )?;
+    let claim_id = orbit_tools::require_str(&input, "claim_id")?;
+    let run_id = orbit_tools::require_str(&input, "run_id")?;
+    let ship = parse_field(&input, "ship")?;
+    let result = runtime.serve_claim_bind(session, &claim_id, &run_id, ship)?;
+    serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// `orbit.drain.claim.settle`.
+pub(super) fn claim_settle(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: Value,
+) -> Result<Value, OrbitError> {
+    reject_unknown_tool_fields(
+        &input,
+        &[
+            "claim_id",
+            "run_id",
+            "settlement",
+            "workspace",
+            "agent",
+            "model",
+        ],
+    )?;
+    let claim_id = orbit_tools::require_str(&input, "claim_id")?;
+    let run_id = optional_string(&input, "run_id");
+    let settlement: ClaimMutation = parse_field(&input, "settlement")?;
+    let result = runtime.serve_claim_settle(session, &claim_id, run_id.as_deref(), settlement)?;
+    serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+fn parse_field<T: serde::de::DeserializeOwned>(input: &Value, key: &str) -> Result<T, OrbitError> {
+    let value = input
+        .get(key)
+        .cloned()
+        .ok_or_else(|| OrbitError::InvalidInput(format!("invalid_input: `{key}` is required")))?;
+    serde_json::from_value(value)
+        .map_err(|error| OrbitError::InvalidInput(format!("invalid_input: `{key}`: {error}")))
+}
+
+/// Deserialize the named fields together as one value, ignoring the routing
+/// and attribution envelope fields every tool accepts.
+fn parse_fields<T: serde::de::DeserializeOwned>(
+    input: &Value,
+    keys: &[&str],
+) -> Result<T, OrbitError> {
+    let object: serde_json::Map<String, Value> = keys
+        .iter()
+        .filter_map(|key| {
+            input
+                .get(*key)
+                .map(|value| ((*key).to_string(), value.clone()))
+        })
+        .collect();
+    serde_json::from_value(Value::Object(object))
+        .map_err(|error| OrbitError::InvalidInput(format!("invalid_input: {error}")))
 }
 
 pub(super) fn claims(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {

@@ -83,6 +83,13 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskDelete => super::auto_task_tools::delete(runtime, input),
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
+        OrbitBuiltinAction::DrainClaimBind => {
+            super::drain_tools::claim_bind(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::DrainClaimSettle => {
+            super::drain_tools::claim_settle(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::TaskPull => super::drain_tools::pull(runtime, session_context, input),
         OrbitBuiltinAction::DrainProbe => {
             super::drain_tools::probe(runtime, session_context, input)
         }

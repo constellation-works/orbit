@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-25
+last_updated: 2026-09-27
 last_validated: 2026-09-20
 status: Draft
 feature: distributed-drain
@@ -11,16 +11,18 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625]
 ---
 
 # Distributed Drain — Design
 
-> **Status: Draft, partly live.** Live on the owner: the claim/admission substrate, owner-local
+> **Status: Draft, live.** Live on the owner: the claim/admission substrate, owner-local
 > claimed leaves, handoff acceptance and approval, the landing consumer, the probe and claim
-> listing, dashboard actions, and shared capacity and entry-point admission. **Not live:** the
-> routed follower peer, `orbit run auto --pull`, and every mutating distributed entry point,
-> refused by `application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` (`false`).
+> listing, dashboard actions, shared capacity and entry-point admission, and — since [ORB-13625]
+> — the registered `orbit.task.pull`, `orbit.drain.claim.bind` and `orbit.drain.claim.settle`
+> tools. Live on a replica: the routed follower peer and `orbit run auto --pull`
+> (`workspace_pull_pipeline`). `application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
+> is `true`; it remains the one source switch every mutating entry point names.
 
 This doc covers v1: one owner checkout, any number of replica checkouts on other hosts, each
 replica running the drain in pull mode against the owner, and the machinery the shape retires.
@@ -158,21 +160,40 @@ executor's tree-identity and ancestry rules. A merged PR is observable, not refu
 still needs authority). Only `landing_branch` (owner-resolved ship configuration) is taken from
 the submission. Acceptance and landing resolve revisions through one shared rule.
 
-**Not yet executable.** Only an owner-local destination is served. The routed follower
-`PullPeer` over federated SSH does not exist (only `OwnerPullPeer` in
-`adapter/engine_host/v2_host/pull/adapters.rs`), no mutating distributed entry point is a
-registered tool, and `orbit run auto --pull` is not implemented. `run auto` / `run ship` still
-render a legacy pipeline name for `pr` and `local` modes after taking the shared admission
-decision ([§7.3](#73-ship-sweep)).
+**Follower execution** ([ORB-13625]). `RoutedPullPeer`
+(`adapter/engine_host/v2_host/pull/adapters.rs`) speaks the protocol to the owner's registered
+tools over a composition-supplied `orbit_tools::DrainOwnerTransport` — in production the
+federated mux over the host's destinations file, opened as `agent` (`orbit-cmd`
+`worker_coordination.rs`). The owner serves the same code the owner-local adapter calls:
+`application::distributed::serve` resolves the caller machine from the trusted session, requires a
+new request to carry the ship contract the owner resolves now (`ship_contract_mismatch`
+otherwise), fences bind and settle through `ClaimInvocation` on that machine, and refuses a remote
+`LocalCandidate` handoff. The follower's `LeafPullLauncher` routes its bound worker's coordination
+through the same transport. Owner-local `run auto` / `run ship` still render a legacy pipeline
+name for `pr` and `local` modes after taking the shared admission decision
+([§7.3](#73-ship-sweep)).
 
-### Target pull-mode contract
+**Refusal reconciliation.** An owner *answer* that refuses a request (a `RemoteTool` with
+`invalid_input`, `capability_refused`, `capability_denied` or `policy_denied`) is reconciled
+through `orbit.drain.receipt.lookup` before anything local changes: a found receipt is received
+and carried forward (an earlier send committed, and a replay was refused, say after an owner
+upgrade); an expired or absent one closes the local record as `Refused`, which releases its slot,
+and the refusal ends that pass. A lost delivery, an unknown outcome or a store failure leaves the
+request pending under the same ID.
+
+### Pull-mode contract
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
-selector from federated discovery, verifies the checkout belongs to that workspace and repository,
-and persists owner machine, workspace identity, selector and claim in run inputs, which detached
-children and in-run step retries inherit. A renamed or unavailable destination never falls back to
-a local coordination store. The drain keeps its window, sleep controls and detached execution;
-admission becomes:
+selector from federated discovery. Submission (`application::distributed::follower`) refuses unless
+the checkout is a replica whose owner is the selector's machine and whose logical workspace is the
+selector's, the owner answers the probe as that machine and would admit this executor, and the
+host declares required validation commands. It persists the resolved `PullDestination` (owner
+machine, the owner's workspace id as its probe reports it, selector, execution machine) in the
+`workspace_pull_pipeline` run input. A renamed or unavailable destination never falls back to a
+local coordination store. Each `pull_refill` iteration re-probes before allocating, so a changed
+ship contract or version stops new requests without failing the drain. The run keeps iterating
+after its window until every admission has settled, because no leaf terminal hook delivers
+settlement on its own. Admission:
 
 1. Reconcile pending local pull requests and claimed-but-not-launched work first.
 2. Count live leaf runs **and pending admissions without a live run** against local capacity,
@@ -359,9 +380,11 @@ ordered ladder (`orbit_store::admission_refusal`).
 - The protocol schema starts at `1` and versions pull, probe and lifecycle shapes; it is not the
   scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
 - The owner's read-only surface is `orbit.drain.probe`, `orbit.drain.receipt.lookup` and the
-  operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)). MCP and
-  `orbit tool run` reach them through one registry and `application::distributed`. The read-only
-  tools are `control_plane`, so a replica refuses them.
+  operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)); its
+  executor lifecycle is `orbit.task.pull`, `orbit.drain.claim.bind` and `orbit.drain.claim.settle`
+  ([ORB-13625]). MCP and `orbit tool run` reach them through one registry and
+  `application::distributed`. All six are `control_plane`, so a replica refuses them. Approval,
+  revocation and recovery stay dashboard-only owner-operator actions.
 - Their governed-operation rows allow `agent` or `operator` — an identification floor, not an
   operator gate ([ORB-12582]). Cross-attempt receipt inspection requires `operator`, resolved by
   `runtime::authorization::resolved_caller_capabilities`, not read off the session.

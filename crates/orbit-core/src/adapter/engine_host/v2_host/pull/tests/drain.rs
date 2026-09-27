@@ -19,6 +19,10 @@ struct Peer {
     disconnected: Cell<bool>,
     settlements: Cell<usize>,
     idle: Cell<bool>,
+    /// Answer every request with this owner refusal, whether or not a
+    /// receipt already exists — the way an upgraded owner refuses a replay.
+    refuse: RefCell<Option<String>>,
+    lookups: Cell<usize>,
 }
 impl PullPeer for Peer {
     fn request(
@@ -27,6 +31,13 @@ impl PullPeer for Peer {
         request: &AdmissionRequest,
     ) -> Result<AdmissionReceipt, OrbitError> {
         self.requests.set(self.requests.get() + 1);
+        if let Some(message) = self.refuse.borrow().clone() {
+            return Err(OrbitError::RemoteTool {
+                code: "invalid_input".into(),
+                message,
+                payload: serde_json::Value::Null,
+            });
+        }
         let receipt = self
             .receipts
             .borrow_mut()
@@ -93,6 +104,20 @@ impl PullPeer for Peer {
         }
         self.settlements.set(self.settlements.get() + 1);
         Ok(())
+    }
+    fn lookup(
+        &self,
+        _destination: &PullDestination,
+        request_id: &str,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.lookups.set(self.lookups.get() + 1);
+        Ok(match self.receipts.borrow().get(request_id) {
+            Some(receipt) => AdmissionLookup::Found {
+                receipt: Box::new(receipt.clone()),
+                current_claim: None,
+            },
+            None => AdmissionLookup::NotFound,
+        })
     }
 }
 #[derive(Default)]
@@ -425,4 +450,147 @@ fn isolated_pull_test(name: &str) -> bool {
         "child did not execute exact test: {stdout}"
     );
     true
+}
+
+/// [ORB-13625] An owner that answers a never-admitted request with a refusal
+/// holds no receipt for it: the request closes as `Refused`, releases its
+/// slot, and the pass reports the refusal instead of allocating more.
+#[test]
+fn pull_owner_refusal_without_a_receipt_closes_the_request_and_frees_its_slot() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_owner_refusal_without_a_receipt_closes_the_request_and_frees_its_slot",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    *peer.refuse.borrow_mut() = Some("version_mismatch".into());
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let error = drain
+        .refill(&destination, &template, 3)
+        .expect_err("refusal reported");
+    assert!(error.to_string().contains("version_mismatch"), "{error}");
+    // One request went out; the refusal stopped the pass.
+    assert_eq!(peer.requests.get(), 1);
+    assert_eq!(peer.lookups.get(), 1);
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].phase, LocalPullPhase::Refused);
+    assert!(
+        records[0]
+            .refusal
+            .as_deref()
+            .unwrap_or_default()
+            .contains("version_mismatch")
+    );
+    assert_eq!(drain.unsettled(&destination).expect("unsettled"), 0);
+    assert_eq!(jobs.drain_leaf_occupancy().expect("occupancy").occupied, 0);
+
+    // A closed request is history: the next pass sends a new ID.
+    *peer.refuse.borrow_mut() = None;
+    assert_eq!(drain.refill(&destination, &template, 1).expect("admits"), 1);
+    assert_eq!(peer.requests.get(), 2);
+    assert_eq!(launcher.launches.get(), 1);
+}
+
+/// [ORB-13625] A retry can be refused although an earlier send of the same ID
+/// committed — the owner was upgraded while the answer was lost. The owner's
+/// receipt is the truth, so the claim is carried forward rather than
+/// abandoned on the owner.
+#[test]
+fn pull_refused_retry_of_a_committed_request_carries_the_claim_forward() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_refused_retry_of_a_committed_request_carries_the_claim_forward",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    peer.lose_request.set(true);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    assert_eq!(peer.receipts.borrow().len(), 1, "the owner committed");
+
+    *peer.refuse.borrow_mut() = Some("version_mismatch".into());
+    drain
+        .refill(&destination, &template, 1)
+        .expect("reconciled");
+    assert_eq!(peer.lookups.get(), 1);
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].phase, LocalPullPhase::Launched);
+    assert_eq!(launcher.launches.get(), 1);
+}
+
+/// [ORB-13625] A transport failure is not an owner answer: the request stays
+/// pending for the same ID, and nothing is looked up or closed.
+#[test]
+fn pull_transport_failure_keeps_the_request_pending_for_the_same_id() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_transport_failure_keeps_the_request_pending_for_the_same_id",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    peer.lose_request.set(true);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    assert_eq!(peer.lookups.get(), 0);
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records[0].phase, LocalPullPhase::Requested);
+    assert_eq!(drain.unsettled(&destination).expect("unsettled"), 1);
+    // Reconciling without allocating retries exactly that request.
+    drain.reconcile_pending(&destination).expect("reconcile");
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].phase, LocalPullPhase::Launched);
+}
+
+#[test]
+fn owner_refusals_are_distinguished_from_lost_or_uncertain_deliveries() {
+    use super::super::drain::is_owner_refusal;
+    for code in ["invalid_input", "capability_refused", "policy_denied"] {
+        assert!(is_owner_refusal(&OrbitError::RemoteTool {
+            code: code.into(),
+            message: String::new(),
+            payload: serde_json::Value::Null,
+        }));
+    }
+    for error in [
+        OrbitError::RemoteTool {
+            code: "store_error".into(),
+            message: String::new(),
+            payload: serde_json::Value::Null,
+        },
+        OrbitError::OutcomeUnknown {
+            mcp_call_id: "1".into(),
+            message: String::new(),
+        },
+        OrbitError::UnreachableDestination("owner".into()),
+        OrbitError::Execution("lost".into()),
+    ] {
+        assert!(!is_owner_refusal(&error), "{error}");
+    }
 }

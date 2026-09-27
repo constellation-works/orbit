@@ -129,9 +129,9 @@ async fn the_claim_read_reports_its_schema_and_the_actions_this_session_could_ta
 
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["owner_workspace"], true);
-    // The incomplete routed feature stays gated; the read says so rather than
-    // implying the dashboard can drive a distributed drain.
-    assert_eq!(json["distributed_execution_enabled"], false);
+    // [ORB-13625] The read reports whether follower execution is open in this
+    // build; it does not imply the dashboard itself drives a drain.
+    assert_eq!(json["distributed_execution_enabled"], true);
     assert_eq!(json["claims"].as_array().expect("claims").len(), 0);
     assert_eq!(json["capabilities"]["handoff_approve"]["authorized"], true);
     assert_eq!(json["capabilities"]["handoff_revoke"]["authorized"], true);

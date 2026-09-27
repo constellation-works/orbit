@@ -1,76 +1,76 @@
-//! Real owner and launcher adapters for the internal pull drain [ORB-12616].
+//! Owner, routed-owner and launcher adapters for the pull drain
+//! [ORB-12616, ORB-13625].
 //!
 //! [`super::drain::PullDrain`] was proven against injected doubles when the
-//! foundation landed; these are the production implementations of the same two
-//! seams, and the doubles now exist only in tests.
+//! foundation landed; these are the production implementations of its seams.
 //!
-//! What "real" means here, and where it stops:
-//!
-//! - **Owner-local is served end to end, for both delivery shapes.** Owner and
-//!   executor are the same machine and workspace, so admission runs on this
-//!   owner's commit boundary and binding and settlement run on this owner's
-//!   claim journal. A local candidate is observed from this owner's checkout;
-//!   a published pull request is observed from the provider *and* this
-//!   checkout [ORB-12500].
-//! - **A follower destination is refused, not faked.** Routed distributed
-//!   mutations are still behind [`ensure_distributed_mutation_available`]: the
-//!   routed peer that would speak this protocol over the federated transport
-//!   does not exist, and no mutating distributed entry point is a registered
-//!   tool. A follower drain therefore fails with that gate's message rather
-//!   than silently pretending to reach an owner.
+//! - **Owner-local** ([`OwnerPullPeer`]): owner and executor are the same
+//!   machine and workspace, so admission runs on this owner's commit boundary
+//!   and binding and settlement on this owner's claim journal.
+//! - **Follower** ([`RoutedPullPeer`]): the owner is another machine. Every
+//!   call goes over the composition-supplied [`DrainOwnerTransport`] to the
+//!   owner's registered `orbit.task.pull`, `orbit.drain.claim.bind`,
+//!   `orbit.drain.claim.settle` and `orbit.drain.receipt.lookup` tools, which
+//!   run the same owner code the owner-local adapter calls directly. There is
+//!   no local fallback: a missing transport refuses.
 //!
 //! Nothing here reads authority from a payload. The destination is caller-side
-//! durable identity built by the drain from its runtime; each claim mutation
-//! carries a [`ClaimInvocation`] the store fences task, machine, bound run and
-//! phase against inside its own transaction.
+//! durable identity built by the drain from its runtime; on the owner, each
+//! claim mutation carries a [`ClaimInvocation`] the store fences task, machine,
+//! bound run and phase against inside its own transaction, with the machine
+//! taken from the trusted session rather than from anything a follower sends.
 
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
-    ClaimMutation, ClaimRun, ExecutionClaim, HandoffObservation, LocalPullAdmission,
-    PullDestination,
+    ClaimMutation, ClaimRun, ExecutionClaim, LocalPullAdmission, PullDestination,
 };
-use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_tools::DrainOwnerTransport;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::tool::WorkerInvocation;
-use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
+use serde_json::{Value, json};
 
 use super::drain::{PullLauncher, PullPeer};
 use crate::OrbitRuntime;
-use crate::application::distributed::{
-    ensure_distributed_mutation_available, owner_binary_version,
-};
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
 }
 
+/// The claim an admission record is acting on.
+fn admitted_claim(admission: &LocalPullAdmission) -> Result<ExecutionClaim, OrbitError> {
+    admission
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.clone())
+        .ok_or_else(|| refused("this admission holds no claim to act on"))
+}
+
 /// The owner half of the pull protocol, served from this process.
-#[allow(dead_code)]
+///
+/// No production drain selects it yet: `orbit run auto --pull` is a replica
+/// entry point and always reaches its owner through [`RoutedPullPeer`]. It is
+/// kept as the owner-local variant the lifecycle fixtures drive end to end.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct OwnerPullPeer<'a> {
     pub(crate) runtime: &'a OrbitRuntime,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 impl OwnerPullPeer<'_> {
     /// Confirm this process may serve `destination` at all.
     ///
     /// Only an owner-local destination is served here. The check is against
     /// the runtime's own registered machine and workspace, so a destination
-    /// record naming this machine does not make a foreign owner local.
+    /// record naming this machine does not make a foreign owner local. A
+    /// remote owner is [`RoutedPullPeer`]'s, never this adapter's.
     fn ensure_owner_local(&self, destination: &PullDestination) -> Result<(), OrbitError> {
         let machine = self.runtime.automation_machine_identity().ok_or_else(|| {
             refused("this host has no registered machine identity; it cannot serve an admission")
         })?;
         if destination.owner_machine_id != machine || destination.execution_machine_id != machine {
-            // Reaching a different machine is routed distributed mutation,
-            // which this adapter does not implement. Report the gate's reason
-            // while it is closed, and stay a refusal after it opens: a remote
-            // destination never becomes owner-local, whatever the gate says.
-            ensure_distributed_mutation_available("orbit.task.pull")?;
             return Err(refused(format!(
                 "destination owner '{}' / executor '{}' is not this machine '{machine}'; the \
                  owner-local adapter serves only its own machine",
@@ -86,23 +86,18 @@ impl OwnerPullPeer<'_> {
         Ok(())
     }
 
-    fn boundary(&self) -> Result<TaskCommitBoundary, OrbitError> {
-        TaskCommitBoundary::new(
-            self.runtime.sqlite_store()?,
-            TaskRegistryStore::open(&task_registry_path(&self.runtime.global_root()))?,
-            self.runtime.workspace_id()?,
-        )
+    fn identity(destination: &PullDestination) -> AdmissionIdentity {
+        AdmissionIdentity::trusted_local(ExecutionLocation {
+            machine_id: destination.execution_machine_id.clone(),
+            machine_name: None,
+        })
     }
 
     /// The claim an admission record is settling, with the destination checks
     /// already applied.
     fn claim(&self, admission: &LocalPullAdmission) -> Result<ExecutionClaim, OrbitError> {
         self.ensure_owner_local(&admission.destination)?;
-        admission
-            .receipt
-            .as_ref()
-            .and_then(|receipt| receipt.claim.clone())
-            .ok_or_else(|| refused("this admission holds no claim to act on"))
+        admitted_claim(admission)
     }
 
     /// Trusted worker context for one claim mutation. The drain speaks for the
@@ -116,61 +111,6 @@ impl OwnerPullPeer<'_> {
             run,
         )
     }
-
-    /// The owner's own reading of the candidate a claim is settling.
-    ///
-    /// Read from the owner checkout — and, for a published delivery, from the
-    /// provider — with the shared observation rules, so the worker's handoff
-    /// payload contributes nothing but the identity to look *at*. Anything
-    /// that disagrees is refused by the claim journal, which compares this
-    /// observation against the submitted candidate.
-    ///
-    /// Already-landed delivery keeps its refusal: no-diff work carries the
-    /// existing typed already-landed report through its own verifier and is
-    /// not a route a claimed leaf takes.
-    fn observe(&self, handoff: &TaskHandoff) -> Result<HandoffObservation, OrbitError> {
-        let candidate = match handoff.candidate.delivery {
-            HandoffDelivery::LocalCandidate => orbit_engine::observe_candidate(
-                &self.runtime.paths().repo_root,
-                Some(&handoff.candidate.source_branch),
-                &handoff.candidate.base_branch,
-                &handoff.candidate.landing_branch,
-                HandoffDelivery::LocalCandidate,
-                &handoff.workspace_id,
-                // An owner-local candidate has no origin to fetch and must
-                // keep reading the local base it was synchronized onto.
-                "local",
-            )?,
-            // [ORB-12500] The owner reads the published pull request itself:
-            // the provider names the delivery, and the candidate and base
-            // objects are resolved in this checkout.
-            HandoffDelivery::PullRequest { .. } => orbit_engine::observe_published_candidate(
-                self.runtime,
-                &self.runtime.paths().repo_root,
-                &handoff.candidate,
-            )?,
-            HandoffDelivery::AlreadyLanded { .. } => {
-                return Err(refused(
-                    "already-landed delivery carries its own typed report through the no-diff \
-                     verifier; a claimed leaf does not hand one off",
-                ));
-            }
-        };
-        let required_commands = self
-            .runtime
-            .workflow_required_validation_commands()
-            .to_vec();
-        if required_commands.is_empty() {
-            return Err(refused(
-                "this owner declares no required validation commands \
-                 (`workflow.required_validation_commands`), so no handoff can be accepted",
-            ));
-        }
-        Ok(HandoffObservation {
-            candidate,
-            required_commands,
-        })
-    }
 }
 
 impl PullPeer for OwnerPullPeer<'_> {
@@ -180,17 +120,11 @@ impl PullPeer for OwnerPullPeer<'_> {
         request: &AdmissionRequest,
     ) -> Result<AdmissionReceipt, OrbitError> {
         self.ensure_owner_local(destination)?;
-        let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
-            machine_id: destination.execution_machine_id.clone(),
-            machine_name: None,
-        });
-        match self.boundary()?.admit_task(
-            &identity,
-            request,
-            owner_binary_version(),
-            &self.runtime.paths().repo_root,
-            &self.runtime.data_root(),
-        )? {
+        let boundary = self.runtime.admission_boundary()?;
+        match self
+            .runtime
+            .admit_pull_request(&boundary, &Self::identity(destination), request)?
+        {
             AdmissionLookup::Found { receipt, .. } => Ok(*receipt),
             AdmissionLookup::Expired => Err(OrbitError::InvalidInput("request_expired".into())),
             AdmissionLookup::NotFound => Err(OrbitError::Store(
@@ -245,7 +179,7 @@ impl PullPeer for OwnerPullPeer<'_> {
                 )?;
             }
             ClaimMutation::AcceptHandoff(handoff) => {
-                let observation = self.observe(&handoff)?;
+                let observation = self.runtime.observe_claim_handoff(&handoff, false)?;
                 self.runtime.accept_task_handoff(
                     &context,
                     &format!("pull-handoff:{}", claim.claim_id),
@@ -261,6 +195,139 @@ impl PullPeer for OwnerPullPeer<'_> {
         }
         Ok(())
     }
+
+    fn lookup(
+        &self,
+        destination: &PullDestination,
+        request_id: &str,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.ensure_owner_local(destination)?;
+        self.runtime
+            .admission_boundary()?
+            .lookup_admission(&Self::identity(destination), request_id)
+    }
+}
+
+/// The follower half of the pull protocol: every call is delivered to the
+/// owner's registered tools over the composition-supplied transport.
+///
+/// The owner resolves the calling machine from its trusted session, so
+/// nothing sent here names a machine; the claim and run IDs only say which
+/// attempt is being carried forward, and the owner's claim journal refuses any
+/// attempt that is not this machine's current one.
+pub(crate) struct RoutedPullPeer {
+    pub(crate) transport: Arc<dyn DrainOwnerTransport>,
+}
+
+impl RoutedPullPeer {
+    fn call(
+        &self,
+        destination: &PullDestination,
+        tool: &str,
+        input: Value,
+    ) -> Result<Value, OrbitError> {
+        self.transport.call(&destination.selector, tool, input)
+    }
+}
+
+fn decode<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, OrbitError> {
+    serde_json::from_value(value)
+        .map_err(|error| OrbitError::Store(format!("owner {what} response: {error}")))
+}
+
+fn encode<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
+    serde_json::to_value(value).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+impl PullPeer for RoutedPullPeer {
+    fn request(
+        &self,
+        destination: &PullDestination,
+        request: &AdmissionRequest,
+    ) -> Result<AdmissionReceipt, OrbitError> {
+        let response = self.call(destination, "orbit.task.pull", encode(request)?)?;
+        let receipt = response
+            .get("receipt")
+            .cloned()
+            .ok_or_else(|| OrbitError::Store("owner pull response carries no receipt".into()))?;
+        decode(receipt, "pull")
+    }
+
+    fn bind(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        let claim = admitted_claim(admission)?;
+        let run_id = admission
+            .leaf_run_id
+            .clone()
+            .ok_or_else(|| refused("binding requires a created leaf run"))?;
+        self.call(
+            &admission.destination,
+            "orbit.drain.claim.bind",
+            json!({
+                "claim_id": claim.claim_id,
+                "run_id": run_id,
+                "ship": encode(&admission.request.ship)?,
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn settle(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        let claim = admitted_claim(admission)?;
+        let settlement = admission
+            .settlement
+            .as_ref()
+            .ok_or_else(|| refused("settlement was not persisted before the owner call"))?;
+        if !matches!(
+            settlement,
+            ClaimMutation::Fail(_) | ClaimMutation::AcceptHandoff(_)
+        ) {
+            return Err(refused(
+                "only a typed handoff or a failure settles a claimed leaf",
+            ));
+        }
+        self.call(
+            &admission.destination,
+            "orbit.drain.claim.settle",
+            json!({
+                "claim_id": claim.claim_id,
+                "run_id": admission.leaf_run_id,
+                "settlement": encode(settlement)?,
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn lookup(
+        &self,
+        destination: &PullDestination,
+        request_id: &str,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        let response = self.call(
+            destination,
+            "orbit.drain.receipt.lookup",
+            json!({ "request_id": request_id }),
+        )?;
+        match response.get("outcome").and_then(Value::as_str) {
+            Some("found") => {
+                let receipt = response.get("receipt").cloned().ok_or_else(|| {
+                    OrbitError::Store("owner lookup found a receipt but returned none".into())
+                })?;
+                let current_claim = match response.get("current_claim") {
+                    None | Some(Value::Null) => None,
+                    Some(claim) => Some(Box::new(decode(claim.clone(), "lookup")?)),
+                };
+                Ok(AdmissionLookup::Found {
+                    receipt: Box::new(decode(receipt, "lookup")?),
+                    current_claim,
+                })
+            }
+            Some("expired") => Ok(AdmissionLookup::Expired),
+            Some("not_found") => Ok(AdmissionLookup::NotFound),
+            other => Err(OrbitError::Store(format!(
+                "owner receipt lookup answered an unknown outcome {other:?}"
+            ))),
+        }
+    }
 }
 
 /// Launches the one leaf run a claim is bound to, as that claim's worker.
@@ -273,12 +340,10 @@ impl PullPeer for OwnerPullPeer<'_> {
 /// to run rather than falling back to an unauthenticated local identity.
 ///
 /// [`bound_runtime`]: LeafPullLauncher::bound_runtime
-#[allow(dead_code)]
 pub(crate) struct LeafPullLauncher<'a> {
     pub(crate) runtime: &'a OrbitRuntime,
 }
 
-#[allow(dead_code)]
 impl LeafPullLauncher<'_> {
     /// This runtime, bound to the admission's claim and leaf run.
     pub(crate) fn bound_runtime(
@@ -303,12 +368,35 @@ impl LeafPullLauncher<'_> {
             execution: claim.executed_on.clone(),
             bound_run_id,
         };
-        let coordinator: Arc<dyn orbit_tools::OwnerCoordinator> = Arc::new(LocalOwnerCoordinator {
-            runtime: self.runtime.without_worker_routing(),
-        });
+        let coordinator = self.coordinator(&admission.destination)?;
         self.runtime
             .clone()
             .with_worker_invocation(invocation, coordinator)
+    }
+
+    /// Where the bound worker's coordination goes: this process when it is
+    /// the owner, otherwise the composition-supplied route to the remote
+    /// owner. A follower without that route refuses rather than coordinating
+    /// against its own replica store.
+    fn coordinator(
+        &self,
+        destination: &PullDestination,
+    ) -> Result<Arc<dyn orbit_tools::OwnerCoordinator>, OrbitError> {
+        if self.runtime.automation_machine_identity() == Some(destination.owner_machine_id.as_str())
+        {
+            return Ok(Arc::new(LocalOwnerCoordinator {
+                runtime: self.runtime.without_worker_routing(),
+            }));
+        }
+        self.runtime
+            .drain_owner_transport()
+            .map(|transport| transport.worker_coordinator())
+            .ok_or_else(|| {
+                refused(format!(
+                    "owner '{}' is another machine and this runtime has no route to it",
+                    destination.owner_machine_id
+                ))
+            })
     }
 }
 

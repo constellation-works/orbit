@@ -182,7 +182,7 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
     };
     let pending: Vec<LocalPullAdmission> = pending
         .into_iter()
-        .filter(|record| !matches!(record.phase, LocalPullPhase::Idle | LocalPullPhase::Settled))
+        .filter(LocalPullAdmission::holds_capacity)
         .collect();
     let admitted_runs: BTreeSet<String> = pending
         .iter()
@@ -348,6 +348,7 @@ pub(super) fn allocate(
             leaf_run_id: None,
             phase: LocalPullPhase::Requested,
             settlement: None,
+            refusal: None,
         };
         write(conn, workspace, &record)?;
         Ok(Some(record))
@@ -421,7 +422,7 @@ pub(super) fn mutate(
                     if old != settlement.as_ref() { return Err(invalid("pending settlement is immutable")); }
                     return Ok(record);
                 }
-                if matches!(record.phase, LocalPullPhase::Requested | LocalPullPhase::Idle | LocalPullPhase::Settled) { return Err(invalid("settlement requires a claim")); }
+                if matches!(record.phase, LocalPullPhase::Requested | LocalPullPhase::Idle | LocalPullPhase::Settled | LocalPullPhase::Refused) { return Err(invalid("settlement requires a claim")); }
                 record.settlement = Some(settlement.as_ref().clone());
                 record.phase = LocalPullPhase::Settling;
             }
@@ -438,6 +439,14 @@ pub(super) fn mutate(
                         }
                 }
             },
+            LocalPullMutation::Refuse(reason) => {
+                if record.phase == LocalPullPhase::Refused { return Ok(record); }
+                if record.phase != LocalPullPhase::Requested || record.receipt.is_some() {
+                    return Err(invalid("only an unanswered request can be closed as refused"));
+                }
+                record.phase = LocalPullPhase::Refused;
+                record.refusal = Some(reason.clone());
+            }
         }
         write(conn, workspace, &record)?;
         Ok(record)

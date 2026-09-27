@@ -733,6 +733,14 @@ impl PullPeer for CuttingPeer<'_> {
         self.settlements.set(self.settlements.get() + 1);
         Ok(())
     }
+
+    fn lookup(
+        &self,
+        destination: &PullDestination,
+        request_id: &str,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.owner.lookup(destination, request_id)
+    }
 }
 
 /// Derives the real binding the way [`LeafPullLauncher`] does, and stops there.

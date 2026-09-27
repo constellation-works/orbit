@@ -321,8 +321,8 @@ pub struct ClaimRun {
 /// Invocation authority supplied by trusted runtime composition, never tool JSON or env.
 /// SSH establishes owner access; these fields fence attempts, not destination caller ACLs.
 /// The adapter must derive this value from its managed invocation, including when the
-/// tool payload omits task/claim context. Public distributed tools remain disabled until
-/// that propagation is implemented and verified.
+/// tool payload omits task/claim context. The owner's registered bind and settle tools
+/// build it from the trusted session machine, never from a machine named in their input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimInvocation {
     pub(crate) task_id: String,

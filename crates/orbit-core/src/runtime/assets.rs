@@ -46,6 +46,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/drain_window.yaml"),
     ),
     (
+        "pull_refill",
+        include_str!("../../assets/activities/pull_refill.yaml"),
+    ),
+    (
         "file_ci_failure_tasks",
         include_str!("../../assets/activities/file_ci_failure_tasks.yaml"),
     ),
@@ -248,6 +252,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "workspace_auto_pipeline",
         include_str!("../../assets/jobs/workspace_auto_pipeline.yaml"),
+    ),
+    (
+        "workspace_pull_pipeline",
+        include_str!("../../assets/jobs/workspace_pull_pipeline.yaml"),
     ),
     (
         "worktree_gc_pipeline",

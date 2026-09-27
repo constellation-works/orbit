@@ -1,6 +1,6 @@
 ---
 type: runbook
-summary: Set up, migrate, and recover a single-owner distributed drain without enabling gated pull or follower merges.
+summary: Set up, migrate, run, and recover a single-owner distributed drain — follower pull with owner-only landing, no follower merges.
 tags: [operations, distributed-drain, multi-host, recovery]
 paths:
   - "crates/orbit-tools/src/builtin/orbit/drain/**"
@@ -8,21 +8,23 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-09-20
+related_artifacts: [ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+last_validated: 2026-09-27
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
 
 Use this runbook to collapse two independent owners, match follower
-prerequisites, inspect the live read-only drain surface, migrate leftover
-epic/child/review state, and recover a claimed attempt. Installing matching
-binaries is not a rollout. Public pull, binding, settlement, routed handoff
-acceptance, and `orbit run auto --pull` are not registered; do not invent them
-or try to turn the gated mutation surface on. The owner's own dashboard does
-carry approve, revoke and recover for the claims this checkout holds — that is
-an operator surface on the owner, not a routed entry point, and it does not
-enable anything for a follower.
+prerequisites, inspect the owner's drain surface, start a follower's pull
+drain, migrate leftover epic/child/review state, and recover a claimed
+attempt. Installing matching binaries is not a rollout: starting a follower's
+drain is a separate, explicit operator action (step 8).
+
+Since [ORB-13625] the owner serves `orbit.task.pull`, `orbit.drain.claim.bind`
+and `orbit.drain.claim.settle`, and a replica runs `orbit run auto --pull
+<selector>`. Completion approval, revocation and recovery are **not** tools:
+they stay owner-operator actions on the owner's dashboard, and a follower
+never merges.
 
 ## Prerequisites and safety
 
@@ -216,7 +218,8 @@ owner-resolved ship configuration, and review policy. Declaring version,
 schema, or review policy also reports the **first refusal admission would
 raise**, in admission order. It creates no receipt, reservation, claim, or
 task. A replica destination refuses the tool instead of answering about
-itself. Do not call pull — it is not a registered tool — as a health check.
+itself. Do not call pull as a health check: a pull is an admission, and an
+admitted claim is real work the owner holds until it settles.
 
 Expected refusals you may see (and must not work around):
 
@@ -256,31 +259,53 @@ one drain leaves 2,880 request identities per day even after compaction. Stop
 a refill pass after the first idle response; the next poll uses a **new**
 request ID.
 
-### 8. Explicit pull enablement — not available in this slice
+### 8. Start the follower's pull drain
 
 Matching binaries, a replica role, a working probe, and `review_policy = none`
-are **installation**. They do not enable pull.
+are **installation**. Starting a drain is the rollout, and it is explicit. On
+the follower, from the replica checkout:
 
-The following are **not** registered and must stay unavailable until the
-lifecycle integration slice lands:
+```bash
+orbit run auto --pull <selector> --for 8h --concurrency 3
+```
 
-- `orbit.task.pull`
-- run binding, settlement, accept-handoff, approve-handoff, revoke-handoff
-- `orbit run auto --pull <selector>`
+`<selector>` is the owner's host-qualified selector from federated discovery
+(`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`). Before anything is
+submitted, the command refuses unless:
 
-The owner's dashboard approve/revoke/recover actions are **not** on that list:
-they are owner-local operator mutations against this checkout's own claims, not
-routed entry points a follower can reach. They change nothing about the gate.
+- this checkout is a **replica**, and the selector names **its** owner machine
+  and **its** logical workspace;
+- the owner answers the probe **as that machine** and would admit this
+  executor now (binary, protocol schema, review policy, ship mode);
+- this host declares `workflow.required_validation_commands` — the same list
+  the owner uses, since the owner re-checks the evidence against its own.
 
-`DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` cannot be turned on by
-configuration. Do not register a local tool, write a callers file, or start a
-second owner store to simulate pull. Owner-local claimed leaves already exist
-on the owner; followers still fail the public mutation gate.
+The drain is an ordinary durable run of `workspace_pull_pipeline`:
 
-When that slice lands, rollout is a separate operator action: enable pull
-only after this runbook's inspect/migrate/probe steps are clean, keep
-ship-sweep enablement unchanged unless you deliberately edit the routine, and
-never treat a successful probe as permission to merge.
+- Each iteration first carries earlier admissions forward — retries an
+  unanswered request under the **same** ID, binds, launches, and delivers a
+  finished leaf's settlement — then, while the window is open, tops free slots
+  up with new pull requests, each persisted before it is sent.
+- Each claim runs as one local `task_claimed_pr_pipeline` leaf: implement,
+  validate on the exact candidate, push, open the PR, hand off. The owner
+  observes the PR itself and moves the task to `review`. **Nothing lands until
+  the owner approves the handoff** on its dashboard.
+- An owner that refuses a request is checked against its receipt first: a
+  committed claim is carried forward, and only a request the owner holds no
+  receipt for is closed (`Refused`) and its slot returned.
+- An unreachable owner is reported in the iteration output and retried; the
+  drain never fails over to its own store.
+- The run outlives its window until every admission has settled, so a leaf
+  that finishes late still hands off.
+
+Operate it with the ordinary run commands: `orbit run show <run-id>`,
+`orbit run concurrency <run-id> --set N`, and `orbit run auto --stop` (closes
+the window; live leaves keep running and still settle). Ship-sweep
+enablement is unchanged by any of this.
+
+To close the feature entirely, set `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
+to `false` in `orbit-core` and rebuild: it is a source constant, not
+configuration, so no key or environment variable can open or close it.
 
 ## Claim inspection and manual recovery
 
@@ -480,12 +505,19 @@ that follower's `orbit --version`. Confirm:
 - the probe created no task, reservation, or claim (`orbit task locks list`
   unchanged);
 - `orbit job resume` of a known claimed leaf still refuses;
-- `orbit run auto --pull` is not a flag (`orbit run auto --help`);
 - no leftover callers file is treated as an ACL.
+
+After starting a drain (step 8), confirm the first claim end to end: the
+owner's `orbit.drain.claims` shows it `running` on the follower's machine,
+the follower's `orbit run show <leaf-run-id>` shows the claimed PR leaf, and
+after handoff the owner task is in `review` with the PR attached and nothing
+merged.
 
 ## Rollback
 
-Leave the replica registered but idle. Do not enable pull. Restore the
+Stop the follower's drain with `orbit run auto --stop` and let its live
+leaves settle, or cancel them and recover their claims on the owner's
+dashboard. Leave the replica registered but idle. Restore the
 demoted host as an owner only by a deliberate, documented re-init after
 quiescing the current owner — this runbook does not perform that reversal.
 Preserve schedule files; do not bulk-disable routines as cleanup.

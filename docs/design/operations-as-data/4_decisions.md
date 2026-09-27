@@ -291,7 +291,7 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 - The owner's own machine can call its own read-only drain surface. Both tools answer `orbit tool run` for an operator (TTY or `ORBIT_OPERATOR=1`) and for an agent envelope, matching what `orbit tool list` advertises, and continue to answer an `agent` MCP session.
 - A capability-less MCP session is still refused, and now with a denial that names the operation, the required capability, and the remedy for its surface, rather than a bare `capability_refused`.
 - Cost: a CLI caller with no session grant, no agent envelope, and no TTY — a bare shell script or a cron entry — is refused both tools and must identify itself, the same trade the original chokepoint entry recorded for governed operations generally.
-- Cost: the guardrail table now has an exception list. It is two names long and asserted in both directions, so adding a third requires the same deliberate line as adding a governed tool does.
+- Cost: the guardrail table now has an exception list, asserted in both directions, so adding a name requires the same deliberate line as adding a governed tool does. [ORB-13625] added the distributed drain's executor lifecycle — `orbit.task.pull`, `orbit.drain.claim.bind`, `orbit.drain.claim.settle` — on the same floor: a follower's drain holds `agent` and nothing more, and attempt ownership is fenced by the claim journal against the session's own machine, not by a stronger capability.
 
 ## Task References
 

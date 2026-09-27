@@ -93,7 +93,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Contract: ready queue, `orbit.task.pull`, refusals, invariants | [specs/task-pull.md](./specs/task-pull.md) | [ORB-12488] | proposed |
 | Transactional ready selection on the owner | [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull) | — | to file |
 | Request receipt + claim + reservation + status in one transaction | [crates/orbit-core/src/runtime/task/locks.rs](../../../crates/orbit-core/src/runtime/task/locks.rs) | — | to file |
-| Pull-mode drain loop (`orbit run auto --pull`) | [workspace_auto_pipeline.yaml](../../../crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml) | — | to file |
+| Pull-mode drain loop (`orbit run auto --pull`), owner pull/bind/settle tools, routed follower peer | [workspace_pull_pipeline.yaml](../../../crates/orbit-core/assets/jobs/workspace_pull_pipeline.yaml) | [ORB-13625] | done |
 | Claimed leaf dispatch, binding, and terminal settlement | [task_pr_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_pr_pipeline.yaml) | — | to file |
 | Replica task reads and coordination writes route to the owner | [crates/orbit-cmd/src/registry/runtime/mod.rs](../../../crates/orbit-cmd/src/registry/runtime/mod.rs), [crates/orbit-mcp](../../../crates/orbit-mcp) | — | to file |
 | Manual claim inspection and recovery | [2_design.md §3.1](./2_design.md#31-attempt-ownership-and-recovery) | — | to file |

@@ -483,6 +483,10 @@ pub enum LocalPullPhase {
     Settling,
     Settled,
     Idle,
+    /// The owner answered this request with a pre-admission refusal and holds
+    /// no receipt for it, so no claim exists to settle [ORB-13625]. Terminal,
+    /// like `Idle`: the slot returns and the next pass allocates a new ID.
+    Refused,
 }
 
 /// How much of a drain's leaf capacity is spoken for, across both admission
@@ -523,6 +527,21 @@ pub struct LocalPullAdmission {
     pub leaf_run_id: Option<String>,
     pub phase: LocalPullPhase,
     pub settlement: Option<super::ClaimMutation>,
+    /// The owner's refusal, recorded only with [`LocalPullPhase::Refused`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+}
+
+impl LocalPullAdmission {
+    /// Whether this admission still holds a drain slot: it is neither an
+    /// idle poll, a refused request, nor a settled claim.
+    #[must_use]
+    pub fn holds_capacity(&self) -> bool {
+        !matches!(
+            self.phase,
+            LocalPullPhase::Idle | LocalPullPhase::Settled | LocalPullPhase::Refused
+        )
+    }
 }
 
 /// Each transition commits before the next network or process side effect.
@@ -535,4 +554,7 @@ pub enum LocalPullMutation {
     Launched,
     Settle(Box<super::ClaimMutation>),
     Settled,
+    /// Close a still-`Requested` admission the owner refused, after the owner
+    /// confirmed it holds no live receipt for this request ID.
+    Refuse(String),
 }

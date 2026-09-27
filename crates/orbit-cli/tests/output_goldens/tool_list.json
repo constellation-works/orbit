@@ -400,6 +400,62 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
+    "enabled": true,
+    "name": "orbit.drain.claim.bind",
+    "parameters": [
+      {
+        "description": "The claim `orbit.task.pull` admitted to this machine.",
+        "name": "claim_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "The one local leaf run the executor created for this claim.",
+        "name": "run_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "The ship contract the claim was admitted under, from its receipt.",
+        "name": "ship",
+        "param_type": "object",
+        "required": true
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. Either releases only this claim's reservation. Retries replay the recorded outcome.",
+    "enabled": true,
+    "name": "orbit.drain.claim.settle",
+    "parameters": [
+      {
+        "description": "The claim being settled.",
+        "name": "claim_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "The leaf run bound to this claim, when one was bound.",
+        "name": "run_id",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, or `{\"Fail\": <evidence>}`. Nothing else settles a claim.",
+        "name": "settlement",
+        "param_type": "object",
+        "required": true
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "List this workspace's execution claims for inspection and deliberate recovery: phase, age, reservation expiry, execution machine, bound run, last recorded event, unresolved merge intent, and landing invalidation. Age, an expired reservation, and an absent local run are diagnostics, not proof that a worker died — nothing here reclaims, rebinds, or repairs a claim.",
     "enabled": true,
     "name": "orbit.drain.claims",
@@ -1036,6 +1092,52 @@
         "name": "model",
         "param_type": "string",
         "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Distributed-drain admission, served by the workspace owner. Selects the first ready, valid, conflict-free backlog task in the owner's order and, in one transaction, reserves its footprint, records an execution claim for the calling machine, moves it to `in-progress` and stores the request receipt. Answers `idle` (a receipt with no claim) when nothing is admissible. The calling machine is the session's, never a field of this input. A claim grants execution of that one attempt only; completion still needs owner approval.",
+    "enabled": true,
+    "name": "orbit.task.pull",
+    "parameters": [
+      {
+        "description": "Durable unique ID for one intended admission, persisted by the caller before sending. Reuse it unchanged after any uncertainty: a retry replays the stored receipt and never admits a second task.",
+        "name": "request_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "The calling binary's version. It must equal the owner's.",
+        "name": "caller_version",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "The caller's distributed-drain wire-protocol schema version.",
+        "name": "caller_schema",
+        "param_type": "integer",
+        "required": true
+      },
+      {
+        "description": "The executor's effective review policy. Only `none` is admitted in v1.",
+        "name": "caller_review_policy",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "The calling drain: `run_id`, `job_name`, and an optional diagnostic `machine_name`.",
+        "name": "run_context",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "description": "The ship contract this owner resolves, exactly as `orbit.drain.probe` reported it. A new request carrying anything else is refused as `ship_contract_mismatch`, because the receipt freezes it.",
+        "name": "ship",
+        "param_type": "object",
+        "required": true
       }
     ],
     "status": "active"

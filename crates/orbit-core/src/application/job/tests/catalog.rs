@@ -2474,9 +2474,9 @@ fn collect_step_targets(steps: &[JobV2Step], out: &mut Vec<String>) {
 ///
 /// The gate renders its child job name from `input.mode`, so the guarantee is
 /// really about which modes a public submission can express: every accepted
-/// mode names a legacy leaf, and the claimed names are not modes at all.
-/// `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` stays false alongside it, so
-/// even the internal seams remain unreachable from a configured surface.
+/// mode names a legacy leaf, and the claimed names are not modes at all. A
+/// claimed leaf is created only by a pull admission's durable record
+/// [ORB-13625], never by a public ship submission.
 #[test]
 fn public_ship_input_cannot_name_a_claimed_leaf() {
     use orbit_types::workflow::ShipMode;
@@ -2503,9 +2503,4 @@ fn public_ship_input_cannot_name_a_claimed_leaf() {
             "'{claimed}' must not be an admissible public ship mode"
         );
     }
-    assert!(
-        crate::application::distributed::ensure_distributed_mutation_available("orbit.task.pull")
-            .is_err(),
-        "the distributed mutation entry points stay closed in this slice"
-    );
 }

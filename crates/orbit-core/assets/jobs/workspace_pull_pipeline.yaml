@@ -1,0 +1,71 @@
+# Follower pull drain [ORB-13625].
+#
+# The replica-side counterpart of `workspace_auto_pipeline`. It never lists a
+# backlog: the owner orders the work and admits it one claim at a time through
+# `orbit.task.pull`, and this run executes each claim as one local
+# `task_claimed_pr_pipeline` leaf that ends at a typed handoff. The owner keeps
+# landing authority; nothing here merges.
+#
+# `for_seconds` gates *requesting* new claims. Unlike the owner drain, the run
+# does not end when the window does: it keeps iterating until every admission
+# it made has settled with the owner (`unsettled == 0`), so a leaf that
+# finishes after the window still has its handoff or failure delivered by the
+# drain that admitted it. `orbit run auto --stop` closes the window early the
+# same way it does for the owner drain; live leaves keep running.
+#
+# `max_iterations` is the fail-closed ceiling, not the intended exit. Every
+# iteration that admits nothing waits at least `poll_sleep_seconds`, so 6000
+# covers a 24h window plus a long tail of in-flight leaves.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: workspace_pull_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  default_input:
+    for_seconds: 0
+    # Claimed leaves allowed at once on this executor. Read through the same
+    # run-control path `orbit run concurrency` writes, so it can be retuned
+    # live. Each claimed leaf definition also declares `max_active_runs: 10`.
+    max_active_leaf_runs: 5
+    # Waited when leaves are in flight or a pass did not complete.
+    poll_sleep_seconds: 30
+    # Waited when the owner had nothing ready and nothing is in flight.
+    idle_sleep_seconds: 60
+    # The owner this replica pulls from, verified and resolved by
+    # `orbit run auto --pull` at submission.
+    destination: {}
+
+  steps:
+    - id: open_window
+      target: activity:drain_window
+      default_input:
+        for_seconds: "{{ input.for_seconds }}"
+
+    - id: drain
+      loop:
+        max_iterations: 6000
+        break_when: "{{ steps.refill.output.done }} == true"
+        steps:
+          - id: window
+            target: activity:drain_window
+            default_input:
+              deadline: "{{ steps.open_window.output.deadline }}"
+
+          - id: refill
+            target: activity:pull_refill
+            default_input:
+              destination: "{{ input.destination }}"
+              window_expired: "{{ steps.window.output.expired }}"
+              max_active_leaf_runs: "{{ input.max_active_leaf_runs }}"
+              poll_sleep_seconds: "{{ input.poll_sleep_seconds }}"
+              idle_sleep_seconds: "{{ input.idle_sleep_seconds }}"
+
+          - id: idle_wait
+            when: "{{ steps.refill.output.wait }} == true"
+            target: activity:sleep
+            default_input:
+              seconds: "{{ steps.refill.output.sleep_seconds }}"
