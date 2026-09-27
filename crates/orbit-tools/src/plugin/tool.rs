@@ -104,6 +104,18 @@ impl Tool for PluginTool {
         self.backend.spec().enforce_programs(ctx, &self.name)?;
         let output = match &self.backend {
             PluginBackend::Exec(spec) => self.execute_process(spec, ctx, input)?,
+            // A long-lived `mcp` child is shared per caller context, and the
+            // broker does not yet keep or reclaim one per run (design
+            // `docs/design/plugins/2_agent_call_broker.md` §4.4). Refuse
+            // rather than hand a brokered call a child confined by another
+            // caller's profile.
+            PluginBackend::Mcp(_) if ctx.brokered_caller.is_some() => {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "plugin tool '{}' has an `mcp` backend, which the plugin broker does not \
+                     run yet",
+                    self.name
+                )));
+            }
             PluginBackend::Mcp(backend) => backend.call(ctx, &self.name, &self.verb, input)?,
         };
         validate_output(&self.name, self.output_schema.as_ref(), &output)?;
@@ -144,9 +156,14 @@ impl PluginTool {
             &spec.allowed_tools(ctx),
         )?;
         callback.stamp_env(&mut environment);
-        let sandbox = spec
-            .sandbox_profile(ctx.workspace_root.as_deref())?
-            .with_callback_session(&callback);
+        // A call the broker runs for an agent is held to that agent's
+        // profile as well as the plugin's (design
+        // `docs/design/plugins/2_agent_call_broker.md` §5).
+        let profile = match &ctx.brokered_caller {
+            Some(caller) => spec.brokered_sandbox_profile(caller)?,
+            None => spec.sandbox_profile(ctx.workspace_root.as_deref())?,
+        };
+        let sandbox = profile.with_callback_session(&callback);
         let request = ExecRequest {
             program: spec.command.to_string_lossy().into_owned(),
             args: spec.args.clone(),

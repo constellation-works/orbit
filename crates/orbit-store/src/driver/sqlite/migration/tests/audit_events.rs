@@ -152,3 +152,62 @@ fn audit_actor_alias_v2_rederives_rows_stamped_under_the_old_map() {
     assert_eq!(family, "claude");
     assert_eq!(version, orbit_types::telemetry::ACTOR_ALIAS_MAP_VERSION);
 }
+
+/// Migration v32 adds the brokered-call columns without touching earlier
+/// rows: a row written before the broker ran calls still hydrates, and reads
+/// as not brokered with no peer PID.
+#[test]
+fn audit_rows_written_before_brokered_calls_read_as_not_brokered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.db");
+    let conn = Connection::open(&path).expect("open legacy database");
+    conn.execute_batch(
+        r#"
+            CREATE TABLE audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                command TEXT NOT NULL,
+                subcommand TEXT,
+                tool_name TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                role TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                working_directory TEXT NOT NULL,
+                arguments_json TEXT,
+                stdout_truncated TEXT,
+                stderr_truncated TEXT,
+                error_message TEXT,
+                host TEXT,
+                pid INTEGER NOT NULL,
+                session_id TEXT
+            );
+            INSERT INTO audit_events(
+                execution_id, timestamp, command, tool_name, role, status, exit_code,
+                duration_ms, working_directory, pid
+            ) VALUES ('exec-legacy', '2026-09-01T00:00:00Z', 'tool', 'demo.hello', 'claude',
+                      'success', 0, 1, '/repo', 4242);
+        "#,
+    )
+    .expect("seed a legacy audit row");
+    drop(conn);
+
+    let store = crate::Store::open(&path).expect("open and migrate the store");
+    {
+        let connection = store.connection();
+        let conn = connection.lock().expect("connection");
+        assert!(table_has_column(&conn, "audit_events", "brokered").expect("brokered column"));
+        assert!(table_has_column(&conn, "audit_events", "peer_pid").expect("peer_pid column"));
+    }
+    let events = store
+        .list_audit_events(&crate::AuditEventFilter::default())
+        .expect("legacy rows still hydrate");
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].execution_id, "exec-legacy");
+    assert!(!events[0].brokered);
+    assert_eq!(events[0].peer_pid, None);
+}

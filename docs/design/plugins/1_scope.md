@@ -502,6 +502,10 @@ that serves no task. Orbit takes them from the dispatch, never from tool input:
   `ORBIT_TASK_ID` from the run envelope Orbit stamped into the agent's environment, honored
   only with `ORBIT_MANAGED_RUN_CONTEXT` set — the boundary that already scopes reservation
   owners and MCP audit correlation. Without the marker the call is interactive.
+- A call a run's plugin broker executes gets the run and task from the broker's own dispatch
+  record, never from the request or the calling process's environment
+  ([2_agent_call_broker.md](./2_agent_call_broker.md) §4.4). Nested calls reach it once the
+  client forwards them.
 
 A `task_id` or `job_run_id` in the tool's arguments reaches the backend as input and nothing
 else. Read identity from `context`, not from the forwarded `ORBIT_*` environment names, which

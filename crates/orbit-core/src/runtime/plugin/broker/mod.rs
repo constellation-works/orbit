@@ -3,10 +3,11 @@
 //!
 //! The `orbit job run-pipeline-worker` process that runs a sandboxed agent
 //! step starts one broker before spawning the provider and drops it when the
-//! provider exits. This slice delivers the server: the socket, kernel peer
-//! authentication, the wire protocol and its limits, and teardown. Every
-//! authenticated request is answered `not_implemented` until plugin call
-//! forwarding lands.
+//! provider exits. The server owns the socket, kernel peer authentication,
+//! the wire protocol and its limits, and teardown; each authenticated,
+//! well-formed request is handed to the run's [`BrokerDispatch`], which runs
+//! it through the host's audited plugin dispatch under the run's own
+//! authority.
 
 mod peer;
 mod protocol;
@@ -19,12 +20,26 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
+use serde_json::Value;
 
 pub(crate) use peer::PeerAnchor;
+pub(crate) use protocol::{BrokerRequest, EntryPoint};
 pub(crate) use socket::sweep_orphaned;
 
 use server::{AnchorSlot, BrokerServer};
 use socket::RunSocketDir;
+
+/// Executes one authenticated request for the run a broker serves.
+///
+/// The implementation holds the run's dispatch record, so everything that
+/// decides authority — task, job run, activity policy, agent profile — comes
+/// from the host, never from `request`. `peer_pid` is the authenticated
+/// caller's PID, recorded on the call's audit row.
+pub(crate) trait BrokerDispatch: Send + Sync {
+    /// Run the call. `Ok` carries the backend's `output` only; an error is
+    /// rendered as the §4.3 error response.
+    fn call(&self, request: BrokerRequest, peer_pid: u32) -> Result<Value, OrbitError>;
+}
 
 /// One run's broker. Dropping it stops the listener and removes the socket
 /// and its directory.
@@ -36,9 +51,14 @@ pub(crate) struct PluginBroker {
 }
 
 impl PluginBroker {
-    /// Bind this run's socket under `global_root` and start listening. Every
-    /// connection is refused until [`Self::bind_anchor`] names the sandbox.
-    pub(crate) fn start(global_root: &Path, run_id: &str) -> Result<Self, OrbitError> {
+    /// Bind this run's socket under `global_root` and start listening,
+    /// answering requests through `dispatch`. Every connection is refused
+    /// until [`Self::bind_anchor`] names the sandbox.
+    pub(crate) fn start(
+        global_root: &Path,
+        run_id: &str,
+        dispatch: Arc<dyn BrokerDispatch>,
+    ) -> Result<Self, OrbitError> {
         let socket = RunSocketDir::create(global_root)?;
         let listener = match UnixListener::bind(socket.socket_path()) {
             Ok(listener) => listener,
@@ -51,7 +71,7 @@ impl PluginBroker {
             }
         };
         let anchor = Arc::new(AnchorSlot::default());
-        let server = match BrokerServer::spawn(listener, Arc::clone(&anchor), run_id) {
+        let server = match BrokerServer::spawn(listener, Arc::clone(&anchor), dispatch, run_id) {
             Ok(server) => server,
             Err(error) => {
                 let _ = socket.remove();

@@ -14,11 +14,12 @@ last_validated: 2026-09-26
 
 # Design: host-side broker for agent-initiated plugin calls
 
-Status: proposal, partly implemented. The broker server exists (§4, "As implemented"): every
-sandboxed agent step gets a per-run socket with kernel peer authentication, and every
-authenticated request is answered `not_implemented`. The §5 profile compilation exists
-(`PluginBackendSpec::brokered_sandbox_profile`). Nothing forwards a call or applies the mask
-until the client and mask slices land; the follow-up tasks listed at the end deliver the rest.
+Status: proposal, partly implemented. The broker server exists (§4.2, "As implemented"): every
+sandboxed agent step gets a per-run socket with kernel peer authentication. The broker executes
+each authenticated request for an exec-backed plugin tool through the audited dispatch, under
+the run's own record and the §5 profile (§4.4, "As implemented"). Nothing sends it a call, and
+nothing applies the mask, until the client and mask slices land; the follow-up tasks listed at
+the end deliver the rest.
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
@@ -277,6 +278,37 @@ deadline plus a fixed grace. If the client disconnects, the broker kills the bac
 group. A rotation the backend already reported is still applied, because it happened on the
 service side regardless.
 
+**As implemented** (`crates/orbit-core/src/runtime/plugin/broker/` for the server,
+`crates/orbit-core/src/adapter/command/dispatch/brokered.rs` for execution):
+
+- The step runner hands `RuntimeHost::start_plugin_broker` a `PluginBrokerRun` built from its
+  own dispatch: run and job run ID, task ID, activity name, agent identity, workspace, the
+  activity's allowlist or deny policy, and a `BrokeredCaller` (the worktree, the agent's
+  resolved filesystem profile, its program allowlist or disallow list). A sandboxed run with
+  no worktree gets no broker, with a warning.
+- A worker parses the §4.3 request. `schema_version`, `tool`, an object `input` and an
+  absolute `cwd` are required; `workspace` defaults to none, `entry_point` to `cli` and
+  `dry_run` to false. Anything else is `plugin_broker_invalid_request`.
+- The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
+  the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
+  nested `orbit` answers those itself), or it names a tool that is not a plugin tool. The
+  run's policy applies fail-closed: an activity whose allowlist names nothing admits no
+  brokered call, where an in-process call with no activity would be unrestricted.
+- The call runs through the same audited dispatch and tool chokepoint as an in-process call,
+  with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
+  bound to the run's task and job run. An exec backend is confined by the §5 intersection.
+  An `mcp` backend is refused until the broker keeps one per run.
+- One audit row per call, with `brokered: true`, `peer_pid`, the request's `cwd` as the
+  working directory, the role derived from the run's agent, and the run's task, job run and
+  activity. None of it is read from the request, the tool input or the host's environment.
+  Rows written before this change read back as not brokered.
+- `secret_updates` are applied by compare-and-swap inside the dispatch, and the response
+  carries only `output`. A backend's own structured error keeps its code, message, `retryable`
+  and `detail`. Host refusals map to `plugin_broker_refused`, schema failures to
+  `plugin_broker_invalid_input`, and any other failure to `plugin_broker_call_failed`, all
+  non-retryable.
+- Not yet: the client-disconnect kill, and `mcp` backend reuse.
+
 ## 5. Confinement of a brokered backend
 
 Once the backend moves to the host, the agent's sandbox no longer applies to it by inheritance.
@@ -415,6 +447,11 @@ anything:
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
 
+A call the broker accepts but cannot run is answered with the codes in §4.4 ("As
+implemented"): `plugin_broker_invalid_request`, `plugin_broker_refused`,
+`plugin_broker_invalid_input` or `plugin_broker_call_failed`, none retryable, or with the
+backend's own structured error.
+
 Every refusal reaches the agent as an ordinary structured plugin error (1_scope.md §4.2), and
 `orbit tool run` exits non-zero with the JSON on stderr, as it does for any other plugin error.
 
@@ -433,7 +470,12 @@ The mask ships last, only once every call it would break has a broker to go to:
    `orbit mcp serve` forward plugin calls when `ORBIT_PLUGIN_BROKER` is set. The broker runs
    them through the audited dispatch with the authoritative run context and the §5 profile.
    This slice also adds `brokered` audit fields and the §7 error codes, and updates
-   1_scope.md §4.2 "Call identity". Blocked by 1 and 2. [ORB-13238]
+   1_scope.md §4.2 "Call identity". Blocked by 1 and 2. [ORB-13238] Split into:
+   - 3a. Broker-side execution: the audited dispatch, run-record authority, the `brokered`
+     audit fields and the broker's error codes. Landed; see §4.4 "As implemented".
+   - 3b. The nested client forwarding.
+   - 3c. `mcp` backend reuse per run, the client-disconnect kill, and an end-to-end test
+     under a real agent sandbox.
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent
    whether or not its broker bound, plus the §6.3 nested behaviour: the sentinel, no in-process fallback, the secret
    store refusing a masked directory, and operator commands degrading. This slice also updates

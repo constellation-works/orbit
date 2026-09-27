@@ -3,7 +3,8 @@
 //! Two independent concerns live behind this module and are re-exported here
 //! so `command::tool::*` remains the single import path for consumers:
 //! - [`dispatch`] — tool dispatch, audit correlation, agent-identity
-//!   resolution, and the trusted MCP envelope boundary.
+//!   resolution, the trusted MCP envelope boundary, and the calls a run's
+//!   plugin broker executes.
 //! - [`registry`] — registry CRUD (list/show/add/remove/enable/disable/doctor).
 
 mod dispatch;
@@ -25,6 +26,8 @@ mod tests;
 
 pub use crate::runtime::tool_exec::DryRunResult;
 
+#[cfg(unix)]
+pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
     AuditContext, ToolDispatchOutcome, ToolEntryPoint, audit_role_label,
     audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,

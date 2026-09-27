@@ -50,6 +50,8 @@ fn audit_list_json_projection_shape_is_stable() {
         plugin: None,
         plugin_secrets: Vec::new(),
         plugin_secret_updates: Default::default(),
+        brokered: false,
+        peer_pid: None,
     };
 
     assert_eq!(
@@ -144,6 +146,8 @@ fn denied_event(id: i64, execution_id: &str) -> AuditEvent {
         plugin: None,
         plugin_secrets: Vec::new(),
         plugin_secret_updates: Default::default(),
+        brokered: false,
+        peer_pid: None,
     }
 }
 

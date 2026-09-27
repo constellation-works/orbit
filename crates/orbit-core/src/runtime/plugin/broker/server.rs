@@ -15,10 +15,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::BrokerDispatch;
 use super::peer::{Peer, PeerAnchor, Refusal, authenticate, reauthenticate};
 use super::protocol::{
-    BUSY, FrameError, INVALID_REQUEST, MAX_REQUEST_BYTES, NOT_IMPLEMENTED, REQUEST_TOO_LARGE,
-    error_response, parse_request, read_frame, write_frame,
+    BUSY, FrameError, INVALID_REQUEST, MAX_REQUEST_BYTES, REQUEST_TOO_LARGE, call_error_response,
+    error_response, output_response, parse_request, read_frame, write_frame,
 };
 
 /// Requests a broker runs at once.
@@ -86,7 +87,7 @@ impl AnchorSlot {
 }
 
 /// A running listener. Dropping it stops accepting and closes the listener;
-/// requests already admitted finish on their own within [`IO_TIMEOUT`].
+/// requests already admitted run to completion on their worker.
 pub(crate) struct BrokerServer {
     stop: Arc<AtomicBool>,
     wake: UnixStream,
@@ -97,6 +98,7 @@ impl BrokerServer {
     pub(crate) fn spawn(
         listener: UnixListener,
         anchor: Arc<AnchorSlot>,
+        dispatch: Arc<dyn BrokerDispatch>,
         run_id: &str,
     ) -> io::Result<Self> {
         listener.set_nonblocking(true)?;
@@ -111,6 +113,7 @@ impl BrokerServer {
                 pending: Arc::clone(&pending),
                 admitted: Arc::clone(&admitted),
                 stop: Arc::clone(&stop),
+                dispatch: Arc::clone(&dispatch),
                 run_id: run_id.to_string(),
             };
             thread::Builder::new()
@@ -273,6 +276,7 @@ struct Worker {
     pending: Arc<Mutex<Receiver<Admitted>>>,
     admitted: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
+    dispatch: Arc<dyn BrokerDispatch>,
     run_id: String,
 }
 
@@ -331,14 +335,10 @@ impl Worker {
             return;
         }
         let response = match parse_request(&body) {
-            // Forwarding to the audited plugin dispatch arrives with the
-            // nested client (design §8, step 3). Until then an authenticated
-            // request is answered, and nothing runs.
-            Ok(_tool) => error_response(
-                NOT_IMPLEMENTED,
-                "the plugin broker does not run plugin calls yet; the request was not executed",
-                false,
-            ),
+            Ok(request) => match self.dispatch.call(request, peer.pid) {
+                Ok(output) => output_response(output),
+                Err(error) => call_error_response(&error),
+            },
             Err(message) => error_response(INVALID_REQUEST, &message, false),
         };
         respond(stream, &response);

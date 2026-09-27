@@ -338,6 +338,12 @@ pub struct ToolContext {
     /// Host-attested managed activity this call serves. `None` for an
     /// interactive call. Tool input cannot set it.
     pub activity_binding: Option<ActivityBinding>,
+    /// Set only by a run's plugin broker, for a call it executes on a
+    /// sandboxed agent's behalf: a plugin backend is then confined by the
+    /// plugin profile narrowed to this caller
+    /// ([`plugin::PluginBackendSpec::brokered_sandbox_profile`]). Tool input
+    /// cannot set it.
+    pub brokered_caller: Option<plugin::BrokeredCaller>,
     /// Narrow Orbit application host used by Orbit builtins instead of respawning
     /// the Orbit CLI or carrying task-specific state in the generic tool context.
     pub orbit_host: Option<Arc<dyn OrbitToolHost>>,
@@ -368,6 +374,7 @@ impl std::fmt::Debug for ToolContext {
             .field("fs_profile", &self.fs_profile)
             .field("reservation_owner", &self.reservation_owner)
             .field("activity_binding", &self.activity_binding)
+            .field("brokered_caller", &self.brokered_caller)
             .field("has_orbit_host", &self.orbit_host.is_some())
             .finish()
     }

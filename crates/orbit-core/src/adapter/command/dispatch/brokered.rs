@@ -1,0 +1,194 @@
+//! The host side of a run's plugin broker: execute one authenticated request
+//! through the audited dispatch, under the run's authority
+//! (`docs/design/plugins/2_agent_call_broker.md` §4.3–§4.4, §5).
+//!
+//! Everything that decides authority — task, job run, activity policy, agent
+//! identity, filesystem profile and program policy — comes from the
+//! [`PluginBrokerRun`] the step runner built when it dispatched the agent.
+//! The request contributes only the tool, its input and a `cwd` that must lie
+//! within the run's worktree; this process's environment describes the host,
+//! not the agent, and is never read for the call.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use orbit_common::OrbitError;
+use orbit_engine::PluginBrokerRun;
+use orbit_tools::{ActivityBinding, ToolContext};
+use orbit_types::policy::Role;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::tool_allowed;
+use serde_json::Value;
+
+use crate::OrbitRuntime;
+use crate::runtime::plugin::broker::{BrokerDispatch, BrokerRequest, EntryPoint};
+use crate::runtime::tool_exec::CapabilityEnforcement;
+
+use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
+use super::execute::{BrokeredAudit, ToolEntryPoint};
+
+/// Executes a broker's requests for the one run it serves.
+pub(crate) struct RunDispatch {
+    runtime: OrbitRuntime,
+    run: PluginBrokerRun,
+    /// The run's worktree, resolved once so a request `cwd` is compared
+    /// against the real directory rather than a spelling of it.
+    worktree: PathBuf,
+}
+
+impl RunDispatch {
+    pub(crate) fn new(runtime: OrbitRuntime, run: PluginBrokerRun) -> Self {
+        let worktree = run
+            .caller
+            .worktree
+            .canonicalize()
+            .unwrap_or_else(|_| run.caller.worktree.clone());
+        Self {
+            runtime,
+            run,
+            worktree,
+        }
+    }
+
+    /// Why the request itself cannot run, whatever the tool: a `cwd` outside
+    /// the run's worktree, another workspace, or a dry run, which the nested
+    /// `orbit` answers without the broker.
+    fn request_refusal(
+        &self,
+        cwd: &Path,
+        workspace: Option<&str>,
+        dry_run: bool,
+    ) -> Option<OrbitError> {
+        if dry_run {
+            return Some(OrbitError::PolicyDenied(
+                "the plugin broker runs calls; a dry run is answered by the nested orbit"
+                    .to_string(),
+            ));
+        }
+        let within_worktree = cwd
+            .canonicalize()
+            .is_ok_and(|cwd| cwd.starts_with(&self.worktree));
+        if !within_worktree {
+            return Some(OrbitError::PolicyDenied(format!(
+                "the plugin broker runs calls only from within this run's worktree; `{}` is not",
+                cwd.display()
+            )));
+        }
+        if let Some(workspace) = workspace
+            && self.run.workspace.as_deref() != Some(workspace)
+        {
+            return Some(OrbitError::PolicyDenied(format!(
+                "the plugin broker serves only this run's workspace, not `{workspace}`"
+            )));
+        }
+        None
+    }
+
+    /// The run's own activity policy, applied fail-closed: an allowlist
+    /// that names nothing admits nothing here, where an in-process caller
+    /// with no activity would be unrestricted. A non-empty list and a deny
+    /// policy are enforced again, and recorded, by the tool chokepoint.
+    fn refuse_outside_activity_policy(&self, tool: &str) -> Result<(), OrbitError> {
+        if self.run.tool_deny_policy.is_none() && !tool_allowed(tool, &self.run.allowed_tools) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "tool '{tool}' is not in the activity allowlist"
+            )));
+        }
+        Ok(())
+    }
+
+    fn tool_context(&self, cwd: &Path, session_context: ToolSessionContext) -> ToolContext {
+        let run = &self.run;
+        let agent = brokered_agent_identity(run.agent_name.as_deref(), run.model_name.as_deref());
+        let mut tool_context = ToolContext {
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            session_context,
+            allowed_tools: run.allowed_tools.clone(),
+            tool_deny_policy: run.tool_deny_policy.clone(),
+            agent_name: agent.clone(),
+            model_name: agent,
+            proc_spawn_environment: Some(
+                self.runtime
+                    .execution_env_policy()
+                    .agent_subprocess_env(&[]),
+            ),
+            fs_profile: Some(run.caller.fs_profile.name.clone()),
+            activity_binding: run.job_run_id.clone().map(|job_run_id| ActivityBinding {
+                job_run_id,
+                task_id: run.task_id.clone(),
+            }),
+            ..Default::default()
+        };
+        run.caller.restrict(&mut tool_context);
+        tool_context.brokered_caller = Some(run.caller.clone());
+        tool_context
+    }
+}
+
+impl BrokerDispatch for RunDispatch {
+    fn call(&self, request: BrokerRequest, peer_pid: u32) -> Result<Value, OrbitError> {
+        let BrokerRequest {
+            tool,
+            input,
+            cwd,
+            workspace,
+            entry_point,
+            dry_run,
+        } = request;
+        let refusal = self.request_refusal(&cwd, workspace.as_deref(), dry_run);
+        let run = &self.run;
+        // The agent's sandbox is what the broker authenticated, so the call
+        // runs with an agent's authority — never the host's.
+        let session_context = ToolSessionContext {
+            workspace_id: run.workspace.clone(),
+            effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+            ..Default::default()
+        };
+        let audit = BrokeredAudit {
+            peer_pid,
+            role: brokered_role_label(run.agent_name.as_deref(), run.model_name.as_deref()),
+            context: AuditContext {
+                session_id: None,
+                task_id: run.task_id.clone(),
+                job_run_id: run.job_run_id.clone(),
+                activity_id: Some(run.activity_name.clone()),
+                step_index: None,
+            },
+            working_directory: cwd.to_string_lossy().into_owned(),
+        };
+        let entry_point = match entry_point {
+            EntryPoint::Cli => ToolEntryPoint::Cli,
+            EntryPoint::Mcp => ToolEntryPoint::Mcp,
+        };
+        self.runtime
+            .execute_brokered_dispatch(
+                &tool,
+                input,
+                entry_point,
+                session_context.clone(),
+                audit,
+                |input| {
+                    if let Some(refusal) = refusal {
+                        return Err(refusal);
+                    }
+                    // A built-in tool is answered by the nested `orbit`
+                    // itself; the broker exists to run plugin backends.
+                    if self.runtime.tool_registry().plugin_binding(&tool).is_none() {
+                        return Err(OrbitError::PolicyDenied(format!(
+                            "the plugin broker runs plugin tools only; '{tool}' is not one"
+                        )));
+                    }
+                    self.runtime.ensure_tool_agent_facing(&tool)?;
+                    self.refuse_outside_activity_policy(&tool)?;
+                    self.runtime.run_tool_with_context_and_role_and_capability(
+                        &tool,
+                        input,
+                        Role::Admin,
+                        self.tool_context(&cwd, session_context),
+                        CapabilityEnforcement::McpSessionOnly,
+                    )
+                },
+            )
+            .map(|outcome| outcome.value)
+    }
+}

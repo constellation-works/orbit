@@ -17,9 +17,10 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::cli_runner::run_cli_backend;
 use orbit_engine::{
-    DispatchError, DispatchOutcome, PLUGIN_BROKER_ENV, PluginBrokerHandle, ResolvedCliExecutor,
-    ResolvedSandbox, RuntimeHost, V2AuditWriter,
+    DispatchError, DispatchOutcome, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
+    ResolvedCliExecutor, ResolvedSandbox, RuntimeHost, V2AuditWriter,
 };
+use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
@@ -29,6 +30,7 @@ use tempfile::TempDir;
 use super::super::PluginBroker;
 use super::super::protocol::{MAX_REQUEST_BYTES, read_frame, write_frame};
 use super::super::socket::BROKER_DIR;
+use super::EchoDispatch;
 
 const CLIENT_TEST: &str = "runtime::plugin::broker::tests::sandbox::broker_client";
 const CLIENT_ENV: &str = "ORBIT_BROKER_TEST_CLIENT";
@@ -38,8 +40,9 @@ const HOLD_ENV: &str = "ORBIT_BROKER_TEST_HOLD";
 const WAIT: Duration = Duration::from_secs(60);
 
 /// The in-sandbox half: connect to this run's broker (or `TARGET_ENV`), send
-/// one request, and record the reply's error code, `closed` when the broker
-/// hung up without replying, or `absent` when no broker was exported.
+/// one request, and record `ok` for an answered call, the reply's error code,
+/// `closed` when the broker hung up without replying, or `absent` when no
+/// broker was exported.
 #[test]
 #[ignore = "client half of the sandboxed broker tests; runs inside the agent sandbox"]
 fn broker_client() {
@@ -70,14 +73,18 @@ fn client_outcome() -> String {
 
 fn request_outcome(stream: &mut UnixStream) -> String {
     let _ = stream.set_read_timeout(Some(WAIT));
-    let request = json!({"schema_version": 1, "tool": "pulsar.post", "input": {}}).to_string();
+    let request =
+        json!({"schema_version": 1, "tool": "pulsar.post", "input": {}, "cwd": "/"}).to_string();
     // A refusing broker may close before the request is written; the read
     // below still tells the two outcomes apart.
     let _ = write_frame(stream, request.as_bytes());
     match read_frame(stream, MAX_REQUEST_BYTES) {
         Ok(body) => serde_json::from_slice::<Value>(&body)
             .ok()
-            .and_then(|reply| reply["error"]["code"].as_str().map(str::to_string))
+            .and_then(|reply| match reply["ok"].as_bool() {
+                Some(true) => Some("ok".to_string()),
+                _ => reply["error"]["code"].as_str().map(str::to_string),
+            })
             .unwrap_or_else(|| "unreadable reply".to_string()),
         Err(_) => "closed".to_string(),
     }
@@ -172,6 +179,7 @@ impl Scratch {
     fn host(&self, global_root: PathBuf, provider: &str) -> BrokerHost {
         BrokerHost {
             global_root,
+            worktree: self.root.clone(),
             command: self.root.join(provider),
             audit_root: self.root.join("audit"),
             sandbox: ResolvedSandbox {
@@ -223,6 +231,8 @@ fn quote(path: &Path) -> String {
 /// keeps its default.
 struct BrokerHost {
     global_root: PathBuf,
+    /// The run's worktree; a broker serves only a run that has one.
+    worktree: PathBuf,
     command: PathBuf,
     audit_root: PathBuf,
     sandbox: ResolvedSandbox,
@@ -281,14 +291,27 @@ impl BrokerHost {
 impl RuntimeHost for BrokerHost {
     fn start_plugin_broker(
         &self,
-        run_id: &str,
+        run: &PluginBrokerRun,
     ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        let broker = PluginBroker::start(&self.global_root, run_id)?;
+        let broker = PluginBroker::start(&self.global_root, &run.run_id, EchoDispatch::shared())?;
         self.sockets
             .lock()
             .expect("sockets")
             .push(broker.socket_path().to_path_buf());
         Ok(Some(Box::new(broker)))
+    }
+
+    fn tool_context_for_activity(
+        &self,
+        _run_id: Option<&str>,
+        _fs_profile: Option<&str>,
+        _fs_audit: Option<Arc<dyn FsAuditLogger>>,
+        _proc_allowed_programs: Option<&[String]>,
+    ) -> ToolContext {
+        ToolContext {
+            workspace_root: Some(self.worktree.clone()),
+            ..Default::default()
+        }
     }
 
     fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
@@ -333,7 +356,7 @@ fn a_client_inside_the_runs_sandbox_is_authenticated() {
     let outcome = host.run("run-own", Duration::from_secs(60));
 
     assert!(outcome.is_ok(), "step failed: {outcome:?}");
-    assert_eq!(read_result(&result), "not_implemented");
+    assert_eq!(read_result(&result), "ok");
     assert_removed(&host.socket());
 }
 
@@ -385,7 +408,7 @@ fn another_runs_sandbox_and_the_host_are_refused_without_a_reply() {
             owner_outcome.is_ok(),
             "owner step failed: {owner_outcome:?}"
         );
-        assert_eq!(read_result(&owner_result), "not_implemented");
+        assert_eq!(read_result(&owner_result), "ok");
         let (intruder_outcome, intruder_result, host_outcome) =
             probes.expect("the owner run never reached its broker");
         assert!(

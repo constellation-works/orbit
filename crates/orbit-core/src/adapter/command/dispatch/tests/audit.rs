@@ -8,7 +8,8 @@ use serde_json::json;
 use super::super::ORBIT_MANAGED_RUN_CONTEXT_ENV;
 use super::super::audit::{
     activity_binding_from_env, audit_role_label, audit_role_label_for_entry_point,
-    reservation_owner_from_env, resolve_audit_context, trusted_mcp_audit_context,
+    brokered_role_label, reservation_owner_from_env, resolve_audit_context,
+    trusted_mcp_audit_context,
 };
 use super::super::execute::ToolEntryPoint;
 use crate::adapter::command::tests::support::{
@@ -95,6 +96,23 @@ fn cli_tool_dispatch_env_identity_overwrites_task_update_self_reported_model() {
 
     let updated = runtime.get_task(&task.id).expect("read updated task");
     assert_eq!(updated.implemented_by.as_deref(), Some("grok"));
+}
+
+#[test]
+fn brokered_role_label_comes_from_the_run_record_not_the_host_environment() {
+    let _g = env_guard();
+    // The broker runs in the host process: its environment names whatever
+    // the host itself is, never the agent a brokered call is made for.
+    set_identity_env("env-leak", "env-leak-model");
+    let from_run = brokered_role_label(
+        Some("claude"),
+        Some(orbit_common::test_fixtures::TEST_CLAUDE_MODEL),
+    );
+    let without_identity = brokered_role_label(None, None);
+    clear_identity_env();
+
+    assert_eq!(from_run, orbit_common::test_fixtures::TEST_CLAUDE_MODEL);
+    assert_eq!(without_identity, "agent");
 }
 
 #[test]

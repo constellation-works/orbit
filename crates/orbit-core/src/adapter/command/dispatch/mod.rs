@@ -1,13 +1,17 @@
-//! Tool dispatch: audit correlation, agent-identity resolution, and the
-//! trusted MCP envelope boundary.
+//! Tool dispatch: audit correlation, agent-identity resolution, the trusted
+//! MCP envelope boundary, and the calls a run's plugin broker executes.
 
 mod audit;
+#[cfg(unix)]
+mod brokered;
 mod callback;
 mod execute;
 
 pub use audit::{
     AuditContext, audit_role_label, audit_role_label_for_entry_point, trusted_mcp_audit_context,
 };
+#[cfg(unix)]
+pub(crate) use brokered::RunDispatch;
 pub(crate) use callback::legacy_callback_identity_enabled;
 pub use callback::refuse_plugin_child_cli_command;
 #[cfg(test)]

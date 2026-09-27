@@ -5,6 +5,7 @@
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use orbit_common::process::ancestry::process_start_key;
@@ -15,25 +16,29 @@ use tempfile::TempDir;
 use super::super::PluginBroker;
 use super::super::peer::PeerAnchor;
 use super::super::protocol::{
-    BUSY, INVALID_REQUEST, MAX_REQUEST_BYTES, NOT_IMPLEMENTED, REQUEST_TOO_LARGE, read_frame,
-    write_frame,
+    BUSY, INVALID_REQUEST, MAX_REQUEST_BYTES, REFUSED, REQUEST_TOO_LARGE, read_frame, write_frame,
 };
 use super::super::server::{IN_FLIGHT, QUEUED};
+use super::{EchoDispatch, REFUSED_TOOL};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 struct Running {
     broker: PluginBroker,
+    dispatch: Arc<EchoDispatch>,
     _root: TempDir,
 }
 
 fn start(anchor: PeerAnchor) -> Running {
     let root = super::short_tempdir();
     let global = root.path().canonicalize().expect("canonical global root");
-    let broker = PluginBroker::start(&global, "run-under-test").expect("start broker");
+    let dispatch = EchoDispatch::shared();
+    let broker =
+        PluginBroker::start(&global, "run-under-test", dispatch.clone()).expect("start broker");
     broker.bind_anchor(anchor);
     Running {
         broker,
+        dispatch,
         _root: root,
     }
 }
@@ -62,7 +67,11 @@ fn reply(stream: &mut UnixStream) -> Value {
 }
 
 fn tool_request() -> Vec<u8> {
-    json!({"schema_version": 1, "tool": "pulsar.post", "input": {}})
+    request_for("pulsar.post")
+}
+
+fn request_for(tool: &str) -> Vec<u8> {
+    json!({"schema_version": 1, "tool": tool, "input": {"text": "hi"}, "cwd": "/work"})
         .to_string()
         .into_bytes()
 }
@@ -81,23 +90,48 @@ fn closed_without_reply(stream: &mut UnixStream) -> bool {
 }
 
 #[test]
-fn an_authenticated_request_is_answered_not_implemented() {
+fn an_authenticated_request_is_dispatched_with_its_peer_and_answered_with_the_output() {
     let running = start(own_anchor());
 
     let response = call(&running, &tool_request());
 
+    let own_pid = std::process::id();
+    assert_eq!(
+        response,
+        json!({
+            "schema_version": 1,
+            "ok": true,
+            "output": {"tool": "pulsar.post", "peer_pid": own_pid},
+        })
+    );
+    let calls = running.dispatch.calls();
+    assert_eq!(calls.len(), 1, "one request, one dispatch");
+    assert_eq!(calls[0].0.input, json!({"text": "hi"}));
+    assert_eq!(
+        calls[0].1, own_pid,
+        "the dispatch sees the authenticated peer"
+    );
+}
+
+#[test]
+fn a_refused_call_is_answered_with_a_structured_error() {
+    let running = start(own_anchor());
+
+    let response = call(&running, &request_for(REFUSED_TOOL));
+
     assert_eq!(response["ok"], false);
-    assert_eq!(response["error"]["code"], NOT_IMPLEMENTED);
+    assert_eq!(response["error"]["code"], REFUSED);
     assert_eq!(response["error"]["retryable"], false);
 }
 
 #[test]
-fn a_malformed_request_is_answered_invalid() {
+fn a_malformed_request_is_answered_invalid_and_never_dispatched() {
     let running = start(own_anchor());
 
     let response = call(&running, br#"{"schema_version": 1}"#);
 
     assert_eq!(response["error"]["code"], INVALID_REQUEST);
+    assert!(running.dispatch.calls().is_empty());
 }
 
 #[test]
@@ -130,6 +164,10 @@ fn a_peer_outside_the_sandbox_is_closed_without_a_reply() {
     let _ = write_frame(&mut stream, &tool_request());
 
     assert!(closed_without_reply(&mut stream));
+    assert!(
+        running.dispatch.calls().is_empty(),
+        "a refused peer's request must never reach the dispatch"
+    );
     end(&mut sibling);
 }
 
@@ -144,7 +182,7 @@ fn a_full_broker_answers_busy_and_recovers() {
 
     drop(idle);
     let recovered = call_when(&running, |response| response["error"]["code"] != BUSY);
-    assert_eq!(recovered["error"]["code"], NOT_IMPLEMENTED);
+    assert_eq!(recovered["ok"], true);
 }
 
 /// Call until `accept` holds for the reply. Admission is asynchronous, so the

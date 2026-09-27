@@ -5,9 +5,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
-    CrewConfig, DispatchError, PluginBrokerHandle, ResolvedActivityTools, ResolvedCliExecutor,
-    ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
-    V2AuditWriter,
+    CrewConfig, DispatchError, PluginBrokerHandle, PluginBrokerRun, ResolvedActivityTools,
+    ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate,
+    TaskAutomationUpdate, V2AuditWriter,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -35,17 +35,24 @@ use super::{activity_tools, checkpoints, crew, invocation};
 impl RuntimeHost for OrbitRuntime {
     fn start_plugin_broker(
         &self,
-        run_id: &str,
+        run: &PluginBrokerRun,
     ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
         #[cfg(unix)]
         {
-            let broker =
-                crate::runtime::plugin::broker::PluginBroker::start(&self.global_root(), run_id)?;
+            let dispatch = std::sync::Arc::new(crate::adapter::command::RunDispatch::new(
+                self.clone(),
+                run.clone(),
+            ));
+            let broker = crate::runtime::plugin::broker::PluginBroker::start(
+                &self.global_root(),
+                &run.run_id,
+                dispatch,
+            )?;
             Ok(Some(Box::new(broker)))
         }
         #[cfg(not(unix))]
         {
-            let _ = run_id;
+            let _ = run;
             Ok(None)
         }
     }

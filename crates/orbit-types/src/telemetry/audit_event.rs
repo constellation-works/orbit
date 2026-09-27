@@ -152,6 +152,16 @@ pub struct AuditEvent {
     /// call that rotated nothing and for rows written before rotation.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_secret_updates: BTreeMap<String, PluginSecretUpdateStatus>,
+    /// Whether a run's plugin broker executed this call on behalf of a
+    /// sandboxed agent (design `docs/design/plugins/2_agent_call_broker.md`
+    /// §4.4). `false` for every in-process call and for rows written before
+    /// the broker ran calls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub brokered: bool,
+    /// The PID, in the host's namespace, of the authenticated peer that
+    /// asked the broker for a brokered call. `None` for every other row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_pid: Option<u32>,
 }
 
 impl AuditEvent {
