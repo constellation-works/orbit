@@ -527,7 +527,9 @@ pub struct LocalPullAdmission {
     pub leaf_run_id: Option<String>,
     pub phase: LocalPullPhase,
     pub settlement: Option<super::ClaimMutation>,
-    /// The owner's refusal, recorded only with [`LocalPullPhase::Refused`].
+    /// The owner's refusal: with [`LocalPullPhase::Refused`], of the request;
+    /// with [`LocalPullPhase::Settled`], of a settlement the owner could no
+    /// longer accept because it had already ended the claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
 }
@@ -557,4 +559,9 @@ pub enum LocalPullMutation {
     /// Close a still-`Requested` admission the owner refused, after the owner
     /// confirmed it holds no live receipt for this request ID.
     Refuse(String),
+    /// Close a `Settling` admission whose settlement the owner refused, after
+    /// the owner confirmed it had already ended the claim (revoked, failed or
+    /// landed it). The settlement can never be delivered, so the record
+    /// settles locally with the refusal, and its slot is released.
+    SettleObsolete(String),
 }

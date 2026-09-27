@@ -179,7 +179,12 @@ through `orbit.drain.receipt.lookup` before anything local changes: a found rece
 and carried forward (an earlier send committed, and a replay was refused, say after an owner
 upgrade); an expired or absent one closes the local record as `Refused`, which releases its slot,
 and the refusal ends that pass. A lost delivery, an unknown outcome or a store failure leaves the
-request pending under the same ID.
+request pending under the same ID. A refused *settlement* is reconciled the same way: when the
+lookup shows the owner already ended the claim (revoked, failed or landed), or no longer holds it,
+no settlement can ever be accepted, so the record settles locally with the refusal
+(`LocalPullMutation::SettleObsolete`) and releases its slot [ORB-13639]. A claim the owner still holds keeps
+its settlement pending. One record that cannot move forward does not stop the others from being
+reconciled in the same pass, though its error still blocks fresh admission for that pass.
 
 ### Pull-mode contract
 

@@ -420,6 +420,14 @@ A cancelled drain leaves finished leaves unsettled, their tasks stay
 `in-progress` on the owner, and they wait until the next drain for the same
 owner delivers them.
 
+If the owner revokes those claims in the meantime, the next drain cannot
+deliver their settlements. The owner refuses each one as `stale_claim`. The
+drain then looks up the claim on the owner, sees it has ended, and closes the
+record locally. Its `refusal` records why. Those tasks still need an owner-side
+status decision: set a task to `done` if its pull request merged, otherwise
+move it back to `backlog`. A refused settlement for a claim the owner still
+holds stays pending and blocks new admissions until it is delivered.
+
 Handoff **approval** and **revocation** are owner-operator mutations (agent
 capability cannot approve). They are owner-domain seams reached from the
 owner's dashboard — `POST /api/distributed/handoffs/<handoff-id>/approve` and

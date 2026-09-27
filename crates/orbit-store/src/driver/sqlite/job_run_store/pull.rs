@@ -436,7 +436,14 @@ pub(super) fn mutate(
                 record.settlement = Some(settlement.as_ref().clone());
                 record.phase = LocalPullPhase::Settling;
             }
-            LocalPullMutation::Settled => {
+            LocalPullMutation::Settled | LocalPullMutation::SettleObsolete(_) => {
+                if let LocalPullMutation::SettleObsolete(reason) = mutation {
+                    if record.phase == LocalPullPhase::Settled { return Ok(record); }
+                    if record.phase != LocalPullPhase::Settling {
+                        return Err(invalid("only a pending settlement can be closed as obsolete"));
+                    }
+                    record.refusal = Some(reason.clone());
+                }
                 advance(&mut record, LocalPullPhase::Settling, LocalPullPhase::Settled)?;
                 if matches!(record.settlement, Some(ClaimMutation::Fail(_)))
                     && let Some(id) = &record.leaf_run_id {
