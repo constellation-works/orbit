@@ -7,14 +7,14 @@ spec:
   description: >
     Resolve the active workspace's canonical ship input without consulting
     workflow.auto_ship or dispatching any other registered workspace. Returns
-    only mode and base_branch; omitted task_ids keeps task_auto_pipeline in
-    normal backlog-discovery mode.
+    mode, base_branch, and base_sync; omitted task_ids keeps
+    task_auto_pipeline in normal backlog-discovery mode.
   input_schema_json:
     type: object
     additionalProperties: false
   output_schema_json:
     type: object
-    required: [mode, base_branch]
+    required: [mode, base_branch, base_sync]
     additionalProperties: false
     properties:
       mode:
@@ -22,5 +22,8 @@ spec:
         enum: [pr, local]
       base_branch:
         type: string
+      base_sync:
+        type: string
+        enum: [remote, local]
   action: resolve_workspace_ship_input
   config: {}

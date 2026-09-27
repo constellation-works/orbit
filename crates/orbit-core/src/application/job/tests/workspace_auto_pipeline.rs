@@ -16,6 +16,7 @@ use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::workflow::{CompletionPolicy, ShipMode, build_ship_input};
 
 use super::super::pipeline::workspace_auto_run_input;
 use super::exec::{seed_default_catalogs, test_runtime, try_execute_named_job};
@@ -36,6 +37,7 @@ enum WorkspaceAutoScenario {
 struct ScriptedWorkspaceAutoHost<'a> {
     runtime: &'a OrbitRuntime,
     scenario: WorkspaceAutoScenario,
+    ship_mode: ShipMode,
     classify_calls: AtomicUsize,
     window_calls: AtomicUsize,
     calls: Mutex<Vec<(String, Value)>>,
@@ -47,11 +49,17 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
         Self {
             runtime,
             scenario,
+            ship_mode: ShipMode::Pr,
             classify_calls: AtomicUsize::new(0),
             window_calls: AtomicUsize::new(0),
             calls: Mutex::new(Vec::new()),
             dispatch_state_lock: Mutex::new(()),
         }
+    }
+
+    fn with_ship_mode(mut self, ship_mode: ShipMode) -> Self {
+        self.ship_mode = ship_mode;
+        self
     }
 
     fn inputs_for(&self, action: &str) -> Vec<Value> {
@@ -165,10 +173,20 @@ impl RuntimeHost for ScriptedWorkspaceAutoHost<'_> {
             .expect("call log")
             .push((action.to_string(), input.clone()));
         match action {
-            "resolve_workspace_ship_input" => Ok(json!({
-                "mode": "pr",
-                "base_branch": "agent-main",
-            })),
+            "resolve_workspace_ship_input" => {
+                let mut ship_input = build_ship_input(
+                    self.ship_mode,
+                    "agent-main",
+                    &[],
+                    CompletionPolicy::Review,
+                    &[],
+                )
+                .expect("valid scripted ship input");
+                if self.ship_mode == ShipMode::Pr {
+                    ship_input["base_sync"] = json!("remote");
+                }
+                Ok(ship_input)
+            }
             "drain_window" if input.get("deadline").is_none() => Ok(json!({
                 "deadline": "2099-01-01T00:00:00Z",
                 "expired": false,
@@ -236,7 +254,8 @@ impl RuntimeHost for ScriptedWorkspaceAutoHost<'_> {
 fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
     let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
-    let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::KeepsDispatching);
+    let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::KeepsDispatching)
+        .with_ship_mode(ShipMode::Local);
     let input = json!({
         "max_tasks": 50,
         "for_seconds": 10,
@@ -313,6 +332,15 @@ fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
         json!(["ORB-LATER"]),
         "second iteration dispatched while the first two children were still running"
     );
+    for child in host.inputs_for("invoke_detached") {
+        assert_eq!(child["job_name"], "task_auto_pipeline");
+        assert_eq!(child["run_input"]["mode"], "local");
+        assert_eq!(child["run_input"]["base_branch"], "agent-main");
+        assert_eq!(
+            child["run_input"]["base_sync"], "local",
+            "each local drain leaf must start from the local base: {child}"
+        );
+    }
 
     // Detached, but not lost: every child is durably linked to the parent as
     // submitted, which is the only handle this run keeps on it.
@@ -467,6 +495,10 @@ fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
 
     // The detached leaf carries it.
     let dispatched = host.inputs_for("invoke_detached");
+    assert_eq!(
+        dispatched[0]["run_input"]["base_sync"], "remote",
+        "a PR drain keeps the remote worktree base: {dispatched:?}"
+    );
     let by_job: Vec<(String, Value)> = dispatched
         .iter()
         .map(|input| {

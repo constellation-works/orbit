@@ -524,22 +524,13 @@ fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,
     action: &str,
 ) -> Result<Value, DispatchError> {
-    if let Some(binding) = runtime.workspace_runtime_binding() {
-        return crate::application::workflow::build_ship_input(
-            binding.ship_mode,
-            runtime.workspace_base_branch(),
-            &[],
-            COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
-            &[],
-        )
-        .map_err(|error| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("resolve workspace ship input: {error}"),
+    let mode = runtime
+        .workspace_runtime_binding()
+        .map_or(crate::application::workflow::ShipMode::Local, |binding| {
+            binding.ship_mode
         });
-    }
-
-    crate::application::workflow::build_ship_input(
-        crate::application::workflow::ShipMode::Local,
+    let mut input = crate::application::workflow::build_ship_input(
+        mode,
         runtime.workspace_base_branch(),
         &[],
         COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
@@ -548,7 +539,14 @@ fn resolve_workspace_ship_input(
     .map_err(|error| DispatchError::DeterministicActionFailed {
         action: action.to_string(),
         message: format!("resolve workspace ship input: {error}"),
-    })
+    })?;
+    // build_ship_input deliberately omits base_sync for PR submissions. The
+    // drain renders this output into each child, so make that default explicit
+    // here without changing the public ship input contract.
+    if mode == crate::application::workflow::ShipMode::Pr {
+        input["base_sync"] = Value::String("remote".to_string());
+    }
+    Ok(input)
 }
 
 /// The dependency picture for a bundle, split by what the caller should do

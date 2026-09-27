@@ -63,6 +63,7 @@ fn setup_refuses_before_creating_a_worktree_when_a_done_dependency_is_unmerged()
     };
     assert_eq!(diagnostic.task_id, "ORB-TASK");
     assert_eq!(diagnostic.dependency_id, "ORB-DEP");
+    assert_eq!(diagnostic.base_ref, BASE_BRANCH);
     assert_eq!(diagnostic.base_sha, git(&repo, &["rev-parse", BASE_BRANCH]));
     assert!(
         diagnostic.detail.contains(&dependency_sha),

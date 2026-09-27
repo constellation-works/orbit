@@ -373,7 +373,10 @@ fn workspace_ship_input_prefers_the_registry_neutral_runtime_binding() {
         )
         .expect("resolve bound ship input without a workspace registry");
 
-    assert_eq!(input, json!({"mode": "pr", "base_branch": "agent-main"}));
+    assert_eq!(
+        input,
+        json!({"mode": "pr", "base_branch": "agent-main", "base_sync": "remote"})
+    );
 }
 
 #[test]
@@ -412,7 +415,10 @@ fn workspace_ship_input_uses_the_registered_base_branch_over_workflow_config() {
         )
         .expect("resolve bound ship input");
 
-    assert_eq!(input, json!({"mode": "pr", "base_branch": "agent-main"}));
+    assert_eq!(
+        input,
+        json!({"mode": "pr", "base_branch": "agent-main", "base_sync": "remote"})
+    );
 }
 
 #[test]
