@@ -284,8 +284,7 @@ fn runtime_bootstrap_refreshes_orbit_written_stale_activity_before_catalog_load(
     let activities_dir = global_root.join("resources/activities");
     let path = activities_dir.join("agent_implement.yaml");
     let current = std::fs::read_to_string(&path).expect("read current activity");
-    let stale = current.replacen("  tools:\n", "  tools:\n    - fs.read\n", 1);
-    assert_ne!(stale, current, "fixture must contain the retired tool");
+    let stale = activity_yaml("agent_implement", Some("fs.read"));
     std::fs::write(&path, &stale).expect("write stale activity");
     add_managed_manifest_entry(&activities_dir, "agent_implement", &stale);
     drop_global_defaults_stamp(&global_root);
@@ -317,8 +316,7 @@ fn runtime_bootstrap_preserves_locally_modified_stale_managed_activity() {
 
     let activities_dir = global_root.join("resources/activities");
     let path = activities_dir.join("agent_implement.yaml");
-    let current = std::fs::read_to_string(&path).expect("read current activity");
-    let stale = current.replacen("  tools:\n", "  tools:\n    - fs.read\n", 1);
+    let stale = activity_yaml("agent_implement", Some("fs.read"));
     let locally_modified = format!("{stale}# operator edit\n");
     std::fs::write(&path, &locally_modified).expect("write locally modified stale activity");
     add_managed_manifest_entry(&activities_dir, "agent_implement", &stale);

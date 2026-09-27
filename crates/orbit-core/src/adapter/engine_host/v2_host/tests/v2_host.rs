@@ -792,6 +792,17 @@ impl RuntimeHost for RecoveryPreparationHost<'_> {
         self.runtime.resolve_cli_executor(provider)
     }
 
+    fn resolve_activity_tool_denials(
+        &self,
+        ids: &[String],
+        activity: &str,
+        disallow_list: &[String],
+    ) -> Result<orbit_engine::ResolvedActivityTools, orbit_engine::DispatchError> {
+        assert_eq!(ids, &[self.task_id.to_string()]);
+        self.runtime
+            .resolve_activity_tool_denials(ids, activity, disallow_list)
+    }
+
     fn resolve_activity_tools(
         &self,
         ids: &[String],

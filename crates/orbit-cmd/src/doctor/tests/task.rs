@@ -156,10 +156,8 @@ fn stale_shipped_activity_default_names_the_refresh_remediation() {
     .expect("initialize runtime with defaults");
     let activities_dir = global_root.join("resources/activities");
     let path = activities_dir.join("agent_implement.yaml");
-    let current = fs::read_to_string(&path).expect("read current activity");
-    let stale = current.replacen("  tools:\n", "  tools:\n    - fs.read\n", 1);
-    assert_ne!(stale, current, "fixture must contain the retired tool");
-    fs::write(&path, &stale).expect("write stale activity");
+    let stale = "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: agent_implement\nspec:\n  type: agent_loop\n  description: old managed activity\n  instruction: implement\n  tools: [fs.read]\n";
+    fs::write(&path, stale).expect("write stale activity");
 
     let manifest_path = activities_dir.join(".orbit-managed-assets.json");
     let mut manifest: serde_json::Value =
