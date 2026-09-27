@@ -375,3 +375,51 @@ fn reverse_scan_measurement_records_work_not_wall_clock() {
         std::env::consts::ARCH
     );
 }
+
+#[test]
+fn rendered_tail_ignores_bytes_past_the_scanned_extent() {
+    let lines = [
+        event_line("2026-04-27T01:00:01Z", "orbit.keep", "early"),
+        event_line("2026-04-27T01:00:02Z", "orbit.keep", "scanned"),
+    ];
+    let scanned = join_lines(&lines, true);
+    let appended = event_line("2026-04-27T01:00:03Z", "orbit.keep", "appended");
+    let raw = format!("{scanned}{appended}\n");
+    let mut reader = Cursor::new(raw.as_bytes());
+
+    let tail = read_rendered_tail_from(
+        &mut reader,
+        scanned.len() as u64,
+        &Filters::default(),
+        10,
+        16,
+    )
+    .expect("tail");
+
+    assert_eq!(tail.events.len(), 2);
+    assert!(tail.events[1].message_html.contains("scanned"));
+    assert!(
+        tail.events
+            .iter()
+            .all(|e| !e.message_html.contains("appended"))
+    );
+    assert_eq!(tail.cursor, scanned.len() as u64);
+}
+
+#[test]
+fn rendered_tail_cursor_stops_before_a_partial_record() {
+    let complete = join_lines(
+        &[event_line("2026-04-27T01:00:01Z", "orbit.keep", "whole")],
+        true,
+    );
+    let partial = event_line("2026-04-27T01:00:02Z", "orbit.keep", "torn");
+    let raw = format!("{complete}{}", &partial[..partial.len() / 2]);
+    let mut reader = Cursor::new(raw.as_bytes());
+
+    let tail = read_rendered_tail_from(&mut reader, raw.len() as u64, &Filters::default(), 10, 8)
+        .expect("tail");
+
+    assert_eq!(tail.events.len(), 1);
+    assert!(tail.events[0].message_html.contains("whole"));
+    assert_eq!(tail.cursor, complete.len() as u64);
+}
