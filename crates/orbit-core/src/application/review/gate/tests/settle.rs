@@ -51,6 +51,7 @@ fn a_clean_review_passes_without_repairs_and_pins_the_reviewed_candidate() {
     assert!(certificate.validation_complete);
     assert_eq!(certificate.consumed.reviewer_starts, 1);
     assert_eq!(certificate.consumed.repair_cycles, 0);
+    assert_eq!(gated.settle(&admission).expect("unchanged replay"), settled);
     assert!(!certificate.reviewer.same_model_as_implementer);
     assert_eq!(
         certificate.implementation_commits[0].author,
@@ -76,6 +77,100 @@ fn a_clean_review_passes_without_repairs_and_pins_the_reviewed_candidate() {
             .status,
         TaskStatus::InProgress,
         "a pass is evidence, not a lifecycle transition"
+    );
+}
+
+#[test]
+fn replay_refuses_changed_task_meaning_with_the_same_candidate() {
+    for change in ["criteria", "plan"] {
+        let gated = gated_fixture(GATED_CONFIG);
+        let admission = gated.admit().expect("admit");
+        let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+        write_report(
+            &gated.fixture.runtime,
+            &gated.task_id,
+            &report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+        );
+        gated.settle(&admission).expect("initial pass");
+        let certificate = gated.certificate();
+        let store = gated.fixture.runtime.review_store().expect("store");
+        let workspace_id = gated.fixture.runtime.workspace_id().expect("workspace");
+        let ledger_before = store
+            .review_ledger(&workspace_id, &certificate.lineage_key)
+            .expect("ledger")
+            .expect("present");
+        let head = gated.head();
+
+        let update = match change {
+            "criteria" => TaskUpdateParams {
+                acceptance_criteria: Some(vec!["Revised acceptance criterion.".into()]),
+                ..TaskUpdateParams::default()
+            },
+            "plan" => TaskUpdateParams {
+                plan: Some("Revised implementation plan.".into()),
+                ..TaskUpdateParams::default()
+            },
+            _ => unreachable!(),
+        };
+        gated
+            .fixture
+            .runtime
+            .update_task(&gated.task_id, update)
+            .expect("change task meaning");
+        let error = gated.settle(&admission).expect_err("stale review");
+        assert!(
+            error.to_string().contains("task_meaning_changed"),
+            "{change}: {error}"
+        );
+        assert_eq!(gated.head(), head, "{change}: HEAD is unchanged");
+        assert_eq!(
+            store
+                .review_ledger(&workspace_id, &certificate.lineage_key)
+                .expect("ledger")
+                .expect("present"),
+            ledger_before,
+            "{change}: replay must not consume review budget"
+        );
+    }
+}
+
+#[test]
+fn replay_accepts_a_certificate_bound_to_widened_selectors_without_spending_budget() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    fs::write(
+        gated.fixture.repo.join("README.md"),
+        "coupled repair of derived artifact\n",
+    )
+    .expect("repair");
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithRepairs, true);
+    claim.findings[0].paths = vec!["README.md".to_string()];
+    write_report(&gated.fixture.runtime, &gated.task_id, &claim);
+
+    let first = gated.settle(&admission).expect("initial pass");
+    let certificate = gated.certificate();
+    assert_eq!(certificate.selectors_widened, vec!["file:README.md"]);
+    let head = gated.head();
+    let store = gated.fixture.runtime.review_store().expect("store");
+    let workspace_id = gated.fixture.runtime.workspace_id().expect("workspace");
+    let ledger_before = store
+        .review_ledger(&workspace_id, &certificate.lineage_key)
+        .expect("ledger")
+        .expect("present");
+
+    let replay = gated
+        .settle(&admission)
+        .expect("replay widened certificate");
+    assert_eq!(replay, first);
+    assert_eq!(gated.head(), head, "replay creates no commit");
+    assert_eq!(
+        store
+            .review_ledger(&workspace_id, &certificate.lineage_key)
+            .expect("ledger")
+            .expect("present"),
+        ledger_before,
+        "replay creates no attempt or budget charge"
     );
 }
 

@@ -281,6 +281,12 @@ fn reconcile_settled(
             certificate: Box::new(certificate),
         });
     }
+    if context.task_digests.1 != certificate.task_meaning_digest {
+        return Err(OrbitError::Execution(format!(
+            "review_gate_stale: task_meaning_changed: task meaning no longer matches \
+             settled certificate {attempt_id}"
+        )));
+    }
     let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
     if head != certificate.final_candidate {
         return Err(OrbitError::Execution(format!(
