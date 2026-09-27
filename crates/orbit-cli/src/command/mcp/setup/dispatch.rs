@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_core::OrbitError;
@@ -253,6 +254,109 @@ fn resolve_providers(
         ProviderSelectionMode::Explicit(providers) => providers,
         ProviderSelectionMode::Auto => auto_detected_providers(repo_root, home_dir),
     }
+}
+
+/// Return client registrations for Orbit's MCP server in this workspace.
+/// Reuse the same paths that `mcp init` writes, including
+/// user-level registrations, without starting a client or touching its files.
+pub(crate) fn registered_clients_for_workspace(
+    repo_root: &Path,
+    workspace_id: Option<&str>,
+    home_dir: Option<&Path>,
+) -> Vec<String> {
+    const CLIENTS: [McpProvider; 8] = [
+        McpProvider::Claude,
+        McpProvider::Codex,
+        McpProvider::Gemini,
+        McpProvider::Antigravity,
+        McpProvider::Grok,
+        McpProvider::Cursor,
+        McpProvider::Vscode,
+        McpProvider::Windsurf,
+    ];
+    let mut found = Vec::new();
+    for scope in [ScopeArg::Workspace, ScopeArg::Home] {
+        for client in CLIENTS {
+            let Ok(target) = ConfigTarget::resolve(scope, &client, repo_root, home_dir) else {
+                continue;
+            };
+            if [Some(target.mcp_path), target.legacy_mcp_path]
+                .into_iter()
+                .flatten()
+                .any(|path| registration_matches(&path, client, workspace_id, repo_root))
+            {
+                found.push(format!(
+                    "{} ({})",
+                    client.label(),
+                    if scope == ScopeArg::Home {
+                        "home"
+                    } else {
+                        "workspace"
+                    }
+                ));
+            }
+        }
+    }
+    found
+}
+
+fn registration_matches(
+    path: &Path,
+    client: McpProvider,
+    workspace_id: Option<&str>,
+    repo_root: &Path,
+) -> bool {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let entry = if matches!(client, McpProvider::Codex | McpProvider::Grok) {
+        let Ok(doc) = contents.parse::<toml::Value>() else {
+            return false;
+        };
+        doc.get("mcp_servers")
+            .and_then(|servers| servers.get(ORBIT_MCP_SERVER_ID))
+            .and_then(|server| serde_json::to_value(server).ok())
+    } else {
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&contents) else {
+            return false;
+        };
+        let key = if client == McpProvider::Vscode {
+            "servers"
+        } else {
+            "mcpServers"
+        };
+        doc.get(key)
+            .and_then(|servers| servers.get(ORBIT_MCP_SERVER_ID))
+            .cloned()
+    };
+    let Some(entry) = entry else {
+        return false;
+    };
+    if entry.get("enabled").and_then(serde_json::Value::as_bool) == Some(false) {
+        return false;
+    }
+    // A client may launch Orbit through a wrapper or connect to a remote
+    // server. This row checks registration, not whether the launch succeeds.
+    let has_launch = ["command", "url"].into_iter().any(|key| {
+        entry
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+    if !has_launch {
+        return false;
+    }
+    let bound = entry
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|args| {
+            args.windows(2).find_map(|pair| {
+                (pair[0].as_str() == Some("--workspace"))
+                    .then(|| pair[1].as_str())
+                    .flatten()
+            })
+        });
+    bound.is_none_or(|bound| workspace_id == Some(bound) || bound == repo_root.to_string_lossy())
 }
 
 pub(super) fn auto_detected_providers(
