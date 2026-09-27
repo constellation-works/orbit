@@ -184,7 +184,11 @@ key from schemaVersion 2 agent-loop activities.
 `orbit doctor --fix-stale-artifacts` retires only deprecated artifacts whose
 digest still proves Orbit wrote them, preserving locally modified ones under
 `.retired-managed/` rather than deleting them. Faulty and user-authored files
-are reported and never touched by that flag. A workspace-authored fault is a
+are reported and never touched by that flag. Retirement skips any asset with a
+symlink or non-file component beneath its managed catalog, before reading its
+bytes; doctor reports the linked component and keeps its manifest provenance
+so a later pass can retry after the operator repairs the path. A
+workspace-authored fault is a
 `Warning`; only an unloadable *shipped default* is an `Error`, which keeps the
 `orbit doctor` exit code stable for existing cron and CI callers.
 

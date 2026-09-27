@@ -409,17 +409,31 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
             continue;
         }
         let relative = kind.layout().relative_path(name);
-        let Some(on_disk) = read_artifact(&catalog.dir.join(&relative)) else {
-            // Already gone: drop the manifest entry so the next pass is clean.
-            settled.push(name.clone());
-            continue;
-        };
         let path = match resolve_removable_artifact(&catalog.dir, &relative)? {
-            Some(path) => path,
-            // A symlinked artifact is a deliberate operator arrangement;
-            // removing it here would act on a target outside this catalog.
-            None => continue,
+            RemovableArtifact::File(path) => path,
+            RemovableArtifact::Missing => {
+                // Already gone: drop the manifest entry so the next pass is clean.
+                settled.push(name.clone());
+                continue;
+            }
+            RemovableArtifact::Unsafe(path) => {
+                tracing::warn!(
+                    target: "orbit.core.artifact_health",
+                    artifact_kind = kind.singular(),
+                    artifact = name.as_str(),
+                    path = %path.display(),
+                    "skipped deprecated artifact retirement: linked or non-file path component"
+                );
+                continue;
+            }
         };
+        let on_disk = std::fs::read_to_string(&path).map_err(|error| {
+            OrbitError::Io(format!(
+                "read deprecated {} '{}': {error}",
+                kind.singular(),
+                path.display()
+            ))
+        })?;
         // Deletion outright requires an exact digest match, the same
         // `byte_exact` test `reconcile_default_routines` applies: a routine
         // recognized as Orbit-written by shape rather than by digest (an
@@ -468,19 +482,23 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
 /// outside `dir`.
 ///
 /// The relative path is re-validated even though it came from a manifest that
-/// validated it on load, and the final component is inspected with
-/// `symlink_metadata` so removal never follows a symlink at the boundary —
-/// mirroring `remove_workspace_subtree` in the doctor's lock cleanup.
-fn resolve_removable_artifact(dir: &Path, relative: &Path) -> Result<Option<PathBuf>, OrbitError> {
-    if relative.is_absolute()
-        || relative.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::ParentDir
-                    | std::path::Component::RootDir
-                    | std::path::Component::Prefix(_)
-            )
-        })
+/// validated it on load. Each component beneath the managed directory is
+/// inspected without following links before the artifact is read or changed.
+pub(super) enum RemovableArtifact {
+    File(PathBuf),
+    Missing,
+    Unsafe(PathBuf),
+}
+
+pub(super) fn resolve_removable_artifact(
+    dir: &Path,
+    relative: &Path,
+) -> Result<RemovableArtifact, OrbitError> {
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
     {
         return Err(OrbitError::InvalidInput(format!(
             "managed artifact path '{}' must remain relative to '{}'",
@@ -488,19 +506,30 @@ fn resolve_removable_artifact(dir: &Path, relative: &Path) -> Result<Option<Path
             dir.display()
         )));
     }
-    let target = dir.join(relative);
-    let metadata = match std::fs::symlink_metadata(&target) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(OrbitError::Io(format!(
-                "inspect managed artifact {}: {error}",
-                target.display()
-            )));
+    let mut target = dir.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        target.push(component);
+        let metadata = match std::fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(RemovableArtifact::Missing);
+            }
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect managed artifact {}: {error}",
+                    target.display()
+                )));
+            }
+        };
+        let expected_type = if components.peek().is_some() {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        };
+        if metadata.file_type().is_symlink() || !expected_type {
+            return Ok(RemovableArtifact::Unsafe(target));
         }
-    };
-    if metadata.file_type().is_symlink() || metadata.is_dir() {
-        return Ok(None);
     }
-    Ok(Some(target))
+    Ok(RemovableArtifact::File(target))
 }
