@@ -24,6 +24,7 @@ fn single_family_crew(name: &str) -> Crew {
         assignment,
         description: None,
         tags: Vec::new(),
+        enabled: true,
     }
 }
 

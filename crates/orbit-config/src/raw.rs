@@ -44,6 +44,11 @@ pub(crate) struct RawRuntimeConfig {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RawCrewEntry {
+    /// Whether dispatch may run the crew. Absent means enabled, so a table
+    /// written before the key existed keeps working unchanged. Serde admits
+    /// only a TOML boolean here, so a mistyped value fails the load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -19,6 +19,7 @@ fn crew_normalization_canonicalizes_alias_and_metadata() {
             "alpha".to_string(),
             "alpha".to_string(),
         ],
+        enabled: false,
     };
 
     let normalized = CrewDiscoveryEntryV1::from_crew(&crew).expect("crew normalizes");
@@ -30,6 +31,7 @@ fn crew_normalization_canonicalizes_alias_and_metadata() {
         Some("Fast implementation")
     );
     assert_eq!(normalized.tags, vec!["alpha", "zeta"]);
+    assert!(!normalized.enabled, "a disabled crew is listed as disabled");
 }
 
 #[test]
@@ -45,13 +47,14 @@ fn discovery_wire_shape_is_stable_after_rust_type_rename() {
             model: "gpt-test".to_string(),
             description: Some("Fast implementation".to_string()),
             tags: vec!["fast".to_string()],
+            enabled: true,
         }],
     };
 
     assert_eq!(
         serde_json::to_value(discovery).expect("serialize crew discovery"),
         json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "workspace_id": "ws_alpha",
             "owner_machine_id": "hm_alpha",
             "default_crew": "alpha",
@@ -60,7 +63,8 @@ fn discovery_wire_shape_is_stable_after_rust_type_rename() {
                 "provider": "codex",
                 "model": "gpt-test",
                 "description": "Fast implementation",
-                "tags": ["fast"]
+                "tags": ["fast"],
+                "enabled": true
             }]
         })
     );

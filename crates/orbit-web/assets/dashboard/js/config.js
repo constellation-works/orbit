@@ -677,13 +677,25 @@ function crewRow(crew, payload) {
   const node = el("div", { class: "config-row config-crew-row" });
   node.dataset.key = `crews.${crew.name}`;
   if (referenced.length) node.classList.add("referenced");
+  // A table without `enabled` is enabled; only an explicit false disables.
+  const disabled = crew.enabled === false;
+  if (disabled) node.classList.add("disabled");
   if (editing && editing.kind === "crew" && editing.name === crew.name) {
     node.classList.add("editing");
     node.appendChild(crewEditor(crew, payload, false));
     return node;
   }
   const cells = el("div", { class: "config-crew-cells" }, [
-    el("span", { class: "config-key mono", text: crew.name }),
+    el("span", { class: "config-key mono" }, [
+      el("span", { text: crew.name }),
+      disabled
+        ? el("span", {
+            class: "config-crew-disabled",
+            text: "disabled",
+            title: `Dispatch refuses this crew; set crews.${crew.name}.enabled = true to use it`,
+          })
+        : null,
+    ]),
     providerCell(crew.provider),
     el("span", { class: "config-value mono", text: displayValue(crew.model) }),
     el("span", { class: "config-value mono", text: displayValue(crew.effort) }),
@@ -729,6 +741,17 @@ function crewEditor(crew, payload, isNew) {
   const crewFields = payload.crew_fields || [];
   for (const field of crewFields) {
     const current = crew[field];
+    if (field === "enabled") {
+      const toggle = el("input", { class: "config-input" });
+      toggle.type = "checkbox";
+      const was = current !== false;
+      toggle.checked = was;
+      rows.push(fieldRow(field, toggle));
+      // Unchanged state is omitted so saving another field never writes an
+      // `enabled` key into a table that relied on the enabled default.
+      fields[field] = () => (toggle.checked === was ? undefined : toggle.checked);
+      continue;
+    }
     if (field === "tags") {
       const list = chipListInput(Array.isArray(current) ? current : []);
       rows.push(fieldRow(field, list.node));
@@ -780,7 +803,8 @@ async function submitCrew(crew, fields, isNew, init) {
   const body = {};
   for (const [field, read] of Object.entries(fields)) {
     if (field === "name") continue;
-    body[field] = read();
+    const value = read();
+    if (value !== undefined) body[field] = value;
   }
   await submit(() =>
     requestJson(`/api/config/crews/${encodeURIComponent(name)}`, "PUT", {

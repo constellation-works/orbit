@@ -171,9 +171,16 @@ impl OrbitRuntime {
         ))
     }
 
-    /// The pool members configured for `complexity`, with the provenance the
-    /// pool was captured from. `None` when no pool covers the complexity, which
-    /// is what sends both callers to the default chain.
+    /// The enabled pool members configured for `complexity`, with the
+    /// provenance the pool was captured from. `None` when no pool covers the
+    /// complexity, which is what sends both callers to the default chain.
+    ///
+    /// A disabled crew (`[crews.<name>] enabled = false`) is never drawn. A
+    /// pool whose members are all disabled is treated exactly like an empty
+    /// pool and also returns `None`, so the task falls through to
+    /// `workflow.default_crew` — and dispatch refuses that too if it is
+    /// disabled. Enabled state is read from the current configuration, not the
+    /// captured pool, so disabling a crew takes effect for the next draw.
     fn complexity_pool_candidates(
         &self,
         complexity: Option<TaskComplexity>,
@@ -185,13 +192,11 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        let entries = canonical_crew_pool_entries(
-            &pool.crews,
-            self.context.settings().crews(),
-            &pool.source,
-        )?;
+        let registry = self.context.settings().crews();
+        let entries = canonical_crew_pool_entries(&pool.crews, registry, &pool.source)?;
         let crews = entries
             .iter()
+            .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
             .map(|entry| {
                 Ok(CrewCandidate {
                     crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
@@ -199,6 +204,13 @@ impl OrbitRuntime {
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
+        if crews.is_empty() {
+            tracing::info!(
+                source = %pool.source,
+                "every crew in the pool is disabled; routing to workflow.default_crew",
+            );
+            return Ok(None);
+        }
         Ok(Some((crews, pool.source.clone())))
     }
 
@@ -238,8 +250,15 @@ impl OrbitRuntime {
         if self.context.settings().default_crew().is_none() {
             return Ok(None);
         }
+        // A disabled default is not pinned onto the task: creation stays
+        // possible on a host with no enabled crew, and the unset field lets
+        // dispatch refuse against `workflow.default_crew` by name.
+        let default = self.lookup_crew_for_task(None, None)?;
+        if !default.enabled {
+            return Ok(None);
+        }
         Ok(Some(CreationCrewAssignment {
-            crew: self.resolve_crew_for_task(None, None)?.name,
+            crew: default.name,
             source: "default".to_string(),
         }))
     }

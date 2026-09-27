@@ -217,6 +217,21 @@ pub struct Crew {
     /// a sorted, deduplicated list of non-empty strings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Whether dispatch may run this crew (`[crews.<name>] enabled`). A table
+    /// without the key is enabled, so every config written before the flag
+    /// existed keeps its meaning. A disabled crew stays listed and resolvable
+    /// by name; only selection and dispatch refuse it. Omitted from the
+    /// serialized form while `true`, so existing records keep their shape.
+    #[serde(default = "crew_enabled_default", skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
+}
+
+fn crew_enabled_default() -> bool {
+    true
+}
+
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 /// Resolve a named crew from the active registry.

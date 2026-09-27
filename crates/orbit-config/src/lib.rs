@@ -110,7 +110,8 @@ pub use registry::{
     is_global_only_key,
 };
 pub use resolved::{
-    CodexExecutionPolicy, ExecutionEnvPolicy, IgnoredCrewProperty, PrSettings, ResolvedConfig,
+    CodexExecutionPolicy, DisabledLaneCrew, ExecutionEnvPolicy, IgnoredCrewProperty, PrSettings,
+    ResolvedConfig, disabled_crew_message,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};

@@ -570,3 +570,148 @@ fn unresolvable_job_definition_still_records_the_run_crew() {
         Some("beta-model")
     );
 }
+
+/// `beta` is disabled and `gamma` (the system lane) is disabled; `primary`
+/// stays enabled so unrelated dispatch keeps working.
+fn runtime_with_disabled_crews(default_crew: &str) -> (TempDir, OrbitRuntime) {
+    let root = tempdir().expect("create temp root");
+    let global_root = root.path().join("global");
+    let workspace_root = root.path().join("repo").join(".orbit");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(
+        workspace_root.join("config.toml"),
+        format!(
+            r#"
+[crews.primary]
+model = "default-model"
+provider = "codex"
+
+[crews.beta]
+enabled = false
+model = "beta-model"
+provider = "codex"
+
+[crews.gamma]
+enabled = false
+model = "gamma-model"
+provider = "codex"
+
+[workflow]
+default_crew = "{default_crew}"
+system_crew = "gamma"
+"#
+        ),
+    )
+    .expect("write test config");
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
+    (root, runtime)
+}
+
+fn dispatch_error(runtime: &OrbitRuntime, input: serde_json::Value) -> String {
+    RuntimeHost::agent_crew_config_for_input(runtime, &input)
+        .expect_err("a disabled crew must not dispatch")
+        .to_string()
+}
+
+#[test]
+fn dispatch_refuses_a_disabled_crew_from_every_selection_tier() {
+    let (_root, runtime) = runtime_with_disabled_crews("primary");
+
+    let task_id = add_task_with_crew(&runtime, "beta");
+    let from_task = dispatch_error(&runtime, json!({ "task_ids": [task_id] }));
+    assert!(
+        from_task.contains("task.crew selects crew `beta`, which is disabled")
+            && from_task.contains("orbit config set crews.beta.enabled true"),
+        "{from_task}"
+    );
+
+    let explicit = dispatch_error(&runtime, json!({ "crew": "beta" }));
+    assert!(
+        explicit.contains("explicit activity crew `beta`")
+            && explicit.contains("orbit config set crews.beta.enabled true"),
+        "{explicit}"
+    );
+
+    let system = dispatch_error(
+        &runtime,
+        json!({ "crew_config_key": "workflow.system_crew" }),
+    );
+    assert!(
+        system.contains("workflow.system_crew")
+            && system.contains("crew `gamma`, which is disabled")
+            && system.contains("orbit config set crews.gamma.enabled true"),
+        "{system}"
+    );
+
+    // A shipped job step names `system`, which mirrors the disabled `gamma`;
+    // the refusal names the table that actually disables it.
+    let alias = dispatch_error(&runtime, json!({ "crew": "system" }));
+    assert!(
+        alias.contains("crew `system`, which mirrors crew `gamma`")
+            && alias.contains("orbit config set crews.gamma.enabled true"),
+        "{alias}"
+    );
+
+    // An enabled crew is unaffected.
+    let config = RuntimeHost::agent_crew_config_for_input(&runtime, &json!({ "crew": "primary" }))
+        .expect("enabled crew dispatches")
+        .expect("crew config");
+    assert_eq!(config.model.as_deref(), Some("default-model"));
+}
+
+#[test]
+fn a_disabled_default_crew_refuses_dispatch_but_stays_readable() {
+    let (_root, runtime) = runtime_with_disabled_crews("beta");
+
+    // Creation does not pin a disabled default onto the task.
+    let task_id = add_task(&runtime, None);
+    let task = runtime.get_task(&task_id).expect("task");
+    assert_eq!(task.crew, None);
+
+    let error = dispatch_error(&runtime, json!({ "task_ids": [task_id] }));
+    assert!(
+        error.contains("workflow.default_crew selects crew `beta`, which is disabled")
+            && error.contains("orbit config set crews.beta.enabled true"),
+        "{error}"
+    );
+    let start = runtime
+        .resolve_crew_for_task(None, None)
+        .expect_err("task start refuses too")
+        .to_string();
+    assert!(start.contains("crews.beta.enabled"), "{start}");
+
+    // Read surfaces still describe the configured crew.
+    match runtime.task_crew_read(&task) {
+        super::super::crew::TaskCrewRead::Resolved(projection) => {
+            assert_eq!(projection.name, "beta");
+        }
+        other => panic!("a disabled crew must stay readable, got {other:?}"),
+    }
+
+    // Listings show the disabled crews rather than hiding them.
+    let discovery = runtime
+        .crew_discovery("ws_example", None)
+        .expect("crew discovery");
+    let enabled = discovery
+        .crews
+        .iter()
+        .map(|crew| (crew.name.as_str(), crew.enabled))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        enabled,
+        [
+            ("beta", false),
+            ("gamma", false),
+            ("primary", true),
+            ("system", false)
+        ]
+    );
+    let projection = runtime.configured_crew_registry_projection();
+    assert!(
+        projection
+            .crews
+            .iter()
+            .any(|crew| crew.name == "beta" && !crew.enabled && crew.is_default)
+    );
+}

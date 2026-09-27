@@ -301,3 +301,33 @@ fn get_scoped_workspace_with_file_distinguishes_set_and_unset_keys() {
     assert_eq!(unset_doc["exists"], false);
     assert_eq!(unset_doc["path"], ws_config.to_string_lossy().as_ref());
 }
+
+/// A crew table without `enabled` reads as enabled; a set of `false` reads
+/// back as `false` and re-enabling is the same one-line command.
+#[test]
+fn crew_enabled_defaults_true_and_round_trips_through_set() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    write_sol_crew(&workspace_root.join("config.toml"));
+
+    let enabled = |runtime| {
+        json_value(
+            get_args("crews.sol.enabled", true)
+                .execute(runtime)
+                .expect("enabled is gettable"),
+        )["value"]
+            .clone()
+    };
+    assert_eq!(enabled(&runtime), serde_json::json!(true));
+
+    set_args("crews.sol.enabled", "false")
+        .execute(&runtime)
+        .expect("disable sol");
+    assert_eq!(enabled(&runtime), serde_json::json!(false));
+    let saved = fs::read_to_string(workspace_root.join("config.toml")).expect("read config");
+    assert!(saved.contains("enabled = false"), "{saved}");
+
+    set_args("crews.sol.enabled", "true")
+        .execute(&runtime)
+        .expect("re-enable sol");
+    assert_eq!(enabled(&runtime), serde_json::json!(true));
+}

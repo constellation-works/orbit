@@ -435,21 +435,30 @@ fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &Sect
             layers.into_iter().collect::<Vec<_>>().join(" and ")
         )
     };
+    // Disabled crews stay listed; the heading says how many dispatch refuses.
+    let disabled = crews.iter().filter(|crew| crew.enabled == "false").count();
+    let disabled = if disabled == 0 {
+        String::new()
+    } else {
+        format!(" ({disabled} disabled)")
+    };
     let _ = writeln!(
         out,
-        "{:<HEADING_WIDTH$} {} defined, {origin}",
+        "{:<HEADING_WIDTH$} {} defined{disabled}, {origin}",
         section.section.title(),
         crews.len()
     );
 
-    let columns: [&str; 6] = ["NAME", "FROM", "PROVIDER", "MODEL", "EFFORT", "TAGS"];
+    let columns: [&str; 7] = [
+        "NAME", "ENABLED", "FROM", "PROVIDER", "MODEL", "EFFORT", "TAGS",
+    ];
     let mut widths = columns.map(|column| column.chars().count());
     for crew in &crews {
         for (index, cell) in crew.cells().iter().enumerate() {
             widths[index] = widths[index].max(cell.chars().count());
         }
     }
-    let write_cells = |out: &mut String, cells: &[String; 6], trailing: &str| {
+    let write_cells = |out: &mut String, cells: &[String; 7], trailing: &str| {
         let mut line = String::new();
         for (index, cell) in cells.iter().enumerate() {
             let _ = write!(line, "  {:<width$}", cell, width = widths[index]);
@@ -472,6 +481,8 @@ fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &Sect
 
 struct CrewRow {
     name: String,
+    /// `true` / `false`: every crew row carries its effective enabled state.
+    enabled: String,
     layer: String,
     provider: String,
     model: String,
@@ -483,9 +494,10 @@ struct CrewRow {
 }
 
 impl CrewRow {
-    fn cells(&self) -> [String; 6] {
+    fn cells(&self) -> [String; 7] {
         [
             self.name.clone(),
+            self.enabled.clone(),
             self.layer.clone(),
             self.provider.clone(),
             self.model.clone(),
@@ -551,6 +563,7 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
                 annotation.push("workflow.system_crew");
             }
             CrewRow {
+                enabled: cell("enabled"),
                 layer: layers.join("+"),
                 provider: cell("provider"),
                 model: cell("model"),

@@ -380,6 +380,9 @@ pub(crate) struct OrbitRuntimeSettings {
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
     system_crew: String,
+    /// Crew the synthesized `system` entry mirrors, so a disabled-crew
+    /// refusal can name the table that actually disables it.
+    system_crew_alias: Option<String>,
     /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,
     /// Global `machine.worker_*` limits for detached workers [ORB-12903].
@@ -401,6 +404,7 @@ impl OrbitRuntimeSettings {
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
         system_crew: String,
+        system_crew_alias: Option<String>,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
     ) -> Self {
@@ -417,6 +421,7 @@ impl OrbitRuntimeSettings {
             default_crew,
             complexity_crews,
             system_crew,
+            system_crew_alias,
             operation,
             worker_containment,
         }
@@ -464,6 +469,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn system_crew(&self) -> &str {
         &self.system_crew
+    }
+
+    pub(crate) fn system_crew_alias(&self) -> Option<&str> {
+        self.system_crew_alias.as_deref()
     }
 }
 

@@ -741,3 +741,55 @@ async fn writing_unsupported_provider_crew_effort_is_refused_and_leaves_config_b
     );
     assert_eq!(read_workspace_config(&runtime), original);
 }
+
+#[tokio::test]
+async fn a_crew_enabled_write_is_a_bool_and_the_effective_view_shows_it() {
+    let runtime = runtime();
+    write_workspace_config(&runtime, WORKSPACE_CONFIG_WITH_CREWS);
+    let (state, _) = state(runtime.clone());
+
+    let refused = as_operator(send(
+        state.clone(),
+        Method::PUT,
+        "/config/crews/opus?workspace=default",
+        Some(r#"{"fields":{"enabled":"no"}}"#),
+    ))
+    .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(read_workspace_config(&runtime), WORKSPACE_CONFIG_WITH_CREWS);
+
+    let accepted = as_operator(send(
+        state.clone(),
+        Method::PUT,
+        "/config/crews/opus?workspace=default",
+        Some(r#"{"fields":{"enabled":false}}"#),
+    ))
+    .await;
+    let status = accepted.status();
+    let body = body_json(accepted).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(read_workspace_config(&runtime).contains("enabled = false"));
+
+    let view = body_json(
+        send(
+            state,
+            Method::GET,
+            "/config/effective?workspace=default",
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        view["crew_fields"]
+            .as_array()
+            .expect("crew_fields")
+            .contains(&Value::from("enabled"))
+    );
+    let crews = view["crews"].as_array().expect("crews");
+    let opus = crews
+        .iter()
+        .find(|crew| crew["name"] == "opus")
+        .expect("a disabled crew is still listed");
+    assert_eq!(opus["enabled"], false);
+}

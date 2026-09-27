@@ -6,10 +6,12 @@
 //! runs any interactive prompts, and hands the answers over as a
 //! [`ConfigSeed`].
 //!
-//! A seeded file names real crews. `workflow.default_crew` and
-//! `workflow.system_crew` each point at one of the built-in crews the seed
-//! writes for the detected families; init never invents a `custom` or
-//! `system` crew table whose only purpose is to be pointed at.
+//! A seeded file writes every built-in crew. Crews of a detected family get
+//! `enabled = true`; the rest get `enabled = false`, so turning a provider on
+//! later is a one-line edit rather than a re-seed. `workflow.default_crew` and
+//! `workflow.system_crew` each point at an enabled built-in crew; init never
+//! invents a `custom` or `system` crew table whose only purpose is to be
+//! pointed at.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -92,9 +94,10 @@ const SYSTEM_CREW_BY_FAMILY: &[(&str, &str)] = &[
 /// in this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigSeed {
-    /// Provider families available on this host. An empty set seeds an
-    /// explicitly empty `[crews]` registry, which is how a host that can
-    /// dispatch nothing avoids inheriting the built-in crews at load time.
+    /// Provider families available on this host. An empty set seeds every
+    /// crew disabled and no lane keys, which is how a host that can dispatch
+    /// nothing avoids silently running built-in crews: dispatch refuses the
+    /// disabled default until an operator enables a crew.
     pub families: BTreeSet<String>,
     /// Operator-chosen `workflow.default_crew`, by seeded crew name. `None`
     /// takes [`Self::recommended_default_crew`].
@@ -135,18 +138,28 @@ impl ConfigSeed {
         self
     }
 
-    /// The built-in crews this seed writes: the registry filtered to the
-    /// available families, keyed by crew name. The built-in `system` alias is
-    /// excluded because a seeded file names its system crew through
-    /// `workflow.system_crew` instead.
+    /// The built-in crews this seed writes, keyed by crew name: every one of
+    /// them, enabled exactly when its provider family is available. The
+    /// built-in `system` alias is excluded because a seeded file names its
+    /// system crew through `workflow.system_crew` instead.
     pub fn seeded_crews(&self) -> BTreeMap<String, Crew> {
         let available_families = self.available_families();
         default_crews()
             .into_iter()
-            .filter(|(name, crew)| {
-                name != DEFAULT_WORKFLOW_SYSTEM_CREW
-                    && available_families.contains(&crew.assignment.provider.as_str())
+            .filter(|(name, _)| name != DEFAULT_WORKFLOW_SYSTEM_CREW)
+            .map(|(name, mut crew)| {
+                crew.enabled = available_families.contains(&crew.assignment.provider.as_str());
+                (name, crew)
             })
+            .collect()
+    }
+
+    /// The seeded crews an operator may choose for a workflow lane: only
+    /// those enabled on this host.
+    pub fn enabled_crews(&self) -> BTreeMap<String, Crew> {
+        self.seeded_crews()
+            .into_iter()
+            .filter(|(_, crew)| crew.enabled)
             .collect()
     }
 
@@ -272,9 +285,9 @@ fn render_workflow_crew_keys(
         let Some(name) = crew else {
             continue;
         };
-        if !crews.contains_key(&name) {
+        if !crews.get(&name).is_some_and(|crew| crew.enabled) {
             return Err(OrbitError::InvalidInput(format!(
-                "workflow.{key} names crew `{name}`, which this host does not seed"
+                "workflow.{key} names crew `{name}`, which this host does not seed enabled"
             )));
         }
         rendered.push_str(&format!("{key} = {}\n", toml::Value::String(name)));
@@ -293,20 +306,19 @@ fn render_workflow_crew_keys(
 }
 
 fn render_crews(crews: &BTreeMap<String, Crew>) -> String {
-    let mut rendered = String::new();
+    let mut rendered = String::from(
+        "# Every built-in crew is listed. `enabled = false` marks a crew whose provider\n\
+         # CLI was not detected at `orbit init`; dispatch refuses it. Enable one with\n\
+         # `orbit config set crews.<name>.enabled true`.\n",
+    );
     for (name, crew) in crews {
         rendered.push_str(&render_crew_table(name, crew));
-    }
-    if rendered.is_empty() {
-        // Preserve an explicitly empty registry so runtime loading does not
-        // substitute built-in crews for a host where init detected none.
-        rendered.push_str("[crews]\n");
     }
     rendered
 }
 
 fn render_crew_table(name: &str, crew: &Crew) -> String {
-    let mut rendered = format!("[crews.{name}]\n");
+    let mut rendered = format!("[crews.{name}]\nenabled = {}\n", crew.enabled);
     for (field, value) in [
         ("model", &crew.assignment.model),
         ("provider", &crew.assignment.provider),

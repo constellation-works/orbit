@@ -457,6 +457,42 @@ pub(super) fn ignored_optional_crew_effort_is_a_config_warning() {
 }
 
 #[test]
+pub(super) fn a_lane_naming_a_disabled_crew_is_a_config_warning() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+
+    fs::write(
+        temp.path().join("repo").join(".orbit").join("config.toml"),
+        "[workflow]\ndefault_crew = \"astra\"\nsystem_crew = \"luna\"\n\n[crews.astra]\nenabled = false\nmodel = \"gpt-6-astra\"\nprovider = \"codex\"\n\n[crews.luna]\nmodel = \"gpt-6-luna\"\nprovider = \"codex\"\n",
+    )
+    .expect("write config with a disabled default crew");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let config_rows: Vec<_> = results
+        .iter()
+        .filter(|row| row.check_name == "config")
+        .collect();
+    assert_eq!(
+        config_rows.len(),
+        1,
+        "only the disabled lane is flagged: {results:?}"
+    );
+    let config = config_rows[0];
+    assert_eq!(config.status, WorkspaceDoctorStatus::Warning, "{config:?}");
+    assert!(
+        config.message.contains("workflow.default_crew") && config.message.contains("`astra`"),
+        "finding names the lane and the crew: {}",
+        config.message
+    );
+    assert_eq!(
+        config.remediation.as_deref(),
+        Some(
+            "orbit config set crews.astra.enabled true (or point workflow.default_crew at an enabled crew)"
+        )
+    );
+}
+
+#[test]
 pub(super) fn unopenable_store_database_fails_the_database_check() {
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = workspace_runtime(&temp);

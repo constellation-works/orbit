@@ -254,3 +254,18 @@ fn set_claude_crew_effort_accepts_supported_value() {
         fs::read_to_string(workspace_root.join("config.toml")).expect("read workspace config");
     assert!(saved.contains("effort = \"max\""), "{saved}");
 }
+
+#[test]
+fn set_crew_enabled_rejects_a_non_bool_without_writing() {
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    write_sol_crew(&workspace_root.join("config.toml"));
+    let original = fs::read(workspace_root.join("config.toml")).expect("read original");
+
+    let error = set_args("crews.sol.enabled", "maybe", false, false, false)
+        .execute(&runtime)
+        .expect_err("a non-bool enabled must be rejected");
+    assert!(error.to_string().contains("expected a boolean"), "{error}");
+
+    let after = fs::read(workspace_root.join("config.toml")).expect("read after failed set");
+    assert_eq!(after, original);
+}

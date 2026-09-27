@@ -137,6 +137,11 @@
   gap: 10px; align-items: baseline; padding: 8px 14px;
 }
 .config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
+.config-crew-row.disabled .config-crew-cells { color: var(--fg-mute); }
+.config-crew-disabled {
+  margin-left: 6px; padding: 0 5px; border: 1px solid var(--border); border-radius: 2px;
+  color: var(--fg-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+}
 .config-provider { display: inline-flex; gap: 6px; align-items: center; color: var(--fg); font-size: 12px; }
 .config-provider-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
