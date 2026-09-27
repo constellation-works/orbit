@@ -670,6 +670,8 @@ fn setup_worktree_refuses_dirty_base_checkout_when_landing_mode_is_local() {
 
     // Introduce dirty landing state in the base repository checkout (simulating init generated files)
     fs::write(repo.join(".gitignore"), ".orbit/*\n").unwrap();
+    fs::create_dir_all(repo.join(".claude")).unwrap();
+    fs::write(repo.join(".claude/settings.json"), "{}\n").unwrap();
     fs::create_dir_all(repo.join(".orbit").join("auto_tasks")).unwrap();
     fs::write(
         repo.join(".orbit").join("auto_tasks").join("curation.yaml"),
@@ -692,7 +694,10 @@ fn setup_worktree_refuses_dirty_base_checkout_when_landing_mode_is_local() {
     let message = error.to_string();
     assert!(
         message.contains("base branch checkout")
-            && message.contains("must be clean before merge_batch_worktree_into_base"),
+            && message.contains("must be clean before merge_batch_worktree_into_base")
+            && message.contains("?? .gitignore")
+            && message.contains("?? .claude/settings.json")
+            && message.contains("Commit or stash these changes"),
         "expected clean base checkout refusal, got: {message}"
     );
 

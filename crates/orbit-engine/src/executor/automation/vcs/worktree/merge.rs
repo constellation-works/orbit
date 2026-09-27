@@ -271,7 +271,7 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
     path: &Path,
     label: &str,
 ) -> Result<(), OrbitError> {
-    let status = git_output_raw(path, &["status", "--porcelain"])?;
+    let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=all"])?;
     if status.trim().is_empty() {
         return Ok(());
     }
@@ -287,13 +287,13 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
     });
     if has_unmerged {
         return Err(OrbitError::Execution(format!(
-            "{label} '{}' has unresolved merge conflicts",
-            path.display()
+            "{label} '{}' has unresolved merge conflicts:\n{status}\nResolve and commit the conflicts before shipping.",
+            path.display(),
         )));
     }
 
     Err(OrbitError::Execution(format!(
-        "{label} '{}' must be clean before merge_batch_worktree_into_base",
-        path.display()
+        "{label} '{}' must be clean before merge_batch_worktree_into_base. Dirty paths (git status --short):\n{status}\nCommit or stash these changes, and remove unwanted untracked files, then retry shipping.",
+        path.display(),
     )))
 }

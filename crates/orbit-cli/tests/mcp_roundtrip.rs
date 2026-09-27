@@ -1109,6 +1109,175 @@ fn workspace_init_mcp_config_reaches_a_governed_tool_over_the_real_transport() {
     assert_eq!(listed["items"], json!([]));
 }
 
+/// A fresh checkout's first ship must explain the setup files that block local
+/// landing. PR delivery reaches worktree setup with those same files present.
+#[test]
+fn fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup() {
+    for mode in ["local", "pr"] {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
+        let remote = temp.path().join("remote.git");
+        std::fs::create_dir_all(&home).expect("create home");
+        std::fs::create_dir_all(&work).expect("create work");
+        plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&home), "codex");
+
+        let git = |cwd: &Path, args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("run git fixture command");
+            assert_command_succeeded(&format!("git {}", args.join(" ")), &output);
+        };
+        git(&work, &["init", "--quiet", "-b", "main"]);
+        git(&work, &["config", "user.name", "Orbit Test"]);
+        git(
+            &work,
+            &["config", "user.email", "orbit-test@example.invalid"],
+        );
+        std::fs::write(work.join("README.md"), "first commit\n").expect("write first commit");
+        git(&work, &["add", "README.md"]);
+        git(&work, &["commit", "--quiet", "-m", "first commit"]);
+        git(
+            temp.path(),
+            &["init", "--quiet", "--bare", remote.to_str().unwrap()],
+        );
+        git(
+            &work,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&work, &["push", "--quiet", "-u", "origin", "main"]);
+
+        orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "fresh-host",
+            "--task-prefix",
+            "FRH",
+        ]));
+        std::fs::create_dir_all(work.join(".claude")).expect("mark Claude installed");
+        let initialized = orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
+            "workspace",
+            "init",
+            "--mcp",
+            "--ship-mode",
+            mode,
+        ]));
+        let human_report = String::from_utf8(initialized.stdout).expect("init report is UTF-8");
+        for path in [".claude/settings.json", ".gitignore", ".mcp.json"] {
+            assert!(
+                human_report.contains(path),
+                "init omitted {path}: {human_report}"
+            );
+        }
+        assert!(
+            human_report.contains("commit") && human_report.contains("clean"),
+            "{human_report}"
+        );
+        let status = Command::new("git")
+            .args(["status", "--porcelain", "--untracked-files=all"])
+            .current_dir(&work)
+            .output()
+            .expect("read fresh checkout status");
+        assert_command_succeeded("git status", &status);
+        let status = String::from_utf8(status.stdout).expect("Git status is UTF-8");
+        for entry in status.lines() {
+            let path = &entry[3..];
+            assert!(
+                human_report.contains(path),
+                "init omitted {path}: {human_report}"
+            );
+        }
+        for path in [".claude/settings.json", ".gitignore", ".mcp.json"] {
+            assert!(work.join(path).is_file(), "init did not write {path}");
+        }
+
+        let added = orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
+            "task",
+            "add",
+            "--title",
+            "First task",
+            "--complexity",
+            "low",
+            "--crew",
+            "sol",
+            "--status",
+            "backlog",
+            "--json",
+        ]));
+        let task: Value = serde_json::from_slice(&added.stdout).expect("parse task add");
+        let task_id = task["id"].as_str().expect("task id");
+        let shipped = orbit_ok(
+            McpWorkspace::orbit_command(&work, &home).args(["run", "ship", task_id, "--json"]),
+        );
+        let submission: Value =
+            serde_json::from_slice(&shipped.stdout).expect("parse ship submission");
+        let parent_run_id = submission["run_id"].as_str().expect("run id");
+
+        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        let leaf_run = loop {
+            let history = orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
+                "run",
+                "history",
+                "-j",
+                &format!("task_{mode}_pipeline"),
+                "--no-reconcile",
+                "--json",
+            ]));
+            let history: Value =
+                serde_json::from_slice(&history.stdout).expect("parse run history");
+            let Some(run_id) = history["runs"][0]["run_id"].as_str() else {
+                assert!(
+                    Instant::now() < deadline,
+                    "ship {parent_run_id} did not dispatch: {history}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            };
+            let shown = orbit_ok(McpWorkspace::orbit_command(&work, &home).args([
+                "run",
+                "show",
+                run_id,
+                "--no-reconcile",
+                "--json",
+            ]));
+            let run: Value = serde_json::from_slice(&shown.stdout).expect("parse run show");
+            if matches!(
+                run["run"]["state"].as_str(),
+                Some("success" | "failed" | "timeout")
+            ) {
+                break run;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worktree setup did not finish: {run}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        if mode == "local" {
+            assert_eq!(leaf_run["run"]["state"], "failed", "{leaf_run}");
+            let error = leaf_run["run"]["error_message"]
+                .as_str()
+                .expect("local refusal");
+            assert!(
+                error.contains("worktree_setup")
+                    && error.contains(".claude/settings.json")
+                    && error.contains(".mcp.json")
+                    && error.contains(".gitignore")
+                    && error.contains("Commit or stash"),
+                "{error}"
+            );
+        } else {
+            assert!(
+                leaf_run["pipeline_state"]["step_outputs"]["0"].is_object(),
+                "PR mode must complete worktree setup despite init files: {leaf_run}"
+            );
+        }
+    }
+}
+
 #[test]
 fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
     let workspace = McpWorkspace::init();

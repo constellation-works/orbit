@@ -1,9 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
 use orbit_core::OrbitError;
 
-use super::dispatch::{print_action_summary, run_action};
+use super::dispatch::{ConfigTarget, auto_detected_providers, print_action_summary, run_action};
 use super::providers::ServerLaunch;
 use super::workspace::{env_home_dir, resolve_workspace_layout};
 use crate::command::{CommandOut, CommandOutput};
@@ -274,7 +274,7 @@ pub(crate) fn init_auto_for_workspace(
     repo_root: &Path,
     orbit_root: &Path,
     workspace_id: &str,
-) -> Result<Vec<String>, OrbitError> {
+) -> Result<(Vec<String>, Vec<PathBuf>), OrbitError> {
     // `orbit workspace init` is a per-workspace setup, so its auto-MCP path
     // writes repo-local files. `orbit mcp init` defaults to workspace scope
     // as well; pass `--scope home` for a user-level registration.
@@ -286,18 +286,37 @@ pub(crate) fn init_auto_for_workspace(
     //
     // The workspace being registered is known here, so the generated server is
     // bound to it directly rather than re-derived from the checkout.
-    run_action(
+    let home_dir = env_home_dir();
+    let providers = auto_detected_providers(repo_root, home_dir.as_deref());
+    let mut files = Vec::new();
+    for provider in &providers {
+        let target = ConfigTarget::resolve(
+            ScopeArg::Workspace,
+            provider,
+            repo_root,
+            home_dir.as_deref(),
+        )?;
+        files.push(target.mcp_path);
+        if let Some(settings_path) = target.settings_path {
+            files.push(settings_path);
+        }
+        if let Some(legacy_path) = target.legacy_mcp_path.filter(|path| path.exists()) {
+            files.push(legacy_path);
+        }
+    }
+    let configured = run_action(
         McpAction::Init(ServerLaunch::local(true, Some(workspace_id))),
         repo_root,
         orbit_root,
-        ProviderSelectionMode::Auto,
-        env_home_dir(),
+        ProviderSelectionMode::Explicit(providers),
+        home_dir,
         ScopeArg::Workspace,
-    )
-    .map(|providers| {
-        providers
+    )?;
+    Ok((
+        configured
             .into_iter()
             .map(|provider| provider.label().to_string())
-            .collect()
-    })
+            .collect(),
+        files,
+    ))
 }
