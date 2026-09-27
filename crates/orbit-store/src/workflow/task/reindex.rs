@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id};
+use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id, task_id_prefix};
 
 use crate::driver::file::task_bundle::{
     bundle_lock_target, is_unpublished_stub, reap_unpublished_stub, recover_pending_bundle_at,
@@ -44,8 +44,10 @@ pub fn reindex_workspace(
 
     let workspace_dir = registry.workspaces_dir().join(&workspace_id);
     let mut candidates = on_disk_task_ids(&workspace_dir)?;
+    let local_prefix = registry.local_task_prefix()?;
     let max_number = candidates
         .iter()
+        .filter(|id| task_id_prefix(id) == Some(local_prefix.as_str()))
         .filter_map(|id| parse_orb_task_number(id))
         .max();
     for existing in registry.tasks_for_workspace(&workspace_id)? {
@@ -117,7 +119,7 @@ pub fn reindex_workspace(
     // Include unresolved IDs so allocator recovery cannot collide with data
     // retained for repair. Never replace the entire index with a partial set.
     if let Some(max) = max_number {
-        registry.bump_allocator_to_at_least(max.saturating_add(1))?;
+        registry.bump_allocator_past_task_number(max)?;
     }
 
     if !failures.is_empty() {

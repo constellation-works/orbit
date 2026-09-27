@@ -64,7 +64,10 @@ machine a disjoint id range).
   (machine A took `0–9999`, machine B `10000+`); now redundant for collision
   avoidance and kept only as a harmless floor.
 - **Reindex** — rebuild `index.sqlite` rows from the on-disk bundles (source of
-  truth), recovering from rsync/manual moves and index drift.
+  truth), recovering from rsync/manual moves and index drift. It advances the
+  local allocator past on-disk IDs with this host's task prefix, including
+  unreadable bundles retained for repair. Foreign-prefix mirrors are indexed
+  without moving that counter. A local ID at `u32::MAX` exhausts allocation.
 
 ## 3. At a Glance
 

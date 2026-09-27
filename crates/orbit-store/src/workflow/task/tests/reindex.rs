@@ -1,6 +1,6 @@
 //! Concurrent-mutation races against `reindex_workspace`.
 
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{ORB_TASK_ID_MAX, TaskStatus};
 use tempfile::TempDir;
 
 use crate::contracts::TaskHistoryUpdateParams;
@@ -191,4 +191,122 @@ fn reindex_reregisters_disk_bundles_and_drops_stale() {
     assert_eq!(again.indexed, outcome.indexed);
     assert_eq!(again.removed_stale, 0);
     assert_eq!(registry.allocator_next_number().unwrap(), 4);
+}
+
+#[test]
+fn reindex_indexes_foreign_mirrors_without_advancing_local_allocator() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_foreign_reindex";
+    let registry = open_registry(temp.path());
+    registry.set_task_prefix("DE").unwrap();
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let foreign_id = format!("ORB-{ORB_TASK_ID_MAX}");
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle(&foreign_id, "mirror", Vec::new()),
+    );
+    registry.unregister_task_bundle(&foreign_id, ws).unwrap();
+    registry.seed_allocator_start(7).unwrap();
+
+    let outcome = reindex_workspace(&registry, ws).unwrap();
+    assert_eq!(outcome.indexed, 1);
+    assert_eq!(registry.allocator_next_number().unwrap(), 7);
+    assert!(
+        registry
+            .tasks_for_workspace(ws)
+            .unwrap()
+            .iter()
+            .any(|task| task.task_id == foreign_id)
+    );
+    assert_eq!(registry.allocate_task_id(ws).unwrap(), "DE-00007");
+
+    reindex_workspace(&registry, ws).unwrap();
+    assert_eq!(registry.allocator_next_number().unwrap(), 8);
+}
+
+#[test]
+fn reindex_reserves_healthy_and_unresolved_local_ids() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_local_reindex";
+    let registry = open_registry(temp.path());
+    registry.set_task_prefix("DE").unwrap();
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("DE-00008", "healthy", Vec::new()),
+    );
+    let unresolved = registry.canonical_task_bundle_path(ws, "DE-00012").unwrap();
+    fs::create_dir_all(&unresolved).unwrap();
+    fs::write(unresolved.join("events.jsonl"), b"retained data").unwrap();
+
+    let error = reindex_workspace(&registry, ws).unwrap_err();
+    assert!(error.to_string().contains("unresolved bundles retained"));
+    assert_eq!(registry.allocator_next_number().unwrap(), 13);
+    assert!(
+        registry
+            .tasks_for_workspace(ws)
+            .unwrap()
+            .iter()
+            .any(|task| task.task_id == "DE-00008")
+    );
+    assert_eq!(registry.allocate_task_id(ws).unwrap(), "DE-00013");
+}
+
+#[test]
+fn reindex_local_ceiling_exhausts_allocator_without_reusing_id() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_ceiling_reindex";
+    let registry = open_registry(temp.path());
+    registry.set_task_prefix("DE").unwrap();
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let ceiling_id = format!("DE-{ORB_TASK_ID_MAX}");
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle(&ceiling_id, "last id", Vec::new()),
+    );
+
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, 1);
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, 1);
+    assert!(
+        registry
+            .allocator_next_number()
+            .unwrap_err()
+            .to_string()
+            .contains("exhausted")
+    );
+    let error = registry.allocate_task_id(ws).unwrap_err();
+    assert!(error.to_string().contains("exhausted"), "{error}");
+}
+
+#[test]
+fn reindex_unresolved_local_ceiling_also_exhausts_allocator() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_unresolved_ceiling";
+    let registry = open_registry(temp.path());
+    registry.set_task_prefix("DE").unwrap();
+    bind(&registry, temp.path(), ws);
+    let ceiling_id = format!("DE-{ORB_TASK_ID_MAX}");
+    let unresolved = registry
+        .canonical_task_bundle_path(ws, &ceiling_id)
+        .unwrap();
+    fs::create_dir_all(&unresolved).unwrap();
+    fs::write(unresolved.join("events.jsonl"), b"retained data").unwrap();
+
+    assert!(
+        reindex_workspace(&registry, ws)
+            .unwrap_err()
+            .to_string()
+            .contains("unresolved")
+    );
+    let error = registry.allocate_task_id(ws).unwrap_err();
+    assert!(error.to_string().contains("exhausted"), "{error}");
 }
