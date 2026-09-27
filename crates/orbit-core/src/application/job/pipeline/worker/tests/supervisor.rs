@@ -55,6 +55,10 @@ impl RecordingHost {
 }
 
 impl PipelineRunHost for RecordingHost {
+    fn providers_stopped(&self, _run_id: &str) -> bool {
+        true
+    }
+
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
         self.runs
             .get_job_run(run_id)?
@@ -475,5 +479,244 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
     assert!(!sibling_run.state.is_terminal());
     unsafe {
         libc::kill(-(sibling_pid as i32), libc::SIGKILL);
+    }
+}
+
+/// Exercise the production host (including reservation cleanup) in a child
+/// with no inherited managed-run authority.
+#[cfg(unix)]
+#[test]
+fn unexpected_exit_retains_reservations_until_provider_evidence_closes() {
+    use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    use orbit_common::process::identity::process_start_identity_token;
+    use orbit_store::{TaskReservationReserveParams, V2AuditEventInsertParams};
+
+    use crate::OrbitRuntime;
+    use crate::application::job::pipeline::worker::log::configure_pipeline_worker_stdio;
+
+    const CHILD: &str = "ORBIT_TEST_SUPERVISOR_PROVIDER_CHILD";
+    const NAME: &str = concat!(
+        module_path!(),
+        "::unexpected_exit_retains_reservations_until_provider_evidence_closes"
+    );
+    if std::env::var(CHILD).ok().as_deref() != Some(NAME) {
+        let home = TempDir::new().expect("isolated home");
+        let mut child = Command::new(std::env::current_exe().expect("test binary"));
+        orbit_common::test_env::clear_inherited_authority(|key| {
+            child.env_remove(key);
+        });
+        let output = child
+            .args([
+                "--exact",
+                NAME.strip_prefix("orbit_core::").unwrap_or(NAME),
+                "--nocapture",
+            ])
+            .env(CHILD, NAME)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .output()
+            .expect("isolated supervisor test");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "child must execute regression: {stdout}"
+        );
+        return;
+    }
+
+    struct ObservedHost {
+        runtime: OrbitRuntime,
+        probes: AtomicUsize,
+    }
+    impl PipelineRunHost for ObservedHost {
+        fn providers_stopped(&self, run_id: &str) -> bool {
+            let stopped = PipelineRunHost::providers_stopped(&self.runtime, run_id);
+            self.probes.fetch_add(1, Ordering::SeqCst);
+            stopped
+        }
+        fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
+            PipelineRunHost::reconciled_run(&self.runtime, run_id)
+        }
+        fn terminalize_run(
+            &self,
+            run_id: &str,
+            state: JobRunState,
+            at: DateTime<Utc>,
+        ) -> Result<bool, OrbitError> {
+            PipelineRunHost::terminalize_run(&self.runtime, run_id, state, at)
+        }
+    }
+
+    // Both a verifiable live identity and an absent identity must defer.
+    for known_identity in [true, false] {
+        let root = TempDir::new().expect("fixture root");
+        let global = root.path().join("global");
+        let orbit_dir = root.path().join("repo/.orbit");
+        std::fs::create_dir_all(&global).expect("global root");
+        std::fs::create_dir_all(&orbit_dir).expect("workspace root");
+        let runtime = OrbitRuntime::from_roots(&global, &orbit_dir).expect("runtime");
+        let runs = Arc::clone(&runtime.stores().job_run);
+        let run = runs
+            .insert_job_run("provider_survivor", 1, Utc::now(), None, None)
+            .expect("run");
+        let host = Arc::new(ObservedHost {
+            runtime: runtime.clone(),
+            probes: AtomicUsize::new(0),
+        });
+        let events = EventLog::default();
+        let supervisor = PipelineWorkerSupervisor::new(
+            Arc::clone(&runs),
+            Arc::clone(&runtime.stores().audit_event),
+            runtime.paths().clone(),
+            events.clone(),
+            WorkerCommandConfig::for_paths(runtime.paths()),
+            host.clone(),
+        );
+        runtime
+            .stores()
+            .task_reservations()
+            .reserve_task_reservation(TaskReservationReserveParams {
+                workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
+                workspace_id: Some(runtime.workspace_id().expect("workspace id")),
+                task_ids: Vec::new(),
+                requested_files: vec!["file:src/provider.rs".to_string()],
+                actor: "test".to_string(),
+                ttl_seconds: 3600,
+                owner_run_id: Some(run.run_id.clone()),
+                owner_metadata_json: None,
+            })
+            .expect("reservation");
+        let reserved = || {
+            runtime
+                .stores()
+                .task_reservations()
+                .list_active_task_reservations(
+                    &orbit_dir.to_string_lossy(),
+                    Some(&runtime.workspace_id().expect("workspace id")),
+                )
+                .expect("reservations")
+                .reservations
+                .iter()
+                .any(|r| r.owner_run_id.as_deref() == Some(&run.run_id))
+        };
+        // This process survives the worker and has a real stable identity.
+        let mut provider = Command::new("sleep").arg("30").spawn().expect("provider");
+        let provider_pid = provider.id();
+        let token =
+            known_identity.then(|| process_start_identity_token(provider.id()).expect("identity"));
+        let write_event = |finished: bool| {
+            let id = if finished {
+                "provider-finished"
+            } else {
+                "provider-spawn"
+            };
+            let payload = serde_json::json!({
+                "event_id": id, "ts": Utc::now().to_rfc3339(), "run_id": run.run_id,
+                "parent_event_id": "invocation", "step_id": "agent_implement", "provider": "codex",
+                "body_kind": if finished { "cli_invocation_finished" } else { "cli_invocation_process" },
+                "pid": provider_pid, "pid_start_time": token, "exit_code": 0, "timed_out": false,
+            });
+            runtime
+                .insert_v2_audit_event(&V2AuditEventInsertParams {
+                    workspace_id: runtime.workspace_id().expect("workspace"),
+                    event_id: id.to_string(),
+                    source: "v2_envelope".to_string(),
+                    schema_version: 1,
+                    event_type: "activity.progress".to_string(),
+                    ts: Utc::now(),
+                    run_id: run.run_id.clone(),
+                    agent_identity: "test".to_string(),
+                    parent_event_id: Some("invocation".to_string()),
+                    workspace_path: None,
+                    payload_json: payload.to_string(),
+                })
+                .expect("provider evidence");
+        };
+        write_event(false);
+        let mut worker = Command::new("sleep");
+        worker.arg("30");
+        let log =
+            configure_pipeline_worker_stdio(&mut worker, &root.path().join("logs"), &run.run_id)
+                .expect("log");
+        let pid = supervisor
+            .spawn_process(&run.run_id, None, worker, log)
+            .expect("worker");
+        runs.mark_job_run_running(&run.run_id, Utc::now(), pid)
+            .expect("claim");
+        let signal = if known_identity {
+            libc::SIGKILL
+        } else {
+            libc::SIGTERM
+        };
+        assert_eq!(unsafe { libc::kill(pid as i32, signal) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while host.probes.load(Ordering::SeqCst) < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "observer must retry deferred exit"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            runs.get_job_run(&run.run_id).unwrap().unwrap().state,
+            JobRunState::Running
+        );
+        assert!(reserved(), "surviving provider retains reservation");
+        assert!(events.snapshot().is_empty(), "no premature completion");
+        // Closing durable evidence allows the observer's original diagnostic
+        // to settle exactly once, even for an unverifiable identity.
+        if !known_identity {
+            write_event(true);
+        }
+        provider.kill().expect("stop provider");
+        provider.wait().expect("reap provider");
+        loop {
+            if events
+                .snapshot()
+                .iter()
+                .any(|e| matches!(e, OrbitEvent::JobRunCompleted { .. }))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "closed evidence must settle");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let stored = runs.get_job_run(&run.run_id).unwrap().unwrap();
+        assert_eq!(
+            stored.state,
+            if known_identity {
+                JobRunState::Failed
+            } else {
+                JobRunState::Interrupted
+            }
+        );
+        assert!(!reserved(), "settlement releases reservation");
+        let step = stored.steps.last().expect("original exit diagnostic");
+        assert_eq!(
+            step.error_code.as_deref(),
+            (!known_identity).then_some(crate::application::job::run::WORKER_TERMINATED_ERROR_CODE)
+        );
+        assert!(
+            step.error_message
+                .as_deref()
+                .unwrap()
+                .contains(&format!("exited with status signal: {signal}"))
+        );
+        assert_eq!(
+            events
+                .snapshot()
+                .iter()
+                .filter(|e| matches!(e, OrbitEvent::JobRunCompleted { .. }))
+                .count(),
+            1
+        );
     }
 }

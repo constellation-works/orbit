@@ -327,7 +327,7 @@ impl OrbitRuntime {
     /// still-open provider child is alive or cannot be verified. The audit
     /// collector reads the complete trail and process probing verifies the
     /// recorded start token and PID namespace before returning `Alive`.
-    fn provider_evidence_allows_orphan_finalization<P>(
+    pub(crate) fn provider_evidence_allows_orphan_finalization<P>(
         &self,
         run_id: &str,
         provider_probe: &P,

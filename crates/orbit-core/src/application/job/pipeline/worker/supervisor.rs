@@ -8,7 +8,7 @@
 //!
 //! The supervisor is built from the handles that work needs — the run and
 //! audit stores, workspace paths, the session event log, the worker command
-//! configuration, and a [`PipelineRunHost`] for the two run-lifecycle steps it
+//! configuration, and a [`PipelineRunHost`] for the run-lifecycle decisions it
 //! must not own — so its failure paths can be exercised against a store alone.
 //! [`OrbitRuntime`] keeps its worker methods as thin delegations.
 
@@ -32,7 +32,8 @@ use crate::application::job::run::active_cancellation_request;
 /// Terminalizing a run releases the run's task reservations and blocks the
 /// tasks coupled to it, and a reconciled read repairs stale run records:
 /// task-domain and reconciliation work that belongs to [`OrbitRuntime`], not
-/// to a process supervisor. Keeping exactly those two steps behind this seam
+/// to a process supervisor. Provider liveness uses the same guard as orphan
+/// reconciliation. Keeping these decisions behind this seam
 /// is what lets the rest of supervision run without a runtime.
 pub(crate) trait PipelineRunHost: Send + Sync {
     fn worker_bound(&self) -> bool {
@@ -44,6 +45,9 @@ pub(crate) trait PipelineRunHost: Send + Sync {
 
     /// The run as `orbit run show` reports it, after stale-run reconciliation.
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError>;
+
+    /// Whether durable provider evidence proves no provider remains active.
+    fn providers_stopped(&self, run_id: &str) -> bool;
 
     /// Terminalize `run_id`, releasing the task reservations it owns. Returns
     /// whether this call performed the terminal write.
@@ -65,6 +69,13 @@ impl PipelineRunHost for OrbitRuntime {
 
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
         self.show_job_run(run_id)
+    }
+
+    fn providers_stopped(&self, run_id: &str) -> bool {
+        self.provider_evidence_allows_orphan_finalization(
+            run_id,
+            &orbit_common::process::identity::probe_process_liveness,
+        )
     }
 
     fn terminalize_run(
@@ -372,7 +383,12 @@ impl PipelineWorkerSupervisor {
                             ),
                         ),
                     };
-                self.finalize_exit_failure(&run, error_code, &message, actor)?;
+                while !self.finalize_exit_failure(&run, error_code, &message, actor)? {
+                    // Reaping the leader does not prove its independently
+                    // grouped providers stopped. Keep the original diagnostic
+                    // while waiting; never kill additional processes here.
+                    thread::sleep(Duration::from_secs(1));
+                }
                 return Ok(());
             }
 
@@ -421,17 +437,33 @@ impl PipelineWorkerSupervisor {
     /// non-terminal run. `try_wait` has already reaped the process when this is
     /// called. Pending exits are interrupted startup; a running worker with a
     /// SIGTERM exit is interrupted like a dead owner found by reconciliation.
+    /// Returns false while provider evidence remains open, so the observer can
+    /// retry with the original diagnostic. A terminal or replaced owner ends
+    /// observation without changing its outcome.
     fn finalize_exit_failure(
         &self,
         run: &JobRun,
         error_code: Option<&str>,
         message: &str,
         actor: Option<&str>,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<bool, OrbitError> {
         let current = self
             .runs
             .get_job_run(&run.run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run.run_id.clone()))?;
+        if current.pid != run.pid
+            || current.pid_start_time != run.pid_start_time
+            || current.state.is_terminal()
+        {
+            return Ok(true);
+        }
+        #[cfg(unix)]
+        if active_cancellation_request(self.audit_events.as_ref(), &run.run_id)?.is_some() {
+            return Ok(true);
+        }
+        if !self.host.providers_stopped(&run.run_id) {
+            return Ok(false);
+        }
         let (state, started_at, audit_name) = match current.state {
             JobRunState::Pending => (
                 JobRunState::Interrupted,
@@ -447,7 +479,7 @@ impl PipelineWorkerSupervisor {
                 current.started_at.unwrap_or(current.scheduled_at),
                 "pipeline.worker.exit",
             ),
-            _ => return Ok(()),
+            _ => return Ok(true),
         };
         let finished_at = Utc::now();
         self.record_diagnostic_step(
@@ -459,7 +491,8 @@ impl PipelineWorkerSupervisor {
             state,
         )?;
         self.terminalize(&current, state, finished_at)?;
-        self.record_worker_failure_audit(audit_name, &current.run_id, message, actor)
+        self.record_worker_failure_audit(audit_name, &current.run_id, message, actor)?;
+        Ok(true)
     }
 
     /// Terminalize a run whose worker never started at all.

@@ -100,6 +100,13 @@ orphaned runs to `interrupted`, releasing their task reservations:
 - `pending` runs never claimed within a 30-minute grace window, such as queued children
   stranded when their parent run was interrupted by a reboot.
 
+The parent-side worker observer applies the same provider guard after an unexpected
+worker exit. While a recorded provider is alive or unverifiable, the run stays
+nonterminal and keeps its reservations. The observer retries once per second and
+retains the original exit status and worker-log diagnostic until it can finalize.
+It does not kill surviving providers. If the observer itself stops, lazy orphan
+reconciliation remains available with its ordinary stale-owner diagnostic.
+
 Reconciliation runs best-effort at workspace open and lazily on
 `orbit run history` / `show` / `logs` / `events`. Pass `--no-reconcile` to any of those four
 to read stored run records without finalizing anything; the run-failure and backlog-hygiene
