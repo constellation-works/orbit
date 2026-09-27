@@ -3,8 +3,8 @@ use std::process::Command;
 
 use chrono::Utc;
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskEventRowV2,
-    TaskStatus,
+    ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
+    TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus,
 };
 use tempfile::TempDir;
 
@@ -224,8 +224,9 @@ fn export_refuses_interrupted_write_child() {
 }
 
 #[test]
-fn archive_excludes_pending_root_sidecar_but_keeps_dotfile_artifacts() {
+fn export_round_trips_pending_write_named_artifacts_and_excludes_root_sidecar() {
     let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
     let archive = src.path().join("tasks.tar.zst");
     let ws = "export-sidecars-abcdef";
     let registry = open_registry(src.path());
@@ -238,24 +239,73 @@ fn archive_excludes_pending_root_sidecar_but_keeps_dotfile_artifacts() {
         &make_bundle("ORB-00000", "dotfile artifact", Vec::new()),
     );
 
-    let dotfile = seed_artifact_blob(&store, "ORB-00000", ".payload", b"dotfile", "codex");
+    let root_artifact = seed_artifact_blob(
+        &store,
+        "ORB-00000",
+        ".pending-write.yaml",
+        b"root artifact",
+        "codex",
+    );
+    let nested_artifact = seed_artifact_blob(
+        &store,
+        "ORB-00000",
+        "nested/.pending-write.yaml",
+        b"nested artifact bytes\x00",
+        "codex",
+    );
     store
         .rewrite_artifact_manifest(
             "ORB-00000",
             &ArtifactManifestV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                files: vec![dotfile],
+                files: vec![root_artifact.clone(), nested_artifact.clone()],
             },
         )
         .expect("write artifact manifest");
+
+    export_tasks(&registry, ws, ExportSelection::All, &archive, exported_at())
+        .expect("export task with pending-write-named artifacts");
+    let target_registry = open_registry(dst.path());
+    let imported = import_tasks(&target_registry, &archive, None, ImportConflictPolicy::Fail)
+        .expect("import task with pending-write-named artifacts");
+    assert_eq!(imported.tasks.len(), 1);
+    assert_eq!(imported.tasks[0].action, ImportAction::Kept);
+
+    let landed_dir = target_registry
+        .canonical_task_bundle_path(ws, "ORB-00000")
+        .expect("landed bundle path");
+    let landed = read_bundle_at(&landed_dir).expect("valid imported artifact manifest and blobs");
+    let landed_manifest = landed
+        .artifact_manifest
+        .expect("imported bundle has artifact manifest");
+    assert_eq!(
+        landed_manifest.files,
+        vec![root_artifact.clone(), nested_artifact.clone()]
+    );
+    for (artifact, expected_bytes) in [
+        (&root_artifact, &b"root artifact"[..]),
+        (&nested_artifact, &b"nested artifact bytes\x00"[..]),
+    ] {
+        let blob_path = landed_dir
+            .join(TASK_ARTIFACTS_DIR_NAME)
+            .join(&artifact.blob);
+        assert_eq!(
+            fs::read(blob_path).expect("imported artifact bytes"),
+            expected_bytes
+        );
+    }
+
+    // Normal export rejects recovery state during preflight. Exercise the
+    // packer's defense-in-depth exclusion against an actual bundle-root file.
     let bundle_dir = store.bundle_path("ORB-00000").expect("bundle path");
     fs::write(
         bundle_dir.join(crate::driver::file::task_bundle::PENDING_WRITE_FILE_NAME),
-        "internal recovery state",
+        b"internal recovery state",
     )
     .expect("write pending sidecar");
 
-    let file = fs::File::create(&archive).expect("create archive");
+    let sidecar_archive = src.path().join("sidecar.tar.zst");
+    let file = fs::File::create(&sidecar_archive).expect("create sidecar archive");
     let encoder = zstd::stream::write::Encoder::new(file, 3).expect("zstd encoder");
     let mut builder = tar::Builder::new(encoder);
     builder.mode(tar::HeaderMode::Deterministic);
@@ -268,7 +318,7 @@ fn archive_excludes_pending_root_sidecar_but_keeps_dotfile_artifacts() {
         .expect("finish zstd");
 
     let extracted = TempDir::new().unwrap();
-    super::super::archive::extract_archive(&archive, extracted.path()).expect("extract");
+    super::super::archive::extract_archive(&sidecar_archive, extracted.path()).expect("extract");
     let archived_bundle = extracted.path().join("bundles/ORB-00000");
     assert!(
         !archived_bundle
@@ -276,13 +326,13 @@ fn archive_excludes_pending_root_sidecar_but_keeps_dotfile_artifacts() {
             .exists()
     );
     assert_eq!(
-        fs::read(archived_bundle.join("artifacts/files/.payload")).expect("dotfile payload"),
-        b"dotfile"
-    );
-
-    assert_eq!(
-        fs::read(archived_bundle.join("artifacts/files/.payload")).expect("archived payload"),
-        b"dotfile"
+        fs::read(
+            archived_bundle
+                .join(TASK_ARTIFACTS_DIR_NAME)
+                .join(&nested_artifact.blob)
+        )
+        .expect("nested pending-write artifact retained"),
+        b"nested artifact bytes\x00"
     );
 }
 
