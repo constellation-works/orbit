@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
+    ArtifactManifestV2, ORB_TASK_ID_MAX, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -219,6 +219,151 @@ fn allocator_bumped_past_max_imported_id() {
     let target = open_registry(dst.path());
     import_tasks(&target, &archive, None, ImportConflictPolicy::Fail).unwrap();
     assert_eq!(target.allocator_next_number().unwrap(), 43);
+}
+
+#[test]
+fn maximum_local_id_import_exhausts_allocator_without_wrapping() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let ws = "orbit-max-cccccc";
+    let max_id = format!("ORB-{ORB_TASK_ID_MAX}");
+    let source = open_registry(src.path());
+    let binding = bind(&source, src.path(), ws);
+    seed(
+        &bundle_store(&source, &binding),
+        &source,
+        ws,
+        &make_bundle(&max_id, "final id", Vec::new()),
+    );
+    export_tasks(&source, ws, ExportSelection::All, &archive, exported_at()).unwrap();
+
+    let target = open_registry(dst.path());
+    let outcome = import_tasks(&target, &archive, None, ImportConflictPolicy::Fail).unwrap();
+    assert_eq!(outcome.tasks[0].final_id, max_id);
+    assert!(target.find_task_binding(&max_id).unwrap().is_some());
+    assert!(matches!(
+        target.allocator_next_number(),
+        Err(orbit_common::OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+    assert!(matches!(
+        target.allocate_task_id(ws),
+        Err(orbit_common::OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+}
+
+#[test]
+fn renumber_with_maximum_kept_id_refuses_before_publication() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let source_ws = "orbit-src-aaaaaa";
+    let existing_ws = "orbit-dst-bbbbbb";
+    let max_id = format!("ORB-{ORB_TASK_ID_MAX}");
+    let source = open_registry(src.path());
+    let source_binding = bind(&source, src.path(), source_ws);
+    let source_store = bundle_store(&source, &source_binding);
+    seed(
+        &source_store,
+        &source,
+        source_ws,
+        &make_bundle("ORB-00000", "incoming collision", Vec::new()),
+    );
+    seed(
+        &source_store,
+        &source,
+        source_ws,
+        &make_bundle(&max_id, "incoming maximum", Vec::new()),
+    );
+    export_tasks(
+        &source,
+        source_ws,
+        ExportSelection::All,
+        &archive,
+        exported_at(),
+    )
+    .unwrap();
+
+    let target = open_registry(dst.path());
+    let existing_binding = bind(&target, dst.path(), existing_ws);
+    seed(
+        &bundle_store(&target, &existing_binding),
+        &target,
+        existing_ws,
+        &make_bundle("ORB-00000", "existing", Vec::new()),
+    );
+    let before = target.allocator_next_number().unwrap();
+    let err = import_tasks(&target, &archive, None, ImportConflictPolicy::Renumber).unwrap_err();
+    assert!(
+        matches!(err, orbit_common::OrbitError::Store(message) if message.contains("exhausted") && message.contains("renumber"))
+    );
+    assert_eq!(target.allocator_next_number().unwrap(), before);
+    assert!(target.find_workspace_binding(source_ws).unwrap().is_none());
+    assert!(target.find_task_binding(&max_id).unwrap().is_none());
+    assert!(
+        !target
+            .canonical_task_bundle_path(source_ws, &max_id)
+            .unwrap()
+            .exists()
+    );
+    assert_eq!(target.tasks_for_workspace(existing_ws).unwrap().len(), 1);
+}
+
+#[test]
+fn renumber_above_registered_maximum_refuses_without_counter_rollback() {
+    let src = TempDir::new().unwrap();
+    let dst = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let source_ws = "orbit-src-aaaaaa";
+    let existing_ws = "orbit-dst-bbbbbb";
+    let max_id = format!("ORB-{ORB_TASK_ID_MAX}");
+    let source = open_registry(src.path());
+    let source_binding = bind(&source, src.path(), source_ws);
+    seed(
+        &bundle_store(&source, &source_binding),
+        &source,
+        source_ws,
+        &make_bundle("ORB-00000", "incoming collision", Vec::new()),
+    );
+    export_tasks(
+        &source,
+        source_ws,
+        ExportSelection::All,
+        &archive,
+        exported_at(),
+    )
+    .unwrap();
+
+    let target = open_registry(dst.path());
+    let existing_binding = bind(&target, dst.path(), existing_ws);
+    let existing_store = bundle_store(&target, &existing_binding);
+    seed(
+        &existing_store,
+        &target,
+        existing_ws,
+        &make_bundle("ORB-00000", "existing", Vec::new()),
+    );
+    seed(
+        &existing_store,
+        &target,
+        existing_ws,
+        &make_bundle(&max_id, "existing maximum", Vec::new()),
+    );
+    target.seed_allocator_start(10).unwrap();
+
+    let err = import_tasks(&target, &archive, None, ImportConflictPolicy::Renumber).unwrap_err();
+    assert!(
+        matches!(err, orbit_common::OrbitError::Store(message) if message.contains("exhausted") && message.contains("renumber"))
+    );
+    assert_eq!(target.allocator_next_number().unwrap(), 10);
+    assert!(target.find_workspace_binding(source_ws).unwrap().is_none());
+    assert_eq!(target.tasks_for_workspace(existing_ws).unwrap().len(), 2);
+    assert!(
+        !target
+            .canonical_task_bundle_path(source_ws, "ORB-00000")
+            .unwrap()
+            .exists()
+    );
 }
 
 #[test]

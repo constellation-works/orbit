@@ -203,6 +203,42 @@ fn allocator_reports_exhaustion() {
 }
 
 #[test]
+fn final_id_allocation_leaves_consistent_exhaustion() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    store
+        .seed_allocator_start(ORB_TASK_ID_MAX)
+        .expect("seed final ID");
+
+    assert_eq!(
+        store
+            .allocate_task_id(&workspace.partition_id)
+            .expect("final ID"),
+        format!("ORB-{ORB_TASK_ID_MAX}")
+    );
+    assert!(matches!(
+        store.allocator_next_number(),
+        Err(OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+    assert!(matches!(
+        store.seed_allocator_start(ORB_TASK_ID_MAX),
+        Err(OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+    assert!(matches!(
+        store.bump_allocator_to_at_least(ORB_TASK_ID_MAX),
+        Err(OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+    store
+        .bump_allocator_past_task_number(ORB_TASK_ID_MAX)
+        .expect("idempotent ceiling maintenance");
+    assert!(matches!(
+        store.allocate_task_id(&workspace.partition_id),
+        Err(OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+}
+
+#[test]
 fn seed_allocator_start_moves_counter_forward() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);

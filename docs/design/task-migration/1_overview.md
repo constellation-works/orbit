@@ -112,6 +112,10 @@ source workspace id without a checkout. It keeps ids that are free, renumbers th
 rebuilds the index rows from bundle YAML, and bumps the allocator past the highest
 landed id. When anything is
 renumbered, an `<archive>.idmap.json` old→new map is written and printed.
+Importing the highest valid local task ID advances the allocator to its
+exhausted state, so later local ID allocation fails explicitly. A renumber
+whose kept or registered IDs already reach that ceiling fails before publishing
+any imported bundles or registering the source workspace.
 
 Idempotency is scoped to *kept* ids: re-importing an archive whose ids are free
 (or already landed unchanged) is a no-op. A `--on-conflict=renumber` run is not
@@ -141,7 +145,8 @@ orbit workspace init --task-id-start 10000     # or [tasks] id_start in config.t
 
 The counter only moves forward — a lower `--task-id-start` is refused; the
 config form (see [../../CONFIG.md](../../CONFIG.md)) is applied as a forward-only
-floor on every runtime build and never errors on an already-advanced counter.
+floor on every runtime build. An exhausted allocator reports exhaustion during
+this maintenance step as well as during allocation.
 Both paths cap at the allocator's `ORB_TASK_ID_MAX` (`u32::MAX`): five-digit
 padding is a minimum display width, not an exhaustion boundary.
 
