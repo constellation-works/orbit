@@ -3,11 +3,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use orbit_automation::routines::loader::retired_routine_job_reason;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, write_text_with_parent};
+use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_common::security::release::sha256_hex;
 
@@ -50,6 +51,16 @@ pub(crate) fn seed_default_routines(
     )
 }
 
+/// Reconcile the shipped default routines in `routines_dir` against its
+/// managed manifest.
+///
+/// Every path this reads, creates, refreshes, retires, or preserves into is
+/// held to one confinement contract: the catalog, its manifest, each
+/// definition, and the `.retired-managed/routines/` route beside it must be a
+/// real directory or regular file — or absent — judged without following
+/// links. A symbolic link anywhere on that route, dangling or not, is refused
+/// and reported, so no sync creates, overwrites, or retires a file outside the
+/// catalog. The routine loader refuses the same links.
 pub(crate) fn reconcile_default_routines(
     routines_dir: &Path,
     identity: &RoutineSeedIdentity,
@@ -57,15 +68,30 @@ pub(crate) fn reconcile_default_routines(
     mode: ManagedAssetReconcileMode,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
     let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let mut result = ManagedAssetReconciliation::default();
+    if let Some(detail) = unconfined_catalog(routines_dir, &manifest_path)? {
+        // The manifest and every definition live behind the refused path, so
+        // nothing below can be judged, let alone written.
+        result.warnings.push(detail.clone());
+        for (name, _) in DEFAULT_ROUTINE_FILES {
+            result.actions.push(ManagedAssetAction {
+                name: (*name).to_string(),
+                path: routines_dir.join(format!("{name}.yaml")),
+                outcome: ManagedAssetOutcome::Preserved,
+                detail: Some(detail.clone()),
+            });
+        }
+        return Ok(result);
+    }
     let previous =
         load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)?;
+    let preservation_confined = preservation_route_is_confined(routines_dir)?;
     let shipped: BTreeSet<&str> = DEFAULT_ROUTINE_FILES
         .iter()
         .map(|(name, _)| *name)
         .collect();
     let mut next_assets = BTreeMap::new();
     let mut next_provenance = BTreeMap::new();
-    let mut result = ManagedAssetReconciliation::default();
 
     if let Some(previous) = &previous {
         for (name, rendered_digest) in &previous.assets {
@@ -73,8 +99,19 @@ pub(crate) fn reconcile_default_routines(
                 continue;
             }
             let path = routines_dir.join(format!("{name}.yaml"));
+            let entry = inspect_catalog_entry(&path, CatalogEntryKind::File)?;
+            if entry == CatalogEntry::Unsafe {
+                // Keep tracking it so the retirement completes once the link
+                // is replaced by the definition it stands for.
+                refuse_unconfined_routine(&mut result, name, &path, &unconfined_detail(&path));
+                next_assets.insert(name.clone(), rendered_digest.clone());
+                if let Some(provenance) = previous.routine_provenance.get(name) {
+                    next_provenance.insert(name.clone(), provenance.clone());
+                }
+                continue;
+            }
             let mut retired_detail = None;
-            if path.exists() {
+            if entry == CatalogEntry::Present {
                 let existing = fs::read_to_string(&path).map_err(|error| {
                     OrbitError::Io(format!(
                         "read retired managed routine '{}': {error}",
@@ -82,6 +119,14 @@ pub(crate) fn reconcile_default_routines(
                     ))
                 })?;
                 let byte_exact = sha256_hex(existing.as_bytes()) == *rendered_digest;
+                if !byte_exact && !preservation_confined {
+                    refuse_unconfined_preservation(&mut result, name, &path, routines_dir);
+                    next_assets.insert(name.clone(), rendered_digest.clone());
+                    if let Some(provenance) = previous.routine_provenance.get(name) {
+                        next_provenance.insert(name.clone(), provenance.clone());
+                    }
+                    continue;
+                }
                 // Orbit deletes outright only bytes it can prove it wrote. A
                 // lifecycle variant — the operator's `enabled` opt-in, the
                 // retired `hosts:` key they were told to drop, a comment they
@@ -171,6 +216,22 @@ pub(crate) fn reconcile_default_routines(
         let previous_provenance = previous
             .as_ref()
             .and_then(|value| value.routine_provenance.get(*name));
+        let present = match inspect_catalog_entry(&path, CatalogEntryKind::File)? {
+            CatalogEntry::Missing => false,
+            CatalogEntry::Present => true,
+            CatalogEntry::Unsafe => {
+                // Neither read nor written: a dangling link would otherwise
+                // look missing and be "recreated" at its external target.
+                refuse_unconfined_routine(&mut result, name, &path, &unconfined_detail(&path));
+                if let Some(provenance) = previous_provenance {
+                    next_assets.insert((*name).to_string(), provenance.rendered_digest.clone());
+                    next_provenance.insert((*name).to_string(), provenance.clone());
+                } else if let Some(digest) = previous_digest {
+                    next_assets.insert((*name).to_string(), digest.clone());
+                }
+                continue;
+            }
+        };
 
         if let Some(provenance) = previous_provenance {
             let binding = if overwrite_bindings {
@@ -180,7 +241,7 @@ pub(crate) fn reconcile_default_routines(
             };
             let rendered = render_routine_template(name, template, &binding)?;
             let rendered_digest = sha256_hex(rendered.as_bytes());
-            if path.exists() {
+            if present {
                 let existing = fs::read_to_string(&path).map_err(|error| {
                     OrbitError::Io(format!(
                         "read managed routine '{}': {error}",
@@ -259,7 +320,7 @@ pub(crate) fn reconcile_default_routines(
                     (refreshed, digest)
                 };
                 if mode == ManagedAssetReconcileMode::Apply {
-                    write_text_with_parent(&path, &rendered)?;
+                    write_confined_routine(&path, &rendered)?;
                 }
                 result.refreshed += 1;
                 result.actions.push(ManagedAssetAction {
@@ -280,7 +341,7 @@ pub(crate) fn reconcile_default_routines(
                 continue;
             } else {
                 if mode == ManagedAssetReconcileMode::Apply {
-                    write_text_with_parent(&path, &rendered)?;
+                    write_confined_routine(&path, &rendered)?;
                 }
                 result.refreshed += 1;
                 result.actions.push(ManagedAssetAction {
@@ -305,11 +366,11 @@ pub(crate) fn reconcile_default_routines(
         }
 
         if let Some(legacy_digest) = previous_digest {
-            if !path.exists() {
+            if !present {
                 let rendered = render_routine_template(name, template, &requested_binding)?;
                 let rendered_digest = sha256_hex(rendered.as_bytes());
                 if mode == ManagedAssetReconcileMode::Apply {
-                    write_text_with_parent(&path, &rendered)?;
+                    write_confined_routine(&path, &rendered)?;
                 }
                 result.refreshed += 1;
                 result.actions.push(ManagedAssetAction {
@@ -375,7 +436,7 @@ pub(crate) fn reconcile_default_routines(
             let rendered_digest = sha256_hex(rendered.as_bytes());
             let changed = rendered_digest != *legacy_digest;
             if changed && mode == ManagedAssetReconcileMode::Apply {
-                write_text_with_parent(&path, &rendered)?;
+                write_confined_routine(&path, &rendered)?;
             }
             if changed {
                 result.refreshed += 1;
@@ -409,7 +470,7 @@ pub(crate) fn reconcile_default_routines(
 
         let rendered = render_routine_template(name, template, &requested_binding)?;
         let rendered_digest = sha256_hex(rendered.as_bytes());
-        if path.exists() {
+        if present {
             let existing = fs::read_to_string(&path).map_err(|error| {
                 OrbitError::Io(format!(
                     "read colliding routine '{}': {error}",
@@ -502,7 +563,7 @@ pub(crate) fn reconcile_default_routines(
             });
         } else {
             if mode == ManagedAssetReconcileMode::Apply {
-                write_text_with_parent(&path, &rendered)?;
+                write_confined_routine(&path, &rendered)?;
             }
             result.refreshed += 1;
             result.actions.push(ManagedAssetAction {
@@ -533,6 +594,7 @@ pub(crate) fn reconcile_default_routines(
         routines_dir,
         previous.as_ref(),
         &shipped,
+        preservation_confined,
         mode,
         &mut result,
     )?;
@@ -570,6 +632,7 @@ fn reconcile_untracked_retired_routines(
     routines_dir: &Path,
     previous: Option<&ManagedAssetManifest>,
     shipped: &BTreeSet<&str>,
+    preservation_confined: bool,
     mode: ManagedAssetReconcileMode,
     result: &mut ManagedAssetReconciliation,
 ) -> Result<(), OrbitError> {
@@ -609,6 +672,10 @@ fn reconcile_untracked_retired_routines(
             });
             continue;
         }
+        if !preservation_confined {
+            refuse_unconfined_preservation(result, stem, &path, routines_dir);
+            continue;
+        }
 
         let preserved = if mode == ManagedAssetReconcileMode::Apply {
             preserve_modified_retired_asset(
@@ -637,7 +704,8 @@ fn reconcile_untracked_retired_routines(
 
 /// Regular `*.yaml` / `*.yml` files directly in `routines_dir`, in stable
 /// filename order. The `local/` subdirectory is a separate origin that
-/// seeding never writes to, so it is skipped with every other subdirectory.
+/// seeding never writes to, so it is skipped with every other subdirectory;
+/// a symbolic link is skipped without being followed, as the loader skips it.
 /// A directory that cannot be listed yields nothing: reconciliation of the
 /// managed defaults has already reported what it could not read.
 fn top_level_routine_files(routines_dir: &Path) -> Vec<PathBuf> {
@@ -646,8 +714,8 @@ fn top_level_routine_files(routines_dir: &Path) -> Vec<PathBuf> {
     };
     let mut paths: Vec<PathBuf> = entries
         .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
         .map(|entry| entry.path())
-        .filter(|path| path.is_file())
         .filter(|path| {
             path.extension()
                 .and_then(|extension| extension.to_str())
@@ -658,4 +726,168 @@ fn top_level_routine_files(routines_dir: &Path) -> Vec<PathBuf> {
         .collect();
     paths.sort();
     paths
+}
+
+/// A routine catalog path judged without following links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogEntry {
+    Missing,
+    /// A real directory or regular file, as the path requires.
+    Present,
+    /// A symbolic link (dangling or not) or an entry of the wrong type.
+    Unsafe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CatalogEntryKind {
+    Directory,
+    File,
+}
+
+fn inspect_catalog_entry(path: &Path, kind: CatalogEntryKind) -> Result<CatalogEntry, OrbitError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CatalogEntry::Missing);
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "inspect routine catalog path '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    // `symlink_metadata` reports a link as neither a directory nor a file.
+    let file_type = metadata.file_type();
+    let expected = match kind {
+        CatalogEntryKind::Directory => file_type.is_dir(),
+        CatalogEntryKind::File => file_type.is_file(),
+    };
+    Ok(if expected {
+        CatalogEntry::Present
+    } else {
+        CatalogEntry::Unsafe
+    })
+}
+
+/// Why the catalog itself cannot be reconciled: `routines_dir` or its
+/// manifest is a link or the wrong kind of entry. Every definition and the
+/// provenance that judges it sit behind that path.
+fn unconfined_catalog(
+    routines_dir: &Path,
+    manifest_path: &Path,
+) -> Result<Option<String>, OrbitError> {
+    if inspect_catalog_entry(routines_dir, CatalogEntryKind::Directory)? == CatalogEntry::Unsafe {
+        return Ok(Some(unconfined_detail(routines_dir)));
+    }
+    if inspect_catalog_entry(manifest_path, CatalogEntryKind::File)? == CatalogEntry::Unsafe {
+        return Ok(Some(unconfined_detail(manifest_path)));
+    }
+    Ok(None)
+}
+
+/// Whether `.retired-managed/routines/` beside the catalog can receive a
+/// preserved copy without a link redirecting the move out of the workspace.
+fn preservation_route_is_confined(routines_dir: &Path) -> Result<bool, OrbitError> {
+    let preserved = retired_preservation_path(
+        routines_dir,
+        "routine",
+        ManagedAssetLayout::YamlStem,
+        "routine",
+    );
+    let Some(kind_dir) = preserved.parent() else {
+        return Ok(false);
+    };
+    let Some(backup_root) = kind_dir.parent() else {
+        return Ok(false);
+    };
+    for dir in [backup_root, kind_dir] {
+        if inspect_catalog_entry(dir, CatalogEntryKind::Directory)? == CatalogEntry::Unsafe {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn unconfined_detail(path: &Path) -> String {
+    format!(
+        "routine catalog path '{}' is a symbolic link or not the expected regular file or directory; Orbit did not read, create, overwrite, or retire anything through it. Replace it with a regular entry inside the workspace, then rerun `orbit workspace sync`",
+        path.display()
+    )
+}
+
+fn refuse_unconfined_routine(
+    result: &mut ManagedAssetReconciliation,
+    name: &str,
+    path: &Path,
+    detail: &str,
+) {
+    result.warnings.push(detail.to_string());
+    result.actions.push(ManagedAssetAction {
+        name: name.to_string(),
+        path: path.to_path_buf(),
+        outcome: ManagedAssetOutcome::Preserved,
+        detail: Some(detail.to_string()),
+    });
+}
+
+fn refuse_unconfined_preservation(
+    result: &mut ManagedAssetReconciliation,
+    name: &str,
+    path: &Path,
+    routines_dir: &Path,
+) {
+    let preserved =
+        retired_preservation_path(routines_dir, "routine", ManagedAssetLayout::YamlStem, name);
+    let detail = format!(
+        "retiring routine '{}' needs a preserved copy, but '{}' is reached through a symbolic link or a non-directory; the routine was left in place. Replace that path with a regular directory inside the workspace, then rerun `orbit workspace sync`",
+        path.display(),
+        preserved.parent().unwrap_or(routines_dir).display()
+    );
+    refuse_unconfined_routine(result, name, path, &detail);
+}
+
+/// Write a managed routine definition under the catalog confinement
+/// contract: the catalog must be a real directory (created when absent) and
+/// the definition a regular file or absent. On Unix the open also refuses a
+/// final-component link (`O_NOFOLLOW`), so a link that appears after
+/// inspection is still not written through.
+pub(super) fn write_confined_routine(path: &Path, content: &str) -> Result<(), OrbitError> {
+    let routines_dir = path.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "managed routine '{}' has no catalog directory",
+            path.display()
+        ))
+    })?;
+    match inspect_catalog_entry(routines_dir, CatalogEntryKind::Directory)? {
+        CatalogEntry::Missing => fs::create_dir_all(routines_dir).map_err(|error| {
+            OrbitError::Io(format!(
+                "create routine catalog '{}': {error}",
+                routines_dir.display()
+            ))
+        })?,
+        CatalogEntry::Present => {}
+        CatalogEntry::Unsafe => {
+            return Err(OrbitError::InvalidInput(unconfined_detail(routines_dir)));
+        }
+    }
+    if inspect_catalog_entry(path, CatalogEntryKind::File)? == CatalogEntry::Unsafe {
+        return Err(OrbitError::InvalidInput(unconfined_detail(path)));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(content.as_bytes()))
+        .map_err(|error| {
+            OrbitError::Io(format!(
+                "write managed routine '{}': {error}",
+                path.display()
+            ))
+        })
 }
