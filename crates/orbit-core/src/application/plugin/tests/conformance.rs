@@ -813,6 +813,162 @@ fn accept_requested_still_refuses_a_write_root_that_covers_the_global_root() {
     assert!(error.to_string().contains("global root"), "{error}");
 }
 
+/// A backend that overwrites `<dir>/sentinel` and fails its case when the
+/// sandbox does not let it.
+#[cfg(unix)]
+fn write_sentinel_backend(root: &Path, dir: &Path) {
+    std::fs::write(
+        root.join("bin/backend.sh"),
+        format!(
+            r#"#!/bin/sh
+cat > /dev/null
+echo overwritten > "{}/sentinel" 2>/dev/null || {{ printf '{{"ok":false,"error":{{"code":"unwritable","message":"sentinel"}}}}\n'; exit 0; }}
+printf '{{"ok":true,"output":{{"subject":"world"}}}}\n'
+"#,
+            dir.display()
+        ),
+    )
+    .expect("write sentinel backend");
+}
+
+/// An existing host directory holding a `sentinel` file the plugin must not
+/// reach without consent.
+#[cfg(unix)]
+fn external_dir_with_sentinel(fixture: &PluginFixture, name: &str) -> PathBuf {
+    let dir = fixture.sources.join(name);
+    std::fs::create_dir_all(&dir).expect("create external directory");
+    std::fs::write(dir.join("sentinel"), "original").expect("write sentinel");
+    dir
+}
+
+#[cfg(unix)]
+fn sentinel(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("sentinel")).expect("read sentinel")
+}
+
+#[cfg(unix)]
+#[test]
+fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "configured", "world");
+    let external = external_dir_with_sentinel(&fixture, "configured-output");
+    write_sentinel_backend(&root, &external);
+    patch_manifest(
+        &root,
+        "",
+        &format!(
+            "  config:\n    defaults: {{ output: \"{}\" }}\n  permissions:\n    fs:\n      \
+             write: [\"{{{{config.output}}}}\"]\n",
+            external.display()
+        ),
+    );
+
+    let error = run(&fixture.runtime, &root)
+        .expect_err("a template rendering to a host directory is not scratch-contained");
+    assert_refusal_prints_requested_set(&error, &["{{config.output}}", "--grant fs"]);
+    assert!(
+        error.to_string().contains(&external.display().to_string()),
+        "the refusal names where the root resolved: {error}"
+    );
+    assert_eq!(
+        sentinel(&external),
+        "original",
+        "the refusal comes before the backend runs"
+    );
+
+    let report = run_with(
+        &fixture.runtime,
+        &root,
+        PluginTestOptions {
+            grants: vec!["fs".to_string()],
+            ..PluginTestOptions::default()
+        },
+    )
+    .expect("`--grant fs` consents to the resolved external root");
+    assert!(report.passed(), "{:?}", report.results);
+    assert_eq!(
+        sentinel(&external),
+        "overwritten\n",
+        "the consented root is opened"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_config_templated_write_root_inside_scratch_runs_without_consent() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "scratchcfg", "world");
+    patch_manifest(
+        &root,
+        "",
+        "  config:\n    defaults: { output: out }\n  permissions:\n    fs:\n      write: \
+         [\"{{workspace}}/{{config.output}}\", \"{{plugin_state}}/cache\"]\n",
+    );
+
+    let report = run(&fixture.runtime, &root).expect("scratch-contained roots need no consent");
+    assert!(report.passed(), "{:?}", report.results);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_write_root_escaping_the_source_or_scratch_needs_fs_consent() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "escaping", "world");
+    let external = external_dir_with_sentinel(&fixture, "escaping-outside");
+    write_sentinel_backend(&root, &external);
+    for (declared, needle) in [
+        // Relative roots resolve against the plugin source, beside which the
+        // sentinel directory sits.
+        ("../escaping-outside", external.display().to_string()),
+        // `..` out of the rendered scratch workspace is resolved physically.
+        ("{{workspace}}/../../../escaped", "--grant fs".to_string()),
+    ] {
+        let manifest = root.join("plugin.yaml");
+        let original = std::fs::read_to_string(&manifest).expect("read manifest");
+        patch_manifest(
+            &root,
+            "",
+            &format!("  permissions:\n    fs:\n      write: [\"{declared}\"]\n"),
+        );
+        let error = run(&fixture.runtime, &root)
+            .expect_err("a root outside the scratch directory needs consent");
+        assert_refusal_prints_requested_set(&error, &[declared, "--grant fs", &needle]);
+        std::fs::write(&manifest, original).expect("restore manifest");
+    }
+    assert_eq!(
+        sentinel(&external),
+        "original",
+        "the refusal comes before the backend runs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn consent_still_refuses_a_config_templated_protected_write_root() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "protect", "world");
+    patch_manifest(
+        &root,
+        "",
+        &format!(
+            "  config:\n    defaults: {{ output: \"{}\" }}\n  permissions:\n    fs:\n      \
+             write: [\"{{{{config.output}}}}\"]\n",
+            root.display()
+        ),
+    );
+
+    let error = run_with(
+        &fixture.runtime,
+        &root,
+        PluginTestOptions {
+            accept_requested: true,
+            ..PluginTestOptions::default()
+        },
+    )
+    .expect_err("consent does not lift the protected-path refusal");
+    assert!(error.to_string().contains("plugin install root"), "{error}");
+}
+
 /// A plugin declaring `api_token`, whose backend reports which of two known
 /// values its request carried — the golden's fixture (at version `fixture`)
 /// or the host's stored one — without echoing either.

@@ -974,9 +974,13 @@ schema self-consistency, definition cross-references, and the `spec.web` rules o
   host's secret store, and refuses every `secret_updates` entry a backend returns.
 - A temp directory stands in for the global root and workspace. Template paths,
   `network: loopback` and `orbit_tools` run under the requested profile. `sandbox: none`, an
-  absolute non-template `fs.write` root, `network: any`, or any `env_pass` is refused (printing
-  the requested grants) unless `--accept-requested` or a `--grant` list names each; that
-  consent is for the run only.
+  `fs.write` root that resolves outside the temp directory, `network: any`, or any `env_pass`
+  is refused (printing the requested grants) unless `--accept-requested` or a `--grant` list
+  names each; that consent is for the run only. Write roots are judged as the sandbox will
+  open them — rendered with the effective `[plugins.<ns>]` values, relative roots joined to the
+  plugin root, and physically resolved — so a `{{config.<key>}}` default or a `../` root naming
+  a host directory needs consent like an absolute path. Consent never lifts the write-root
+  admission refusals (§4.1).
 - Output is compared as JSON (exact, key order irrelevant); a failure prints expected beside
   actual and exits non-zero.
 - A case can use `expect.error.code` and optionally `expect.error.retryable` and
