@@ -328,6 +328,7 @@ fn owner_domain_accepts_typed_handoff_but_only_operator_can_approve() {
     let observation = HandoffObservation {
         candidate: candidate.clone(),
         required_commands: vec!["make ci".into()],
+        owner_completion_authority: None,
     };
     runtime
         .accept_task_handoff(&context, "handoff", handoff, observation.clone())

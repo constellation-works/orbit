@@ -383,6 +383,43 @@ Owner-local landing of an already-authorized handoff does not need a drain or
 ship-sweep. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
 
+### Let the owner land follower deliveries
+
+To land follower deliveries the way `orbit run auto --complete` lands the
+owner's own tasks, set this on the **owner** checkout, then restart its
+long-lived processes so they read it:
+
+```toml
+[workflow]
+distributed_completion = "done"
+```
+
+Followers pick it up on their next probe. A request built from the old
+contract is refused with `ship_contract_mismatch` and retried with the new
+one. From then on:
+
+- Each accepted handoff is authorized in the same transaction that moves the
+  task to `review`, and `task_landing_pipeline` starts at once. The task
+  reaches `done` when the landing job has verified the merge.
+- Claims admitted before the change keep their `review` contract and still
+  need **Approve handoff**.
+- Setting the key back to `review` (or removing it) stops every handoff that
+  has not landed. The landing job refuses with `owner completion policy
+  withdrawn`. Restore the key, or revoke the handoff and recover the claim.
+
+Do not merge follower pull requests on the provider by hand. That skips the
+owner's validation gate, and the owner still has to settle the claim.
+
+On the dashboard, **approve** on a review task that has a handed-off claim
+sends **Approve handoff** for the exact candidate. A plain status write would
+be refused with `active execution claim requires a claim-scoped mutation`.
+
+**Stop a follower drain with `orbit run auto --stop`, not by cancelling the
+run.** The drain delivers every settlement (handoff or failure) to the owner.
+A cancelled drain leaves finished leaves unsettled, their tasks stay
+`in-progress` on the owner, and they wait until the next drain for the same
+owner delivers them.
+
 Handoff **approval** and **revocation** are owner-operator mutations (agent
 capability cannot approve). They are owner-domain seams reached from the
 owner's dashboard — `POST /api/distributed/handoffs/<handoff-id>/approve` and

@@ -172,6 +172,7 @@ fn console(handed_off: bool) -> Console {
                 HandoffObservation {
                     candidate: candidate.clone(),
                     required_commands: vec!["make ci".into()],
+                    owner_completion_authority: None,
                 },
             )
             .expect("accept");
@@ -511,6 +512,7 @@ fn an_unresolved_merge_intent_blocks_revocation_and_recovery() {
     .with_handoff_observation(HandoffObservation {
         candidate: console.candidate.clone(),
         required_commands: vec!["make ci".into()],
+        owner_completion_authority: None,
     });
     console
         .runtime

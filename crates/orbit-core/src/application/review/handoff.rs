@@ -248,6 +248,7 @@ impl OrbitRuntime {
         let observation = HandoffObservation {
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
+            owner_completion_authority: self.owner_completion_authority(),
         };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),

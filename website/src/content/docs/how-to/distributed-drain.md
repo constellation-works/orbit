@@ -160,7 +160,9 @@ refuse owner-only sweeps.
 - **Not auto-recovery.** A dead replica can hold a footprint until you
   inspect and revoke it.
 - **Not follower merge.** Landing stays on the owner after explicit
-  completion authority.
+  completion authority: a per-task **Approve handoff**, or the owner's
+  `workflow.distributed_completion = "done"`, which lands every validated
+  follower delivery the way `--complete` lands the owner's own tasks.
 - **Not automatic.** A clean probe means the hosts are installed. A replica
   pulls only while an operator-started `orbit run auto --pull` is running.
 

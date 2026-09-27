@@ -392,10 +392,39 @@ function expectedCandidate(claim) {
 }
 
 export function approveHandoff(claim) {
-  return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/approve`, {
-    ...expectedCandidate(claim),
-    request_id: newRequestId(),
-  });
+  const request = handoffApprovalRequest(claim);
+  return postJson(request.path, request.body);
+}
+
+/// The owner approval a review task's handed-off claim needs: the endpoint
+/// and the exact candidate the operator is approving.
+export function handoffApprovalRequest(claim) {
+  return {
+    path: `/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/approve`,
+    body: { ...expectedCandidate(claim), request_id: newRequestId() },
+  };
+}
+
+/// How a plain "approve" on a review task must be carried out when this
+/// workspace holds a claim for it. The owner refuses an unscoped status write
+/// while a claim protects the task, so approving a delivered handoff goes
+/// through the handoff approval instead. `null` means no claim is involved
+/// and the ordinary approval applies.
+export async function claimedReviewApproval(taskId) {
+  const payload = await loadDistributedConsole({ force: true });
+  const live = claimsForTask(payload, taskId).filter(
+    (claim) => claim.phase === "handed_off" || claim.unsettled,
+  );
+  if (live.length === 0) return null;
+  const handedOff = live.find((claim) => claim.phase === "handed_off" && claim.handoff);
+  if (!handedOff) {
+    return { refusal: "this task's distributed claim has not handed off yet; see distributed execution below" };
+  }
+  const state = (handedOff.handoff.authority || {}).state;
+  if (state === "not_authorized") return { claim: handedOff };
+  return {
+    refusal: `this handoff is already ${state || "decided"}; the owner landing job completes the task`,
+  };
 }
 
 export function revokeHandoff(claim, reason) {

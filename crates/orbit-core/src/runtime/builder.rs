@@ -252,6 +252,10 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_required_validation_commands
         .clone();
+    let workflow_distributed_completion = runtime_config
+        .snapshot
+        .workflow_distributed_completion
+        .clone();
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let system_crew = runtime_config.system_crew.clone();
@@ -289,6 +293,7 @@ pub(crate) fn build_context_from_roots(
             workflow_base_branch,
             workflow_auto_ship,
             workflow_required_validation_commands,
+            workflow_distributed_completion,
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),

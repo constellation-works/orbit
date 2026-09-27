@@ -291,7 +291,11 @@ task's review lock keeps protecting the footprint. A lost response replays the s
 
 **Completion authority.** Completion defaults to `review`; pull eligibility or `agent` access
 never authorizes a merge. `completion: done` requires durable, explicitly granted task/workspace
-authority, persisted with the handoff and rechecked at landing.
+authority, persisted with the handoff and rechecked at landing. The one such authority is the
+owner's `workflow.distributed_completion = "done"` [ORB-13637]. Admission pins it as the contract's
+`authorization_reference`. Acceptance records it as an `owner_policy` authorization only while the
+owner's own configuration, observed for that decision, still grants it, and dispatches landing.
+Landing rechecks it before merge intent and completion.
 
 - **Approve handoff** is owner-only, operator-authorized and idempotent. Input: workspace, current
   handoff/claim, exact candidate/base, mutation request ID. One transaction verifies `review`

@@ -96,6 +96,12 @@ pub struct AcceptedHandoff {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HandoffAuthorizationSource {
     Operator,
+    /// The owner's standing completion policy (`[workflow]
+    /// distributed_completion = "done"`), recorded when the handoff was
+    /// accepted and rechecked against the owner's configuration at landing.
+    OwnerPolicy {
+        reference: String,
+    },
     /// Retained only so rows written before operation mode was removed still
     /// decode; completion under this source is always refused.
     Grant {

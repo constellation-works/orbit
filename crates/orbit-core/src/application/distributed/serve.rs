@@ -94,8 +94,13 @@ impl crate::OrbitRuntime {
             if request.ship != owner {
                 return Err(OrbitError::InvalidInput(format!(
                     "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
-                     '{}', review policy '{}'; re-read the probe before sending a new request",
-                    owner.mode, owner.base_branch, owner.landing_branch, owner.review_policy
+                     '{}', review policy '{}', completion '{}'; re-read the probe before sending \
+                     a new request",
+                    owner.mode,
+                    owner.base_branch,
+                    owner.landing_branch,
+                    owner.review_policy,
+                    owner.completion
                 )));
             }
         }
@@ -267,6 +272,7 @@ impl crate::OrbitRuntime {
         Ok(HandoffObservation {
             candidate,
             required_commands,
+            owner_completion_authority: self.owner_completion_authority(),
         })
     }
 

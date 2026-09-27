@@ -27,6 +27,7 @@ pub(super) fn observation(h: &TaskHandoff) -> HandoffObservation {
     HandoffObservation {
         candidate: h.candidate.clone(),
         required_commands: vec!["build".into(), "test".into()],
+        owner_completion_authority: None,
     }
 }
 pub(super) fn handoff(f: &Coordinated, c: &ExecutionClaim) -> TaskHandoff {
@@ -571,22 +572,90 @@ fn local_and_already_landed_require_the_same_evidence_and_approval() {
     }
 }
 
-/// Managed completion was bound to an operation-mode grant. With grants
-/// removed, a `done` ship contract has nothing to authorize it and the
-/// handoff is refused rather than silently downgraded to review.
-#[test]
-fn done_completion_contract_is_refused_without_operation_grants() {
+const OWNER_POLICY: &str = "workspace-config:workflow.distributed_completion";
+
+fn done_ship() -> AdmissionShipContract {
     let mut ship = request("first").ship;
     ship.completion = "done".into();
-    ship.authorization_reference = Some("grant".into());
-    let (_tmp, f, c, h) = fixture(ship);
-    let error = accept(&f, &c, &h).expect_err("no authority can bind a done contract");
-    assert!(
-        error.to_string().contains("managed completion unsupported"),
-        "{error}"
-    );
+    ship.authorization_reference = Some(OWNER_POLICY.into());
+    ship
+}
+
+fn policy_observation(h: &TaskHandoff, policy: Option<&str>) -> HandoffObservation {
+    HandoffObservation {
+        owner_completion_authority: policy.map(str::to_string),
+        ..observation(h)
+    }
+}
+
+fn accept_under(
+    f: &Coordinated,
+    c: &ExecutionClaim,
+    h: &TaskHandoff,
+    policy: Option<&str>,
+) -> Result<ClaimMutationResult, OrbitError> {
+    f.boundary().mutate_execution_claim(
+        Some(&worker(c).with_handoff_observation(policy_observation(h, policy))),
+        "handoff",
+        &ClaimMutation::AcceptHandoff(h.clone()),
+    )
+}
+
+/// A `done` contract admitted under the owner's completion policy is
+/// authorized at acceptance, in the same transaction that moves the task to
+/// review, and its landing request is pending for the owner's landing job.
+#[test]
+fn done_contract_is_authorized_by_the_owner_policy_it_was_admitted_under() {
+    let (_tmp, f, c, h) = fixture(done_ship());
+    accept_under(&f, &c, &h, Some(OWNER_POLICY)).expect("handoff");
+    assert_eq!(f.task(&c.task_id).status, TaskStatus::Review);
+    let starts = starts(&f);
+    assert_eq!(starts.len(), 1);
+    assert_eq!(starts[0].state, LandingStartState::Pending);
+
+    let intent = ClaimMutation::MergeIntent {
+        intent_id: "sent-merge".into(),
+        resolved: false,
+        evidence: "pinned provider request".into(),
+    };
+    // Landing rechecks the owner's current configuration: once the policy is
+    // withdrawn, the recorded authorization no longer lands anything.
+    let withdrawn = operator(&c).with_handoff_observation(policy_observation(&h, None));
+    let error = f
+        .boundary()
+        .mutate_execution_claim(Some(&withdrawn), "withdrawn", &intent)
+        .expect_err("withdrawn policy fences landing");
+    assert!(error.to_string().contains("policy withdrawn"), "{error}");
+
+    let granted = operator(&c).with_handoff_observation(policy_observation(&h, Some(OWNER_POLICY)));
+    f.boundary()
+        .mutate_execution_claim(Some(&granted), "intent", &intent)
+        .expect("policy still granted: merge intent is recorded");
+}
+
+/// Authority comes from the owner's own observation, never from the ship
+/// contract alone: a `done` contract accepted while the owner grants no
+/// policy, or a different one, waits in review for an operator.
+#[test]
+fn done_contract_waits_for_an_operator_unless_the_owner_still_grants_its_policy() {
+    for policy in [None, Some("workspace-config:some.other_key")] {
+        let (_tmp, f, c, h) = fixture(done_ship());
+        accept_under(&f, &c, &h, policy).expect("valid delivery is still accepted");
+        assert_eq!(f.task(&c.task_id).status, TaskStatus::Review);
+        assert!(starts(&f).is_empty(), "no authority for {policy:?}");
+        approve(&f, &c, &h, "approval").expect("operator approves");
+        assert_eq!(starts(&f).len(), 1);
+    }
+}
+
+/// A `review` contract is never authorized by the policy, even when the owner
+/// grants it by the time the handoff arrives: the claim was admitted without
+/// it.
+#[test]
+fn review_contract_is_not_authorized_by_a_policy_enabled_after_admission() {
+    let (_tmp, f, c, h) = fixture(request("first").ship);
+    accept_under(&f, &c, &h, Some(OWNER_POLICY)).expect("handoff");
     assert!(starts(&f).is_empty());
-    assert_eq!(f.task(&c.task_id).status, TaskStatus::InProgress);
 }
 
 #[test]

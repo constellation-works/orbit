@@ -96,6 +96,7 @@ xhard_complexity_crews = []
 | `workflow.low_complexity_crews`, `medium_…`, `hard_…`, `xhard_…` | `[]` | Crew pools a crew-less task draws from at creation, by complexity. Empty means "use `default_crew`". See [pools](#automatic-crew-pools-by-complexity). |
 | `workflow.auto_ship` | `false` | Opt in to unattended ship dispatch from the sweep/routine scheduler. While `false`, the ship sweep skips with `auto_ship_disabled`. |
 | `workflow.required_validation_commands` | `[]` | Commands a distributed-drain claim must pass on its exact candidate before this owner accepts its handoff. Empty refuses every claimed handoff. |
+| `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
 
 **The `system` name.** Shipped job steps such as `task_pilot_pipeline` name `crew: system` directly. At load that name is aliased onto the crew `workflow.system_crew` names, so `system_crew = "luna"` runs the task pilot on Luna. A user-authored `[crews.system]` table wins over the alias. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then to the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
 

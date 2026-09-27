@@ -272,6 +272,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 60,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_distributed_completion: String => String {
+        key: "workflow.distributed_completion", value_type: "string",
+        description: "How far this owner takes a distributed execution claim's accepted handoff: `review` (default) waits for an operator's Approve handoff; `done` has the owner authorize and land it through its landing job, as `orbit run auto --complete` does for its own tasks.",
+        section: ConfigSection::Delivery, order: 65,
+        resolve: |raw: Option<String>| resolve_distributed_completion(raw),
+    },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
@@ -617,6 +623,17 @@ fn resolve_non_empty(raw: Option<String>, default: &str, key: &str) -> Result<St
         Err(OrbitError::InvalidInput(format!("{key} must not be empty")))
     } else {
         Ok(value.to_string())
+    }
+}
+
+/// `review` unless the owner opts into landing claimed handoffs itself.
+fn resolve_distributed_completion(raw: Option<String>) -> Result<String, OrbitError> {
+    match raw.as_deref().map(str::trim) {
+        None | Some("review") => Ok("review".to_string()),
+        Some("done") => Ok("done".to_string()),
+        Some(other) => Err(OrbitError::InvalidInput(format!(
+            "workflow.distributed_completion must be `review` or `done`, not `{other}`"
+        ))),
     }
 }
 

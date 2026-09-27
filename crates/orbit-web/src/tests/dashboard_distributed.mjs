@@ -546,5 +546,39 @@ const mount = async (taskId = "ORB-2") => {
   assert.equal(buttons(block).length, 0, "a replica offers no owner action");
 }
 
+// --- a review task's plain "approve" goes through its handoff ----------------
+
+{
+  // A delivered handoff awaiting authority: the task-level approve must send
+  // the claim-scoped approval, because the owner refuses an unscoped status
+  // write while the claim protects the task.
+  consoleBody = console_([claim()]);
+  const pending = await distributed.claimedReviewApproval("ORB-2");
+  assert.equal(pending.claim.claim_id, "claim-1");
+  const request = distributed.handoffApprovalRequest(pending.claim);
+  assert.equal(request.path, "/api/distributed/handoffs/handoff1/approve");
+  assert.equal(request.body.expected_candidate_commit, CANDIDATE);
+  assert.equal(request.body.expected_base_commit, BASE);
+
+  // Already authorized (an operator, or the owner's completion policy): the
+  // landing job completes it, and approving again is not offered as success.
+  const authorized = claim();
+  authorized.handoff = { ...authorized.handoff, authority: { ...authorized.handoff.authority, state: "authorized" } };
+  consoleBody = console_([authorized]);
+  const decided = await distributed.claimedReviewApproval("ORB-2");
+  assert.ok(decided.refusal && decided.refusal.includes("landing job"), JSON.stringify(decided));
+
+  // Still running: nothing to approve yet.
+  consoleBody = console_([claim({ phase: "running", handoff: null })]);
+  const running = await distributed.claimedReviewApproval("ORB-2");
+  assert.ok(running.refusal && running.refusal.includes("has not handed off"), JSON.stringify(running));
+
+  // No claim for this task, or only a settled one: the ordinary approval applies.
+  consoleBody = console_([claim({ phase: "failed", unsettled: false, handoff: null })]);
+  assert.equal(await distributed.claimedReviewApproval("ORB-2"), null);
+  consoleBody = console_([]);
+  assert.equal(await distributed.claimedReviewApproval("ORB-2"), null);
+}
+
 globalThis.distributedTestsPassed = true;
 console.log("dashboard distributed claim provenance and owner handoff actions");
