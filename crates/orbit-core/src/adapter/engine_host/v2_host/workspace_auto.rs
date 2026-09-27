@@ -267,6 +267,74 @@ pub fn explain_workspace_auto_readiness(
     // the static default, so readiness and the drain cannot disagree about the
     // ceiling that decides `capacity_saturated`.
     let (active_drain, queued_drains) = workspace_drains(runtime)?;
+    let recent_drain = if active_drain.is_none() {
+        runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(DRAIN_JOB_NAME.to_string()),
+                terminal_only: true,
+                limit: Some(1),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?
+            .into_iter()
+            .next()
+    } else {
+        None
+    };
+    let status_run_id = active_drain
+        .as_ref()
+        .map(|drain| drain.run_id.as_str())
+        .or_else(|| recent_drain.as_ref().map(|run| run.run_id.as_str()));
+    let status_state = status_run_id
+        .map(|run_id| runtime.stores().jobs().read_run_state(run_id))
+        .transpose()?
+        .flatten();
+    // The open-window checkpoint is the actual server-stamped deadline, not
+    // the submission time plus a browser's chosen duration.
+    let ends_at = status_state.as_ref().and_then(|state| {
+        state
+            .step_outputs
+            .values()
+            .find_map(|output| output.get("deadline").and_then(Value::as_str))
+    });
+    let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
+        let mut running = 0;
+        let workers = state
+            .child_dispatches
+            .iter()
+            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME);
+        let mut admitted = 0;
+        for dispatch in workers {
+            admitted += 1;
+            if runtime
+                .stores()
+                .jobs()
+                .get_job_run(&dispatch.child_run_id)?
+                .is_some_and(|child| !child.state.is_terminal())
+            {
+                running += 1;
+            }
+        }
+        (admitted, running)
+    } else {
+        (0, 0)
+    };
+    let window_open = ends_at
+        .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
+        .is_none_or(|deadline| deadline > Utc::now());
+    let drain_phase = if active_drain
+        .as_ref()
+        .is_some_and(|drain| !drain.admissions_stopped())
+        && window_open
+    {
+        "draining"
+    } else if running_admitted_workers > 0 {
+        "winding_down"
+    } else {
+        "idle"
+    };
     let (max_active_leaf_runs, limit_source) = match (max_active_leaf_runs, &active_drain) {
         (Some(requested), _) => (u64::from(requested), "requested"),
         (None, Some(drain)) => (
@@ -534,6 +602,11 @@ pub fn explain_workspace_auto_readiness(
             "candidate_pool_truncated": candidate_pool_truncated,
             "limit_source": limit_source,
             "drain_run_id": active_drain.as_ref().map(|drain| &drain.run_id),
+            "drain_status_run_id": if drain_phase == "idle" { None } else { status_run_id },
+            "drain_phase": drain_phase,
+            "ends_at": ends_at,
+            "admitted_workers": admitted_workers,
+            "running_admitted_workers": running_admitted_workers,
             "queued_drains": queued_drains,
             "worker_limit": active_drain.as_ref().and_then(|drain| drain.limit.clone()),
             "admissions_stopped": admissions_stopped,

@@ -1273,6 +1273,8 @@ function activeRefreshJobs() {
   } else {
     jobs.push(fetchAndRenderSummary());
   }
+  // Keep the chrome indicator current even when Tasks and its dock are hidden.
+  jobs.push(fetchAndRenderAutoDrainPane());
 
   if (activeTab === "tasks") {
     jobs.push(fetchAndRenderTasks());
@@ -1281,7 +1283,6 @@ function activeRefreshJobs() {
     if (!aggregate && !document.hidden) jobs.push(fetchAndRenderTaskLocks());
     // The dock's Drain card; without a concrete workspace it renders its own
     // read-only note instead of fetching.
-    jobs.push(fetchAndRenderAutoDrainPane());
     return jobs;
   }
 

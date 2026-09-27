@@ -1,7 +1,7 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
 import { requestPanel, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
-import { navigateToRun } from './router.js';
+import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 
 const $ = (id) => document.getElementById(id);
@@ -13,6 +13,7 @@ const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as 
 let lastOperations = null;
 let lastAutoTasks = null;
 let lastAutoDrain = null;
+let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
 let autoDrainComplete = false;
@@ -27,6 +28,8 @@ export function initOperations(nextContext) {
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = null;
+    announcedDrainState = null;
+    updateDrainIndicators("idle", "idle");
     for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
   });
 }
@@ -1305,30 +1308,31 @@ function autoDrainShortRunId(runId) {
   return match ? `jrun-…${match[1]}` : runId;
 }
 
-// The readiness snapshot names the live coordinator but not its deadline, so
-// time left is known only for a window this browser started: the deadline is
-// the server's submit time plus the chosen duration, kept per run id.
-const AUTO_DRAIN_WINDOW_KEY = "orbit.dashboard.autoDrainWindow";
-
-function rememberAutoDrainWindow(runId, submittedAt, duration) {
-  const started = Date.parse(submittedAt || "");
-  const deadline = (Number.isFinite(started) ? started : Date.now()) + AUTO_DRAIN_DURATION_SECONDS[duration] * 1000;
-  try {
-    window.localStorage.setItem(AUTO_DRAIN_WINDOW_KEY, JSON.stringify({ runId, deadline }));
-  } catch (_) {
-    // Storage unavailable: the header shows the run without time left.
-  }
+// The server-stamped window deadline is shared by CLI and browser starts.
+function autoDrainTimeLeft(endsAt) {
+  const deadline = Date.parse(endsAt || "");
+  if (!Number.isFinite(deadline)) return "";
+  const minutes = Math.max(0, Math.ceil((deadline - Date.now()) / 60_000));
+  if (minutes === 0) return "window closed";
+  return minutes < 60 ? `${minutes}m left` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m left`;
 }
 
-function autoDrainTimeLeft(runId) {
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(AUTO_DRAIN_WINDOW_KEY) || "null");
-    if (stored?.runId !== runId || !Number.isFinite(stored.deadline)) return "";
-    const minutes = Math.round((stored.deadline - Date.now()) / 60_000);
-    if (minutes <= 0) return "window closed";
-    return minutes < 60 ? `${minutes}m left` : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m left`;
-  } catch (_) {
-    return "";
+function updateDrainIndicators(phase, label) {
+  const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
+  const tabState = $("dock-drain-state");
+  if (tab) tab.dataset.drainState = phase;
+  if (tabState) tabState.textContent = phase === "idle" ? "" : label;
+  const global = $("global-drain-state");
+  if (global) {
+    global.hidden = phase === "idle";
+    global.dataset.drainState = phase;
+    global.setAttribute("aria-label", `${label}. Open Drain card`);
+    const text = global.querySelector?.('.global-drain-label');
+    if (text) text.textContent = label;
+    if (!global.dataset.wired) {
+      global.addEventListener("click", () => setActiveTab("auto-drain"));
+      global.dataset.wired = "true";
+    }
   }
 }
 
@@ -1336,19 +1340,38 @@ function autoDrainTimeLeft(runId) {
 // the short id with the full one in its title, and opens like any run link.
 function renderAutoDrainHead(payload) {
   const live = autoDrainLiveWindow(payload);
+  const capacity = payload.capacity || {};
+  const phase = capacity.drain_phase || (live.runId && !live.admissionsStopped ? "draining" : "idle");
+  const running = Number(capacity.running_admitted_workers) || 0;
+  const label = phase === "draining" ? "Draining"
+    : phase === "winding_down" ? `Winding down · ${running} workers still running` : "idle";
+  updateDrainIndicators(phase, phase === "winding_down" ? "Winding down" : label);
+  const card = $("auto-drain-panel");
+  if (card) card.dataset.drainState = phase;
   const dot = $("auto-drain-dot");
-  if (dot) dot.className = `drain-dot${live.runId ? (live.admissionsStopped ? " stopped" : " live") : ""}`;
+  if (dot) dot.className = `drain-dot ${phase}`;
   const head = $("auto-drain-live");
   if (!head) return;
   head.textContent = "";
-  if (!live.runId) {
+  if (phase === "idle") {
     head.appendChild(el("span", { class: "drain-idle", text: workspaceReadOnlyReason() ? "read-only" : "idle" }));
-    return;
+  } else {
+    head.appendChild(el("strong", { class: "drain-state-label", text: label }));
+    const runId = capacity.drain_status_run_id || live.runId;
+    const detail = el("span", { class: "drain-live-detail" });
+    if (runId) detail.appendChild(runLink(runId, selectedWorkspace()?.id, autoDrainShortRunId(runId)));
+    if (phase === "draining") {
+      const left = autoDrainTimeLeft(capacity.ends_at);
+      if (left) detail.appendChild(el("span", { class: "drain-left", text: ` · ${left}` }));
+      if (capacity.admitted_workers != null) detail.appendChild(el("span", { text: ` · ${running} running / ${capacity.admitted_workers} admitted` }));
+    }
+    head.appendChild(detail);
   }
-  const workspace = selectedWorkspace();
-  head.appendChild(runLink(live.runId, workspace?.id, autoDrainShortRunId(live.runId)));
-  const left = live.admissionsStopped ? "admissions stopped" : autoDrainTimeLeft(live.runId);
-  if (left) head.appendChild(el("span", { class: "drain-left", text: ` · ${left}` }));
+  const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
+  if (announcedDrainState !== null && announcedDrainState !== stateKey) {
+    feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}.`);
+  }
+  announcedDrainState = stateKey;
 }
 
 function autoDrainDurationControl(payload) {
@@ -1444,8 +1467,8 @@ function autoDrainStartButton(payload) {
   const reasons = autoDrainReasons(payload);
   const pending = pendingOperations.has(key);
   const button = el("button", {
-    class: "operation-button primary drain-start",
-    text: pending ? "Starting…" : `Start ${autoDrainDuration} window`,
+    class: `operation-button drain-start${payload.capacity?.drain_phase === "draining" ? "" : " primary"}`,
+    text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainDuration} window`,
     title: reasons.submit || "Submit orbit.workflow.auto with this duration and concurrency",
   });
   button.type = "button";
@@ -1478,7 +1501,6 @@ function autoDrainStartButton(payload) {
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
       feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`);
-      if (runId) rememberAutoDrainWindow(runId, result?.submitted_at, duration);
       await fetchAndRenderAutoDrain();
     } catch (error) {
       feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);

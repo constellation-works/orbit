@@ -8,16 +8,29 @@
 .dock-pane[data-pane="drain"] { overflow-y: auto; }
 .dock-pane > .panel.drain-card { flex: 0 0 auto; border-bottom: 1px solid var(--border); }
 .dock-pane[data-pane="drain"] > #locks-panel { min-height: 160px; }
-.drain-card > header { flex-wrap: nowrap; gap: 10px; padding: 14px 16px 0; border-bottom: 0; }
+.drain-card > header { flex-wrap: wrap; gap: 6px 10px; padding: 14px 16px 0; border-bottom: 0; }
+.drain-card[data-drain-state="draining"] { box-shadow: inset 3px 0 var(--state-running); }
+.drain-card[data-drain-state="winding_down"] { box-shadow: inset 3px 0 var(--priority-medium); }
 .drain-title { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .drain-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-mute); }
-.drain-dot.live { background: var(--state-running); box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.12); }
-.drain-dot.stopped { background: var(--priority-medium); }
+.drain-dot.draining, [data-drain-state="draining"] > .drain-dot { background: var(--state-running); animation: drain-pulse 1.5s ease-in-out infinite; }
+.drain-dot.winding_down, [data-drain-state="winding_down"] > .drain-dot { background: var(--priority-medium); }
+@keyframes drain-pulse { 50% { box-shadow: 0 0 0 5px var(--state-running); opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .drain-dot.draining, [data-drain-state="draining"] > .drain-dot { animation: none; } }
 .drain-live {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; flex-direction: column; gap: 3px; min-width: 0; width: 100%; overflow-wrap: anywhere;
   color: var(--fg-dim); font: 400 12.5px var(--font-sans); letter-spacing: 0; text-transform: none;
 }
+.drain-state-label { color: var(--state-running); font-weight: 600; }
+.drain-card[data-drain-state="winding_down"] .drain-state-label { color: var(--priority-medium); }
+.drain-live-detail { min-width: 0; overflow-wrap: anywhere; }
 .drain-idle { color: var(--fg-mute); }
+.dock-drain-state { color: var(--state-running); font-size: 10px; }
+.dock-seg[data-drain-state="winding_down"] .dock-drain-state { color: var(--priority-medium); }
+.global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: var(--radius); background: var(--bg); color: var(--state-running); padding: 5px 8px; cursor: pointer; font: 600 12px var(--font-sans); }
+.global-drain-state[hidden] { display: none; }
+.global-drain-state[data-drain-state="winding_down"] { color: var(--priority-medium); border-color: var(--priority-medium); }
+.global-drain-state:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #auto-drain-body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; min-width: 0; }
 
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;

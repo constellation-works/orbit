@@ -1610,6 +1610,7 @@ fn a_terminal_run_never_projects_an_unfinished_step_as_still_running() {
 
 mod auto_drain {
     use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
+    use orbit_types::workflow::{ChildDispatch, PipelineState};
 
     use super::*;
 
@@ -1645,6 +1646,87 @@ mod auto_drain {
             )
             .await
             .expect("response")
+    }
+
+    #[tokio::test]
+    async fn readiness_reports_live_window_wind_down_and_idle_from_child_lineage() {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let parent_id = "jrun-web-drain-state";
+        let child_id = "jrun-web-drain-child";
+        let mut parent = seed_run(
+            &runtime,
+            parent_id,
+            "workspace_auto_pipeline",
+            JobRunState::Running,
+        );
+        parent.input = Some(json!({"for_seconds": 3600, "max_active_leaf_runs": 2}));
+        write_seeded_run(&runtime, &parent);
+        let mut child = seed_run(
+            &runtime,
+            child_id,
+            "task_auto_pipeline",
+            JobRunState::Running,
+        );
+        child.input = Some(json!({"task_ids": ["ORB-1"]}));
+        write_seeded_run(&runtime, &child);
+        let mut state = PipelineState::new(
+            parent_id.into(),
+            "workspace_auto_pipeline".into(),
+            json!({}),
+        );
+        let deadline = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        state.step_outputs.insert(1, json!({"deadline": deadline}));
+        state.record_child_dispatch(ChildDispatch::submitted(
+            child_id.into(),
+            "task_auto_pipeline".into(),
+            "invoke_detached".into(),
+            false,
+            false,
+            Utc::now(),
+        ));
+        runtime
+            .write_run_state(parent_id, &state)
+            .expect("write parent state");
+
+        let live = body_json(request_readiness(runtime.clone(), "").await).await;
+        assert_eq!(live["capacity"]["drain_phase"], "draining");
+        assert_eq!(live["capacity"]["ends_at"], deadline);
+        assert_eq!(live["capacity"]["running_admitted_workers"], 1);
+        assert_eq!(live["capacity"]["drain_status_run_id"], parent_id);
+
+        state.step_outputs.insert(
+            1,
+            json!({"deadline": (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339()}),
+        );
+        runtime
+            .write_run_state(parent_id, &state)
+            .expect("expire window");
+        let expired = body_json(request_readiness(runtime.clone(), "").await).await;
+        assert_eq!(expired["capacity"]["drain_phase"], "winding_down");
+
+        state.step_outputs.insert(1, json!({"deadline": deadline}));
+        state.set_drain_admissions_stop("operator".into(), None);
+        runtime
+            .write_run_state(parent_id, &state)
+            .expect("stop admissions");
+        let stopped = body_json(request_readiness(runtime.clone(), "").await).await;
+        assert_eq!(stopped["capacity"]["drain_phase"], "winding_down");
+
+        parent.state = JobRunState::Success;
+        parent.finished_at = Some(Utc::now());
+        write_seeded_run(&runtime, &parent);
+        let winding = body_json(request_readiness(runtime.clone(), "").await).await;
+        assert_eq!(winding["capacity"]["drain_phase"], "winding_down");
+        assert_eq!(winding["capacity"]["drain_run_id"], Value::Null);
+        assert_eq!(winding["capacity"]["drain_status_run_id"], parent_id);
+        assert_eq!(winding["capacity"]["running_admitted_workers"], 1);
+
+        child.state = JobRunState::Success;
+        child.finished_at = Some(Utc::now());
+        write_seeded_run(&runtime, &child);
+        let idle = body_json(request_readiness(runtime, "").await).await;
+        assert_eq!(idle["capacity"]["drain_phase"], "idle");
+        assert_eq!(idle["capacity"]["running_admitted_workers"], 0);
     }
 
     /// Pin the process signals `CallerCapabilities::resolve` reads, for the
