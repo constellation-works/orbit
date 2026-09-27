@@ -20,6 +20,11 @@ use super::store::TaskRegistryStore;
 use super::util::{parse_relation_type_name, relation_type_name};
 use crate::contracts::DanglingRelationTarget;
 
+// Keep each walk below SQLite's older 999-variable limit. The seed set can
+// span many statements without losing paths: each walk is transitive, and the
+// caller validates against the union of all returned edges.
+const CYCLE_WALK_SEED_BATCH_SIZE: usize = 400;
+
 impl TaskRegistryStore {
     /// Validate task relations against every workspace in the coordination
     /// registry without mutating allocator, bundle, or index state.
@@ -359,9 +364,9 @@ fn cycle_walk_seeds(
 /// searches.
 pub(super) fn reachable_cycle_family_sql(seed_count: usize) -> String {
     let seed_rows = (1..=seed_count)
-        .map(|index| format!("SELECT ?{index}"))
+        .map(|index| format!("(?{index})"))
         .collect::<Vec<_>>()
-        .join(" UNION ");
+        .join(", ");
     let families = CYCLIC_RELATION_TYPES
         .iter()
         .map(|relation_type| format!("'{}'", relation_type_name(*relation_type)))
@@ -379,7 +384,7 @@ pub(super) fn reachable_cycle_family_sql(seed_count: usize) -> String {
     // planner. `relation_subgraph_query_stays_indexed` checks the result.
     format!(
         "WITH RECURSIVE reachable(task_id) AS (
-             {seed_rows}
+             VALUES {seed_rows}
              UNION
              SELECT edge.target_task_id
              FROM task_bundle_relations AS edge
@@ -416,27 +421,36 @@ fn reachable_cycle_family_edges(
     if seeds.is_empty() {
         return Ok(Vec::new());
     }
-    let mut stmt = conn
-        .prepare(&reachable_cycle_family_sql(seeds.len()))
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-    let rows = stmt
-        .query_map(params_from_iter(seeds.iter()), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
     let mut edges = Vec::new();
-    for row in rows {
-        let (source, relation_type, target) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
-        edges.push(TaskRelationEdge {
-            source,
-            relation_type: parse_relation_type_name(&relation_type).map_err(OrbitError::Store)?,
-            target,
-        });
+    let seed_ids = seeds.iter().collect::<Vec<_>>();
+    for batch in seed_ids.chunks(CYCLE_WALK_SEED_BATCH_SIZE) {
+        let mut stmt = conn
+            .prepare(&reachable_cycle_family_sql(batch.len()))
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let rows = stmt
+            .query_map(params_from_iter(batch.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        for row in rows {
+            let (source, relation_type, target) =
+                row.map_err(|e| OrbitError::Store(e.to_string()))?;
+            edges.push(TaskRelationEdge {
+                source,
+                relation_type: parse_relation_type_name(&relation_type)
+                    .map_err(OrbitError::Store)?,
+                target,
+            });
+        }
     }
+    edges.sort_by(|a, b| {
+        (&a.source, a.relation_type, &a.target).cmp(&(&b.source, b.relation_type, &b.target))
+    });
+    edges.dedup();
     Ok(edges)
 }
 

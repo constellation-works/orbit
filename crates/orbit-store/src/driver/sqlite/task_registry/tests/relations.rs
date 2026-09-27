@@ -739,6 +739,142 @@ fn workspace_rebuild_uses_constant_relation_validation_queries() {
 }
 
 #[test]
+fn large_workspace_rebuild_accepts_acyclic_relations_and_rejects_cycle_atomically() {
+    // More than 500 distinct targets crosses SQLite's compound SELECT limit,
+    // and the closing edge is reachable only from a later seed batch.
+    const RELATION_COUNT: usize = 602;
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    let foreign = store
+        .register_workspace(RegisterWorkspaceParams {
+            partition_id: "logical-foreign-aaaaaa".into(),
+            slug: "Foreign".into(),
+            repo_fingerprint: None,
+        })
+        .expect("register foreign workspace");
+    let source_ids = (0..RELATION_COUNT)
+        .map(|number| format!("ORB-{number:05}"))
+        .collect::<Vec<_>>();
+    let target_ids = (RELATION_COUNT..2 * RELATION_COUNT)
+        .map(|number| format!("ORB-{number:05}"))
+        .collect::<Vec<_>>();
+    let source_bundles = source_ids
+        .iter()
+        .map(|task_id| {
+            (
+                task_id.clone(),
+                create_canonical_bundle(&store, &workspace, task_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .register_task_bundles(&workspace.partition_id, &source_bundles)
+        .expect("register source bundles");
+    let target_bundles = target_ids
+        .iter()
+        .map(|task_id| {
+            let path = store
+                .canonical_task_bundle_path(&foreign.partition_id, task_id)
+                .expect("foreign canonical bundle path");
+            fs::create_dir_all(&path).expect("create foreign bundle");
+            (task_id.clone(), path)
+        })
+        .collect::<Vec<_>>();
+    store
+        .register_task_bundles(&foreign.partition_id, &target_bundles)
+        .expect("register foreign target bundles");
+
+    // The stored edge is outside the rebuilt workspace. Reaching it from the
+    // changed source requires the last target, which is in the second batch.
+    store
+        .replace_task_index(
+            &foreign.partition_id,
+            &envelope(
+                &target_ids[RELATION_COUNT - 1],
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![blocked_by(&source_ids[0])],
+            ),
+        )
+        .expect("index foreign edge back to source");
+
+    let mut envelopes = source_ids
+        .iter()
+        .enumerate()
+        .map(|(index, task_id)| {
+            envelope(
+                task_id,
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![blocked_by(&target_ids[index])],
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .replace_workspace_task_indexes(&workspace.partition_id, &envelopes)
+        .expect("acyclic rebuild with 602 distinct relation targets");
+    assert_eq!(
+        store
+            .indexed_task_count_for_workspace(&workspace.partition_id)
+            .expect("indexed task count"),
+        RELATION_COUNT
+    );
+    assert_eq!(
+        store
+            .indexed_relation_targets(
+                &workspace.partition_id,
+                &source_ids[400],
+                TaskRelationType::BlockedBy,
+            )
+            .expect("relation in later seed batch"),
+        vec![target_ids[400].clone()]
+    );
+
+    envelopes[0].status = TaskStatus::Review;
+    envelopes[0]
+        .relations
+        .push(blocked_by(&target_ids[RELATION_COUNT - 1]));
+    let error = store
+        .replace_workspace_task_indexes(&workspace.partition_id, &envelopes)
+        .expect_err("cycle through the later seed batch and stored foreign edge");
+    assert!(
+        error.to_string().contains("cycle"),
+        "expected cycle rejection, got: {error}"
+    );
+    assert_eq!(
+        store
+            .global_task_status_index()
+            .expect("statuses after rejected rebuild")
+            .get(&source_ids[0]),
+        Some(&TaskStatus::Backlog),
+        "rejected rebuild must preserve the previous task status"
+    );
+    assert_eq!(
+        store
+            .indexed_relation_targets(
+                &workspace.partition_id,
+                &source_ids[0],
+                TaskRelationType::BlockedBy,
+            )
+            .expect("first relation after rejected rebuild"),
+        vec![target_ids[0].clone()],
+        "rejected rebuild must preserve the previous relations"
+    );
+    assert_eq!(
+        store
+            .indexed_relation_targets(
+                &workspace.partition_id,
+                &source_ids[400],
+                TaskRelationType::BlockedBy,
+            )
+            .expect("middle relation after rejected rebuild"),
+        vec![target_ids[400].clone()]
+    );
+}
+
+#[test]
 fn generated_relation_index_supports_forward_and_inverse_lookup() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
