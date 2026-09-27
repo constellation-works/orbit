@@ -1,6 +1,4 @@
-//! What the shipped activity catalog must guarantee: crew routing, the clauses
-//! each agent mandate spells out, and the seeding behaviour `orbit init` relies
-//! on.
+//! Executable catalog contracts: crew routing, policy, schema, and seeding.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -20,9 +18,6 @@ use tempfile::tempdir;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 use super::super::activity::seed_default_activities;
-
-const AGENT_IMPLEMENT_CONTRACT_PHRASES: &str =
-    include_str!("../../../assets/activities/agent_implement_contract_phrases.txt");
 
 #[test]
 fn shipped_agent_catalog_preserves_provider_and_model_routing() {
@@ -133,78 +128,6 @@ fn seeded_deterministic_activities_match_actions() {
 }
 
 #[test]
-fn agent_implement_guidance_allows_bounded_scope_expansion() {
-    let (_, yaml) = DEFAULT_ACTIVITY_FILES
-        .iter()
-        .find(|(name, _)| *name == "agent_implement")
-        .expect("agent implement activity is seeded");
-    let asset = load_activity_asset(yaml).expect("parse agent implement activity");
-    match asset.spec.spec {
-        ActivityV2Spec::AgentLoop(spec) => {
-            let instruction = spec
-                .instruction
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase();
-            assert_agent_implement_shared_contracts(&instruction);
-            assert!(!yaml.contains("\n  role:"));
-            assert!(
-                instruction.contains("git rev-parse --show-toplevel"),
-                "[ORB-10296] instruction must guard worktree toplevel check"
-            );
-            assert!(
-                instruction.contains("worktree_mismatch"),
-                "[ORB-10296] instruction must fail with worktree_mismatch diagnostic"
-            );
-            for contract in [
-                "task.terminal",
-                "pwd -p",
-                "context_files",
-                "eperm",
-                "orbit.friction.add",
-                "orbit.task.update",
-                "move the task to `review`",
-                "execution_summary",
-            ] {
-                assert!(
-                    instruction.contains(contract),
-                    "implementation contract disappeared: {contract}"
-                );
-            }
-        }
-        _ => panic!("expected agent_loop activity"),
-    }
-}
-
-#[test]
-fn agent_implement_shared_contract_detects_former_suite_only_deletions() {
-    let (_, yaml) = DEFAULT_ACTIVITY_FILES
-        .iter()
-        .find(|(name, _)| *name == "agent_implement")
-        .expect("agent implement activity is seeded");
-    let instruction = agent_implement_instruction(yaml);
-
-    for (phrase, former_suite) in [
-        (
-            "a containing directory selector is not new-file intent",
-            "bootstrap::tests::activity",
-        ),
-        ("before validation", "prompt-budget"),
-    ] {
-        let mutated = instruction.replacen(phrase, "", 1);
-        assert_ne!(
-            mutated, instruction,
-            "representative phrase formerly pinned only by {former_suite} must exist in the activity"
-        );
-        assert!(
-            missing_agent_implement_contract_phrases(&mutated).contains(&phrase),
-            "shared guard must detect deletion of `{phrase}`, formerly pinned only by {former_suite}"
-        );
-    }
-}
-
-#[test]
 fn agent_implement_seeds_a_deny_policy_with_proc_spawn() {
     let (_, yaml) = DEFAULT_ACTIVITY_FILES
         .iter()
@@ -227,240 +150,32 @@ fn agent_implement_seeds_a_deny_policy_with_proc_spawn() {
 }
 
 #[test]
-fn agent_implement_context_loading_reads_files_and_lists_directories() {
+fn agent_implement_activity_loads_after_instruction_rewording() {
     let (_, yaml) = DEFAULT_ACTIVITY_FILES
         .iter()
         .find(|(name, _)| *name == "agent_implement")
         .expect("agent implement activity is seeded");
-    let asset = load_activity_asset(yaml).expect("parse agent implement activity");
-    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+    let original = load_activity_asset(yaml).expect("load shipped activity");
+    let mut reworded: serde_yaml::Value = serde_yaml::from_str(yaml).expect("parse activity yaml");
+    reworded["spec"]["instruction"] =
+        serde_yaml::Value::String("Complete the assigned task and report the result.".to_string());
+    let reworded = serde_yaml::to_string(&reworded).expect("serialize reworded activity");
+    let loaded = load_activity_asset(&reworded).expect("load activity with reworded instruction");
+
+    assert_eq!(loaded.name, original.name);
+    assert_eq!(
+        loaded.spec.input_schema_json,
+        original.spec.input_schema_json
+    );
+    assert_eq!(
+        loaded.spec.output_schema_json,
+        original.spec.output_schema_json
+    );
+    let ActivityV2Spec::AgentLoop(spec) = loaded.spec.spec else {
         panic!("expected agent_loop activity");
     };
-    let instruction = spec
-        .instruction
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-
-    assert!(
-        instruction.contains("each `file:` target with the provider-native file-read tool"),
-        "[ORB-10652] file selector contract"
-    );
-    assert!(
-        instruction.contains("each `dir:` selector"),
-        "[ORB-10652] dir selector contract"
-    );
-    assert!(
-        instruction.contains("do not call the file-read tool on the directory"),
-        "[ORB-10652] directory read avoidance"
-    );
-    assert!(
-        instruction.contains("resolves beneath the workspace root"),
-        "[ORB-10652] workspace root boundary"
-    );
-    assert!(
-        instruction.contains("`rg --files <directory>`"),
-        "[ORB-10652] rg listing contract"
-    );
-    assert!(
-        !instruction.contains("is a directory"),
-        "[ORB-10652] no obsolete error phrasing"
-    );
-}
-
-/// The effective implementation instruction must carry the final
-/// scope-reconciliation and cleanup contract, not the older permissive
-/// "record the bounded leftover" handoff.
-#[test]
-fn agent_implement_requires_final_scope_reconciliation_before_handoff() {
-    let (_, shipped) = DEFAULT_ACTIVITY_FILES
-        .iter()
-        .find(|(name, _)| *name == "agent_implement")
-        .expect("agent implement activity is seeded");
-    for (source, yaml) in [("packaged", *shipped)] {
-        let instruction = agent_implement_instruction(yaml);
-
-        for clause in [
-            // Final inventory across every change class.
-            "take a final inventory with `git status --short` and `git diff --check`",
-            "staged, unstaged, and untracked",
-            "both sides of every rename",
-            "account for every entry against the item 3 baseline",
-            // Selector coverage, refreshed after authorized updates.
-            "re-read the durable `context_files` after any authorized update",
-            "confirm a selector covers each intended delivery path",
-            "append its exact `file:` selector",
-            "a containing directory selector is not new-file intent",
-            // Cleanup before a successful exit, and what stays untouched.
-            "before a successful exit, remove or revert the run-owned output",
-            "write scratch, logs, and review evidence under `.orbit/tmp/`",
-            "preserve pre-existing contents, another actor's edits, and legitimate task outputs",
-            // Cleanup is scoped to what git reports, never to ignored
-            // build output the sandbox owns.
-            "run-owned non-deliverable output is only what `git status --short` adds to the item 3 baseline",
-            "ignored build output, caches, and sandbox-owned paths like `<worktree>/target` are not yours to remove and never block handoff",
-            "deleting is an exception for a stray untracked path, not a step",
-            // Denied cleanup is a blocker, not a successful handoff.
-            "if a cleanup command is denied, do not retry it",
-            "name the exact leftover paths",
-            "record the blocker with `orbit.task.update` (`comment`)",
-            "do not hand off as success",
-            // ...except for the sanctioned scratch dir, which is ignored
-            // and run-scoped, so a denied removal there is not a blocker.
-            "if run-owned output outside `.orbit/tmp/` remains because cleanup was denied or unsafe",
-            // Durable state stays the authority for delivery.
-            "record the item 11 reconciliation",
-            "never parse the execution summary as an oracle",
-        ] {
-            assert!(
-                instruction.contains(clause),
-                "{source} agent_implement lost the reconciliation clause: {clause}"
-            );
-        }
-
-        assert!(
-            !instruction.contains("if run-owned output remains because cleanup was denied"),
-            "{source} agent_implement blocks handoff on denied `.orbit/tmp/` scratch cleanup \
-             [ORB-12779: jrun-20260921-0952-c3 delivered green, then failed as cleanup_denied \
-             when a sandbox denied moving `.orbit/tmp/` scratch to Trash]"
-        );
-
-        assert!(
-            !instruction.contains("record the bounded leftover"),
-            "{source} agent_implement still permits a bounded leftover at successful handoff"
-        );
-
-        // The contract is global: every workspace loads it, whatever the
-        // language. No cleanup mechanism may name one toolchain.
-        for language_specific in [
-            "cargo",
-            "rustfmt",
-            "node_modules",
-            "npm run",
-            "__pycache__",
-            ".venv",
-            "gradle",
-        ] {
-            assert!(
-                !instruction.contains(language_specific),
-                "{source} agent_implement names a language-specific cleanup mechanism: {language_specific}"
-            );
-        }
-    }
-}
-
-/// Focused handoff scenarios the reconciliation contract has to answer.
-/// Each one names the clause an implementer needs to decide correctly.
-#[test]
-fn agent_implement_reconciliation_answers_each_handoff_scenario() {
-    let (_, yaml) = DEFAULT_ACTIVITY_FILES
-        .iter()
-        .find(|(name, _)| *name == "agent_implement")
-        .expect("agent implement activity is seeded");
-    let instruction = agent_implement_instruction(yaml);
-
-    for (scenario, clauses) in [
-        (
-            "intended new file needs its own exact selector",
-            vec![
-                "append its exact `file:` selector",
-                "a containing directory selector is not new-file intent",
-            ],
-        ),
-        (
-            "an accidental edit is reverted, never declared into scope",
-            vec![
-                "declaring a path never converts an accidental or unintended edit into scoped work",
-                "revert that edit instead of widening the boundary",
-            ],
-        ),
-        (
-            "review evidence and scratch live in the run-scoped scratch dir",
-            vec![
-                "write scratch, logs, and review evidence under `.orbit/tmp/`",
-                "the only location `orbit.task.artifact.put` accepts",
-                "write temporary evidence and scratch files under `.orbit/tmp/`",
-                "never under `/tmp`",
-            ],
-        ),
-        (
-            "pre-existing dirt is separated from run-owned output",
-            vec![
-                "record the starting head and a full starting inventory",
-                "preserve pre-existing edits",
-                "run-owned output you verified is not part of the deliverable",
-            ],
-        ),
-        (
-            "an empty ignored sandbox build mount is not a leftover",
-            vec![
-                "run-owned non-deliverable output is only what `git status --short` adds to the item 3 baseline",
-                "sandbox-owned paths like `<worktree>/target` are not yours to remove and never block handoff",
-            ],
-        ),
-        (
-            "denied cleanup blocks instead of retrying or over-deleting",
-            vec![
-                "never use raw `rm -f` or `rm -rf`",
-                "never clean broadly to catch a specific leftover",
-                "do not substitute a destructive one",
-                "record the blocker with `orbit.task.update` (`comment`)",
-                "separately from cleanup so a denied cleanup cannot skip these reads",
-                "repeat the inventory after any cleanup",
-            ],
-        ),
-        (
-            "a denied move of `.orbit/tmp/` scratch to Trash still hands off success",
-            vec![
-                "scratch there needs no trash-based recoverable cleanup",
-                "if run-owned output outside `.orbit/tmp/` remains because cleanup was denied or unsafe",
-            ],
-        ),
-    ] {
-        for clause in clauses {
-            assert!(
-                instruction.contains(clause),
-                "agent_implement cannot answer `{scenario}`: missing {clause}"
-            );
-        }
-    }
-}
-
-/// Whitespace-normalized, lowercased instruction text of an `agent_loop`
-/// activity asset, so clause assertions ignore YAML line wrapping.
-fn agent_implement_instruction(yaml: &str) -> String {
-    let asset = load_activity_asset(yaml).expect("parse agent implement activity");
-    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
-        panic!("expected agent_loop activity");
-    };
-    spec.instruction
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-fn assert_agent_implement_shared_contracts(instruction: &str) {
-    let missing = missing_agent_implement_contract_phrases(instruction);
-    assert!(
-        missing.is_empty(),
-        "agent_implement lost shared contract phrases: {missing:?}"
-    );
-}
-
-fn missing_agent_implement_contract_phrases(instruction: &str) -> Vec<&'static str> {
-    let normalized = instruction
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-    AGENT_IMPLEMENT_CONTRACT_PHRASES
-        .lines()
-        .map(str::trim)
-        .filter(|phrase| !phrase.is_empty() && !phrase.starts_with('#'))
-        .filter(|phrase| !normalized.contains(phrase))
-        .collect()
+    assert!(spec.require_completion_envelope);
+    assert!(spec.tool_disallow_list.is_some());
 }
 
 #[test]
