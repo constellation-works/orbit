@@ -10,6 +10,7 @@ use orbit_store::maintenance::task_registry::{
 use crate::OrbitError;
 
 use orbit_common::NotFoundKind;
+use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
 use orbit_types::task::TaskStatus;
 use tempfile::tempdir;
 
@@ -27,6 +28,58 @@ fn v2_runtime() -> (tempfile::TempDir, PathBuf, PathBuf, OrbitRuntime) {
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
     (root, global_root, workspace_root, runtime)
+}
+
+#[test]
+fn workspace_default_yml_deny_rules_reach_the_active_policy() {
+    let (_root, global_root, workspace_root, runtime) = v2_runtime();
+    let mut workspace_default = runtime
+        .get_policy_def(DEFAULT_POLICY_NAME)
+        .expect("load seeded policy")
+        .expect("default present");
+    workspace_default.deny_read.push("private/**".to_string());
+    workspace_default.deny_modify.push("private/**".to_string());
+    runtime
+        .upsert_policy_def(&workspace_default)
+        .expect("write workspace default");
+    let policy_dir = workspace_root.join("resources/policies");
+    std::fs::rename(
+        policy_dir.join("default.yaml"),
+        policy_dir.join("default.yml"),
+    )
+    .expect("rename workspace default");
+    drop(runtime);
+
+    let rebuilt =
+        OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build with workspace yml");
+    let named = rebuilt
+        .get_policy_def(DEFAULT_POLICY_NAME)
+        .expect("named lookup")
+        .expect("default present");
+    assert!(named.deny_read.contains(&"private/**".to_string()));
+    assert!(named.deny_modify.contains(&"private/**".to_string()));
+    assert!(
+        rebuilt
+            .list_policy_defs()
+            .expect("list")
+            .iter()
+            .any(|def| def.name == DEFAULT_POLICY_NAME && def.deny_read == named.deny_read)
+    );
+
+    let active = rebuilt.policy_engine();
+    assert_eq!(active.def(), &named);
+    assert!(
+        !active
+            .check("implementer", FsOperation::Read, "private/secret.txt")
+            .expect("evaluate read")
+            .allowed
+    );
+    assert!(
+        !active
+            .check("implementer", FsOperation::Modify, "private/secret.txt")
+            .expect("evaluate modify")
+            .allowed
+    );
 }
 
 #[test]
