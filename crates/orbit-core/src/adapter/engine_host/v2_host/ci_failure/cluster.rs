@@ -10,9 +10,7 @@ use super::filing::{
     CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
     MAX_LISTED_RUNS,
 };
-use super::grouping::{
-    failure_test_names, legacy_source_matches, source_identity_fingerprint, tested_commit,
-};
+use super::grouping::{failure_test_names, legacy_source_matches, tested_commit};
 use super::log_signature::{
     FailedStepExcerpt, compiler_cause, relevant_log_query_errors, render_failed_step_excerpt,
     specific_command_from_log, specific_error_anchors,
@@ -142,23 +140,20 @@ impl FailureCluster {
                 ],
             )]
         };
-        if !self.signature_is_step_fallback {
-            if let Some(command) = specific_command_from_log(&self.log_excerpt) {
-                for diagnostic in specific_error_anchors(&self.log_excerpt, &self.signature)
-                    .into_iter()
-                    .take(3)
-                {
-                    fingerprints.push(CoverageFingerprint::new(
-                        "ci_failure_error_and_command",
-                        vec![
-                            CoverageAnchor::new("specific_error", diagnostic),
-                            CoverageAnchor::new("command", command.clone()),
-                        ],
-                    ));
-                }
-            }
-            if let Some(fingerprint) = source_identity_fingerprint(&self.runs) {
-                fingerprints.push(fingerprint);
+        if !self.signature_is_step_fallback
+            && let Some(command) = specific_command_from_log(&self.log_excerpt)
+        {
+            for diagnostic in specific_error_anchors(&self.log_excerpt, &self.signature)
+                .into_iter()
+                .take(3)
+            {
+                fingerprints.push(CoverageFingerprint::new(
+                    "ci_failure_error_and_command",
+                    vec![
+                        CoverageAnchor::new("specific_error", diagnostic),
+                        CoverageAnchor::new("command", command.clone()),
+                    ],
+                ));
             }
         }
         fingerprints.extend(self.provenance_fingerprints());
@@ -180,12 +175,27 @@ impl FailureCluster {
     ) -> Vec<CoverageFingerprint> {
         let mut fingerprints = Vec::new();
         let mut seen = BTreeSet::new();
+        let (cause_field, cause) = if let Some(cause) = &self.compiler_cause {
+            ("compiler_cause", digest(&[cause]))
+        } else {
+            ("normalized_error_signature", self.signature.clone())
+        };
         for run in &self.runs {
             let run_id = value_string(run, "run_id");
-            if !run_id.is_empty() && seen.insert(("run_id", run_id.clone())) {
+            let job_id = value_string(run, "job_id");
+            // A run can contain several independent failing jobs (and one job
+            // can have several causes). Its ID alone never proves coverage.
+            if !run_id.is_empty()
+                && !job_id.is_empty()
+                && seen.insert(("run_id", format!("{run_id}:{job_id}")))
+            {
                 fingerprints.push(CoverageFingerprint::new(
                     "ci_failure_run_id",
-                    vec![CoverageAnchor::new("run_id", run_id)],
+                    vec![
+                        CoverageAnchor::new("run_id", run_id),
+                        CoverageAnchor::new("job_id", job_id),
+                        CoverageAnchor::new(cause_field, cause.clone()),
+                    ],
                 ));
             }
             // A bare SHA identifies a commit, not a failure: any open task
@@ -206,6 +216,7 @@ impl FailureCluster {
                             CoverageAnchor::new("head_sha", sha),
                             CoverageAnchor::new("workflow", format!("workflow {}", self.workflow)),
                             CoverageAnchor::new("job", format!("failing job {}", self.job)),
+                            CoverageAnchor::new(cause_field, cause.clone()),
                         ],
                     ));
                 }

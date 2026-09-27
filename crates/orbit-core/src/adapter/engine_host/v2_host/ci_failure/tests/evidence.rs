@@ -303,6 +303,98 @@ fn two_failed_jobs_file_distinct_correct_findings_regardless_of_order() {
 }
 
 #[test]
+fn a_capped_two_job_run_files_each_cause_on_successive_sweeps() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let findings = two_job_findings();
+    let first = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(findings.clone()), "max_tasks": 1}),
+    );
+    assert_eq!(first["filed_count"], 1, "{first}");
+    assert_eq!(first["filed"][0]["job"], "Clippy");
+    assert_eq!(first["skipped_over_cap"][0]["job"], "Coverage");
+    let first_id = filed_task_ids(&first).remove(0);
+
+    let second = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(findings.clone()), "max_tasks": 1}),
+    );
+    assert_eq!(second["filed_count"], 1, "{second}");
+    assert_eq!(second["filed"][0]["job"], "Coverage");
+    assert_eq!(second["skipped_existing"][0]["task_id"], first_id);
+    assert_eq!(second["skipped_over_cap"], json!([]));
+    let second_id = filed_task_ids(&second).remove(0);
+    assert_ne!(first_id, second_id);
+
+    let replay = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(findings), "max_tasks": 1}),
+    );
+    assert_eq!(replay["filed_count"], 0, "{replay}");
+    let owners = replay["skipped_existing"]
+        .as_array()
+        .expect("existing owners")
+        .iter()
+        .map(|entry| entry["task_id"].as_str().expect("owner"))
+        .collect::<Vec<_>>();
+    assert_eq!(owners, vec![first_id.as_str(), second_id.as_str()]);
+    assert_eq!(
+        runtime
+            .list_tasks_by_tags(&["ci-failure-sweep".to_string()])
+            .expect("tasks")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn completing_deferred_job_files_its_cause_despite_another_jobs_owner() {
+    for completed in [false, true] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let mut incomplete = two_job_findings();
+        incomplete[1]["investigated"] = json!(false);
+        let mut initial = snapshot(incomplete);
+        initial["retryable_errors"] = json!([{
+            "run_id": 10, "job_id": 920, "operation": "run_logs",
+            "message": "job log unavailable",
+        }]);
+        let first = file(&runtime, json!({"ci_evidence": initial}));
+        assert_eq!(first["filed_count"], 1, "{first}");
+        assert_eq!(first["deferred"][0]["job_id"], 920);
+        let first_id = filed_task_ids(&first).remove(0);
+        if completed {
+            runtime
+                .update_task(
+                    &first_id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..TaskUpdateParams::default()
+                    },
+                )
+                .expect("admit first task");
+            runtime
+                .update_task(
+                    &first_id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Done),
+                        ..TaskUpdateParams::default()
+                    },
+                )
+                .expect("complete first task");
+        }
+
+        let complete = file(
+            &runtime,
+            json!({"ci_evidence": snapshot(two_job_findings())}),
+        );
+        assert_eq!(complete["filed_count"], 1, "{complete}");
+        assert_eq!(complete["filed"][0]["job"], "Coverage");
+        assert_eq!(complete["skipped_existing"][0]["task_id"], first_id);
+        assert_ne!(filed_task_ids(&complete)[0], first_id);
+    }
+}
+
+#[test]
 fn one_jobs_retryable_error_defers_only_that_job() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let mut findings = two_job_findings();

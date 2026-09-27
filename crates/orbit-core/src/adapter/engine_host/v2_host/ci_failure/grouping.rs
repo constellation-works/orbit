@@ -11,9 +11,6 @@ use super::log_signature::{
     classify_log_lines, compiler_cause, error_signature, is_libtest_stdout_header,
     legacy_signature, signature_payload,
 };
-use crate::adapter::engine_host::v2_host::admission::duplicate_tasks::{
-    CoverageAnchor, CoverageFingerprint,
-};
 use crate::adapter::engine_host::v2_host::admission::sweep_filing::digest;
 
 /// Group current failures by root cause.
@@ -243,20 +240,4 @@ pub(super) fn legacy_source_matches(description: &str, run: &Value) -> bool {
         && description.contains(&format!("run `{run_id}`"))
         && description.contains(&format!("(id `{job_id}`)"))
         && description.contains(&format!("commit actually checked out: `{checkout}`"))
-}
-
-pub(super) fn source_identity_fingerprint(runs: &[Value]) -> Option<CoverageFingerprint> {
-    let run = runs.first()?;
-    let run_id = value_string(run, "run_id");
-    let job_id = value_string(run, "job_id");
-    if run_id.is_empty() || job_id.is_empty() {
-        return None;
-    }
-    Some(CoverageFingerprint::new(
-        "ci_failure_source_identity",
-        vec![
-            CoverageAnchor::new("run_id", run_id),
-            CoverageAnchor::new("job_id", job_id),
-        ],
-    ))
 }

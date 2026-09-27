@@ -198,13 +198,14 @@ fn ci_reports_an_untagged_manual_task_with_bounded_match_evidence() {
 }
 
 #[test]
-fn ci_run_reference_dedupes_open_and_recently_completed_manual_tasks() {
+fn ci_run_job_and_cause_reference_dedupes_open_and_recently_completed_manual_tasks() {
     for status in [TaskStatus::InProgress, TaskStatus::Done] {
         let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
         let task_id = seed_manual_task(
             &runtime,
             "Investigate the failing CI test",
-            "The incident is tracked by GitHub Actions run 10; preserve its evidence.",
+            "The incident is tracked by GitHub Actions run 10, job 910: \
+             error: expected <n> arguments, found <n>.",
             status,
         );
 
@@ -220,7 +221,23 @@ fn ci_run_reference_dedupes_open_and_recently_completed_manual_tasks() {
 }
 
 #[test]
-fn ci_run_reference_in_a_manual_comment_dedupes_without_sweep_metadata() {
+fn a_bare_ci_run_reference_does_not_claim_a_jobs_cause() {
+    for status in [TaskStatus::InProgress, TaskStatus::Done] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        seed_manual_task(
+            &runtime,
+            "Investigate a CI run",
+            "The incident is tracked by GitHub Actions run 10; preserve its evidence.",
+            status,
+        );
+        let output = file_ci(&runtime, ci_evidence());
+        assert_eq!(output["filed_count"], json!(1), "{output}");
+        assert_eq!(output["skipped_existing"], json!([]));
+    }
+}
+
+#[test]
+fn ci_run_job_and_cause_reference_in_a_manual_comment_dedupes_without_sweep_metadata() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let task_id = seed_manual_task(
         &runtime,
@@ -232,7 +249,11 @@ fn ci_run_reference_in_a_manual_comment_dedupes_without_sweep_metadata() {
         .update_task(
             &task_id,
             TaskUpdateParams {
-                comment: Some("The owner is tracking Actions run 10.".to_string()),
+                comment: Some(
+                    "The owner is tracking Actions run 10, job 910: \
+                 error: expected <n> arguments, found <n>."
+                        .to_string(),
+                ),
                 ..TaskUpdateParams::default()
             },
         )
