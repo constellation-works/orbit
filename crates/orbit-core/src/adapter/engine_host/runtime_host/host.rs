@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -665,8 +665,9 @@ impl RuntimeHost for OrbitRuntime {
         step_index: u32,
         step_id: &str,
         output: &Value,
+        compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
-        checkpoints::checkpoint_step(self, run_id, step_index, step_id, output)
+        checkpoints::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)
     }
 
     fn checkpoint_failure_activity(

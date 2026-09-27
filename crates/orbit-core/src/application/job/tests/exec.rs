@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1432,6 +1432,7 @@ fn checkpoint_step_records_into_run_state() {
         0,
         "nap0",
         &json!({"ok": 0}),
+        &BTreeMap::new(),
     )
     .expect("checkpoint step 0");
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
@@ -1440,6 +1441,7 @@ fn checkpoint_step_records_into_run_state() {
         1,
         "nap1",
         &json!({"ok": 1}),
+        &BTreeMap::new(),
     )
     .expect("checkpoint step 1");
 
@@ -1466,6 +1468,72 @@ fn checkpoint_step_records_into_run_state() {
     );
 }
 
+/// [ORB-13420] A compound step's nested outputs persist with its checkpoint:
+/// into `compound_outputs[step_index]` for resume and into `pipeline` by key
+/// for mid-run readers. Re-checkpointing the index replaces them.
+#[test]
+fn checkpoint_step_records_compound_outputs_into_run_state() {
+    let (_root, runtime, _repo_root, _global_root) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("qa_ckpt", 1, Utc::now(), Some(json!({})), None)
+        .expect("insert run");
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(
+            &run.run_id,
+            &orbit_types::workflow::PipelineState::new(
+                run.run_id.clone(),
+                run.job_id.clone(),
+                json!({}),
+            ),
+        )
+        .expect("write initial state");
+    let nested = BTreeMap::from([
+        ("left".to_string(), json!({"side": "left"})),
+        ("results".to_string(), json!([])),
+    ]);
+
+    <OrbitRuntime as RuntimeHost>::checkpoint_step(
+        &runtime,
+        &run.run_id,
+        0,
+        "par",
+        &json!([{"branch_id": "left", "outcome": "success"}]),
+        &nested,
+    )
+    .expect("checkpoint compound step");
+
+    let state = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state")
+        .expect("state exists");
+    assert_eq!(state.compound_outputs.get(&0), Some(&nested));
+    assert_eq!(state.pipeline.get("left"), Some(&json!({"side": "left"})));
+    assert_eq!(
+        state.pipeline.get("results"),
+        Some(&json!([])),
+        "an empty collection is persisted as a value, not dropped"
+    );
+
+    <OrbitRuntime as RuntimeHost>::checkpoint_step(
+        &runtime,
+        &run.run_id,
+        0,
+        "par",
+        &json!([]),
+        &BTreeMap::new(),
+    )
+    .expect("re-checkpoint compound step");
+    let state = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state")
+        .expect("state exists");
+    assert!(state.compound_outputs.is_empty());
+}
+
 /// [ORB-10002] A checkpoint against a run that was never persisted is a
 /// silent no-op (direct `execute_job` callers without a run row).
 #[test]
@@ -1477,6 +1545,7 @@ fn checkpoint_step_without_run_row_is_noop() {
         0,
         "nap0",
         &json!({}),
+        &BTreeMap::new(),
     )
     .expect("no-op checkpoint");
 }
@@ -1538,6 +1607,7 @@ fn interrupted_run_resumes_skipping_checkpointed_steps() {
         0,
         "nap0",
         &json!({"checkpointed": true}),
+        &BTreeMap::new(),
     )
     .expect("persist step 0 checkpoint");
     child.kill().expect("SIGKILL fake worker");

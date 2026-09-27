@@ -293,3 +293,41 @@ fn recording_a_step_output_replaces_a_non_object_pipeline() {
         serde_json::json!({"worktree": {"ok": true}})
     );
 }
+
+#[test]
+fn compound_outputs_round_trip_and_are_omitted_when_absent() {
+    let mut state = state();
+    let empty = serde_json::to_value(&state).expect("serialize state");
+    assert!(empty.get("compound_outputs").is_none());
+
+    let nested = std::collections::BTreeMap::from([
+        ("results".to_string(), serde_json::json!([])),
+        ("left".to_string(), serde_json::json!({"side": "left"})),
+    ]);
+    state.record_compound_outputs(2, nested.clone());
+    let encoded = serde_json::to_string(&state).expect("serialize state");
+    let decoded: PipelineState = serde_json::from_str(&encoded).expect("deserialize state");
+    assert_eq!(decoded.compound_outputs.get(&2), Some(&nested));
+
+    state.record_compound_outputs(2, Default::default());
+    assert!(
+        state.compound_outputs.is_empty(),
+        "re-checkpointing a step with no nested outputs clears the old ones"
+    );
+}
+
+#[test]
+fn state_written_before_compound_outputs_existed_still_loads() {
+    let legacy = serde_json::json!({
+        "run_id": "jrun-legacy",
+        "job_id": "fan_out_job",
+        "initial_input": {},
+        "pipeline": {"workers": []},
+        "step_outputs": {"0": []},
+        "step_states": {"0": "success"},
+        "updated_at": Utc::now().to_rfc3339(),
+    });
+    let decoded: PipelineState = serde_json::from_value(legacy).expect("deserialize legacy state");
+    assert!(decoded.compound_outputs.is_empty());
+    assert_eq!(decoded.step_outputs.get(&0), Some(&serde_json::json!([])));
+}

@@ -238,12 +238,14 @@ impl RuntimeHost for ResumeFailureHost {
         step_index: u32,
         step_id: &str,
         output: &Value,
+        compound_outputs: &std::collections::BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
         let mut states = self.run_states.lock().expect("run states lock");
         let state = states
             .get_mut(run_id)
             .ok_or_else(|| DispatchError::JobExecution(format!("missing state for {run_id}")))?;
         state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
+        state.record_compound_outputs(step_index, compound_outputs.clone());
         state.record_pipeline_output(step_id, output.clone());
         Ok(())
     }
