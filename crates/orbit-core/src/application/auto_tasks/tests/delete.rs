@@ -13,10 +13,13 @@ use orbit_automation::auto_tasks::scheduler::{
 use orbit_common::OrbitError;
 use orbit_store::compose::auto_task::{load_cursor_state, upsert_cursor};
 use orbit_types::workflow::automation::AutomationDiagnostic;
-use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition, SkipIfUnchanged};
+use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition, DedupePolicy, SkipIfUnchanged};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
+use crate::application::auto_tasks::crud::{
+    set_manual_mint_after_admission_barriers, set_manual_mint_after_preload_barriers,
+};
 use crate::application::auto_tasks::delete::{
     AutoTaskDeleteParams, set_delete_before_lock_barrier,
 };
@@ -58,6 +61,10 @@ fn cursor_names(runtime: &OrbitRuntime) -> Vec<String> {
         .definitions
         .into_keys()
         .collect()
+}
+
+fn cursor_bytes(runtime: &OrbitRuntime) -> Option<Vec<u8>> {
+    std::fs::read(cursor_state_path(&runtime.paths().state_dir)).ok()
 }
 
 /// A workspace initialized with the shipped defaults, as `orbit workspace
@@ -444,6 +451,148 @@ fn preloaded_scheduler_cannot_recreate_cursor_after_real_delete() {
         assert!(runtime.auto_task_show(name).unwrap().is_none());
         assert!(!cursor_names(&runtime).contains(&name.to_string()));
         assert!(runtime.list_tasks().expect("minted tasks").is_empty());
+    });
+}
+
+#[test]
+fn manual_mint_winning_admission_refuses_non_force_delete() {
+    let runtime = OrbitRuntime::in_memory().expect("in-memory runtime");
+    let name = "racy-manual-mint";
+    let params = interval_params(name, 60);
+    assert_eq!(params.dedupe, DedupePolicy::SkipIfOpen);
+    runtime.auto_task_add(params).expect("add definition");
+    runtime
+        .auto_task_toggle(name, false)
+        .expect("disable definition");
+    seed_cursor(&runtime, name);
+    let definition = definition_path(&runtime.paths().local_dir, name);
+    let definition_before = std::fs::read(&definition).expect("definition bytes");
+    let cursor_before = cursor_bytes(&runtime).expect("seeded cursor");
+    let admitted = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let delete_reached = Arc::new(Barrier::new(2));
+
+    thread::scope(|scope| {
+        let admitted_for_mint = Arc::clone(&admitted);
+        let release_for_mint = Arc::clone(&release);
+        let mint = scope.spawn(|| {
+            set_manual_mint_after_admission_barriers(Some((admitted_for_mint, release_for_mint)));
+            let result = runtime.auto_task_mint(name);
+            set_manual_mint_after_admission_barriers(None);
+            result
+        });
+        admitted.wait(); // The minted task exists and mint still holds the lock.
+        let delete_barrier = Arc::clone(&delete_reached);
+        let deletion = scope.spawn(|| {
+            set_delete_before_lock_barrier(Some(delete_barrier));
+            let result = runtime.auto_task_delete(delete(name));
+            set_delete_before_lock_barrier(None);
+            result
+        });
+        delete_reached.wait(); // Delete has reached its lock boundary.
+        release.wait();
+
+        let minted = mint.join().expect("mint thread").expect("manual mint");
+        let error = deletion
+            .join()
+            .expect("deletion thread")
+            .expect_err("open mint must refuse non-force deletion");
+        assert!(
+            error.to_string().contains(&minted.id),
+            "the refusal names the open task: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&definition).expect("definition preserved"),
+            definition_before,
+            "a refused delete leaves the definition bytes in place"
+        );
+        assert_eq!(
+            cursor_bytes(&runtime).expect("cursor still present"),
+            cursor_before,
+            "manual mint must not rewrite scheduler cursor bytes"
+        );
+        let shown = runtime
+            .auto_task_show(name)
+            .expect("show")
+            .expect("definition remains");
+        assert!(!shown.enabled, "mint still ignores enabled");
+
+        let report = runtime
+            .auto_task_delete(AutoTaskDeleteParams {
+                force: true,
+                ..delete(name)
+            })
+            .expect("explicit force deletion remains supported");
+        assert_eq!(report.open_tasks, vec![minted.id.clone()]);
+        assert!(runtime.auto_task_show(name).unwrap().is_none());
+        assert!(
+            runtime.get_task(&minted.id).is_ok(),
+            "force deletion leaves the open task itself alone"
+        );
+    });
+}
+
+#[test]
+fn preloaded_manual_mint_cannot_create_from_a_deleted_definition() {
+    let runtime = OrbitRuntime::in_memory().expect("in-memory runtime");
+    let name = "deleted-before-manual-mint";
+    let params = interval_params(name, 60);
+    assert_eq!(params.dedupe, DedupePolicy::SkipIfOpen);
+    runtime.auto_task_add(params).expect("add definition");
+    runtime
+        .auto_task_toggle(name, false)
+        .expect("disable definition");
+    seed_cursor(&runtime, name);
+    let loaded = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+
+    thread::scope(|scope| {
+        let loaded_for_mint = Arc::clone(&loaded);
+        let resume_for_mint = Arc::clone(&resume);
+        let mint = scope.spawn(|| {
+            set_manual_mint_after_preload_barriers(Some((loaded_for_mint, resume_for_mint)));
+            let result = runtime.auto_task_mint(name);
+            set_manual_mint_after_preload_barriers(None);
+            result
+        });
+        loaded.wait(); // A validated definition was loaded before deletion.
+        let (sender, receiver) = mpsc::channel();
+        let runtime_ref = &runtime;
+        let deletion = scope.spawn(move || {
+            sender
+                .send(runtime_ref.auto_task_delete(delete(name)))
+                .expect("send delete result");
+        });
+        let deleted = receiver.recv_timeout(std::time::Duration::from_secs(20));
+        let cursor_after_delete = cursor_bytes(&runtime);
+        resume.wait();
+        deleted
+            .expect("delete must finish before the preloaded mint resumes")
+            .expect("delete succeeds");
+        deletion.join().expect("deletion thread");
+
+        let error = mint
+            .join()
+            .expect("mint thread")
+            .expect_err("a deleted definition must not mint");
+        assert!(
+            error.to_string().contains(name),
+            "the refusal names the definition: {error}"
+        );
+        assert!(runtime.auto_task_show(name).unwrap().is_none());
+        assert!(
+            runtime.list_tasks().expect("minted tasks").is_empty(),
+            "the preloaded definition must not become a task"
+        );
+        assert!(
+            !cursor_names(&runtime).contains(&name.to_string()),
+            "mint must not recreate the deleted cursor"
+        );
+        assert_eq!(
+            cursor_bytes(&runtime),
+            cursor_after_delete,
+            "manual mint must not rewrite scheduler cursor bytes"
+        );
     });
 }
 

@@ -59,8 +59,10 @@ becomes just the first definition.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
   definition immediately, reusing the scheduler's mint path so the result is
   indistinguishable from a fired instance. Unconditional and cursor-inert: it
-  ignores schedule, `dedupe`, and `enabled`, and never touches
-  `<orbit_dir>/state/auto-tasks.json` (ORB-10439).
+  ignores schedule, `dedupe`, and `enabled`, and never reads or writes
+  `<orbit_dir>/state/auto-tasks.json`. Lookup and mint share that file's lock
+  with deletion, so a definition removed before admission is not minted
+  (ORB-10439, ORB-13432).
 - **Default catalog** — Orbit embeds a small catalog of workspace definitions.
   Initialization materializes a missing catalog file under `.orbit/auto_tasks/`
   but every default is `enabled: false`. Seeding neither mints a task nor
