@@ -13,7 +13,7 @@ use crate::application::job::seed_default_jobs;
 use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
 use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::skill::{
-    default_skill_ids, is_default_skill_file_for_root, seed_default_skills,
+    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills,
 };
 use crate::application::workspace_sync::{
     ManagedArtifactOutcome, reconcile_workspace_managed_artifacts,
@@ -475,8 +475,9 @@ fn ensure_workspace_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
     Ok(())
 }
 
-/// Reap skill trees left behind under a workspace root by older versions that
-/// seeded them there.
+/// Reap unchanged skill trees left behind under a workspace root by older
+/// versions that seeded them there. A tree with edited or unknown files stays
+/// intact so runtime opening cannot discard operator content.
 ///
 /// `global_root` names the root that owns the live catalog. It is normally a
 /// different path from `orbit_root`, but a `--root` scratch root makes one
@@ -498,8 +499,7 @@ fn remove_workspace_seeded_default_skills(
 
         for skill_id in default_skill_ids() {
             let skill_dir = skills_dir.join(skill_id);
-            let skill_file = skill_dir.join("SKILL.md");
-            if is_default_skill_file_for_root(skill_id, &skill_file, orbit_root)? {
+            if is_default_skill_tree_for_root(skill_id, &skill_dir, orbit_root)? {
                 remove_path_if_exists(&skill_dir)?;
             }
         }
