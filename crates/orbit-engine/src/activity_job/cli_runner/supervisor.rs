@@ -12,11 +12,14 @@
 //! 1. **Bounded drain.** Readers keep consuming readable bytes and emitting
 //!    tracing line events until EOF or [`OUTPUT_READER_JOIN_TIMEOUT`].
 //! 2. **Cancel.** If a writer still holds the pipe (an escaped session), the
-//!    supervisor wakes each reader through an owned pollable cancel fd. The
-//!    reader then nonblocking-drains whatever is already readable and stops
-//!    capturing and emitting. The supervisor joins the reader thread before
-//!    returning. It does not close another thread's pipe descriptor and does
-//!    not treat a duplicate close as cancellation.
+//!    supervisor sets each reader's cancel flag and wakes it through an owned
+//!    pollable cancel fd. The reader then drains at most the bytes already
+//!    queued in the pipe when it observed the cancel (capped at
+//!    [`POST_CANCEL_DRAIN_LIMIT_BYTES`]), so a writer that keeps producing
+//!    cannot extend the drain, and stops capturing and emitting. The
+//!    supervisor joins the reader thread before returning. It does not close
+//!    another thread's pipe descriptor and does not treat a duplicate close
+//!    as cancellation.
 //! 3. **Capture finish.** Bytes collected before cancel/EOF are frozen by
 //!    [`RollingOutputCapture::finish`]: under the limit they are kept in full;
 //!    over the limit the prefix plus a complete-line tail are kept and
@@ -27,13 +30,21 @@
 //!    type has no output payload.
 //!
 //! Unix implements wakeup with `poll` on the reader fd plus a `UnixStream`
-//! pair. Non-Unix platforms keep a blocking `Read` and cannot interrupt an
-//! escaped holder; that path is not tested here.
+//! pair. When the pair cannot be created (for example `EMFILE`), the reader
+//! still never blocks in `read`: it polls the pipe with a
+//! [`CANCEL_FLAG_POLL_INTERVAL`] timeout and rechecks the cancel flag, so
+//! finalization stays bounded without a wakeup fd. On Unix the supervisor
+//! therefore returns within [`OUTPUT_READER_JOIN_TIMEOUT`] of process-tree
+//! cleanup plus one poll interval and one bounded drain, whatever an escaped
+//! writer does. Non-Unix platforms keep a blocking `Read` and cannot
+//! interrupt an escaped holder; that path is not tested here.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Child, ExitStatus};
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -59,6 +70,14 @@ pub(super) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
 pub(super) type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
 
 const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
+/// How often a reader without a wakeup fd rechecks its cancel flag.
+#[cfg(unix)]
+const CANCEL_FLAG_POLL_INTERVAL: Duration = Duration::from_millis(25);
+/// Upper bound on bytes a cancelled reader drains. Matches Linux's default
+/// `/proc/sys/fs/pipe-max-size`, the largest buffer an unprivileged writer
+/// can request for a pipe.
+#[cfg(unix)]
+const POST_CANCEL_DRAIN_LIMIT_BYTES: usize = 1024 * 1024;
 const PROCESS_GROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 const CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
 const DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
@@ -231,7 +250,31 @@ struct OutputReaderHandle {
     finished: mpsc::Receiver<()>,
     join: thread::JoinHandle<()>,
     #[cfg(unix)]
-    cancel: Option<UnixStream>,
+    cancel: ReaderCancel,
+}
+
+/// Supervisor-owned half of a reader's cancellation. The flag is always
+/// present; the stream only wakes a reader parked in `poll` sooner.
+#[cfg(unix)]
+struct ReaderCancel {
+    requested: Arc<AtomicBool>,
+    wakeup: Option<UnixStream>,
+}
+
+#[cfg(unix)]
+impl ReaderCancel {
+    fn cancel(self) {
+        self.requested.store(true, Ordering::Release);
+        // Closing our end makes the reader's end readable (EOF).
+        drop(self.wakeup);
+    }
+}
+
+/// Reader-owned half of [`ReaderCancel`].
+#[cfg(unix)]
+struct CancelWatch {
+    requested: Arc<AtomicBool>,
+    wakeup: Option<UnixStream>,
 }
 
 struct LiveReaderGuard {
@@ -463,17 +506,23 @@ where
     let fd = handle.into_raw_fd();
     // SAFETY: `into_raw_fd` transferred ownership of a valid pipe descriptor.
     let mut reader = unsafe { File::from_raw_fd(fd) };
+    // The reader only calls `read` after `poll` reports the pipe ready, so a
+    // failure here cannot turn it into a blocking reader.
+    let _ = set_nonblocking(reader.as_raw_fd());
     let pair_result = cancel_pair.map_or_else(UnixStream::pair, |make_pair| make_pair());
-    let (wakeup, cancel) = match pair_result {
+    // Without a pair the reader falls back to timed polls of the cancel flag.
+    let (wakeup, cancel_wakeup) = match pair_result {
         Ok((wakeup, cancel)) => {
-            // The fallback below uses a blocking read loop, so only make the
-            // pipe nonblocking when its pollable cancel channel exists.
-            let _ = set_nonblocking(reader.as_raw_fd());
             let _ = wakeup.set_nonblocking(true);
             let _ = cancel.set_nonblocking(true);
             (Some(wakeup), Some(cancel))
         }
         Err(_) => (None, None),
+    };
+    let requested = Arc::new(AtomicBool::new(false));
+    let watch = CancelWatch {
+        requested: Arc::clone(&requested),
+        wakeup,
     };
 
     // One reader sends one completion signal; capacity one cannot block it.
@@ -481,14 +530,17 @@ where
     let join = thread::spawn(move || {
         let _live = LiveReaderGuard::enter(live_readers);
         tracing::dispatcher::with_default(&context.dispatch, || {
-            read_cancelable_output(&mut reader, wakeup.as_ref(), &buf, &context);
+            read_cancelable_output(&mut reader, &watch, &buf, &context);
         });
         let _ = finished_tx.send(());
     });
     OutputReaderHandle {
         finished,
         join,
-        cancel,
+        cancel: ReaderCancel {
+            requested,
+            wakeup: cancel_wakeup,
+        },
     }
 }
 
@@ -527,9 +579,11 @@ fn join_output_reader(reader: OutputReaderHandle, deadline: Instant) {
             let _ = join.join();
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
+            // A cancelled Unix reader never blocks in `read` and drains a
+            // bounded byte count, so this join is bounded too.
             #[cfg(unix)]
             {
-                drop(cancel);
+                cancel.cancel();
                 let _ = join.join();
             }
             #[cfg(not(unix))]
@@ -538,6 +592,7 @@ fn join_output_reader(reader: OutputReaderHandle, deadline: Instant) {
     }
 }
 
+#[cfg(not(unix))]
 fn read_blocking_output<R: Read>(
     mut reader: R,
     buf: &SharedOutputCapture,
@@ -559,20 +614,15 @@ fn read_blocking_output<R: Read>(
 #[cfg(unix)]
 fn read_cancelable_output(
     reader: &mut File,
-    wakeup: Option<&UnixStream>,
+    watch: &CancelWatch,
     buf: &SharedOutputCapture,
     context: &OutputReaderContext,
 ) {
-    let Some(wakeup) = wakeup else {
-        read_blocking_output(reader, buf, context);
-        return;
-    };
-
     let mut chunk = [0u8; 4096];
     let mut line_buf = Vec::new();
     let mut cancelled = false;
     loop {
-        match poll_reader_or_cancel(reader.as_raw_fd(), wakeup.as_raw_fd()) {
+        match poll_reader_or_cancel(reader.as_raw_fd(), watch) {
             PollOutcome::Failed => break,
             PollOutcome::Cancelled => {
                 cancelled = true;
@@ -634,19 +684,41 @@ fn drain_readable_output(
     context: &OutputReaderContext,
     line_buf: &mut Vec<u8>,
 ) {
+    // Snapshot the queued byte count once: bytes written after the cancel
+    // belong to no invocation and must not keep this loop alive.
+    let mut remaining = queued_bytes(reader.as_raw_fd())
+        .map_or(POST_CANCEL_DRAIN_LIMIT_BYTES, |queued| {
+            queued.min(POST_CANCEL_DRAIN_LIMIT_BYTES)
+        });
     let mut chunk = [0u8; 4096];
-    loop {
+    while remaining > 0 {
         if !fd_is_readable(reader.as_raw_fd()) {
             return;
         }
-        match reader.read(&mut chunk) {
+        let want = remaining.min(chunk.len());
+        match reader.read(&mut chunk[..want]) {
             Ok(0) => return,
-            Ok(n) => append_output_chunk(buf, context, &chunk[..n], line_buf),
+            Ok(n) => {
+                remaining = remaining.saturating_sub(n);
+                append_output_chunk(buf, context, &chunk[..n], line_buf);
+            }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return,
             Err(_) => return,
         }
     }
+}
+
+#[cfg(unix)]
+fn queued_bytes(fd: RawFd) -> Option<usize> {
+    let mut available: libc::c_int = 0;
+    // SAFETY: FIONREAD writes one `c_int` through a valid pointer; `fd` is the
+    // reader thread's own pipe.
+    let rc = unsafe { libc::ioctl(fd, libc::FIONREAD, &mut available) };
+    if rc < 0 {
+        return None;
+    }
+    usize::try_from(available).ok()
 }
 
 #[cfg(unix)]
@@ -657,7 +729,7 @@ enum PollOutcome {
 }
 
 #[cfg(unix)]
-fn poll_reader_or_cancel(reader_fd: RawFd, wakeup_fd: RawFd) -> PollOutcome {
+fn poll_reader_or_cancel(reader_fd: RawFd, watch: &CancelWatch) -> PollOutcome {
     let mut fds = [
         libc::pollfd {
             fd: reader_fd,
@@ -665,15 +737,28 @@ fn poll_reader_or_cancel(reader_fd: RawFd, wakeup_fd: RawFd) -> PollOutcome {
             revents: 0,
         },
         libc::pollfd {
-            fd: wakeup_fd,
+            fd: watch.wakeup.as_ref().map_or(-1, AsRawFd::as_raw_fd),
             events: libc::POLLIN,
             revents: 0,
         },
     ];
+    // With a wakeup fd the reader can park indefinitely; without one it must
+    // wake periodically to observe the cancel flag.
+    let (nfds, timeout_ms) = if watch.wakeup.is_some() {
+        (2, -1)
+    } else {
+        (1, CANCEL_FLAG_POLL_INTERVAL.as_millis() as libc::c_int)
+    };
     loop {
-        // SAFETY: `fds` is a valid two-element pollfd array we own for the
-        // duration of the call; both descriptors are owned by this thread.
-        let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        // The flag is checked on every pass so a continuously readable pipe
+        // cannot starve cancellation.
+        if watch.requested.load(Ordering::Acquire) {
+            return PollOutcome::Cancelled;
+        }
+        // SAFETY: `fds` is a valid pollfd array we own for the duration of
+        // the call and `nfds` never exceeds its length; both descriptors are
+        // owned by this thread.
+        let rc = unsafe { libc::poll(fds.as_mut_ptr(), nfds, timeout_ms) };
         if rc < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == io::ErrorKind::Interrupted {
