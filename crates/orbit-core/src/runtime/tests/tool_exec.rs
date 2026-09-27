@@ -244,11 +244,30 @@ fn root_resolution_keeps_linked_worktrees_and_rejects_unrelated_checkouts() {
     );
 }
 
+#[test]
+fn root_resolution_uses_nested_linked_worktree_from_root_and_subdirectory() {
+    let fixture = GitRuntimeFixture::new();
+    let nested = canonical(&fixture.nested_linked);
+    let subdirectory = nested.join("subdirectory");
+    std::fs::create_dir(&subdirectory).expect("create linked worktree subdirectory");
+
+    for cwd in [&nested, &subdirectory] {
+        let probes = ContextResolutionProbes::capture();
+        let mut context = cwd_context(cwd, None, None);
+        populate_filesystem_policy_context(&fixture.runtime, &mut context)
+            .expect("populate nested linked worktree");
+        assert_eq!(context.workspace_root.as_deref(), Some(nested.as_path()));
+        assert!(probes.git_checkout_probes() >= 1);
+        assert!(probes.git_common_dir_probes() >= 1);
+    }
+}
+
 struct GitRuntimeFixture {
     _root: TempDir,
     runtime: OrbitRuntime,
     repo_root: PathBuf,
     linked: PathBuf,
+    nested_linked: PathBuf,
     unrelated: PathBuf,
 }
 
@@ -258,6 +277,7 @@ impl GitRuntimeFixture {
         let global_root = root.path().join("global");
         let repo_root = root.path().join("repo");
         let linked = root.path().join("linked");
+        let nested_linked = repo_root.join(".orbit/state/worktrees/linked");
         let unrelated = root.path().join("unrelated");
         std::fs::create_dir_all(&global_root).expect("global");
         std::fs::create_dir_all(repo_root.join(".orbit")).expect("workspace");
@@ -282,6 +302,17 @@ impl GitRuntimeFixture {
                 "HEAD",
             ],
         );
+        std::fs::create_dir_all(nested_linked.parent().expect("nested parent"))
+            .expect("worktree directory");
+        git(
+            &repo_root,
+            &[
+                "worktree",
+                "add",
+                nested_linked.to_str().expect("utf8 nested linked path"),
+                "HEAD",
+            ],
+        );
 
         git(&unrelated, &["init", "-b", "other"]);
         git(&unrelated, &["config", "user.name", "Orbit Test"]);
@@ -301,6 +332,7 @@ impl GitRuntimeFixture {
             runtime,
             repo_root,
             linked,
+            nested_linked,
             unrelated,
         }
     }
