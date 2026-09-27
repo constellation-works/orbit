@@ -248,6 +248,11 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// A child process exceeded its deadline. The supervisor signalled the
+    /// owned process group and reaped the leader; descendants that remained in
+    /// that group were signalled with it.
+    #[error("process timed out after {timeout_ms}ms: {detail}")]
+    ProcessTimeout { timeout_ms: u64, detail: String },
     /// Strict worker containment refused a launch before the worker existed.
     #[error(
         "worker containment required but unavailable: {reason}; enable machine.worker_containment and run under a Linux systemd user manager, or drop --strict-worker-containment / machine.worker_containment_strict"

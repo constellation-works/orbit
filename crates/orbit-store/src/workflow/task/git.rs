@@ -7,13 +7,19 @@
 //! repository hooks, or let content filters rewrite snapshot bytes, and it needs
 //! per-invocation environment (index file, deterministic commit identity). That
 //! is a different contract, so it keeps its own runner here.
+//!
+//! Each invocation runs in its own process group under a finite deadline. A
+//! stalled transport is killed and reaped, and the caller receives
+//! [`OrbitError::ProcessTimeout`] instead of waiting forever.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::create_private_dir_all;
+use orbit_common::process::run_bounded;
 use orbit_types::workspace::git_remotes_equivalent;
 
 /// Highest-precedence attributes for an Orbit-owned cache. Unsets every
@@ -26,6 +32,11 @@ use orbit_types::workspace::git_remotes_equivalent;
 /// layer that actually wins over `artifacts/files/.gitattributes`.
 const LITERAL_ATTRIBUTES: &str =
     "* -text -eol -crlf -ident -filter -diff -merge -working-tree-encoding\n";
+
+/// Wall-clock budget for one publication Git invocation. Local snapshots finish
+/// well under this. A transport that accepts a connection and then stops
+/// responding still has to return.
+const PUBLICATION_GIT_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Result of a Git invocation that is allowed to fail.
 pub(super) struct GitAttempt {
@@ -102,18 +113,36 @@ impl<'a> GitRunner<'a> {
             .env_remove("GIT_CONFIG_COUNT")
             .env_remove("GIT_CONFIG_PARAMETERS")
             .env_remove("GIT_ATTR_SOURCE");
-        let output = command.output().map_err(|error| {
-            OrbitError::Execution(format!(
-                "{} failed to run `git {}`: {error}",
-                self.label,
-                redact_args(args)
-            ))
-        })?;
+        let output = match run_bounded(&mut command, self.deadline()) {
+            Ok(output) => output,
+            Err(OrbitError::ProcessTimeout { timeout_ms, .. }) => {
+                return Err(OrbitError::ProcessTimeout {
+                    timeout_ms,
+                    detail: format!("{} `git {}`", self.label, redact_args(args)),
+                });
+            }
+            Err(OrbitError::Execution(message)) => {
+                return Err(OrbitError::Execution(format!(
+                    "{} failed to run `git {}`: {message}",
+                    self.label,
+                    redact_args(args)
+                )));
+            }
+            Err(other) => return Err(other),
+        };
         Ok(GitAttempt {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
+    }
+
+    fn deadline(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(deadline) = publication_git_deadline_override() {
+            return deadline;
+        }
+        PUBLICATION_GIT_DEADLINE
     }
 
     /// Single Git parent of `commit`. Publication history must stay linear, so
@@ -146,6 +175,22 @@ impl<'a> GitRunner<'a> {
     pub(super) fn error(&self, message: impl Into<String>) -> OrbitError {
         OrbitError::InvalidInput(format!("{}: {}", self.label, message.into()))
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static GIT_DEADLINE_OVERRIDE: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+/// Shorten or restore the publication Git deadline for the current test thread.
+#[cfg(test)]
+pub(crate) fn set_publication_git_deadline(deadline: Option<Duration>) {
+    GIT_DEADLINE_OVERRIDE.with(|cell| cell.set(deadline));
+}
+
+#[cfg(test)]
+fn publication_git_deadline_override() -> Option<Duration> {
+    GIT_DEADLINE_OVERRIDE.with(|cell| cell.get())
 }
 
 fn git_dir_from_args<'a>(args: &'a [&'a str]) -> Option<&'a Path> {
