@@ -147,6 +147,80 @@ fn publication_remote_rejects_credentials_aliases_paths_and_source_equivalents()
 }
 
 #[test]
+fn malformed_credential_urls_are_rejected_with_redacted_diagnostics() {
+    let cases = [
+        (
+            "https://review-user:invalid-host-secret@[invalid/tasks.git",
+            "https://***@[invalid/tasks.git",
+            "review-user",
+            "invalid-host-secret",
+        ),
+        (
+            "https://review-user:invalid-port-secret@github.com:not-a-port/tasks.git",
+            "https://***@github.com:not-a-port/tasks.git",
+            "review-user",
+            "invalid-port-secret",
+        ),
+        (
+            "ssh://deploy-user:invalid-host-secret@[invalid/tasks.git",
+            "ssh://***@[invalid/tasks.git",
+            "deploy-user",
+            "invalid-host-secret",
+        ),
+        (
+            "ssh://deploy-user:invalid-port-secret@github.com:not-a-port/tasks.git",
+            "ssh://***@github.com:not-a-port/tasks.git",
+            "deploy-user",
+            "invalid-port-secret",
+        ),
+    ];
+
+    for (remote, redacted, username, password) in cases {
+        assert_eq!(redact_git_remote(remote), redacted);
+
+        let diagnostic = validate_publication_remote(remote)
+            .expect_err("malformed credential URL")
+            .to_string();
+        assert!(
+            diagnostic.contains("is not a valid Git URL"),
+            "{diagnostic}"
+        );
+        assert!(diagnostic.contains(redacted), "{diagnostic}");
+        assert!(!diagnostic.contains(username), "{diagnostic}");
+        assert!(!diagnostic.contains(password), "{diagnostic}");
+    }
+}
+
+#[test]
+fn valid_ssh_credentials_are_rejected_and_credential_free_identity_is_preserved() {
+    let credential_remote = "ssh://deploy-user:deploy-secret@github.com/example/tasks.git";
+    let diagnostic = validate_publication_remote(credential_remote)
+        .expect_err("credential URL")
+        .to_string();
+    assert!(
+        diagnostic.contains("must not contain credentials"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("ssh://***@github.com/example/tasks.git"),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains("deploy-user"), "{diagnostic}");
+    assert!(!diagnostic.contains("deploy-secret"), "{diagnostic}");
+    assert_eq!(
+        redact_git_remote(credential_remote),
+        "ssh://***@github.com/example/tasks.git"
+    );
+
+    let credential_free = "ssh://github.com/example/tasks.git";
+    assert!(validate_publication_remote(credential_free).is_ok());
+    assert_eq!(
+        git_remote_identity(credential_free).expect("credential-free identity"),
+        "github.com/example/tasks"
+    );
+}
+
+#[test]
 fn publication_branch_and_id_reject_malformed_refs() {
     assert_eq!(
         canonicalize_publication_branch("main").expect("short name"),

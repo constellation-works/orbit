@@ -197,7 +197,8 @@ pub fn redact_git_remote(remote: &str) -> String {
     if looks_like_local_path(remote) {
         return "<local-path>".to_string();
     }
-    if let Some(redacted) = redact_url_userinfo(remote) {
+    if let Some(redacted) = redact_url_userinfo(remote).or_else(|| redact_raw_url_userinfo(remote))
+    {
         return redacted;
     }
     redact_scp_userinfo(remote).unwrap_or_else(|| remote.to_string())
@@ -359,6 +360,17 @@ fn redact_url_userinfo(remote: &str) -> Option<String> {
     let _ = url.set_username("***");
     let _ = url.set_password(None);
     Some(url.to_string())
+}
+
+fn redact_raw_url_userinfo(remote: &str) -> Option<String> {
+    let (scheme, remainder) = remote.split_once("://")?;
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let (_, host) = authority.rsplit_once('@')?;
+    Some(format!(
+        "{scheme}://***@{host}{}",
+        &remainder[authority_end..]
+    ))
 }
 
 fn redact_scp_userinfo(remote: &str) -> Option<String> {
