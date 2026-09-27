@@ -279,3 +279,252 @@ fn a_profile_without_exclusions_reports_nothing_unenforced() {
 
     assert!(boundary.unenforced_exclusions.is_empty());
 }
+
+/// Directory symlinks come back as their canonical targets, so `loop -> .`
+/// and a two-directory cycle revisit a directory the walk is already in. The
+/// canonical path does not grow, and the kernel `ELOOP` limit never trips;
+/// compilation has to finish anyway. The fixture runs in a child so a
+/// regression overflows that process instead of the test runner.
+///
+/// In-bound aliases still resolve to the target's grant. A link that leaves
+/// the workspace does not gain one.
+#[cfg(unix)]
+#[test]
+fn a_directory_symlink_cycle_finishes_grant_compilation() {
+    const CHILD: &str = "ORBIT_LANDLOCK_WORKSPACE_CYCLE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .arg("a_directory_symlink_cycle_finishes_grant_compilation")
+            .env(CHILD, "1")
+            .output()
+            .expect("spawn cycle fixture");
+        assert!(
+            output.status.success(),
+            "cycle fixture failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    self_link_with_an_exclusion_keeps_allowed_and_refuses_denied();
+    two_directory_cycle_keeps_allowed_and_refuses_denied();
+    in_bound_alias_keeps_the_target_grant();
+    disallowed_root_with_a_self_link_grants_only_the_kept_subtree();
+    carve_walkers_stay_bounded_and_keep_grants();
+}
+
+#[cfg(unix)]
+fn self_link_with_an_exclusion_keeps_allowed_and_refuses_denied() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    let allowed = workspace.path().join("ok.txt");
+    let denied = workspace.path().join("vault/token.txt");
+    let outside_file = outside.path().join("secret.txt");
+    fs::write(&allowed, "ok").expect("write allowed");
+    fs::create_dir(workspace.path().join("vault")).expect("mkdir vault");
+    fs::write(&denied, "token").expect("write denied");
+    fs::write(&outside_file, "secret").expect("write outside");
+    std::os::unix::fs::symlink(".", workspace.path().join("loop")).expect("symlink loop");
+    std::os::unix::fs::symlink(&outside_file, workspace.path().join("escape"))
+        .expect("symlink escape");
+    std::os::unix::fs::symlink("ok.txt", workspace.path().join("alias.txt"))
+        .expect("symlink alias");
+
+    let grants = compile(workspace.path(), &profile(&["**"], &["vault/**"]));
+
+    assert!(grants_read(&grants, &allowed), "allowed file: {grants:?}");
+    assert!(
+        grants_read(&grants, &workspace.path().join("alias.txt")),
+        "in-bound file alias: {grants:?}"
+    );
+    assert!(!grants_read(&grants, &denied), "denied file: {grants:?}");
+    assert!(
+        !grants_read(&grants, &outside_file),
+        "outside file: {grants:?}"
+    );
+}
+
+#[cfg(unix)]
+fn two_directory_cycle_keeps_allowed_and_refuses_denied() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    fs::create_dir_all(workspace.path().join("a/vault")).expect("mkdir a/vault");
+    fs::create_dir_all(workspace.path().join("b/vault")).expect("mkdir b/vault");
+    let a_ok = workspace.path().join("a/ok.txt");
+    let b_ok = workspace.path().join("b/ok.txt");
+    let a_denied = workspace.path().join("a/vault/token.txt");
+    let b_denied = workspace.path().join("b/vault/token.txt");
+    let outside_file = outside.path().join("secret.txt");
+    fs::write(&a_ok, "a").expect("write a");
+    fs::write(&b_ok, "b").expect("write b");
+    fs::write(&a_denied, "no").expect("write a token");
+    fs::write(&b_denied, "no").expect("write b token");
+    fs::write(&outside_file, "secret").expect("write outside");
+    std::os::unix::fs::symlink("../b", workspace.path().join("a/to_b")).expect("symlink a to b");
+    std::os::unix::fs::symlink("../a", workspace.path().join("b/to_a")).expect("symlink b to a");
+    std::os::unix::fs::symlink(&outside_file, workspace.path().join("a/escape"))
+        .expect("symlink escape");
+
+    let grants = compile(
+        workspace.path(),
+        &profile(&["**"], &["a/vault/**", "b/vault/**"]),
+    );
+
+    assert!(grants_read(&grants, &a_ok), "a allowed: {grants:?}");
+    assert!(grants_read(&grants, &b_ok), "b allowed: {grants:?}");
+    assert!(!grants_read(&grants, &a_denied), "a denied: {grants:?}");
+    assert!(!grants_read(&grants, &b_denied), "b denied: {grants:?}");
+    assert!(
+        !grants_read(&grants, &outside_file),
+        "outside file: {grants:?}"
+    );
+}
+
+#[cfg(unix)]
+fn in_bound_alias_keeps_the_target_grant() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    fs::create_dir_all(workspace.path().join("real/vault")).expect("mkdir real/vault");
+    let allowed = workspace.path().join("real/ok.txt");
+    let denied = workspace.path().join("real/vault/token.txt");
+    fs::write(&allowed, "ok").expect("write allowed");
+    fs::write(&denied, "token").expect("write denied");
+    std::os::unix::fs::symlink("real", workspace.path().join("alias")).expect("symlink alias");
+    std::os::unix::fs::symlink(".", workspace.path().join("loop")).expect("symlink loop");
+
+    let grants = compile(workspace.path(), &profile(&["**"], &["real/vault/**"]));
+
+    assert!(grants_read(&grants, &allowed), "real file: {grants:?}");
+    assert!(
+        grants_read(&grants, &workspace.path().join("alias/ok.txt")),
+        "alias file: {grants:?}"
+    );
+    assert!(!grants_read(&grants, &denied), "real denied: {grants:?}");
+    assert!(
+        !grants_read(&grants, &workspace.path().join("alias/vault/token.txt")),
+        "alias denied: {grants:?}"
+    );
+}
+
+#[cfg(unix)]
+fn disallowed_root_with_a_self_link_grants_only_the_kept_subtree() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    fs::create_dir_all(workspace.path().join("kept/vault")).expect("mkdir kept");
+    fs::create_dir(workspace.path().join("a")).expect("mkdir a");
+    fs::create_dir(workspace.path().join("b")).expect("mkdir b");
+    let allowed = workspace.path().join("kept/ok.txt");
+    let denied = workspace.path().join("kept/vault/token.txt");
+    let beside = workspace.path().join("beside.txt");
+    let hidden = workspace.path().join("a/hidden.txt");
+    fs::write(&allowed, "ok").expect("write allowed");
+    fs::write(&denied, "token").expect("write denied");
+    fs::write(&beside, "beside").expect("write beside");
+    fs::write(&hidden, "hidden").expect("write hidden");
+    std::os::unix::fs::symlink(".", workspace.path().join("loop")).expect("symlink loop");
+    std::os::unix::fs::symlink("../b", workspace.path().join("a/to_b")).expect("symlink a to b");
+    std::os::unix::fs::symlink("../a", workspace.path().join("b/to_a")).expect("symlink b to a");
+
+    let grants = compile(workspace.path(), &profile(&["kept/**"], &["kept/vault/**"]));
+
+    assert!(grants_read(&grants, &allowed), "kept file: {grants:?}");
+    assert!(!grants_read(&grants, &denied), "kept denied: {grants:?}");
+    assert!(!grants_read(&grants, &beside), "beside file: {grants:?}");
+    assert!(!grants_read(&grants, &hidden), "cycle file: {grants:?}");
+}
+
+#[cfg(unix)]
+fn carve_walkers_stay_bounded_and_keep_grants() {
+    use std::collections::BTreeSet;
+
+    use super::super::workspace::{carve_out, carve_out_boundary, carve_out_unlistable};
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let outside = tempfile::tempdir().expect("outside");
+    let root = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let outside_root = outside.path().canonicalize().expect("canonical outside");
+    let allowed = root.join("ok.txt");
+    let denied = root.join("vault/token.txt");
+    let a_ok = root.join("a/ok.txt");
+    let b_ok = root.join("b/ok.txt");
+    let a_denied = root.join("a/token.txt");
+    let outside_file = outside_root.join("secret.txt");
+    fs::write(&allowed, "ok").expect("write allowed");
+    fs::create_dir(root.join("vault")).expect("mkdir vault");
+    fs::write(&denied, "token").expect("write denied");
+    fs::create_dir(root.join("a")).expect("mkdir a");
+    fs::create_dir(root.join("b")).expect("mkdir b");
+    fs::write(&a_ok, "a").expect("write a");
+    fs::write(&b_ok, "b").expect("write b");
+    fs::write(&a_denied, "no").expect("write a token");
+    fs::write(&outside_file, "secret").expect("write outside");
+    std::os::unix::fs::symlink(".", root.join("loop")).expect("symlink loop");
+    std::os::unix::fs::symlink("../b", root.join("a/to_b")).expect("symlink a to b");
+    std::os::unix::fs::symlink("../a", root.join("b/to_a")).expect("symlink b to a");
+    std::os::unix::fs::symlink(&outside_file, root.join("escape")).expect("symlink escape");
+
+    let denied_paths = BTreeSet::from([denied.clone(), a_denied.clone()]);
+    let carved = carve_out(&root, &denied_paths).expect("carve_out");
+    assert!(
+        grants_read(&carved, &allowed),
+        "carve_out allowed: {carved:?}"
+    );
+    assert!(grants_read(&carved, &a_ok), "carve_out a: {carved:?}");
+    assert!(grants_read(&carved, &b_ok), "carve_out b: {carved:?}");
+    assert!(
+        !grants_read(&carved, &denied),
+        "carve_out denied: {carved:?}"
+    );
+    assert!(
+        !grants_read(&carved, &a_denied),
+        "carve_out a denied: {carved:?}"
+    );
+    assert!(
+        !grants_read(&carved, &outside_file),
+        "carve_out outside: {carved:?}"
+    );
+
+    let unlisted = carve_out_unlistable(&root, &denied_paths).expect("carve_out_unlistable");
+    assert!(
+        grants_read(&unlisted, &allowed),
+        "unlistable allowed: {unlisted:?}"
+    );
+    assert!(grants_read(&unlisted, &a_ok), "unlistable a: {unlisted:?}");
+    assert!(grants_read(&unlisted, &b_ok), "unlistable b: {unlisted:?}");
+    assert!(
+        !grants_read(&unlisted, &denied),
+        "unlistable denied: {unlisted:?}"
+    );
+    assert!(
+        !grants_read(&unlisted, &a_denied),
+        "unlistable a denied: {unlisted:?}"
+    );
+    assert!(
+        !grants_read(&unlisted, &outside_file),
+        "unlistable outside: {unlisted:?}"
+    );
+
+    let listable = BTreeSet::from([denied.clone()]);
+    let unlistable = BTreeSet::from([a_denied.clone()]);
+    let boundary = carve_out_boundary(&root, &unlistable, &listable).expect("carve_out_boundary");
+    assert!(
+        grants_read(&boundary, &allowed),
+        "boundary allowed: {boundary:?}"
+    );
+    assert!(grants_read(&boundary, &a_ok), "boundary a: {boundary:?}");
+    assert!(grants_read(&boundary, &b_ok), "boundary b: {boundary:?}");
+    assert!(
+        !grants_read(&boundary, &denied),
+        "boundary listable deny: {boundary:?}"
+    );
+    assert!(
+        !grants_read(&boundary, &a_denied),
+        "boundary unlistable deny: {boundary:?}"
+    );
+    assert!(
+        !grants_read(&boundary, &outside_file),
+        "boundary outside: {boundary:?}"
+    );
+}

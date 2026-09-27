@@ -176,7 +176,7 @@ fn grant_read_tree(
     reach: &DenyReach<'_>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     let denied = denied_paths(workspace_root, root, rules)?;
-    carve_out_beneath(root, &denied, reach)
+    carve_out_beneath(root, &denied, reach, &mut BTreeSet::new())
 }
 
 /// Walk into a workspace whose root is not itself allowed, granting the
@@ -187,12 +187,32 @@ fn allowed_subtrees(
     rules: &CompiledFsRules,
     reach: &DenyReach<'_>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    allowed_subtrees_in(workspace_root, dir, rules, reach, &mut BTreeSet::new())
+}
+
+fn allowed_subtrees_in(
+    workspace_root: &Path,
+    dir: &Path,
+    rules: &CompiledFsRules,
+    reach: &DenyReach<'_>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    // `dir` may be an alias of a directory this walk is already inside.
+    if !enter_dir(walked, dir) {
+        return Ok(Vec::new());
+    }
     let mut grants = Vec::new();
     for child in children_under(workspace_root, dir)? {
         if rules.allows(&relative_to(workspace_root, &child)?)? {
             grants.extend(grant_read_tree(workspace_root, &child, rules, reach)?);
         } else if child.is_dir() {
-            grants.extend(allowed_subtrees(workspace_root, &child, rules, reach)?);
+            grants.extend(allowed_subtrees_in(
+                workspace_root,
+                &child,
+                rules,
+                reach,
+                walked,
+            )?);
         }
     }
     Ok(grants)
@@ -207,7 +227,13 @@ fn denied_paths(
 ) -> Result<BTreeSet<PathBuf>, OrbitError> {
     let mut denied = BTreeSet::new();
     if rules.has_exclusion() {
-        collect_denied(workspace_root, root, rules, &mut denied)?;
+        collect_denied(
+            workspace_root,
+            root,
+            rules,
+            &mut denied,
+            &mut BTreeSet::new(),
+        )?;
     }
     Ok(denied)
 }
@@ -217,12 +243,16 @@ fn collect_denied(
     dir: &Path,
     rules: &CompiledFsRules,
     denied: &mut BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
 ) -> Result<(), OrbitError> {
+    if !enter_dir(walked, dir) {
+        return Ok(());
+    }
     for child in children_under(workspace_root, dir)? {
         if !rules.allows(&relative_to(workspace_root, &child)?)? {
             denied.insert(child);
         } else if child.is_dir() {
-            collect_denied(workspace_root, &child, rules, denied)?;
+            collect_denied(workspace_root, &child, rules, denied, walked)?;
         }
     }
     Ok(())
@@ -236,7 +266,7 @@ pub(super) fn carve_out(
     root: &Path,
     denied: &BTreeSet<PathBuf>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
-    carve_out_beneath(root, denied, &DenyReach::none(root))
+    carve_out_beneath(root, denied, &DenyReach::none(root), &mut BTreeSet::new())
 }
 
 /// Grant `root` while leaving every denied path beneath it with no grant at
@@ -257,6 +287,14 @@ pub(super) fn carve_out_unlistable(
     root: &Path,
     denied: &BTreeSet<PathBuf>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    carve_out_unlistable_in(root, denied, &mut BTreeSet::new())
+}
+
+fn carve_out_unlistable_in(
+    root: &Path,
+    denied: &BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     if denied.contains(root) {
         return Ok(Vec::new());
     }
@@ -266,9 +304,12 @@ pub(super) fn carve_out_unlistable(
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
     let mut grants = Vec::new();
     for child in children_under(root, root)? {
-        grants.extend(carve_out_unlistable(&child, denied)?);
+        grants.extend(carve_out_unlistable_in(&child, denied, walked)?);
     }
     Ok(grants)
 }
@@ -288,6 +329,15 @@ pub(super) fn carve_out_boundary(
     unlistable: &BTreeSet<PathBuf>,
     listable: &BTreeSet<PathBuf>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    carve_out_boundary_in(root, unlistable, listable, &mut BTreeSet::new())
+}
+
+fn carve_out_boundary_in(
+    root: &Path,
+    unlistable: &BTreeSet<PathBuf>,
+    listable: &BTreeSet<PathBuf>,
+    walked: &mut BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     if listable.is_empty() {
         return carve_out_unlistable(root, unlistable);
     }
@@ -300,9 +350,12 @@ pub(super) fn carve_out_boundary(
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
     let mut grants = Vec::new();
     for child in children_under(root, root)? {
-        grants.extend(carve_out_boundary(&child, unlistable, listable)?);
+        grants.extend(carve_out_boundary_in(&child, unlistable, listable, walked)?);
     }
     Ok(grants)
 }
@@ -313,6 +366,7 @@ fn carve_out_beneath(
     root: &Path,
     denied: &BTreeSet<PathBuf>,
     reach: &DenyReach<'_>,
+    walked: &mut BTreeSet<PathBuf>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
     if denied.contains(root) {
         return Ok(Vec::new());
@@ -324,10 +378,13 @@ fn carve_out_beneath(
     if !root.is_dir() {
         return Ok(Vec::new());
     }
+    if !enter_dir(walked, root) {
+        return Ok(Vec::new());
+    }
 
     let mut grants = vec![LandlockPathGrant::list_only(root.to_path_buf())];
     for child in children_under(root, root)? {
-        grants.extend(carve_out_beneath(&child, denied, reach)?);
+        grants.extend(carve_out_beneath(&child, denied, reach, walked)?);
     }
     Ok(grants)
 }
@@ -344,6 +401,13 @@ fn whole_path_grant(path: &Path) -> LandlockPathGrant {
 /// `boundary`. A symlink pointing out of the workspace must not smuggle an
 /// outside path into the ruleset; the child following that link is denied at
 /// the resolved location, which is where the profile is defined.
+///
+/// A directory symlink is returned as its canonical target. That target may
+/// be `dir` itself (`loop -> .`) or another directory this walk has already
+/// entered, and the canonical path does not grow, so the kernel `ELOOP`
+/// limit never stops the walk. Recursive callers bound that with
+/// [`enter_dir`]: the first visit grants the target, and a later alias of
+/// the same directory is not entered again.
 ///
 /// This runs once per directory before every activity-scoped spawn, so it
 /// avoids per-entry syscalls: `dir` is already canonical, which makes a
@@ -375,6 +439,16 @@ fn children_under(boundary: &Path, dir: &Path) -> Result<Vec<PathBuf>, OrbitErro
         }
     }
     Ok(children)
+}
+
+/// Whether `dir` is new to this walk.
+///
+/// Keys are the canonical paths [`children_under`] already returns. A second
+/// sighting is an alias (or a cycle back to one), not a new tree: its
+/// children were listed on the first visit, which is what keeps an in-bound
+/// alias's grants while a cycle terminates.
+fn enter_dir(walked: &mut BTreeSet<PathBuf>, dir: &Path) -> bool {
+    walked.insert(dir.to_path_buf())
 }
 
 fn relative_to(workspace_root: &Path, path: &Path) -> Result<String, OrbitError> {
