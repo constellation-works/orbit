@@ -248,6 +248,114 @@ fn mint_does_not_change_the_next_scheduler_decision() {
     );
 }
 
+fn write_external_definition(directory: &std::path::Path, name: &str) {
+    std::fs::create_dir_all(directory).expect("definition directory");
+    std::fs::write(
+        directory.join(format!("{name}.yaml")),
+        format!(
+            r#"schemaVersion: 1
+name: {name}
+description: outside the definition directory
+schedule:
+  every_minutes: 60
+template:
+  title: Outside {name}
+"#
+        ),
+    )
+    .expect("write external definition");
+}
+
+fn assert_mint_refused(runtime: &OrbitRuntime, name: &str) {
+    let minted = runtime.auto_task_mint(name);
+    assert!(
+        matches!(minted, Err(orbit_common::OrbitError::InvalidInput(_))),
+        "mint {name:?} must refuse the lookup before creating a task, got {minted:?}"
+    );
+}
+
+#[test]
+fn mint_rejects_absolute_and_traversal_lookups_without_creating_a_task() {
+    let runtime = runtime();
+    let orbit = runtime.paths().local_dir.clone();
+    write_external_definition(&orbit, "outside");
+    let absolute_root = tempfile::tempdir().expect("absolute definition root");
+    write_external_definition(absolute_root.path(), "escaped");
+    let absolute_name = absolute_root
+        .path()
+        .join("escaped")
+        .to_str()
+        .expect("utf-8 absolute path")
+        .to_string();
+
+    for name in [
+        "../outside",
+        "..",
+        "foo/../../outside",
+        absolute_name.as_str(),
+    ] {
+        assert_mint_refused(&runtime, name);
+    }
+    assert!(
+        runtime.list_tasks().expect("tasks").is_empty(),
+        "a refused lookup must not mint"
+    );
+
+    let params = interval_params("chore", 60);
+    assert_eq!(params.dedupe, DedupePolicy::SkipIfOpen);
+    runtime
+        .auto_task_add(params)
+        .expect("add in-scope definition");
+    runtime
+        .auto_task_toggle("chore", false)
+        .expect("disable definition");
+    let shown = runtime
+        .auto_task_show("chore")
+        .expect("show regular definition")
+        .expect("regular definition is present");
+    assert!(!shown.enabled);
+    assert!(cursor_bytes(&runtime).is_none());
+    let minted = runtime
+        .auto_task_mint("chore")
+        .expect("manual mint ignores enabled, dedupe, and due state");
+    assert!(minted.tags.contains(&auto_task_tag("chore")));
+    assert!(cursor_bytes(&runtime).is_none());
+    assert_eq!(runtime.list_tasks().expect("tasks").len(), 1);
+    assert_mint_refused(&runtime, "../outside");
+    assert_mint_refused(&runtime, &absolute_name);
+    assert_eq!(runtime.list_tasks().expect("tasks").len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn mint_refuses_symlinked_definition_file_and_directory() {
+    use std::os::unix::fs::symlink;
+
+    let runtime = runtime();
+    let outside = tempfile::tempdir().expect("symlink target root");
+    write_external_definition(outside.path(), "linked");
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    std::fs::create_dir_all(&definitions).expect("auto_tasks directory");
+    symlink(
+        outside.path().join("linked.yaml"),
+        definitions.join("linked.yaml"),
+    )
+    .expect("definition symlink");
+    assert_mint_refused(&runtime, "linked");
+
+    let escaped_root = tempfile::tempdir().expect("directory symlink root");
+    let escaped_definitions = escaped_root.path().join("auto_tasks");
+    write_external_definition(&escaped_definitions, "escaped");
+    std::fs::remove_dir_all(&definitions).expect("replace auto_tasks");
+    symlink(&escaped_definitions, &definitions).expect("directory symlink");
+    assert_mint_refused(&runtime, "escaped");
+    assert_mint_refused(&runtime, "missing");
+    assert!(
+        runtime.list_tasks().expect("tasks").is_empty(),
+        "symlink refusals must not mint"
+    );
+}
+
 #[test]
 fn an_open_manually_minted_instance_defers_the_next_fire_like_a_fired_one() {
     // The flip side of provenance parity: a manually minted task carries the
