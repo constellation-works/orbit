@@ -115,13 +115,15 @@ no `completion` input, end at `claim_handoff`, and contain no `git_merge`, `pr_c
 no origin or PR credentials.
 
 - `claim_validate` resolves candidate and base from Git in the executor's worktree, refuses a
-  candidate that does not descend from the base, runs the owner's
-  `workflow.required_validation_commands` on that exact candidate, and attaches one
-  `HandoffValidationLog` per command to the owner's task through the routed coordination
-  transport. An empty owner requirement list fails closed on both sides.
-- `claim_handoff` re-observes the same identity, refuses a worktree that moved, and records the
-  typed `TaskHandoff` as the claim's durable pending settlement *before* any owner call, so a
-  disconnect leaves one immutable settlement the next refill retries idempotently.
+  candidate that does not descend from the base, and requires the checked-out branch and HEAD to
+  match the candidate with no staged, tracked or untracked changes. It runs the owner's
+  `workflow.required_validation_commands` on that exact candidate and checks the same Git state
+  after each command. Passing logs are attached to the owner's task through the routed
+  coordination transport only after all commands pass without changing the candidate. Git-ignored
+  build output is allowed. An empty owner requirement list fails closed on both sides.
+- `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
+  records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
+  call, so a disconnect leaves one immutable settlement the next refill retries idempotently.
 
 **Execution authority** is the trusted worker binding plus the durable admission, never a
 payload: `execute_pipeline_run_worker` admits a claimed leaf only when the binding's task, claim,
@@ -250,8 +252,9 @@ and landing branch, execution summary and validation artifact references.
   `{ policy: none, disposition: not_required }`, with no reviewed SHA, verdict or review artifact;
   the PR pipeline's `gate: not_required` is adapted into it. Task status `review` means a delivery
   handoff awaiting completion authority, not that a review occurred.
-- Validation runs on the exact candidate/base pair. Artifacts must live in the owner's store; a
-  follower-local path is not evidence.
+- Validation runs on the exact candidate/base pair and refuses staged, tracked or relevant
+  untracked candidate changes before checks, after each check and at handoff. Artifacts must live
+  in the owner's store; a follower-local path is not evidence.
 - No-diff/already-landed work carries its typed evidence instead of a PR; the owner observer
   itself runs the Git ancestry, delivery-marker, unchanged-scope and clean-tree checks.
 

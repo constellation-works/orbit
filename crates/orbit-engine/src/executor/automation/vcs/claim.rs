@@ -35,7 +35,8 @@ use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::input_string_field;
 
 use super::git::{
-    BaseSyncMode, git_command_success, git_output, git_success, resolve_worktree_start_point,
+    BaseSyncMode, git_command_success, git_output, git_output_raw, git_success,
+    resolve_worktree_start_point,
 };
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state};
 use super::review_gate::revision;
@@ -267,6 +268,41 @@ fn observe(
     Ok(candidate)
 }
 
+/// Git's candidate tree is the committed HEAD only when the checked-out
+/// branch still points there and no tracked or untracked input differs from
+/// it. Ignored build output is intentionally outside this check.
+fn require_clean_candidate(
+    workspace_path: &Path,
+    candidate: &HandoffCandidate,
+) -> Result<(), OrbitError> {
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch != candidate.source_branch {
+        return Err(refused(format!(
+            "the checked-out source branch moved from '{}' to '{branch}'; rerun validation",
+            candidate.source_branch
+        )));
+    }
+    let head = git_output(workspace_path, &["rev-parse", "HEAD"])?;
+    if head != candidate.candidate.commit {
+        return Err(refused(format!(
+            "the checked-out HEAD moved from validated candidate {} to {head}; rerun validation",
+            candidate.candidate.commit
+        )));
+    }
+    if !git_output_raw(
+        workspace_path,
+        &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+    )?
+    .is_empty()
+    {
+        return Err(refused(
+            "the claimed candidate has staged, tracked, or untracked changes; commit or remove \
+             them and rerun validation on the exact candidate",
+        ));
+    }
+    Ok(())
+}
+
 /// The run's sync mode, which every other claimed-leaf step already honors.
 ///
 /// An explicit `base_sync` on the activity input wins. When it is absent, ship
@@ -495,12 +531,13 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         ));
     }
     let candidate = observe(&workspace_path, &context, input)?;
+    require_clean_candidate(&workspace_path, &candidate)?;
 
     // A repository check suite is not a Git invocation: it gets the same
     // allow-listed child environment an agent subprocess would, so a command
     // that needs a configured toolchain variable can still find it.
     let environment = host.agent_subprocess_environment(&[]);
-    let mut references = Vec::new();
+    let mut logs = Vec::new();
     let mut commands = Vec::new();
     for (index, command) in context.required_commands.iter().enumerate() {
         let command = command.trim();
@@ -528,6 +565,7 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
                 candidate.candidate.commit
             )));
         }
+        require_clean_candidate(&workspace_path, &candidate)?;
         let log = HandoffValidationLog {
             schema_version: 1,
             workspace_id: context.workspace_id.clone(),
@@ -544,12 +582,20 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         let content = serde_json::to_vec(&log)
             .map_err(|error| OrbitError::Execution(format!("encode validation log: {error}")))?;
         let path = format!("validation/{}/{index}.json", context.claim_id);
+        logs.push((path, content));
+        commands.push(command.to_string());
+    }
+
+    // A later required command must not invalidate logs from an earlier one.
+    // Publish them only after the whole suite has kept the candidate intact.
+    require_clean_candidate(&workspace_path, &candidate)?;
+    let mut references = Vec::new();
+    for (path, content) in logs {
         host.attach_claim_validation_log(&path, content.clone())?;
         references.push(HandoffArtifactRef {
             path,
             sha256: format!("{:x}", Sha256::digest(&content)),
         });
-        commands.push(command.to_string());
     }
 
     Ok(json!({
@@ -588,6 +634,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
              evidence pins the candidate that is still checked out",
         ));
     }
+    require_clean_candidate(&workspace_path, &candidate)?;
     let validation: Vec<HandoffArtifactRef> = input
         .get("validation")
         .cloned()
