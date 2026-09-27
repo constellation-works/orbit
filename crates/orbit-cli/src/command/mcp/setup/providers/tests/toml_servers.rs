@@ -217,6 +217,7 @@ fn grok_workspace_scope_init_and_remove_preserve_unrelated_entries() {
         parsed["mcp_servers"]["orbit"]["enabled"].as_bool(),
         Some(true)
     );
+    assert!(parsed["mcp_servers"]["orbit"].get("env_vars").is_none());
     assert!(parsed["mcp_servers"]["orbit"].get("cwd").is_none());
     assert_eq!(
         parsed["mcp_servers"]["other"]["command"].as_str(),

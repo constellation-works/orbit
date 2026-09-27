@@ -7,11 +7,13 @@ without requiring an Orbit source checkout.
 
 ## Select the store before reading or writing
 
-When using MCP, call `orbit_workspace_list({})` on the configured connection
-first. For CLI-only use, inspect `orbit workspace list` and `orbit workspace show`
-on the intended host, then use its registered workspace in tool calls. MCP setup
-is not a prerequisite for local task tracking. Inspect host, workspace, ownership,
-availability and capabilities where returned.
+In a managed activity, use the injected task and inherited workspace binding;
+its allowlist may omit `orbit.workspace.list`. For an unbound MCP session, call
+`orbit_workspace_list({})` on the configured connection first. For CLI-only use,
+inspect `orbit workspace list` and `orbit workspace show` on the intended host,
+then use its registered workspace in tool calls. MCP setup is not a prerequisite
+for local task tracking. Inspect host, workspace, ownership, availability and
+capabilities where returned.
 
 - Direct server: pass the returned logical workspace ID as `workspace`.
   The server can also resolve registered names and paths, but IDs avoid

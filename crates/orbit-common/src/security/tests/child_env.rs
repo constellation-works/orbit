@@ -113,6 +113,22 @@ fn orbit_execution_envelope_variables_reach_the_child() {
 }
 
 #[test]
+fn managed_activity_programs_reach_the_agent_child_for_nested_mcp() {
+    let mut parent = parent_env();
+    parent.push((
+        "ORBIT_PROC_ALLOWED_PROGRAMS".to_string(),
+        "git,rg".to_string(),
+    ));
+
+    let env = allowlisted_child_env_from(&parent, &[], &[]);
+
+    assert_eq!(
+        value_of(&env, "ORBIT_PROC_ALLOWED_PROGRAMS"),
+        Some("git,rg")
+    );
+}
+
+#[test]
 fn privilege_bearing_orbit_variables_do_not_ride_the_envelope_allowlist() {
     let parent = [
         ("ORBIT_OPERATOR", "1"),

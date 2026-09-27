@@ -11,10 +11,13 @@ checklist. An injected task snapshot is your starting context.
 
 ## Connect and act
 
-- With MCP, discover its tools and call `orbit_workspace_list`; copy the
-  returned selector, including host qualification when federated. For a CLI-only
-  installation, inspect `orbit workspace list/show` on the intended host and use
-  that registered workspace. Never substitute another host or shadow store.
+- With MCP, discover its tools. In a managed activity, use the injected task
+  and inherited workspace binding; `orbit.workspace.list` may be outside the
+  activity allowlist. In an unbound session, call `orbit_workspace_list` and
+  copy the returned selector, including host qualification when federated.
+  For a CLI-only installation, inspect `orbit workspace list/show` on the
+  intended host and use that registered workspace. Never substitute another
+  host or shadow store.
 - Use registered tools: MCP `orbit_task_show`, or the installed CLI's
   `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`.
   Include your agent family in `model` where supported. Use `fields` for compact

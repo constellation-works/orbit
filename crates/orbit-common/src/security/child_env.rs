@@ -38,7 +38,7 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
 ];
 
 /// Managed envelope names that a nested Codex MCP server needs for workspace
-/// binding and run or source-inspection attribution. These are names only;
+/// binding, attribution, and activity policy. These are names only;
 /// Codex copies their values from the managed child environment.
 pub const MCP_MANAGED_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
 /// Job-run identity forwarded to a nested MCP server.
@@ -50,13 +50,19 @@ pub const MCP_MANAGED_WORKSPACE_ENV: &str = "ORBIT_WORKSPACE";
 /// Registry locator forwarded to a nested MCP server.
 pub const MCP_MANAGED_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
 
-/// Exact set of managed binding and identity names Codex must forward.
+/// Exact managed binding, identity, and activity policy names Codex must forward.
 pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     MCP_MANAGED_CONTEXT_ENV,
     MCP_MANAGED_RUN_ID_ENV,
     MCP_MANAGED_SESSION_ID_ENV,
     MCP_MANAGED_WORKSPACE_ENV,
     MCP_MANAGED_REGISTRY_ROOT_ENV,
+    "ORBIT_AGENT_NAME",
+    "ORBIT_AGENT_MODEL",
+    "ORBIT_TASK_ACTOR_KIND",
+    "ORBIT_ACTIVITY_TOOLS",
+    "ORBIT_ACTIVITY_FS_PROFILE",
+    "ORBIT_PROC_ALLOWED_PROGRAMS",
 ];
 
 /// Exact envelope names a managed run exports or forwards into a child.
@@ -83,6 +89,7 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
     "ORBIT_BIN",
     "ORBIT_STEP_INDEX",
     "ORBIT_TASK_ACTOR_KIND",
+    "ORBIT_PROC_ALLOWED_PROGRAMS",
 ];
 
 /// Envelope families admitted by prefix because the engine treats them as
