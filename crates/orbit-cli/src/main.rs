@@ -41,8 +41,9 @@ mod usage_error;
 
 use clap::{Arg, ArgMatches, Command, CommandFactory, FromArgMatches};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_common::fs::generation::ParticipantRole;
 use orbit_core::ActorIdentity;
-use orbit_core::composition::pin_executable_generation;
+use orbit_core::composition::pin_executable_generation_as;
 
 #[cfg(test)]
 use crate::command::init::InitCommand;
@@ -207,6 +208,30 @@ fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
             matches!(clock.command, command::clock::ClockSubcommand::Tick(_))
         }
         _ => false,
+    }
+}
+
+/// What this process is while it participates in upgrade admission, so a
+/// breaking upgrade can name it and long-lived processes know to yield.
+fn participant_role(command: &command::Commands) -> ParticipantRole {
+    use command::Commands;
+    match command {
+        Commands::Mcp(mcp) if matches!(mcp.command, command::mcp::McpSubcommand::Serve(_)) => {
+            ParticipantRole::McpServe
+        }
+        Commands::Web(web) if matches!(web.command, command::web::WebSubcommand::Serve(_)) => {
+            ParticipantRole::Dashboard
+        }
+        Commands::Job(job)
+            if matches!(
+                job.command,
+                command::job::JobSubcommand::RunPipelineWorker(_)
+            ) =>
+        {
+            ParticipantRole::Drain
+        }
+        command if is_clock_tick(command) => ParticipantRole::Clock,
+        _ => ParticipantRole::Command,
     }
 }
 
@@ -384,12 +409,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-        match pin_executable_generation(
+        match pin_executable_generation_as(
             &root,
             matches!(
                 runtime_need,
                 RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
             ),
+            participant_role(&cli.command),
         ) {
             Ok(guard) => {
                 if clock_tick

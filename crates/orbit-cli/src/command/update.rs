@@ -5,6 +5,7 @@ use clap::Args;
 use orbit_cmd::update::{
     UpdateEnvironment, UpdateOutcome, UpdateReport, UpdateRequest, run_update,
 };
+use orbit_common::fs::generation;
 use orbit_core::OrbitError;
 
 use crate::command::{CommandOut, Payload};
@@ -55,10 +56,27 @@ impl UpdateCommand {
     /// Run the update and render its report.
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         if self.contract {
+            let identity = orbit_core::composition::compiled_compatibility();
             return Ok(Payload::detail(
-                serde_json::json!({"schema_version": 1,
-                    "contract": orbit_common::fs::generation::GENERATION_CONTRACT}),
-                orbit_common::fs::generation::GENERATION_CONTRACT,
+                serde_json::json!({
+                    "schema_version": 1,
+                    // Updaters that only speak executable-generation-v1 read
+                    // this field; every v2 binary still honours that protocol.
+                    "contract": generation::LEGACY_GENERATION_CONTRACT,
+                    "contracts": [
+                        generation::LEGACY_GENERATION_CONTRACT,
+                        generation::GENERATION_CONTRACT
+                    ],
+                    "admission_contract": generation::GENERATION_CONTRACT,
+                    "compatibility": identity,
+                    "resume": generation::RESUME_CAPABILITIES,
+                }),
+                format!(
+                    "{} (also honours {})\n  compatibility: {identity}\n  resume: {}",
+                    generation::GENERATION_CONTRACT,
+                    generation::LEGACY_GENERATION_CONTRACT,
+                    generation::RESUME_CAPABILITIES.join(", ")
+                ),
             )
             .into());
         }
@@ -70,6 +88,7 @@ impl UpdateCommand {
             // the replaced executable out of.
             let roots = orbit_cmd::update::admission_authorities(root_override)?;
             let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
+            let quiesce = generation::quiesce_bound().as_secs();
             return Ok(Payload::detail(
                 serde_json::json!({
                     "schema_version": 1,
@@ -77,11 +96,15 @@ impl UpdateCommand {
                     "reservation": false,
                     "global_root": roots.first(),
                     "admission_roots": roots,
-                    "contract": orbit_common::fs::generation::GENERATION_CONTRACT
+                    "contract": generation::LEGACY_GENERATION_CONTRACT,
+                    "admission_contract": generation::GENERATION_CONTRACT,
+                    "compatibility": orbit_core::composition::compiled_compatibility(),
+                    "quiesce_timeout_secs": quiesce,
                 }),
                 format!(
-                    "Upgrade admission available on {}. This observation does not reserve admission; use orbit update for guarded replacement.",
-                    describe_authorities(&roots)
+                    "Upgrade admission available on {}. This observation does not reserve admission; use orbit update for guarded replacement. Admission follows {}: builds with compatible state versions run side by side, and a breaking migration waits up to {quiesce}s for live Orbit processes to yield.",
+                    describe_authorities(&roots),
+                    generation::GENERATION_CONTRACT,
                 ),
             ).into());
         }

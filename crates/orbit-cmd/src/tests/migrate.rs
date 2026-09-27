@@ -128,7 +128,7 @@ fn workspace_layout_newer_than_binary_refuses_to_open() {
 }
 
 #[test]
-fn workspace_layout_newer_by_additive_migrations_opens_read_only() {
+fn workspace_layout_newer_by_additive_migrations_opens_for_older_binaries() {
     let roots = temp_roots();
     let state_dir = roots.workspace_root.join("state");
     fs::create_dir_all(&state_dir).expect("mkdir state");
@@ -143,6 +143,7 @@ fn workspace_layout_newer_by_additive_migrations_opens_read_only() {
             version: SUPPORTED_LAYOUT_VERSION,
             name: "remove-task-checkout-projections".to_string(),
         }],
+        read_only: None,
     };
     fs::write(
         state_dir.join("layout.compat"),
@@ -162,8 +163,12 @@ fn workspace_layout_newer_by_additive_migrations_opens_read_only() {
         .expect("the open must be recorded as forward-compatible");
     assert_eq!(forward.component, StateComponent::WorkspaceLayout);
     assert_eq!(forward.state_version, newer);
+    assert!(
+        forward.writable,
+        "layout Additive has always meant older writers stay correct"
+    );
 
-    // Read-only work is served rather than refused at open.
+    // Work is served rather than refused at open.
     runtime.list_tasks().expect("task listing must still work");
     assert_eq!(
         fs::read(state_dir.join("layout.version")).expect("read marker"),
@@ -208,6 +213,7 @@ fn workspace_layout_newer_by_a_breaking_migration_still_refuses() {
             version: newer,
             name: "relocate-run-state".to_string(),
         }],
+        read_only: None,
     };
     fs::write(
         state_dir.join("layout.compat"),

@@ -134,16 +134,19 @@ fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {
         })).collect::<Vec<_>>(),
         "up_to_date": status.pending_total() == 0 && !status.newer_than_binary(),
         "forward_compatible": {
-            "read_only": status.forward_compatible_only(),
+            "read_only": status.forward_compatible_only() && !status.forward_compatible_writable(),
+            "writable": status.forward_compatible_writable(),
             "layout": status.layout_forward_compatible.as_ref().map(|open| json!({
                 "state_version": open.state_version,
                 "supported_version": open.supported_version,
                 "min_reader_version": open.min_reader_version,
+                "writable": open.writable,
             })),
             "schema": status.schema_forward_compatible.as_ref().map(|open| json!({
                 "state_version": open.state_version,
                 "supported_version": open.supported_version,
                 "min_reader_version": open.min_reader_version,
+                "writable": open.writable,
             })),
         },
     });
@@ -192,11 +195,16 @@ fn status_trailer(status: &MigrateStatus) -> String {
     .into_iter()
     .flatten()
     {
-        trailer.push_str(&format!("\nread-only: {forward}"));
+        trailer.push_str(&format!("\nforward-compatible: {forward}"));
     }
-    if status.forward_compatible_only() {
+    if status.forward_compatible_writable() {
         trailer.push_str(
-            "\n\nThis workspace is newer than this binary, by additive migrations only: \
+            "\n\nThis workspace is newer than this binary, by migrations older binaries keep \
+             writing through: commands read and write it as usual.",
+        );
+    } else if status.forward_compatible_only() {
+        trailer.push_str(
+            "\n\nThis workspace is newer than this binary, by read-compatible migrations: \
              read-only commands work and writes are refused. Upgrade orbit to write to it.",
         );
     }

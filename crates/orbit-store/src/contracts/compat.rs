@@ -14,14 +14,19 @@
 //! [`MigrationCompatibility::Breaking`]. An older binary reads that record
 //! and decides:
 //!
-//! - no breaking migration above its supported version → open read-only
+//! - nothing above its supported version but [`MigrationCompatibility::Additive`]
+//!   migrations → open and keep writing ([`ForwardCompatibleOpen::writable`]);
+//! - no breaking migration above its supported version, but at least one
+//!   [`MigrationCompatibility::ReadCompatible`] one → open read-only
 //!   ([`ForwardCompatibleOpen`]);
 //! - otherwise → refuse, naming the first breaking migration it lacks
 //!   ([`CompatibilityRefusal`]).
 //!
 //! The record is conservative by construction. A missing, stale, corrupt, or
 //! future-format record refuses exactly as before, so state written by
-//! binaries that predate this contract keeps the old behaviour.
+//! binaries that predate this contract keeps the old behaviour. A record from
+//! a binary that predates the writer classification (no `read_only` list)
+//! opens read-only at most, as it did before writers were covered.
 
 use std::fmt;
 
@@ -34,27 +39,46 @@ pub const COMPATIBILITY_RECORD_FORMAT: u32 = 1;
 
 /// What a shipped migration means for a binary that does not have it.
 ///
-/// This is a claim about *readers*, made by the migration's author:
+/// This is a claim about older *readers and writers*, made by the migration's
+/// author. It also decides upgrade admission: an older process may keep
+/// running beside a newer one only across [`Self::Additive`] migrations
+/// (see `orbit_common::fs::generation`).
 ///
-/// - [`Self::Additive`] — the migration only adds state (new tables,
-///   columns, indexes, files) or rewrites state into a shape older binaries
-///   already understand. A binary without this migration still reads the
-///   state correctly and ignores what it does not know.
+/// - [`Self::Additive`] — the migration only adds state that an older binary
+///   can both read and keep writing through its own code paths: new tables
+///   no existing row depends on, nullable or defaulted columns, indexes an
+///   older writer cannot violate, or files it never touches. Rows an older
+///   binary writes afterwards stay correct for the newer binary, which reads
+///   a missing value as its documented default. Nothing is derived from
+///   existing rows that an older writer would leave stale, and nothing is
+///   reinterpreted.
+/// - [`Self::ReadCompatible`] — an older binary still reads the state
+///   correctly, but its writes would not be: a `NOT NULL` column without a
+///   default, a constraint or trigger its statements could trip, a projection
+///   or journal the newer binary keeps in step with rows an older writer
+///   would not update, or rows backfilled into a shape an older writer would
+///   write back in the old one. Older binaries open such state read-only.
 /// - [`Self::Breaking`] — the migration removes, renames, or reinterprets
 ///   state that an older binary reads or writes. Older binaries must refuse.
 ///
-/// When in doubt, declare [`Self::Breaking`]: the cost is the old flag-day
-/// behaviour, while a wrong `Additive` claim hands an old binary a store it
-/// misreads.
+/// When in doubt, declare the stricter class: the cost of [`Self::Breaking`]
+/// is the old flag-day behaviour, while a wrong `Additive` claim lets an old
+/// process write rows the newer binary misreads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MigrationCompatibility {
     Additive,
+    ReadCompatible,
     Breaking,
 }
 
 impl MigrationCompatibility {
     pub fn is_breaking(self) -> bool {
         matches!(self, Self::Breaking)
+    }
+
+    /// Whether an older binary may keep writing state this migration produced.
+    pub fn is_write_safe(self) -> bool {
+        matches!(self, Self::Additive)
     }
 }
 
@@ -103,6 +127,12 @@ pub struct CompatibilityRecord {
     /// Every breaking migration at or below `version`, ascending.
     #[serde(default)]
     pub breaking: Vec<BreakingMigration>,
+    /// Every [`MigrationCompatibility::ReadCompatible`] migration at or below
+    /// `version`, ascending. Absent in records written before older writers
+    /// were covered; a reader then assumes none of the newer migrations is
+    /// write-safe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<Vec<BreakingMigration>>,
 }
 
 impl CompatibilityRecord {
@@ -112,18 +142,27 @@ impl CompatibilityRecord {
     where
         I: IntoIterator<Item = (u32, &'a str, MigrationCompatibility)>,
     {
-        let breaking = registry
-            .into_iter()
-            .filter(|(entry_version, _, compat)| compat.is_breaking() && *entry_version <= version)
-            .map(|(entry_version, name, _)| BreakingMigration {
+        let mut breaking = Vec::new();
+        let mut read_only = Vec::new();
+        for (entry_version, name, compat) in registry {
+            if entry_version > version {
+                continue;
+            }
+            let entry = BreakingMigration {
                 version: entry_version,
                 name: name.to_string(),
-            })
-            .collect();
+            };
+            match compat {
+                MigrationCompatibility::Additive => {}
+                MigrationCompatibility::ReadCompatible => read_only.push(entry),
+                MigrationCompatibility::Breaking => breaking.push(entry),
+            }
+        }
         Self {
             format: COMPATIBILITY_RECORD_FORMAT,
             version,
             breaking,
+            read_only: Some(read_only),
         }
     }
 
@@ -155,7 +194,8 @@ impl CompatibilityRecord {
     }
 }
 
-/// A newer state this binary may open, read-only.
+/// A newer state this binary may open: read-only, or — when every newer
+/// migration is [`MigrationCompatibility::Additive`] — for writing too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardCompatibleOpen {
     pub component: StateComponent,
@@ -165,16 +205,28 @@ pub struct ForwardCompatibleOpen {
     pub supported_version: u32,
     /// Newest breaking migration the state carries.
     pub min_reader_version: u32,
+    /// Whether this binary may keep writing: every migration above
+    /// `supported_version` is write-safe for older writers.
+    pub writable: bool,
 }
 
 impl fmt::Display for ForwardCompatibleOpen {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} version {} is newer than this binary's supported version {}, \
-             but only by additive migrations; opened read-only",
-            self.component, self.state_version, self.supported_version
-        )
+        if self.writable {
+            write!(
+                f,
+                "{} version {} is newer than this binary's supported version {}, \
+                 but only by migrations older writers keep; opened for reads and writes",
+                self.component, self.state_version, self.supported_version
+            )
+        } else {
+            write!(
+                f,
+                "{} version {} is newer than this binary's supported version {}, \
+                 but only by read-compatible migrations; opened read-only",
+                self.component, self.state_version, self.supported_version
+            )
+        }
     }
 }
 
@@ -225,16 +277,22 @@ impl fmt::Display for CompatibilityRefusal {
     }
 }
 
-/// Decide whether a state recorded at `state_version` may be opened
-/// read-only by a binary supporting `supported_version`.
+/// Decide whether a state recorded at `state_version` may be opened by a
+/// binary supporting `supported_version`, and whether that binary may write.
 ///
 /// Call only when `state_version > supported_version`; a state at or below
 /// the supported version opens normally and never consults a record.
+///
+/// `write_gated` says whether the caller can hold such a state read-only.
+/// The store can (SQLite `query_only`); the workspace layout cannot, so for it
+/// a newer [`MigrationCompatibility::ReadCompatible`] migration refuses like a
+/// breaking one.
 pub fn evaluate_newer_state(
     component: StateComponent,
     state_version: u32,
     supported_version: u32,
     record: Option<CompatibilityRecord>,
+    write_gated: bool,
 ) -> Result<ForwardCompatibleOpen, CompatibilityRefusal> {
     debug_assert!(state_version > supported_version);
     let Some(record) = record else {
@@ -258,10 +316,30 @@ pub fn evaluate_newer_state(
     {
         return Err(CompatibilityRefusal::Breaking(missing.clone()));
     }
+    let newer_read_only = record.read_only.as_ref().map(|entries| {
+        entries
+            .iter()
+            .filter(|entry| entry.version > supported_version)
+            .min_by_key(|entry| entry.version)
+    });
+    let writable = match (newer_read_only, write_gated) {
+        // Every newer migration is write-safe for this binary.
+        (Some(None), _) => true,
+        (Some(Some(_)), true) => false,
+        (Some(Some(entry)), false) => {
+            return Err(CompatibilityRefusal::Breaking(entry.clone()));
+        }
+        // A record from before writers were classified. A write-gated state
+        // stays read-only, as it did then; an ungated one (the layout) never
+        // was, because its additive declarations already had to keep older
+        // writers safe.
+        (None, gated) => !gated,
+    };
     Ok(ForwardCompatibleOpen {
         component,
         state_version,
         supported_version,
         min_reader_version: record.min_reader_version(),
+        writable,
     })
 }

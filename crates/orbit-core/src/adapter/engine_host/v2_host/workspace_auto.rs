@@ -144,6 +144,10 @@ pub(super) fn classify_workspace_auto_tasks(
     // count.
     let occupancy = shared_leaf_occupancy(runtime)
         .map_err(|error| action_failed(action, format!("read shared leaf occupancy: {error}")))?;
+    // Between iterations nothing of this drain is in flight in-process: a
+    // drain worker yields to a pending generation switch or hands itself over
+    // to a replaced installation here.
+    runtime.drain_upgrade_boundary();
     let free_slots = if admissions_stopped || host_shutdown.is_some() {
         0
     } else {

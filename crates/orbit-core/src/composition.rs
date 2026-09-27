@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::generation::GenerationGuard;
+use orbit_common::fs::generation::{
+    Access, GenerationGuard, ParticipantRole, process_participation,
+};
 use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::Store;
+pub use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
-use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
@@ -253,20 +255,36 @@ impl OrbitRuntime {
     }
 }
 
-/// Pin this process against `root` before bootstrap. Read-only callers may
-/// join a live generation without rewriting `.generation.lock` when the
-/// compiled store schema equals the store's current schema.
+/// Join `root`'s generation before bootstrap, in the role this process
+/// already joined as (a plain command otherwise). See
+/// [`pin_executable_generation_as`].
 pub fn pin_executable_generation(
     root: &Path,
     read_only: bool,
 ) -> Result<GenerationGuard, OrbitError> {
-    if read_only {
-        GenerationGuard::for_process_read_only(root, SUPPORTED_SCHEMA_VERSION, || {
-            Store::open_read_only(&root.join("orbit.db"))?.schema_version()
-        })
+    let role = process_participation().map_or(ParticipantRole::Command, |(_, role)| role);
+    pin_executable_generation_as(root, read_only, role)
+}
+
+/// Join `root`'s generation before bootstrap under
+/// `compatibility-generation-v2`: any build whose store schema, workspace
+/// layout and feature schemas are compatible with the live participants is
+/// admitted, whatever its executable digest. A read-only caller that meets a
+/// v1-owned generation still joins it when the compiled store schema equals
+/// the store's current schema.
+pub fn pin_executable_generation_as(
+    root: &Path,
+    read_only: bool,
+    role: ParticipantRole,
+) -> Result<GenerationGuard, OrbitError> {
+    let access = if read_only {
+        Access::ReadOnly
     } else {
-        GenerationGuard::for_process(root)
-    }
+        Access::Write
+    };
+    GenerationGuard::for_process(root, &compiled_compatibility(), role, access, || {
+        Store::open_read_only(&root.join("orbit.db"))?.schema_version()
+    })
 }
 
 fn build_runtime(

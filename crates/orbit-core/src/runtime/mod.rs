@@ -37,6 +37,7 @@ pub(crate) mod run_input;
 pub(crate) mod task;
 pub use task::{InfraBlockedTask, StaleTaskReservation};
 pub(crate) mod tool_exec;
+pub(crate) mod upgrade_handover;
 mod worker_coordination;
 pub mod workspace;
 

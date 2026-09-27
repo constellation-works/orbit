@@ -251,6 +251,7 @@ fn stamp_newer_workspace(orbit_dir: &Path, version: u32, breaking: &[(u32, &str)
                 name: (*name).to_string(),
             })
             .collect(),
+        read_only: None,
     };
     fs::write(
         orbit_dir.join("state").join("layout.compat"),
@@ -384,6 +385,7 @@ fn newer_layout_with_a_stale_or_unreadable_record_still_refuses() {
                 format: COMPATIBILITY_RECORD_FORMAT,
                 version: SUPPORTED_LAYOUT_VERSION,
                 breaking: Vec::new(),
+                read_only: None,
             }
             .encode()
             .expect("encode")

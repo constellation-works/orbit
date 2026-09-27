@@ -23,14 +23,13 @@ mod error;
 pub mod federated;
 mod listener;
 mod remote;
+mod stdio_session;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
-use rmcp::ServiceExt;
-use rmcp::transport::io::stdio;
 use serde_json::Value;
 
 pub use adapter::OrbitToolServer;
@@ -41,6 +40,7 @@ pub use remote::{
     execute_federated_workspace_discovery, ignored_caller_authorization_paths, mcp_server_identity,
     safe_mcp_tool_names, serve_mcp_remote_proxy, warn_ignored_caller_authorization,
 };
+pub use stdio_session::{RESUME_ENV, StdioExit};
 
 /// Back-end for the complete MCP tool surface.
 ///
@@ -89,28 +89,15 @@ pub trait McpHost: Send + Sync + 'static {
     }
 }
 
-/// Serve the given host over MCP stdio with a default local context.
-pub async fn serve_stdio(host: Arc<dyn McpHost>) -> Result<(), OrbitError> {
-    serve_stdio_with_context(host, ToolSessionContext::trusted_local(None, None, None)).await
-}
-
 /// Serve MCP stdio with trusted session context.
+///
+/// Resumes a session handed over by a previous image of this process, and
+/// returns [`StdioExit::HandOver`] when this one should hand over in turn;
+/// see [`stdio_session`](crate::stdio_session).
 pub async fn serve_stdio_with_context(
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
-) -> Result<(), OrbitError> {
+) -> Result<StdioExit, OrbitError> {
     let server = OrbitToolServer::new_with_context(host, trusted_context);
-    serve_server(server).await
-}
-
-async fn serve_server(server: OrbitToolServer) -> Result<(), OrbitError> {
-    let running = server
-        .serve(stdio())
-        .await
-        .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio start: {error}")))?;
-    running
-        .waiting()
-        .await
-        .map_err(|error| OrbitError::Execution(format!("mcp serve_stdio wait: {error}")))?;
-    Ok(())
+    stdio_session::serve(server, stdio_session::resumed_session()).await
 }

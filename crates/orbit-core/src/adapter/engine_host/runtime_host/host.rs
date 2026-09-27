@@ -667,7 +667,10 @@ impl RuntimeHost for OrbitRuntime {
         output: &Value,
         compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
-        checkpoints::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)
+        checkpoints::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)?;
+        // The step is durable, so this is a safe point to yield to an upgrade.
+        self.yield_run_at_step_boundary(run_id);
+        Ok(())
     }
 
     fn checkpoint_failure_activity(

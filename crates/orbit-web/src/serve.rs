@@ -237,7 +237,10 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
 
     let addr = SocketAddr::new(args.host, args.port);
     let url = format!("http://{addr}");
-    let no_open = args.no_open;
+    // A dashboard that took over from a replaced image already has its tab.
+    let no_open = args.no_open || std::env::var_os(HANDOVER_ENV).is_some();
+    let handover = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
+    let handover_target = Arc::clone(&handover);
     let app = assets::dashboard_file_router()?
         .merge(health_router())
         .nest("/api", api::router())
@@ -279,7 +282,14 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         let shutdown_notify = Arc::new(Notify::new());
         let notify_on_signal = Arc::clone(&shutdown_notify);
         let shutdown = async move {
-            shutdown_signal().await;
+            tokio::select! {
+                () = shutdown_signal() => {}
+                target = lifecycle_boundary() => {
+                    if let Ok(mut slot) = handover_target.lock() {
+                        *slot = target;
+                    }
+                }
+            }
             // Ask cooperating long-lived connections (the `/api/log/stream`
             // SSE handler) to close now, before the bounded drain deadline
             // below is reached.
@@ -291,7 +301,59 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             .into_future();
 
         drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await
-    })
+    })?;
+    drop(tokio_runtime);
+    let target = handover.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(executable) = target {
+        // In-flight requests have drained and the listener is closed; the
+        // replacement binds the same address.
+        let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+        return Err(orbit_common::fs::generation::reexec(
+            &executable,
+            &args,
+            &[(HANDOVER_ENV, std::ffi::OsStr::new("1"))],
+        ));
+    }
+    Ok(())
+}
+
+/// Set on a dashboard exec'd to take over from a replaced image.
+const HANDOVER_ENV: &str = "ORBIT_DASHBOARD_HANDOVER";
+
+/// How often the dashboard checks for a replacement or a pending switch.
+const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Resolve when this dashboard should stop serving: with the installed
+/// executable to hand over to when a newer one replaced it, or `None` to
+/// exit so a pending breaking upgrade can proceed (a supervisor restarts it
+/// under the new binary).
+async fn lifecycle_boundary() -> Option<std::path::PathBuf> {
+    use orbit_common::fs::generation;
+    let mut interval = tokio::time::interval(LIFECYCLE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let decision = tokio::task::spawn_blocking(|| {
+            generation::process_participation()?;
+            if let Some(executable) = generation::handover_target(None) {
+                return Some(Some(executable));
+            }
+            generation::pending_switch_for_this_process().map(|_| None)
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(decision) = decision {
+            match &decision {
+                Some(executable) => tracing::info!(
+                    executable = %executable.display(),
+                    "the dashboard's executable was replaced; handing over once requests drain"
+                ),
+                None => tracing::info!("yielding the dashboard to a pending Orbit upgrade"),
+            }
+            return decision;
+        }
+    }
 }
 
 /// Race a server-drain future against a grace-period timeout that only

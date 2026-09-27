@@ -126,10 +126,14 @@ impl Store {
                 }
             }
         }
-        // A newer-but-additive database is readable, never writable by this
-        // binary. Pin the writer connection read-only in SQLite itself so a
-        // write cannot reach the file through any path that holds it.
-        if forward_compatible.is_some() {
+        // A newer database is writable by this binary only when every newer
+        // migration keeps older writers safe. Otherwise pin the writer
+        // connection read-only in SQLite itself so a write cannot reach the
+        // file through any path that holds it.
+        if forward_compatible
+            .as_ref()
+            .is_some_and(|forward: &ForwardCompatibleOpen| !forward.writable)
+        {
             conn.pragma_update(None, "query_only", "ON")
                 .map_err(|error| {
                     OrbitError::Store(format!(
@@ -154,7 +158,10 @@ impl Store {
     /// The scoped refusal for a write attempted against a forward-compatible
     /// read-only handle: name the operation, not the whole workspace.
     fn refuse_forward_compatible_write(&self, operation: &str) -> Option<OrbitError> {
-        let forward = self.forward_compatible.as_ref()?;
+        let forward = self
+            .forward_compatible
+            .as_ref()
+            .filter(|forward| !forward.writable)?;
         Some(OrbitError::Migration(format!(
             "cannot {operation}: this orbit binary supports {} version {} and the store records \
              version {}, so it was opened read-only; reads are served normally — upgrade orbit to \

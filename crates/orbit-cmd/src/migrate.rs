@@ -17,8 +17,9 @@
 //!
 //! Both paths also report forward compatibility (ORB-12434): a workspace
 //! newer than this binary is not automatically unusable, and
-//! [`MigrateStatus::forward_compatible_only`] distinguishes "newer, opens
-//! read-only" from "newer, refuses".
+//! [`MigrateStatus::forward_compatible_only`] distinguishes "newer, opens"
+//! from "newer, refuses", and [`MigrateStatus::forward_compatible_writable`]
+//! whether it opens for writes too.
 
 use std::path::{Path, PathBuf};
 
@@ -77,9 +78,9 @@ impl MigrateStatus {
         self.layout_version > self.layout_supported || self.schema_version > self.schema_supported
     }
 
-    /// True when everything newer than this binary is newer only by additive
-    /// migrations, so the workspace still serves read-only commands
-    /// (ORB-12434). False when nothing is newer.
+    /// True when everything newer than this binary is newer only by
+    /// migrations it can still read, so the workspace serves at least
+    /// read-only commands (ORB-12434). False when nothing is newer.
     pub fn forward_compatible_only(&self) -> bool {
         if !self.newer_than_binary() {
             return false;
@@ -89,6 +90,20 @@ impl MigrateStatus {
         let schema_ok = self.schema_version <= self.schema_supported
             || self.schema_forward_compatible.is_some();
         layout_ok && schema_ok
+    }
+
+    /// True when the workspace is [forward-compatible](Self::forward_compatible_only)
+    /// and every newer migration keeps this binary's writes correct, so it
+    /// reads and writes as usual.
+    pub fn forward_compatible_writable(&self) -> bool {
+        self.forward_compatible_only()
+            && [
+                self.layout_forward_compatible.as_ref(),
+                self.schema_forward_compatible.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .all(|open| open.writable)
     }
 }
 

@@ -17,8 +17,14 @@ use crate::contracts::{
 };
 use crate::driver::sqlite::migration::FeatureMigration;
 
-fn initialize(store: &Store) -> Result<(), OrbitError> {
-    store.apply_feature_migrations("local_pull", &[FeatureMigration::new(1, "pending_requests_and_unique_leaves", |conn| {
+/// This feature's schema ledger name.
+pub(crate) const FEATURE: &str = "local_pull";
+
+/// Append-only schema registry for this feature.
+pub(crate) const MIGRATIONS: &[FeatureMigration] = &[FeatureMigration::new(
+    1,
+    "pending_requests_and_unique_leaves",
+    |conn| {
         conn.execute_batch("CREATE TABLE local_pull_admissions (
             workspace_id TEXT NOT NULL, owner_machine TEXT NOT NULL,
             owner_workspace TEXT NOT NULL, execution_machine TEXT NOT NULL,
@@ -27,7 +33,11 @@ fn initialize(store: &Store) -> Result<(), OrbitError> {
             UNIQUE(workspace_id, owner_machine, owner_workspace, claim_id),
             UNIQUE(workspace_id, leaf_run_id));")
             .map_err(db_error)
-    })])
+    },
+)];
+
+fn initialize(store: &Store) -> Result<(), OrbitError> {
+    store.apply_feature_migrations(FEATURE, MIGRATIONS)
 }
 
 fn db_error(error: impl std::fmt::Display) -> OrbitError {

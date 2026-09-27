@@ -28,11 +28,12 @@
 //!   [`SUPPORTED_LAYOUT_VERSION`] is decided from the companion
 //!   `state/layout.compat` record a newer binary leaves behind
 //!   ([`crate::contracts::CompatibilityRecord`], ORB-12434): newer by
-//!   additive migrations only opens read-only (nothing is applied and the
-//!   marker is never rewritten); anything breaking — or a missing, stale, or
-//!   unreadable record — still refuses with [`OrbitError::Migration`],
-//!   naming the first breaking migration this binary lacks. The SQLite
-//!   ledger guards its database the same way.
+//!   additive migrations only opens (nothing is applied and the marker is
+//!   never rewritten). The layout is not write-gated, so its additive
+//!   migrations must keep older writers safe, and a read-compatible or
+//!   breaking migration — or a missing, stale, or unreadable record — still
+//!   refuses with [`OrbitError::Migration`], naming the first such migration
+//!   this binary lacks. The SQLite ledger guards its database the same way.
 //! - **Crash tolerance.** Every migration MUST be idempotent (or stage via
 //!   write-new-then-swap): the marker is advanced (atomic temp-file +
 //!   rename) only *after* a migration's `apply` returns, so a crash in
@@ -111,8 +112,10 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         name: "archive-friction-tasks",
         description: "rewrite affected task records from status 'friction' to 'archived', preserving the task and its event history",
         // Rewrites a removed status into one every binary understands; a
-        // binary without this migration reads the result correctly.
-        compat: MigrationCompatibility::Additive,
+        // binary without this migration reads the result correctly. It never
+        // re-runs, so an older writer that still records `friction` leaves
+        // tasks the newer binary cannot load: not write-safe.
+        compat: MigrationCompatibility::ReadCompatible,
         apply: apply_archive_friction_tasks,
     },
     LayoutMigration {
@@ -436,13 +439,23 @@ pub struct LayoutUpgradeReport {
     /// was already current.
     pub applied: Vec<LayoutMigrationInfo>,
     /// Set when the workspace layout is newer than this binary supports but
-    /// only by additive migrations (ORB-12434). The workspace is usable
-    /// read-only: nothing was applied and the marker was not rewritten.
+    /// by no breaking migration (ORB-12434). Nothing was applied and the
+    /// marker was not rewritten; the report says whether this binary may
+    /// keep writing (additive only) or only read (read-compatible).
     pub forward_compatible: Option<ForwardCompatibleOpen>,
 }
 
 /// Current layout version recorded in the workspace marker; 0 when no marker
 /// exists (fresh or pre-versioning workspace).
+/// This binary's layout ledger as upgrade admission compares it.
+pub(crate) fn layout_compatibility() -> orbit_common::fs::generation::LedgerCompatibility {
+    orbit_common::fs::generation::LedgerCompatibility::from_registry(
+        LAYOUT_MIGRATIONS
+            .iter()
+            .map(|m| (m.version, m.compat.is_write_safe(), !m.compat.is_breaking())),
+    )
+}
+
 pub fn current_layout_version(orbit_dir: &Path) -> Result<u32, OrbitError> {
     read_marker(orbit_dir)
 }
@@ -554,7 +567,7 @@ pub(crate) fn upgrade_with(
 }
 
 /// Decide a marker newer than `supported`: `Ok(None)` when it is not newer,
-/// `Ok(Some(report))` when it is newer only by additive migrations (nothing
+/// `Ok(Some(report))` when it is newer by no breaking migration (nothing
 /// applied, marker untouched), and an error naming the first breaking
 /// migration this binary lacks otherwise.
 fn forward_compatible_report(
@@ -591,8 +604,10 @@ fn forward_compatible_report(
 }
 
 /// Read the companion compatibility record and decide whether this binary
-/// may open the newer workspace read-only. The outer error covers only I/O
-/// on the record itself; an unusable record is an inner [`CompatibilityRefusal`].
+/// may open the newer workspace. The layout is not write-gated, so a newer
+/// read-compatible migration refuses like a breaking one. The outer error
+/// covers only I/O on the record itself; an unusable record is an inner
+/// [`CompatibilityRefusal`].
 fn evaluate_marker(
     orbit_dir: &Path,
     current: u32,
@@ -607,6 +622,7 @@ fn evaluate_marker(
         current,
         supported,
         record,
+        false,
     ))
 }
 

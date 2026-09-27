@@ -1,8 +1,93 @@
-use crate::fs::generation::{GenerationGuard, GenerationUpdate};
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use crate::fs::generation::{
+    Access, CompatibilityIdentity, GenerationGuard, GenerationUpdate, LedgerCompatibility,
+    Participant, ParticipantRole, is_clock_generation_hold, pending_switch,
+};
 use crate::fs::generation::{finish_clock_generation_hold, record_clock_generation_hold};
 
 const OLD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const NEW: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const THIRD: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+/// An identity at store schema `version` whose newest migrations older
+/// binaries cannot keep writing / reading are `writer_floor` / `reader_floor`.
+fn identity(version: u32, writer_floor: u32, reader_floor: u32) -> CompatibilityIdentity {
+    CompatibilityIdentity {
+        store_schema: LedgerCompatibility {
+            version,
+            writer_floor,
+            reader_floor,
+        },
+        workspace_layout: LedgerCompatibility {
+            version: 3,
+            writer_floor: 3,
+            reader_floor: 3,
+        },
+        features: [("automation".to_string(), 3)].into(),
+    }
+}
+
+fn join_as(
+    root: &Path,
+    digest: &str,
+    identity: &CompatibilityIdentity,
+    role: ParticipantRole,
+    access: Access,
+    quiesce: Duration,
+) -> Result<GenerationGuard, crate::OrbitError> {
+    let participant = Participant {
+        digest,
+        identity,
+        role,
+        access,
+    };
+    GenerationGuard::join(root, &participant, quiesce, || {
+        Ok(identity.store_schema.version)
+    })
+}
+
+fn join_writer(
+    root: &Path,
+    digest: &str,
+    identity: &CompatibilityIdentity,
+) -> Result<GenerationGuard, crate::OrbitError> {
+    join_as(
+        root,
+        digest,
+        identity,
+        ParticipantRole::Command,
+        Access::Write,
+        Duration::ZERO,
+    )
+}
+
+fn refusal_text(result: Result<GenerationGuard, crate::OrbitError>) -> String {
+    match result {
+        Ok(_) => panic!("admission should have been refused"),
+        Err(error) => error.to_string(),
+    }
+}
+
+fn read_only_join<F>(
+    root: &Path,
+    digest: &str,
+    compiled_schema: u32,
+    store_schema: F,
+) -> Result<GenerationGuard, crate::OrbitError>
+where
+    F: FnOnce() -> Result<u32, crate::OrbitError>,
+{
+    let identity = identity(compiled_schema, 0, 0);
+    let participant = Participant {
+        digest,
+        identity: &identity,
+        role: ParticipantRole::Command,
+        access: Access::ReadOnly,
+    };
+    GenerationGuard::join(root, &participant, Duration::ZERO, store_schema)
+}
 
 #[test]
 fn clock_generation_hold_coalesces_refused_ticks_until_resumed() {
@@ -115,7 +200,7 @@ fn candidate_pin_excludes_old_generation_through_convergence() {
     drop(concurrent);
     let candidate = GenerationUpdate::acquire(root.path())
         .expect("quiescent")
-        .pin(NEW)
+        .pin(NEW, None)
         .expect("pin candidate");
     assert!(GenerationGuard::acquire(root.path(), OLD).is_err());
     let convergence = GenerationGuard::acquire(root.path(), NEW).expect("candidate child");
@@ -131,7 +216,7 @@ fn pinned_newer_generation_refuses_old_digest_until_pin_is_dropped() {
     drop(GenerationGuard::acquire(root.path(), OLD).expect("old"));
     let newer = GenerationUpdate::acquire(root.path())
         .expect("quiescent update")
-        .pin(NEW)
+        .pin(NEW, None)
         .expect("new pin");
     assert!(GenerationGuard::acquire(root.path(), OLD).is_err());
     drop(newer);
@@ -333,7 +418,7 @@ fn a_readonly_record_refuses_a_guarded_update_pin() {
         Err(error) => error.to_string(),
     };
     assert!(upfront.contains("cannot be written from here"), "{upfront}");
-    let refusal = refusal_of(update.pin(NEW));
+    let refusal = refusal_of(update.pin(NEW, None));
     assert!(refusal.contains("cannot be written from here"), "{refusal}");
     assert_eq!(std::fs::read(&record).expect("record"), before);
 
@@ -436,8 +521,8 @@ fn shared_child() {
 fn read_only_join_keeps_the_recorded_generation_and_blocks_update() {
     let root = tempfile::tempdir().expect("root");
     let old = GenerationGuard::acquire(root.path(), OLD).expect("record OLD");
-    let joined = GenerationGuard::acquire_read_only(root.path(), NEW, 22, || Ok(22))
-        .expect("same-schema read-only join");
+    let joined =
+        read_only_join(root.path(), NEW, 22, || Ok(22)).expect("same-schema read-only join");
     assert!(joined.joined_foreign_generation());
     assert_eq!(
         std::fs::read_to_string(root.path().join(".generation.lock")).expect("record"),
@@ -471,7 +556,7 @@ fn read_only_join_keeps_the_recorded_generation_and_blocks_update() {
 fn read_only_join_refuses_when_store_schema_differs() {
     let root = tempfile::tempdir().expect("root");
     drop(GenerationGuard::acquire(root.path(), OLD).expect("record OLD"));
-    let refusal = match GenerationGuard::acquire_read_only(root.path(), NEW, 22, || Ok(21)) {
+    let refusal = match read_only_join(root.path(), NEW, 22, || Ok(21)) {
         Ok(_) => panic!("schema mismatch must refuse a foreign read-only join"),
         Err(error) => error.to_string(),
     };
@@ -488,7 +573,7 @@ fn read_only_join_refuses_when_store_schema_differs() {
 #[test]
 fn read_only_join_pins_first_generation_when_store_is_unavailable() {
     let root = tempfile::tempdir().expect("root");
-    let joined = GenerationGuard::acquire_read_only(root.path(), NEW, 22, || {
+    let joined = read_only_join(root.path(), NEW, 22, || {
         Err(crate::OrbitError::Execution("store is unavailable".into()))
     })
     .expect("a fresh root without a readable store uses the ordinary first pin");
@@ -506,7 +591,7 @@ fn matching_digest_read_only_join_does_not_consult_store_schema() {
     let root = tempfile::tempdir().expect("root");
     drop(GenerationGuard::acquire(root.path(), OLD).expect("record OLD"));
     let probed = AtomicBool::new(false);
-    let joined = GenerationGuard::acquire_read_only(root.path(), OLD, 22, || {
+    let joined = read_only_join(root.path(), OLD, 22, || {
         probed.store(true, Ordering::SeqCst);
         Ok(99)
     })
@@ -627,4 +712,251 @@ fn missing_root_escaping_start_with_parent_dir_component_is_refused() {
     );
     assert!(!parent.path().join(".generation.lock").exists());
     assert!(!parent.path().join(".generation-admission.lock").exists());
+}
+
+#[test]
+fn builds_with_one_compatibility_share_a_generation_whatever_their_digest() {
+    let root = tempfile::tempdir().expect("root");
+    let current = identity(32, 28, 26);
+    let first = join_writer(root.path(), OLD, &current).expect("first writer");
+    let rebuilt = join_writer(root.path(), NEW, &current).expect("same-compatibility writer");
+    assert!(!rebuilt.joined_foreign_generation());
+    let reader = join_as(
+        root.path(),
+        THIRD,
+        &current,
+        ParticipantRole::Dashboard,
+        Access::ReadOnly,
+        Duration::ZERO,
+    )
+    .expect("same-compatibility reader");
+    assert!(reader.joined_foreign_generation());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n"),
+        "joining must not rewrite the executable-generation-v1 record"
+    );
+    assert!(GenerationUpdate::acquire(root.path()).is_err());
+    drop((first, rebuilt, reader));
+    assert!(GenerationUpdate::acquire(root.path()).is_ok());
+}
+
+#[test]
+fn an_additive_upgrade_joins_live_writers_and_older_writers_keep_joining() {
+    let root = tempfile::tempdir().expect("root");
+    let older = identity(32, 28, 26);
+    let newer = identity(33, 28, 26);
+    let live = join_writer(root.path(), OLD, &older).expect("older writer");
+    let upgraded = join_writer(root.path(), NEW, &newer).expect("additive upgrade joins");
+    let late_older = join_writer(root.path(), OLD, &older)
+        .expect("an older writer still joins after an additive upgrade");
+    drop((live, upgraded, late_older));
+}
+
+#[test]
+fn a_breaking_upgrade_names_every_blocker_when_the_bound_expires() {
+    let root = tempfile::tempdir().expect("root");
+    let older = identity(32, 28, 26);
+    let breaking = identity(33, 33, 26);
+    let _drain = join_as(
+        root.path(),
+        OLD,
+        &older,
+        ParticipantRole::Drain,
+        Access::Write,
+        Duration::ZERO,
+    )
+    .expect("older drain");
+    let _mcp = join_as(
+        root.path(),
+        OLD,
+        &older,
+        ParticipantRole::McpServe,
+        Access::Write,
+        Duration::ZERO,
+    )
+    .expect("older mcp serve");
+    let refusal = refusal_text(join_writer(root.path(), NEW, &breaking));
+    let pid = std::process::id();
+    assert!(refusal.contains("did not yield within 0s"), "{refusal}");
+    assert!(
+        refusal.contains(&format!("pid {pid} (drain, started ")),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains(&format!("pid {pid} (mcp serve, started ")),
+        "{refusal}"
+    );
+    assert!(
+        pending_switch(root.path()).is_none(),
+        "an expired wait must clear its pending switch"
+    );
+    join_writer(root.path(), OLD, &older).expect("the live generation still admits its own");
+}
+
+#[test]
+fn a_pending_breaking_upgrade_refuses_newcomers_and_waits_for_live_participants() {
+    let root = tempfile::tempdir().expect("root");
+    let older = identity(32, 28, 26);
+    let breaking = identity(33, 33, 26);
+    let live = join_writer(root.path(), OLD, &older).expect("older writer");
+    let waiter = {
+        let root = root.path().to_path_buf();
+        let breaking = breaking.clone();
+        std::thread::spawn(move || join_writer_with(&root, NEW, &breaking, Duration::from_secs(20)))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let switch = loop {
+        if let Some(switch) = pending_switch(root.path()) {
+            break switch;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the upgrade never recorded its pending switch"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(switch.target, breaking);
+    assert_eq!(switch.digest, NEW);
+
+    // No participant the switch would have to wait for is admitted meanwhile,
+    // and a clock tick treats it as a hold rather than a failure.
+    let error = join_writer(root.path(), OLD, &older)
+        .err()
+        .expect("old newcomer refused");
+    assert!(error.to_string().contains("switch is pending"), "{error}");
+    assert!(is_clock_generation_hold(&error));
+    assert!(GenerationUpdate::acquire(root.path()).is_err());
+
+    drop(live);
+    let upgraded = waiter
+        .join()
+        .expect("waiter thread")
+        .expect("the upgrade is admitted once the live writer exits");
+    assert!(pending_switch(root.path()).is_none());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".generation.lock")).expect("record"),
+        format!("1:{NEW}\n")
+    );
+    let refusal = refusal_text(join_writer(root.path(), OLD, &older));
+    assert!(refusal.contains("incompatible"), "{refusal}");
+    join_writer(root.path(), THIRD, &breaking).expect("the new compatibility joins");
+    drop(upgraded);
+}
+
+fn join_writer_with(
+    root: &Path,
+    digest: &str,
+    identity: &CompatibilityIdentity,
+    quiesce: Duration,
+) -> Result<GenerationGuard, crate::OrbitError> {
+    join_as(
+        root,
+        digest,
+        identity,
+        ParticipantRole::Command,
+        Access::Write,
+        quiesce,
+    )
+}
+
+#[test]
+fn an_older_binary_never_displaces_a_newer_generation() {
+    let root = tempfile::tempdir().expect("root");
+    let newer = identity(33, 33, 26);
+    let older = identity(32, 28, 26);
+    let _live = join_writer(root.path(), NEW, &newer).expect("newer writer");
+    let started = Instant::now();
+    let refusal = refusal_text(join_writer_with(
+        root.path(),
+        OLD,
+        &older,
+        Duration::from_secs(30),
+    ));
+    assert!(refusal.contains("incompatible"), "{refusal}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "an older binary must be refused, not wait"
+    );
+    assert!(pending_switch(root.path()).is_none());
+}
+
+#[test]
+fn executable_generation_v1_holders_refuse_v2_writers_at_once() {
+    let root = tempfile::tempdir().expect("root");
+    let current = identity(32, 28, 26);
+    let v1 = GenerationGuard::acquire(root.path(), OLD).expect("v1 holder");
+    let started = Instant::now();
+    let refusal = refusal_text(join_writer_with(
+        root.path(),
+        NEW,
+        &current,
+        Duration::from_secs(30),
+    ));
+    assert!(refusal.contains("this command writes"), "{refusal}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "v1 holders never yield, so waiting for them would only stall"
+    );
+    let reader = read_only_join(root.path(), NEW, 32, || Ok(32))
+        .expect("a same-schema v2 reader joins a v1 generation");
+    assert!(reader.joined_foreign_generation());
+    drop((v1, reader));
+}
+
+#[test]
+fn v2_participants_refuse_v1_writers_and_v1_takeovers_invalidate_the_envelope() {
+    let root = tempfile::tempdir().expect("root");
+    let current = identity(32, 28, 26);
+    let v2 = join_writer(root.path(), NEW, &current).expect("v2 writer");
+    // A v1 binary sees only `.generation.lock`, which names the v2 digest.
+    assert!(GenerationGuard::acquire(root.path(), OLD).is_err());
+    drop(v2);
+
+    // Quiescent: the v1 binary takes over and rewrites the record, so the
+    // v2 envelope no longer describes the live generation.
+    let v1 = GenerationGuard::acquire(root.path(), OLD).expect("v1 takeover");
+    let refusal = refusal_text(join_writer(root.path(), THIRD, &current));
+    assert!(refusal.contains("this command writes"), "{refusal}");
+    drop(v1);
+    join_writer(root.path(), THIRD, &current).expect("v2 takeover once v1 exits");
+}
+
+#[test]
+fn participants_register_while_live_and_withdraw_on_exit() {
+    let root = tempfile::tempdir().expect("root");
+    let current = identity(32, 28, 26);
+    let registrations = || {
+        std::fs::read_dir(root.path().join(".generation-participants"))
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    };
+    let first = join_writer(root.path(), OLD, &current).expect("first");
+    let second = join_writer(root.path(), NEW, &current).expect("second");
+    assert_eq!(registrations(), 2);
+    drop(first);
+    assert_eq!(registrations(), 1);
+    drop(second);
+    assert_eq!(registrations(), 0);
+}
+
+#[test]
+fn an_update_pin_with_an_identity_admits_compatible_builds() {
+    let root = tempfile::tempdir().expect("root");
+    let current = identity(32, 28, 26);
+    let candidate = GenerationUpdate::acquire(root.path())
+        .expect("quiescent")
+        .pin(NEW, Some(&current))
+        .expect("pin candidate");
+    join_writer(root.path(), THIRD, &current)
+        .expect("a compatible build joins the candidate's generation");
+    drop(candidate);
+
+    let v1_candidate = GenerationUpdate::acquire(root.path())
+        .expect("quiescent")
+        .pin(OLD, None)
+        .expect("pin a v1 candidate");
+    let refusal = refusal_text(join_writer(root.path(), THIRD, &current));
+    assert!(refusal.contains("this command writes"), "{refusal}");
+    drop(v1_candidate);
 }
