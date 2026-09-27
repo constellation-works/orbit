@@ -332,6 +332,19 @@ fn reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths() {
         .map(|rule| absolutize_test_rule(&workspace_root, rule))
         .collect();
     let error = compile_linux_bwrap_argv(&unrestricted, "/bin/true", &[], Some(&workspace), false)
+        .expect_err("direct invocation must refuse an absent denyModify anchor");
+    assert!(
+        error.to_string().contains("absent denyModify") && error.to_string().contains("/.orbit/**"),
+        "direct invocation must fail closed when the .orbit denyModify anchor is absent: {error}"
+    );
+
+    for directory in ["auto_tasks", "routines", "resources", "tmp"] {
+        std::fs::create_dir_all(workspace.join(".orbit").join(directory))
+            .expect("create unrestricted profile denyModify anchors");
+    }
+    std::fs::write(workspace.join(".orbit/config.toml"), "")
+        .expect("create unrestricted profile denyModify config anchor");
+    let error = compile_linux_bwrap_argv(&unrestricted, "/bin/true", &[], Some(&workspace), false)
         .expect_err("direct write-capable sandbox must still fail closed");
     assert!(
         error.to_string().contains("non-subtree denyModify"),
