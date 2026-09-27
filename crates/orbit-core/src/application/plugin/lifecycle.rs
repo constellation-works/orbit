@@ -13,7 +13,8 @@ use orbit_tools::plugin::{
 };
 use orbit_types::plugin::{
     InstalledPlugin, MANIFEST_FILE_NAME, PluginDisabledLayer, PluginGrantEntry, PluginGrantSet,
-    PluginStatus, is_valid_namespace, parse_grants, parse_stored_grants, resolve_grant_selection,
+    PluginStatus, is_valid_namespace, parse_grants, parse_stored_grants, plugin_root_in,
+    resolve_grant_selection,
 };
 use orbit_types::record::OrbitEvent;
 
@@ -1141,7 +1142,9 @@ pub struct PluginMigrateRequest {
     pub version: String,
     /// Namespace override when the v1 names do not imply one.
     pub namespace: Option<String>,
-    /// Where to write `plugin.yaml`; `None` returns the YAML without writing.
+    /// Source directory to write the plugin into: the manifest and the copied
+    /// backend go in its `.orbit-plugin/`. `None` returns the YAML without
+    /// writing.
     pub out_dir: Option<PathBuf>,
 }
 
@@ -1183,7 +1186,7 @@ pub fn migrate_plugin_sidecars(
     )?;
     let yaml = serde_yaml::to_string(&manifest)
         .map_err(|error| OrbitError::Execution(format!("serialize plugin manifest: {error}")))?;
-    let Some(out_dir) = request.out_dir.clone() else {
+    let Some(out_dir) = request.out_dir.as_deref().map(plugin_root_in) else {
         return Ok((yaml, None));
     };
     std::fs::create_dir_all(&out_dir)

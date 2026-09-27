@@ -568,7 +568,11 @@ fn migrate_writes_a_v2_manifest_from_v1_sidecars() {
     })
     .expect("migrate");
     assert!(yaml.contains("kind: Plugin"), "{yaml}");
-    assert_eq!(path.as_deref(), Some(out_dir.join("plugin.yaml").as_path()));
+    let plugin_root = out_dir.join(orbit_types::plugin::PLUGIN_DIR_NAME);
+    assert_eq!(
+        path.as_deref(),
+        Some(plugin_root.join("plugin.yaml").as_path())
+    );
     assert!(
         !yaml.contains("null") && !yaml.contains("[]"),
         "migration must omit optional and empty fields: {yaml}"
@@ -582,7 +586,7 @@ fn migrate_writes_a_v2_manifest_from_v1_sidecars() {
     // The generated manifest is what `orbit plugin validate` accepts, and the
     // v1 tool names survive. Migration places the backend in the plugin root
     // even though its source and sidecars were elsewhere.
-    assert!(out_dir.join("bin/legacy-tool").is_file());
+    assert!(plugin_root.join("bin/legacy-tool").is_file());
     let report = validate_plugin_dir(&fixture.runtime, &out_dir, false).expect("validate migrated");
     assert_eq!(report.tools, ["legacy.recommend", "legacy.status"]);
 }
@@ -764,12 +768,16 @@ fn enter_fake_fetch_child(test: &str) -> bool {
     false
 }
 
-/// Pack `source` as the archive the fetch shim will serve, and return the
-/// `sha256:` digest a pin has to name for it.
+/// Pack the checkout holding the plugin root `source` as the archive the
+/// fetch shim will serve, and return the `sha256:` digest a pin has to name
+/// for it.
 #[cfg(unix)]
 fn publish_archive(source: &Path) -> String {
     let archive =
         PathBuf::from(std::env::var_os("ORBIT_TEST_PLUGIN_ARCHIVE").expect("archive path"));
+    let source = source
+        .parent()
+        .expect("the plugin root sits in its checkout");
     let status = std::process::Command::new("tar")
         .args([
             "czf".as_ref(),

@@ -194,8 +194,10 @@ impl<'a> PluginSpecFixture<'a> {
 }
 
 /// Write a plugin whose backend echoes its input back, so a test can prove the
-/// call reached the process.
-pub(super) fn write_plugin_at(root: &Path, spec: PluginSpecFixture<'_>) -> PathBuf {
+/// call reached the process. `source` is the plugin source; the plugin goes in
+/// its `.orbit-plugin/`, and that plugin root is returned.
+pub(super) fn write_plugin_at(source: &Path, spec: PluginSpecFixture<'_>) -> PathBuf {
+    let root = &orbit_types::plugin::plugin_root_in(source);
     std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -246,5 +248,5 @@ pub(super) fn write_plugin_at(root: &Path, spec: PluginSpecFixture<'_>) -> PathB
         None => manifest,
     };
     std::fs::write(root.join("plugin.yaml"), manifest).expect("write manifest");
-    root.to_path_buf()
+    root.clone()
 }

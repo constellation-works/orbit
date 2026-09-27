@@ -7,6 +7,7 @@
 //! test`.
 
 use std::fmt::{Display, Formatter};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,8 +17,22 @@ use super::template::validate_template;
 use super::version::{SemverRange, Version};
 
 pub const MANIFEST_FILE_NAME: &str = "plugin.yaml";
+/// The directory a plugin source keeps its plugin in. It is the plugin root:
+/// it holds [`MANIFEST_FILE_NAME`], and it is the only tree installed.
+pub const PLUGIN_DIR_NAME: &str = ".orbit-plugin";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub const MANIFEST_KIND: &str = "Plugin";
+
+/// The plugin root an authoring command writes into for `dir`: `dir` itself
+/// when it is already a [`PLUGIN_DIR_NAME`] directory, `dir/.orbit-plugin`
+/// otherwise.
+pub fn plugin_root_in(dir: &Path) -> PathBuf {
+    if dir.file_name().is_some_and(|name| name == PLUGIN_DIR_NAME) {
+        dir.to_path_buf()
+    } else {
+        dir.join(PLUGIN_DIR_NAME)
+    }
+}
 
 /// The long option derived for one top-level tool input property.
 ///

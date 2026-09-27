@@ -15,10 +15,15 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+/// The design example's plugin root: the `.orbit-plugin/` of its source.
+fn graph_example() -> PathBuf {
+    fixtures().join("plugins/graph-example/.orbit-plugin")
+}
+
 /// Copy the design example into a scratch dir so a test can edit it.
 fn scratch_example() -> tempfile::TempDir {
     let temp = tempfile::tempdir().expect("tempdir");
-    let source = fixtures().join("plugins/graph-example");
+    let source = graph_example();
     copy_tree(&source, temp.path());
     temp
 }
@@ -52,7 +57,7 @@ fn rewrite_manifest(root: &Path, from: &str, to: &str) {
 
 #[test]
 fn design_example_loads_and_validates_with_unused_sections_tolerated() {
-    let plugin = load_plugin_dir(&fixtures().join("plugins/graph-example")).expect("loads");
+    let plugin = load_plugin_dir(&graph_example()).expect("loads");
     validate_loaded_plugin(&plugin, &PluginValidationPolicy::host_default()).expect("valid");
 
     assert_eq!(plugin.namespace(), "graph");
@@ -81,7 +86,7 @@ fn design_example_loads_and_validates_with_unused_sections_tolerated() {
 
 #[test]
 fn design_example_supports_the_shipped_orbit_host() {
-    let plugin = load_plugin_dir(&fixtures().join("plugins/graph-example")).expect("loads");
+    let plugin = load_plugin_dir(&graph_example()).expect("loads");
     let requirement = plugin
         .manifest
         .spec

@@ -40,7 +40,7 @@ use orbit_tools::plugin::{
     DeliveredPluginSecret, LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginSecretSource,
     PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
     physical_with_missing_tail, refuse_covering_fs_write_roots, resolve_declared_programs,
-    validate_loaded_plugin,
+    resolve_plugin_root, validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
@@ -119,12 +119,14 @@ pub struct PluginTestOptions {
     pub update_goldens: bool,
 }
 
+/// Run a plugin source's conformance goldens. `dir` is a checkout holding
+/// `.orbit-plugin/` or that directory itself.
 pub fn test_plugin_dir(
     runtime: &OrbitRuntime,
     dir: &Path,
     options: &PluginTestOptions,
 ) -> Result<PluginTestReport, OrbitError> {
-    let mut plugin = load_plugin_dir(dir)?;
+    let mut plugin = load_plugin_dir(&resolve_plugin_root(dir)?)?;
     let first_party_verified = match runtime.stores().plugins().get_plugin(plugin.namespace())? {
         Some(installed) if installed.manifest_digest == plugin.manifest_digest => {
             installed.first_party

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use orbit_types::plugin::PluginStatus;
+use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginStatus};
 use orbit_types::telemetry::AuditEventStatus;
 
 use super::super::install::{NamespaceStep, StagedInstall, set_namespace_step_hook};
@@ -36,9 +36,10 @@ fn enter_fake_git_install_child(test: &str) -> bool {
 set -eu
 checkout=''
 for arg in "$@"; do checkout=$arg; done
-mkdir -p "$checkout/.git" "$checkout/bin"
+mkdir -p "$checkout/.git" "$checkout/.orbit-plugin/bin"
 printf '[remote "origin"]\n\turl = https://example.test/demo.git\n' > "$checkout/.git/config"
-cat > "$checkout/plugin.yaml" <<'EOF'
+printf '# product code\n' > "$checkout/Cargo.lock"
+cat > "$checkout/.orbit-plugin/plugin.yaml" <<'EOF'
 schemaVersion: 2
 kind: Plugin
 metadata:
@@ -54,8 +55,8 @@ spec:
       description: Hello.
       execution_kind: read_only
 EOF
-printf '#!/bin/sh\n' > "$checkout/bin/backend.sh"
-chmod +x "$checkout/bin/backend.sh"
+printf '#!/bin/sh\n' > "$checkout/.orbit-plugin/bin/backend.sh"
+chmod +x "$checkout/.orbit-plugin/bin/backend.sh"
 "#,
     )
     .expect("write fake git");
@@ -773,6 +774,10 @@ fn add_from_a_git_source_excludes_the_clone_metadata() {
         !installed.join(".git").exists(),
         "installed tree must not contain the clone's .git directory"
     );
+    assert!(
+        !installed.join("Cargo.lock").exists() && !installed.join(".orbit-plugin").exists(),
+        "only the checkout's .orbit-plugin/ contents are installed"
+    );
 }
 
 #[test]
@@ -793,6 +798,114 @@ fn install_inventory_matches_the_source_tree() {
         source_inventory,
         "install must copy the source tree and nothing else"
     );
+}
+
+/// The plugin root is the source's `.orbit-plugin/`: product files beside it
+/// — including a symlink that would refuse the install if it were walked —
+/// are neither checked nor copied, and the installed tree keeps the manifest
+/// at the top of `<version>/` where an existing install has it.
+#[cfg(unix)]
+#[test]
+fn add_installs_only_the_orbit_plugin_directory() {
+    let fixture = PluginFixture::new();
+    let root = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let checkout = root.parent().expect("checkout");
+    std::fs::create_dir_all(checkout.join("crates/demo")).expect("product dir");
+    std::fs::write(checkout.join("Cargo.lock"), "# product\n").expect("product file");
+    std::fs::write(checkout.join("crates/demo/lib.rs"), "// product\n").expect("product src");
+    std::os::unix::fs::symlink("/etc/hostname", checkout.join("unrelated-link"))
+        .expect("symlink outside the plugin root");
+    let plugin_inventory = relative_inventory(&root);
+
+    let summary = install_plugin(
+        &fixture.runtime,
+        checkout.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("a symlink outside .orbit-plugin/ does not block the install");
+    let installed = Path::new(&summary.install_path);
+    assert_eq!(
+        relative_inventory(installed),
+        plugin_inventory,
+        "only the .orbit-plugin/ contents are installed"
+    );
+    assert!(installed.join(MANIFEST_FILE_NAME).is_file());
+    orbit_tools::plugin::load_plugin_dir(installed).expect("the installed tree loads");
+}
+
+#[test]
+fn validate_resolves_a_checkout_or_the_orbit_plugin_directory_and_refuses_a_flat_source() {
+    let fixture = PluginFixture::new();
+    let root = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
+    for dir in [root.parent().expect("checkout"), root.as_path()] {
+        let report = validate_plugin_dir(&fixture.runtime, dir, false).expect("validate");
+        assert_eq!(
+            Path::new(&report.root),
+            canonical_root,
+            "validate reports the resolved plugin root for {}",
+            dir.display()
+        );
+    }
+
+    let flat = fixture.sources.join("flat");
+    std::fs::create_dir_all(&flat).expect("flat dir");
+    std::fs::copy(root.join(MANIFEST_FILE_NAME), flat.join(MANIFEST_FILE_NAME))
+        .expect("flat manifest");
+    for refused in [
+        validate_plugin_dir(&fixture.runtime, &flat, false)
+            .expect_err("a top-level plugin.yaml is not a plugin source")
+            .to_string(),
+        install_plugin(
+            &fixture.runtime,
+            flat.to_str().expect("utf8 path"),
+            &PluginAddOptions::default(),
+        )
+        .expect_err("add refuses a top-level plugin.yaml too")
+        .to_string(),
+    ] {
+        assert!(
+            refused.contains(".orbit-plugin/plugin.yaml"),
+            "the refusal names the expected manifest path: {refused}"
+        );
+    }
+}
+
+/// Moving an unchanged manifest into `.orbit-plugin/` keeps its bytes, so its
+/// `manifest_digest` — what grants, certification and the first-party digest
+/// list are keyed on — does not change.
+#[test]
+fn moving_a_manifest_into_orbit_plugin_keeps_its_digest() {
+    let fixture = PluginFixture::new();
+    let root = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let bytes = std::fs::read(root.join(MANIFEST_FILE_NAME)).expect("manifest bytes");
+
+    // The pre-move layout: the same files at the top of a directory, as an
+    // existing install and a pre-`.orbit-plugin` source hold them.
+    let flat = fixture.sources.join("flat");
+    std::fs::create_dir_all(flat.join("bin")).expect("flat bin dir");
+    std::fs::write(flat.join(MANIFEST_FILE_NAME), &bytes).expect("flat manifest");
+    std::fs::copy(root.join("bin/backend.sh"), flat.join("bin/backend.sh")).expect("backend");
+    let before = orbit_tools::plugin::load_plugin_dir(&flat)
+        .expect("load the flat tree")
+        .manifest_digest;
+
+    let summary = install_plugin(
+        &fixture.runtime,
+        root.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install");
+    let recorded = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin(&summary.name)
+        .expect("read row")
+        .expect("installed")
+        .manifest_digest;
+    assert_eq!(recorded, before);
+    assert_eq!(recorded, orbit_tools::plugin::manifest_digest(&bytes));
 }
 
 #[cfg(unix)]

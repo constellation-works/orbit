@@ -1,9 +1,14 @@
-//! Resolve an `orbit plugin add` source to a local directory.
+//! Resolve an `orbit plugin add` source to its plugin root.
 //!
 //! Four forms (§3): a local directory, `git+<url>[#<ref>]`, a local
 //! `.tar.gz`/`.tgz`/`.tar`/`.zip` archive, and an `https://` archive Orbit
 //! fetches itself. Fetching runs here rather than in Core because this is the
 //! crate that owns spawning a process.
+//!
+//! Every form keeps its plugin in a `.orbit-plugin/` directory, and that
+//! directory is the plugin root: the manifest sits at its top, and nothing
+//! outside it is walked, checked or installed. A source whose only manifest
+//! is a top-level `plugin.yaml` is refused.
 //!
 //! A fetched archive is the only source whose bytes Orbit chooses to pull
 //! over the network, so it is the only one that carries a mandatory
@@ -19,7 +24,10 @@ use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::security::release::sha256_hex;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
-use orbit_types::plugin::{parse_archive_digest, remote_archive_source};
+use orbit_types::plugin::{
+    MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, parse_archive_digest, plugin_root_in,
+    remote_archive_source,
+};
 
 use super::loader::{plugin_symlink_refusal, refuse_plugin_tree_symlinks};
 use crate::TIMEOUT_LONG_MS;
@@ -65,7 +73,8 @@ const MAX_REDIRECTS: u32 = 5;
 /// Where a resolved source's tree lives, and what the source was.
 #[derive(Debug)]
 pub struct ResolvedSource {
-    /// Directory holding `plugin.yaml`.
+    /// The plugin root: the source's `.orbit-plugin/` directory, holding
+    /// `plugin.yaml`.
     pub root: PathBuf,
     /// Set when the tree was fetched into scratch; dropping it removes the
     /// scratch directory, so the caller holds it until the copy is done.
@@ -127,11 +136,8 @@ fn resolve_plugin_source_unverified(
     }
     let path = Path::new(source);
     if path.is_dir() {
-        let root = std::fs::canonicalize(path).map_err(|error| {
-            OrbitError::InvalidInput(format!("plugin source '{source}': {error}"))
-        })?;
         return Ok(ResolvedSource {
-            root,
+            root: resolve_plugin_root(path)?,
             scratch: None,
             archive_digest: None,
         });
@@ -181,9 +187,9 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     run_git(args, None)?;
 
     // `git clone` writes the source URL (credentials included, when the URL
-    // carried them) into `.git/config`, and `copy_tree` walks this root
-    // verbatim into the install path. Drop the clone's VCS metadata here so
-    // it never reaches the tree the plugin backend can always read.
+    // carried them) into `.git/config`. Only `.orbit-plugin/` is installed,
+    // but drop the clone's VCS metadata anyway so no later change to what is
+    // copied can carry it into the tree the plugin backend can always read.
     let git_dir = checkout.join(".git");
     if git_dir.exists() {
         std::fs::remove_dir_all(&git_dir)
@@ -191,8 +197,7 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     }
 
     Ok(ResolvedSource {
-        root: std::fs::canonicalize(&checkout)
-            .map_err(|error| OrbitError::Io(format!("clone target: {error}")))?,
+        root: resolve_plugin_root(&checkout)?,
         scratch: Some(scratch),
         archive_digest: None,
     })
@@ -706,14 +711,51 @@ impl<R: Read> Read for BoundedReader<R> {
     }
 }
 
-/// An archive may hold the manifest at its top level or inside one wrapper
-/// directory, which is what `git archive` and release tarballs produce.
+/// Resolve a directory source to its plugin root.
+///
+/// `dir` is either the `.orbit-plugin` directory itself or a checkout that
+/// holds one. The plugin root must be a real directory, not a link, holding
+/// `plugin.yaml`; a checkout whose only manifest is a top-level `plugin.yaml`
+/// is refused with the path Orbit expected. The result is canonical.
+pub fn resolve_plugin_root(dir: &Path) -> Result<PathBuf, OrbitError> {
+    let dir = std::fs::canonicalize(dir).map_err(|error| {
+        OrbitError::InvalidInput(format!("plugin source '{}': {error}", dir.display()))
+    })?;
+    let root = plugin_root_in(&dir);
+    if std::fs::symlink_metadata(&root).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin source '{}' has a {PLUGIN_DIR_NAME} that is a symbolic link; the plugin root \
+             must be a real directory",
+            dir.display()
+        )));
+    }
+    let manifest = root.join(MANIFEST_FILE_NAME);
+    if manifest.is_file() {
+        return Ok(root);
+    }
+    let top_level = dir.join(MANIFEST_FILE_NAME);
+    let hint = if root != dir && top_level.is_file() {
+        format!(
+            "; {} is at the top of the source, but a plugin lives in a {PLUGIN_DIR_NAME}/ \
+             directory: move the manifest and the files it names into {PLUGIN_DIR_NAME}/",
+            top_level.display()
+        )
+    } else {
+        String::new()
+    };
+    Err(OrbitError::InvalidInput(format!(
+        "plugin source '{}' has no plugin: expected {}{hint}",
+        dir.display(),
+        manifest.display()
+    )))
+}
+
+/// An archive may hold `.orbit-plugin/` at its top level or inside one
+/// wrapper directory, which is what `git archive` and release tarballs
+/// produce.
 fn plugin_root_within(unpacked: &Path) -> Result<PathBuf, OrbitError> {
-    if unpacked
-        .join(orbit_types::plugin::MANIFEST_FILE_NAME)
-        .is_file()
-    {
-        return Ok(unpacked.to_path_buf());
+    if unpacked.join(PLUGIN_DIR_NAME).is_dir() {
+        return resolve_plugin_root(unpacked);
     }
     let mut entries = std::fs::read_dir(unpacked)
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", unpacked.display())))?
@@ -723,14 +765,12 @@ fn plugin_root_within(unpacked: &Path) -> Result<PathBuf, OrbitError> {
         .collect::<Vec<_>>();
     entries.sort();
     if let [single] = entries.as_slice()
-        && single
-            .join(orbit_types::plugin::MANIFEST_FILE_NAME)
-            .is_file()
+        && single.join(PLUGIN_DIR_NAME).is_dir()
     {
-        return Ok(single.clone());
+        return resolve_plugin_root(single);
     }
     Err(OrbitError::InvalidInput(format!(
-        "the archive does not contain a {} at its root or in a single top-level directory",
-        orbit_types::plugin::MANIFEST_FILE_NAME
+        "the archive does not contain {PLUGIN_DIR_NAME}/{MANIFEST_FILE_NAME} at its root or in a \
+         single top-level directory"
     )))
 }

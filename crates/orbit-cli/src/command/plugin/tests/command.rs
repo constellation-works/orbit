@@ -277,7 +277,7 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     }
     .execute(&fixture.runtime)
     .expect("scaffold a plugin");
-    let manifest_path = plugin_dir.join("plugin.yaml");
+    let manifest_path = plugin_dir.join(".orbit-plugin/plugin.yaml");
     let manifest = std::fs::read_to_string(&manifest_path).expect("read scaffold manifest");
     let patched = manifest
         .replacen(

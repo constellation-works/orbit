@@ -8,7 +8,7 @@ Arguments:
 
 Options:
       --dir <DIR>
-          Directory to create (defaults to `./<namespace>`)
+          Source directory to create; the plugin goes in its `.orbit-plugin/` (defaults to `./<namespace>`)
 
       --root <ROOT>
           Override the Orbit root directory (highest precedence)

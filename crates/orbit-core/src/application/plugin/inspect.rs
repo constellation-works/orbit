@@ -10,7 +10,8 @@ use orbit_tools::ToolContext;
 use orbit_tools::plugin::{
     LoadedPlugin, PLUGIN_TIMEOUT_CEILING_MS, PluginBackend, PluginProgramStatus,
     PluginValidationPolicy, load_plugin_dir, manifest_refusal, program_statuses,
-    refuse_covering_fs_write_roots, resolve_declared_programs, validate_loaded_plugin,
+    refuse_covering_fs_write_roots, resolve_declared_programs, resolve_plugin_root,
+    validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginDisabledLayer, PluginExecutionKind, PluginGrant, PluginGrantSet,
@@ -588,7 +589,8 @@ fn seeded_version_lags(seeded: &str, installed: &str) -> bool {
     SemverRange::parse(&format!(">{seeded}")).is_ok_and(|range| range.matches(&installed))
 }
 
-/// Validate a plugin directory without installing it.
+/// Validate a plugin source directory without installing it. `dir` is a
+/// checkout holding `.orbit-plugin/` or that directory itself.
 pub fn validate_plugin_dir(
     runtime: &OrbitRuntime,
     dir: &Path,
@@ -604,7 +606,7 @@ pub fn validate_plugin_dir_for_workspace(
     first_party_verified: bool,
     workspace: Option<&Path>,
 ) -> Result<PluginValidationReport, OrbitError> {
-    let plugin = load_plugin_dir(dir)?;
+    let plugin = load_plugin_dir(&resolve_plugin_root(dir)?)?;
     let policy =
         PluginValidationPolicy::host_default().with_first_party_verified(first_party_verified);
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;

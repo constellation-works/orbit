@@ -20,7 +20,8 @@ pub struct PluginMigrateArgs {
     /// Namespace to use when the v1 tool names do not imply one
     #[arg(long)]
     pub name: Option<String>,
-    /// Directory to write `plugin.yaml` into (default: print it)
+    /// Source directory to write the plugin into, as `.orbit-plugin/plugin.yaml`
+    /// plus the copied backend (default: print the manifest)
     #[arg(long)]
     pub out_dir: Option<PathBuf>,
 }
