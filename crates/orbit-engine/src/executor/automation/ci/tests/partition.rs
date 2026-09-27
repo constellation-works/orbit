@@ -367,6 +367,58 @@ fn newer_cross_branch_success_suppresses_open_pull_request_failure() {
 }
 
 #[test]
+fn newest_landing_success_suppresses_failure_despite_older_same_ref_success() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_head("feature-x", OLD)
+        .with_pull_request(json!({
+            "number": 12,
+            "url": "https://github.com/acme/orbit/pull/12",
+            "head_branch": "feature-x",
+            "reported_head_sha": OLD,
+        }))
+        .with_runs(vec![vec![
+            run_on_branch(
+                10,
+                "ci",
+                "feature-x",
+                OLD,
+                "completed",
+                Some("success"),
+                "2026-08-30T01:00:00Z",
+            ),
+            run_on_branch(
+                20,
+                "ci",
+                "feature-x",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-08-30T02:00:00Z",
+            ),
+            run_on_branch(
+                30,
+                "ci",
+                "topic",
+                HEAD,
+                "completed",
+                Some("success"),
+                "2026-08-30T03:00:00Z",
+            ),
+        ]]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(evidence["current_failures"], json!([]));
+    assert_eq!(evidence["stale_or_superseded"][0]["run_id"], json!(20));
+    assert_eq!(
+        evidence["stale_or_superseded"][0]["superseded_by"]["run_id"],
+        json!(30)
+    );
+}
+
+#[test]
 fn latest_selection_is_independent_per_workflow_and_breaks_ties_by_run_id() {
     let tied_at = "2026-08-30T05:00:00Z";
     let queries = FakeQueries::authenticated()

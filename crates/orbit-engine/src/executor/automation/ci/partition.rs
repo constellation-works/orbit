@@ -80,7 +80,14 @@ pub(super) fn partition_runs(
                 .first()
                 .copied()
                 .is_some_and(|run| landing_branches.contains(run_branch(run)));
-            let suppressor = same_ref_success.or(if landing { None } else { landing_success });
+            let suppressor = if landing {
+                same_ref_success
+            } else {
+                same_ref_success
+                    .into_iter()
+                    .chain(landing_success)
+                    .max_by_key(|run| run_order(run))
+            };
 
             let mut seen_current = false;
             let mut seen_in_flight = false;
