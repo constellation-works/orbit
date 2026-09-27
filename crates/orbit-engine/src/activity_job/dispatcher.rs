@@ -182,6 +182,16 @@ pub enum DispatchError {
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
 
+    /// A host-owned Git child exceeded its finite budget. The supervisor has
+    /// terminated its process group; recovery state must be inspected as-is.
+    #[error("git {operation} timed out after {timeout_ms}ms in '{}': {diagnostic}", root.display())]
+    GitTimeout {
+        operation: String,
+        root: std::path::PathBuf,
+        timeout_ms: u64,
+        diagnostic: String,
+    },
+
     /// A linked-worktree provider invocation changed the registered primary
     /// checkout. Ordinary retries must not compound or misattribute the delta.
     /// An explicitly configured recovery activity may inspect the diagnostic
@@ -262,6 +272,7 @@ impl DispatchError {
                 | DispatchError::RetryConfigInvalid { .. }
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
+                | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict { .. }
                 | DispatchError::TaskCompletionLiveRun { .. }

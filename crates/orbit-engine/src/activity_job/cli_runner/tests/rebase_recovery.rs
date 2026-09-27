@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 
@@ -12,6 +12,231 @@ use super::orchestrator_worktree::{
     LinkedWorktreeFixture, git_bytes, git_ok, linked_worktree_fixture, test_audit, worktree_input,
 };
 use super::test_support::{TestHost, test_agent_loop_spec, write_executable};
+use crate::activity_job::dispatcher::DispatchError;
+
+const STALLED_GIT_CHILD_ENV: &str = "ORBIT_TEST_STALLED_GIT_CHILD";
+
+struct StalledGitShim {
+    armed: PathBuf,
+    pids: PathBuf,
+    log: PathBuf,
+}
+
+impl StalledGitShim {
+    /// A separate test process owns PATH so other parallel tests never see the
+    /// shim. The shim is armed only after the Git fixture is ready.
+    fn install(test: &str, operation: &str) -> Option<Self> {
+        let module = module_path!()
+            .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+            .unwrap_or(module_path!());
+        let exact_test = format!("{module}::{test}");
+        if std::env::var(STALLED_GIT_CHILD_ENV).ok().as_deref() == Some(&exact_test) {
+            let root = PathBuf::from(std::env::var_os("ORBIT_TEST_STALLED_GIT_ROOT")?);
+            return Some(Self {
+                armed: root.join("armed"),
+                pids: root.join("pids"),
+                log: root.join("invocations"),
+            });
+        }
+
+        let dir = tempfile::tempdir().expect("shim dir");
+        let root = dir.path();
+        let real_git = Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .expect("locate Git");
+        assert!(real_git.status.success());
+        let real_git = String::from_utf8(real_git.stdout).expect("Git path UTF-8");
+        let script = root.join("git");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \" $* \" in\n  *' {operation} '*)\n    if test -e '{armed}'; then\n      sleep 60 &\n      printf '%s %s\\n' \"$$\" \"$!\" > '{pids}'\n      wait\n    fi\n    ;;\nesac\nexec '{real_git}' \"$@\"\n",
+                log = root.join("invocations").display(),
+                armed = root.join("armed").display(),
+                pids = root.join("pids").display(),
+                real_git = real_git.trim(),
+            ),
+        );
+        let mut paths = vec![root.to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", &exact_test, "--nocapture"])
+            .env(STALLED_GIT_CHILD_ENV, &exact_test)
+            .env("ORBIT_TEST_STALLED_GIT_ROOT", root)
+            .env("PATH", std::env::join_paths(paths).expect("shim PATH"))
+            .output()
+            .expect("isolated stalled Git test");
+        assert!(
+            output.status.success(),
+            "stalled Git child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "the isolated child must run the requested test"
+        );
+        None
+    }
+
+    fn arm(&self) {
+        fs::write(&self.armed, "").expect("arm stalled Git");
+    }
+
+    fn assert_reaped(&self) {
+        let pids = fs::read_to_string(&self.pids).expect("stalled Git recorded process IDs");
+        for pid in pids.split_whitespace() {
+            let started = Instant::now();
+            while process_is_running(pid) && started.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(
+                !process_is_running(pid),
+                "owned Git process {pid} survived timeout"
+            );
+        }
+    }
+
+    fn invocations(&self) -> String {
+        fs::read_to_string(&self.log).expect("Git invocation log")
+    }
+}
+
+fn process_is_running(pid: &str) -> bool {
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .expect("inspect process state");
+    output.status.success()
+        && output.stdout.iter().any(|byte| !byte.is_ascii_whitespace())
+        && !String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .starts_with('Z')
+}
+
+#[test]
+fn stalled_snapshot_times_out_before_provider_launch_and_reaps_git_descendants() {
+    let Some(shim) = StalledGitShim::install(
+        "stalled_snapshot_times_out_before_provider_launch_and_reaps_git_descendants",
+        "status --porcelain=v2",
+    ) else {
+        return;
+    };
+    let fixture = linked_worktree_fixture();
+    let provider = fixture.root().join("codex");
+    let launched = fixture.root().join("provider-launched");
+    write_executable(
+        &provider,
+        &format!("#!/bin/sh\ntouch '{}'\n", launched.display()),
+    );
+    let mut host = TestHost::with_command(provider.display().to_string());
+    host.workspace_root = Some(fixture.primary.clone());
+    let mut input = worktree_input(&fixture, "T-stalled-snapshot");
+    input["git_timeout_ms"] = serde_json::json!(250);
+    shim.arm();
+    let started = Instant::now();
+    let error = run_cli_backend(
+        &host,
+        &test_agent_loop_spec(Duration::from_secs(30)),
+        "agent_implement",
+        "run-stalled-snapshot",
+        test_audit("run-stalled-snapshot", "codex"),
+        &input,
+        None,
+    )
+    .expect_err("stalled snapshot must time out");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        matches!(
+            error,
+            DispatchError::GitTimeout {
+                timeout_ms: 250,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        !launched.exists(),
+        "provider must not launch after snapshot timeout"
+    );
+    shim.assert_reaped();
+}
+
+#[test]
+fn stalled_authorized_rebase_continue_keeps_recovery_metadata() {
+    let Some(shim) = StalledGitShim::install(
+        "stalled_authorized_rebase_continue_keeps_recovery_metadata",
+        "rebase --continue",
+    ) else {
+        return;
+    };
+    let recovery = stopped_rebase_fixture(false);
+    let provider = recovery.fixture.root().join("codex");
+    write_executable(
+        &provider,
+        "#!/bin/sh\nset -eu\ncat > /dev/null\nprintf 'candidate and target\\n' > README.md\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\n",
+    );
+    let mut host = TestHost::with_command(provider.display().to_string());
+    host.workspace_root = Some(recovery.fixture.primary.clone());
+    let mut input = conflict_recovery_input(&recovery);
+    input["git_timeouts"] = serde_json::json!({"default": 2_000, "rebase": 250});
+    let rebase_dir = PathBuf::from(
+        String::from_utf8(git_bytes(
+            &recovery.fixture.assigned,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "rebase-merge",
+            ],
+        ))
+        .expect("rebase path UTF-8")
+        .trim(),
+    );
+    let metadata_before = ["head-name", "orig-head", "onto"]
+        .map(|name| fs::read(rebase_dir.join(name)).expect("stopped rebase metadata"));
+    let primary_head = git_head(&recovery.fixture.primary);
+    shim.arm();
+    let started = Instant::now();
+    let error = run_cli_backend(
+        &host,
+        &test_agent_loop_spec(Duration::from_secs(30)),
+        "pr_conflict_recovery",
+        "run-rebase-recovery",
+        test_audit("run-stalled-rebase", "codex"),
+        &input,
+        None,
+    )
+    .expect_err("stalled continuation must time out");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        matches!(
+            error,
+            DispatchError::GitTimeout {
+                timeout_ms: 250,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(rebase_in_progress(&recovery.fixture.assigned));
+    for (name, before) in ["head-name", "orig-head", "onto"]
+        .into_iter()
+        .zip(metadata_before)
+    {
+        assert_eq!(
+            fs::read(rebase_dir.join(name)).expect("preserved metadata"),
+            before
+        );
+    }
+    assert_eq!(git_head(&recovery.fixture.primary), primary_head);
+    assert!(!shim.invocations().contains("rebase --abort"));
+    shim.assert_reaped();
+}
 
 #[test]
 fn conflict_recovery_host_completes_only_its_checkpointed_rebase() {

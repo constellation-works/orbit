@@ -460,8 +460,7 @@ fn primary_fast_forward_is_benign(
         root,
         &["merge-base", "--is-ancestor", &before.head, &after.head],
     )?
-    .status
-    .success())
+    .success)
 }
 
 /// Paths whose working-state identity in a checkout actually changed, judged
