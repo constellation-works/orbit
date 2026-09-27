@@ -212,22 +212,70 @@ pub(crate) fn seed_default_skills(
     )
 }
 
-pub(crate) fn is_default_skill_file_for_root(
+/// A legacy workspace skill may be removed only when every entry in its tree
+/// is a shipped file with unchanged bytes. Missing shipped references are
+/// allowed because older releases seeded smaller trees; unknown entries and
+/// symlinks are treated as operator-owned content.
+pub(crate) fn is_default_skill_tree_for_root(
     skill_id: &str,
-    path: &Path,
+    skill_dir: &Path,
     orbit_root: &Path,
 ) -> Result<bool, OrbitError> {
-    let Some((_, content)) = default_skill_files()
-        .into_iter()
-        .find(|(default_id, _)| *default_id == skill_id)
-    else {
-        return Ok(false);
-    };
-    if !path.exists() {
+    let prefix = format!("{skill_id}/");
+    let expected: Vec<_> = DEFAULT_SKILL_FILES
+        .iter()
+        .filter_map(|(path, content)| path.strip_prefix(&prefix).map(|path| (path, *content)))
+        .collect();
+    if expected.is_empty() {
         return Ok(false);
     }
-    let existing = std::fs::read_to_string(path).map_err(|e| OrbitError::Io(e.to_string()))?;
-    Ok(existing == inject_skill_template_tokens(content, orbit_root))
+    let metadata = match std::fs::symlink_metadata(skill_dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(OrbitError::Io(error.to_string())),
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(false);
+    }
+
+    let mut found_router = false;
+    let mut pending = vec![skill_dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).map_err(|e| OrbitError::Io(e.to_string()))? {
+            let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(skill_dir)
+                .map_err(|e| OrbitError::Io(e.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| OrbitError::Io(e.to_string()))?;
+            if file_type.is_dir() {
+                if !expected
+                    .iter()
+                    .any(|(name, _)| Path::new(name).starts_with(relative))
+                {
+                    return Ok(false);
+                }
+                pending.push(path);
+            } else if file_type.is_file() {
+                let Some((_, content)) = expected
+                    .iter()
+                    .find(|(name, _)| Path::new(name) == relative)
+                else {
+                    return Ok(false);
+                };
+                let existing = std::fs::read(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+                if existing != inject_skill_template_tokens(content, orbit_root).as_bytes() {
+                    return Ok(false);
+                }
+                found_router |= relative == Path::new("SKILL.md");
+            } else {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(found_router)
 }
 
 pub(crate) fn inject_skill_template_tokens(raw: &str, orbit_root: &Path) -> String {

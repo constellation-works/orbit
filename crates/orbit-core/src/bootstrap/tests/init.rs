@@ -534,6 +534,69 @@ fn workspace_init_leaves_repo_skills_unseeded() {
     assert_skill_link_exists(home.path().join(".claude").join("skills").join("orbit"));
 }
 
+#[test]
+fn runtime_open_preserves_custom_files_inside_legacy_workspace_skill() {
+    let temp = tempdir().expect("tempdir");
+    let global_root = temp.path().join("global/.orbit");
+    let workspace_root = temp.path().join("workspace/.orbit");
+    let legacy_skills = workspace_root.join("resources/skills");
+    seed_default_skills(&legacy_skills, &workspace_root, true)
+        .expect("seed legacy workspace skills");
+    seed_default_skills(&workspace_root.join("skills"), &workspace_root, true)
+        .expect("seed pristine obsolete skills");
+
+    let skill = legacy_skills.join("orbit");
+    let router = skill.join("SKILL.md");
+    let shipped_router = fs::read(&router).expect("read shipped router");
+    let reference = skill.join("references/task-execution.md");
+    let private_guide = skill.join("references/private-guide.bin");
+    let edited_bytes = b"operator reference \xff\x00";
+    let private_bytes = b"private guide \x00\xfe";
+    fs::write(&reference, edited_bytes).expect("edit shipped reference");
+    fs::write(&private_guide, private_bytes).expect("add private guide");
+    let custom_skill = legacy_skills.join("custom");
+    fs::create_dir_all(&custom_skill).expect("create unrelated custom skill");
+    fs::write(custom_skill.join("SKILL.md"), b"custom skill")
+        .expect("write unrelated custom skill");
+
+    ensure_orbit_root_initialized(&global_root, &workspace_root).expect("runtime open");
+    assert_eq!(
+        fs::read(&router).expect("read router after open"),
+        shipped_router
+    );
+    assert_eq!(
+        fs::read(&reference).expect("read edited reference"),
+        edited_bytes
+    );
+    assert_eq!(
+        fs::read(&private_guide).expect("read private guide"),
+        private_bytes
+    );
+    assert!(custom_skill.join("SKILL.md").exists());
+    assert!(
+        !workspace_root.join("skills").exists(),
+        "pristine obsolete skills retire"
+    );
+
+    init_workspace_at_root(
+        &workspace_root,
+        InitOptions {
+            global_root_override: Some(global_root),
+            ..Default::default()
+        },
+    )
+    .expect("explicit legacy migration");
+    assert_eq!(
+        fs::read(reference).expect("read migrated reference"),
+        edited_bytes
+    );
+    assert_eq!(
+        fs::read(private_guide).expect("read migrated private guide"),
+        private_bytes
+    );
+    assert!(custom_skill.join("SKILL.md").exists());
+}
+
 /// A `--root` scratch root makes one directory serve as both the global and
 /// the workspace root. Every runtime open seeds the global skill catalog and
 /// then reaps workspace-seeded leftovers; when the two roots are the same
