@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Owner:** Orbit contributors
-**Last updated:** 2026-09-25
+**Last updated:** 2026-09-27
 
 ---
 
@@ -28,29 +28,30 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
 2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
 3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Zero JS by default. The homepage's narrow-viewport
-   Menu (Escape and breakpoint close) is the scripted exception; every other
-   interaction is CSS. Hundreds of pages should feel identical in
-   performance to ten.
-5. **Dark-default, light-available.** Theme toggle persists per user; neither mode is an afterthought.
+4. **Static and fast.** Content is rendered at build time. Small browser scripts
+   support search, the theme toggle, and the homepage's narrow-viewport Menu;
+   they should not delay the page's readable state.
+5. **Light-default, dark-available.** The theme toggle persists explicit choices; neither mode is an afterthought.
 
 ---
 
 ## 3. Visual System
 
-### 3.1 Palette (dark, default)
+### 3.1 Palette (light, default)
 
 | Role              | Value       | Notes                                      |
 |-------------------|-------------|--------------------------------------------|
-| Background        | `#0A0A0A`   | Near-black; avoids pure-black eye strain   |
-| Surface           | `#17171A`   | Cards, code blocks, sidebar hover          |
-| Border            | `#26262B`   | Structural only; never decorative          |
-| Body text         | `#EDEDEF`   | Off-white; softer than `#FFFFFF`           |
-| Muted text        | `#9B9BA3`   | Metadata, captions, inactive nav           |
-| Accent            | `#6E9FFF`   | Neptune blue; links, active nav, focus     |
-| Accent (hover)    | `#8AB3FF`   | One step brighter                          |
+| Background        | `#FFFFFF`   | Reading surface                            |
+| Surface           | `#F4F5F8`   | Cards, code blocks, sidebar hover          |
+| Border            | `#D8DBE2`   | Structural only; never decorative          |
+| Body text         | `#17171A`   | High contrast on the reading surface       |
+| Muted text        | `#5F606B`   | Metadata, captions, inactive nav           |
+| Accent            | `#2F67D8`   | Links, active nav, focus                   |
+| Accent (hover)    | `#173B84`   | Deeper blue for hover and focus            |
 
-Light mode is the same roles inverted; accent stays the same hue, darkened for AA contrast.
+Dark mode keeps the same roles on a near-black `#0A0A0A` background with
+`#EDEDF0` body text and a lighter `#6E9FFF` accent. A plain page load does not
+save a theme preference; the toggle saves an explicit light or dark choice.
 
 ### 3.2 Typography
 
@@ -139,8 +140,9 @@ Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
 and publishes no live metric.
 
-Scripts are limited to the homepage Menu's Escape / breakpoint close. The
-Quickstart section below the hero retains the install and setup commands.
+The homepage's extra script handles the Menu's Escape / breakpoint close. The
+shared theme script applies the light default before styles load. The Quickstart
+section below the hero retains the install and setup commands.
 
 Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.
 

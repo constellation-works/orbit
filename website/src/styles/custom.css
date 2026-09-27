@@ -1,5 +1,5 @@
 :root {
-  color-scheme: dark light;
+  color-scheme: light;
   --sl-content-width: 45rem;
   --sl-sidebar-width: 18rem;
   --sl-text-h1: 2rem;
@@ -11,6 +11,39 @@
   --sl-font: "Geist Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --sl-font-mono: "Geist Mono Variable", "SFMono-Regular", ui-monospace, Consolas, monospace;
 
+  --sl-color-white: #0f1014;
+  --sl-color-gray-1: #15161a;
+  --sl-color-gray-2: #30313a;
+  --sl-color-gray-3: #5f606b;
+  --sl-color-gray-4: #666975;
+  --sl-color-gray-5: #d8dbe2;
+  --sl-color-gray-6: #eceef3;
+  --sl-color-black: #ffffff;
+  --sl-color-accent-low: #dce8ff;
+  --sl-color-accent: #2f67d8;
+  --sl-color-accent-high: #173b84;
+  --sl-color-text: #17171a;
+  --sl-color-text-accent: #2f67d8;
+  --sl-color-bg: #ffffff;
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #ffffff;
+  --sl-color-bg-inline-code: #f4f5f8;
+  --sl-color-hairline-light: #d8dbe2;
+  --sl-color-hairline: #eceef3;
+  --sl-color-hairline-shade: #f4f5f8;
+
+  /* Failure state for the copy controls. Not a Starlight role, so it carries
+     the project prefix; tuned for AA contrast on the surface colour above. */
+  --orbit-color-danger: #b3261e;
+
+  /* Caution panels (changelog breaking changes). */
+  --orbit-caution-bg: #fff6ea;
+  --orbit-caution-line: #f0cf9f;
+  --orbit-caution-text: #8a4b00;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
   --sl-color-white: #ededf0;
   --sl-color-gray-1: #ededf0;
   --sl-color-gray-2: #c7c7cc;
@@ -32,43 +65,10 @@
   --sl-color-hairline: #26262b;
   --sl-color-hairline-shade: #17171a;
 
-  /* Failure state for the copy controls. Not a Starlight role, so it carries
-     the project prefix; tuned for AA contrast on the surface colour above. */
   --orbit-color-danger: #ff9d9d;
-
-  /* Caution panels (changelog breaking changes). */
   --orbit-caution-bg: #1a140c;
   --orbit-caution-line: #5a4225;
   --orbit-caution-text: #f2c38b;
-}
-
-:root[data-theme='light'] {
-  --sl-color-white: #0f1014;
-  --sl-color-gray-1: #15161a;
-  --sl-color-gray-2: #30313a;
-  --sl-color-gray-3: #5f606b;
-  --sl-color-gray-4: #9da0aa;
-  --sl-color-gray-5: #d8dbe2;
-  --sl-color-gray-6: #eceef3;
-  --sl-color-black: #ffffff;
-  --sl-color-accent-low: #dce8ff;
-  --sl-color-accent: #2f67d8;
-  --sl-color-accent-high: #173b84;
-  --sl-color-text: #17171a;
-  --sl-color-text-accent: #2f67d8;
-  --sl-color-bg: #ffffff;
-  --sl-color-bg-nav: #ffffff;
-  --sl-color-bg-sidebar: #ffffff;
-  --sl-color-bg-inline-code: #f4f5f8;
-  --sl-color-hairline-light: #d8dbe2;
-  --sl-color-hairline: #eceef3;
-  --sl-color-hairline-shade: #f4f5f8;
-
-  --orbit-color-danger: #b3261e;
-
-  --orbit-caution-bg: #fff6ea;
-  --orbit-caution-line: #f0cf9f;
-  --orbit-caution-text: #8a4b00;
 }
 
 html {
@@ -357,7 +357,7 @@ html:not([data-has-sidebar]) header.header {
 .orbit-button.primary {
   background: var(--sl-color-accent);
   border-color: var(--sl-color-accent);
-  color: #0a0a0a;
+  color: var(--sl-color-black);
 }
 
 .orbit-button:hover {
@@ -366,17 +366,8 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-button.primary:hover {
-  background: #8ab3ff;
-  color: #0a0a0a;
-}
-
-:root[data-theme='light'] .orbit-button.primary {
-  color: #ffffff;
-}
-
-:root[data-theme='light'] .orbit-button.primary:hover {
   background: var(--sl-color-accent-high);
-  color: #ffffff;
+  color: var(--sl-color-black);
 }
 
 /* The provider strip under the hero CTAs, naming the CLIs Orbit drives. Set
@@ -446,12 +437,12 @@ html:not([data-has-sidebar]) header.header {
   background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 10px;
-  box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
+  box-shadow: 0 20px 60px rgb(15 16 20 / 0.12);
   overflow: hidden;
 }
 
-:root[data-theme='light'] .orbit-session-frame {
-  box-shadow: 0 20px 60px rgb(15 16 20 / 0.12);
+:root[data-theme='dark'] .orbit-session-frame {
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
 }
 
 .orbit-session-bar {

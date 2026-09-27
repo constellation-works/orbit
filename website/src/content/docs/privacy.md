@@ -131,9 +131,11 @@ described in [AI coding agents you choose](#ai-coding-agents-you-choose).
 
 - It has no analytics, tracking pixels, advertising, or third-party scripts, and
   it loads no fonts or other assets from other domains.
-- The site's code sets no cookies. It stores one value, your light or dark theme
-  choice (`starlight-theme`), in your browser's local storage. That value never
-  leaves your browser.
+- The site's code sets no cookies. It defaults to light mode without writing to
+  browser storage. If you use the theme toggle, it stores your light or dark
+  choice (`orbit-theme-choice`) in local storage. That choice never leaves your
+  browser. A previous version stored `starlight-theme` automatically; the site
+  now ignores that legacy value.
 - Site search runs in your browser against an index served from this site. Your
   search queries are not sent anywhere.
 - Cloudflare, as the host, processes the standard data of each request, such as
