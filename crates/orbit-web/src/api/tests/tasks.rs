@@ -10,7 +10,10 @@ use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_types::task::TaskArtifact;
-use orbit_types::task::{TaskRelation, TaskRelationType};
+use orbit_types::task::{
+    ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME, TaskRelation,
+    TaskRelationType,
+};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -498,9 +501,10 @@ async fn get_task_artifact_rejects_adversarial_paths() {
 #[cfg(unix)]
 fn swap_artifact_blob_for_symlink(
     runtime: &OrbitRuntime,
+    task_id: &str,
     target: &std::path::Path,
 ) -> std::path::PathBuf {
-    let blob_path = find_artifact_blob(&runtime.global_root(), "file.json")
+    let blob_path = find_artifact_blob(&runtime.global_root(), task_id, "subdir/file.json")
         .expect("artifact blob exists on disk");
     assert!(
         blob_path.components().any(|c| c.as_os_str() == "artifacts"),
@@ -529,7 +533,7 @@ async fn get_task_artifact_refuses_symlink_escaping_artifact_root() {
     // containment check itself is exercised.
     let outside_twin = runtime.data_root().join("outside-twin.json");
     std::fs::write(&outside_twin, br#"{"ok":true}"#).expect("write outside twin");
-    swap_artifact_blob_for_symlink(&runtime, &outside_twin);
+    swap_artifact_blob_for_symlink(&runtime, &task.id, &outside_twin);
 
     let response = request(
         runtime,
@@ -562,7 +566,7 @@ async fn get_task_artifact_fails_closed_on_symlink_with_foreign_content() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let task = seed_task_with_artifact(&runtime);
     let secret_path = plant_secret_outside_artifact_root(&runtime);
-    swap_artifact_blob_for_symlink(&runtime, &secret_path);
+    swap_artifact_blob_for_symlink(&runtime, &task.id, &secret_path);
 
     let response = request(
         runtime,
@@ -584,21 +588,30 @@ async fn get_task_artifact_fails_closed_on_symlink_with_foreign_content() {
     );
 }
 
-/// Depth-first search for a file named `name` under `root`, skipping nothing.
-/// Test-only helper: the artifact bundle layout is an implementation detail of
-/// orbit-store, so the test discovers the blob instead of hardcoding the path.
-pub(super) fn find_artifact_blob(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    let entries = std::fs::read_dir(root).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            if let Some(found) = find_artifact_blob(&path, name) {
-                return Some(found);
-            }
-        } else if path.file_name().is_some_and(|f| f == name)
-            && path.components().any(|c| c.as_os_str() == "artifacts")
+/// Resolve the blob for a logical artifact path through its task manifest.
+pub(super) fn find_artifact_blob(
+    root: &std::path::Path,
+    task_id: &str,
+    logical_path: &str,
+) -> Option<std::path::PathBuf> {
+    let workspaces = root.join("tasks/workspaces");
+    for workspace in std::fs::read_dir(workspaces).ok()?.flatten() {
+        let bundle_dir = workspace.path().join(task_id);
+        let artifact_dir = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
+        let manifest_path = artifact_dir.join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+        let Ok(raw_manifest) = std::fs::read_to_string(manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_yaml::from_str::<ArtifactManifestV2>(&raw_manifest) else {
+            continue;
+        };
+        manifest.validate().ok()?;
+        if let Some(artifact) = manifest
+            .files
+            .iter()
+            .find(|artifact| artifact.path == logical_path)
         {
-            return Some(path);
+            return Some(artifact_dir.join(&artifact.blob));
         }
     }
     None
