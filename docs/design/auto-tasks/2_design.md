@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-25
-last_validated: 2026-09-25
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422]
 ---
 
 # Auto-tasks — Design
@@ -49,6 +49,16 @@ rejects any file whose stem ≠ its `name`, so the on-disk identity and the
 `collect_auto_tasks` with the registered checkout's local Orbit directory.
 Gitignored copies in linked worktrees are separate files and do not reach that
 clock. Cursor state remains under the shared runtime root.
+
+`auto_task_show` and manual `auto_task_mint` use the same directory boundary.
+The lookup name must be one definition stem, so an absolute path or a
+parent-directory traversal is rejected before the filesystem is consulted. The
+`auto_tasks` directory must be a real directory directly under the Orbit
+directory, and `<name>.yaml` must be a regular file. A symlinked directory, a
+symlinked definition, or any other non-regular entry is refused before its
+bytes are read. A missing regular file remains absence; mint of an unknown
+in-scope name stays `InvalidInput`. Discovery already skipped those escapes,
+and the direct lookup follows that confinement [ORB-13422].
 
 `auto-task show` reports `definition_source.root` and
 `definition_source.path` in JSON, plus the same root and path in plain text, so
@@ -298,7 +308,11 @@ The mint is **unconditional**. It ignores schedule due-math, `dedupe`, and
 `enabled`, and it neither reads nor writes the host-local cursor — an operator
 naming a definition explicitly means it, and a manual mint must not perturb
 scheduler state. Unknown names fail loudly (`InvalidInput` naming the
-definition), so the CLI exits non-zero rather than silently no-op'ing.
+definition), so the CLI exits non-zero rather than silently no-op'ing. Mint
+loads that definition through the confined show lookup above, so an escaped
+name or a symlinked definition is the same `InvalidInput` and creates no task.
+A regular in-scope definition remains mintable with those scheduling gates
+ignored.
 
 Deliberately rejected:
 

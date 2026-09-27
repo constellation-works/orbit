@@ -12,17 +12,23 @@
 //! `mint` (CLI-only by design — see `docs/design/mcp-bridge/2_design.md`)
 //! rides here too: it mints a task from a definition on demand by reusing the
 //! scheduler's mint path, so there is exactly one template→task mapping.
+//! `show` and `mint` resolve a definition only through the confined lookup:
+//! a single in-scope name, a real `auto_tasks` directory, and a regular
+//! definition file, checked before any definition bytes are read.
+
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_types::task::{Task, normalize_required_tools};
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
+    is_valid_auto_task_name,
 };
 
 use crate::OrbitRuntime;
 
-use super::loader::{AutoTaskCollection, collect_auto_tasks, definition_path};
+use super::loader::{AutoTaskCollection, auto_tasks_dir, collect_auto_tasks, definition_path};
 use super::schedule::validate_schedule;
 use super::scheduler::mint_task;
 
@@ -45,6 +51,23 @@ pub struct AutoTaskUpdateParams {
     pub schedule: Option<AutoTaskSchedule>,
     pub dedupe: Option<DedupePolicy>,
     pub template: Option<AutoTaskTemplate>,
+}
+
+/// A lookup may name only one definition stem. Absolute paths, `..`, and
+/// extra components are rejected before they can be joined onto `auto_tasks`.
+fn in_scope_lookup_name(name: &str) -> bool {
+    if !is_valid_auto_task_name(name) {
+        return false;
+    }
+    let path = Path::new(name);
+    if path.is_absolute() {
+        return false;
+    }
+    let mut components = path.components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(stem)), None) => stem.to_str() == Some(name),
+        _ => false,
+    }
 }
 
 impl OrbitRuntime {
@@ -135,12 +158,16 @@ impl OrbitRuntime {
             .collect())
     }
 
-    /// Show one definition by name, or `None` if it does not exist.
+    /// Show one definition by name, or `None` if no regular in-scope file exists.
+    ///
+    /// Absolute paths, parent-directory traversal, and any other name that is
+    /// not a single definition stem are rejected before the filesystem is
+    /// consulted. A symlinked `auto_tasks` directory or a non-regular
+    /// definition entry is refused before its bytes are read.
     pub fn auto_task_show(&self, name: &str) -> Result<Option<AutoTaskDefinition>, OrbitError> {
-        let path = definition_path(&self.paths().local_dir, name);
-        if !path.exists() {
+        let Some(path) = self.confined_definition_path(name)? else {
             return Ok(None);
-        }
+        };
         let raw = std::fs::read_to_string(&path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
         Ok(Some(orbit_common::protocol::yaml::parse_auto_task_yaml(
@@ -221,10 +248,67 @@ impl OrbitRuntime {
     /// the next pass, exactly as a fired one would be.
     ///
     /// An unknown name is an `InvalidInput` error naming the definition.
+    /// Escaped lookups fail the same way, before a task is created: mint loads
+    /// the definition only through [`Self::auto_task_show`].
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
         let definition = self.require_auto_task(name)?;
         self.validate_required_tools(&definition.template.required_tools)?;
         mint_task(self, &definition)
+    }
+
+    /// Resolve `<orbit_dir>/auto_tasks/<name>.yaml` without following a lookup
+    /// outside that directory.
+    ///
+    /// Name checks run first, so a traversal or absolute lookup never becomes
+    /// a path. The directory and file checks use `symlink_metadata`, which
+    /// does not follow the final component, and only a regular file is
+    /// returned for reading.
+    fn confined_definition_path(&self, name: &str) -> Result<Option<PathBuf>, OrbitError> {
+        if !in_scope_lookup_name(name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "auto-task lookup '{name}' is not an in-scope definition name"
+            )));
+        }
+
+        let definitions = auto_tasks_dir(&self.paths().local_dir);
+        match std::fs::symlink_metadata(&definitions) {
+            Ok(metadata) => {
+                let file_type = metadata.file_type();
+                if file_type.is_symlink() || !file_type.is_dir() {
+                    return Err(OrbitError::InvalidInput(
+                        "auto_tasks must be a regular directory directly under the workspace Orbit directory"
+                            .into(),
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect auto_tasks directory {}: {error}",
+                    definitions.display()
+                )));
+            }
+        }
+
+        let path = definition_path(&self.paths().local_dir, name);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                let file_type = metadata.file_type();
+                if file_type.is_symlink() || !file_type.is_file() {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "auto-task '{name}' must be a regular definition file directly under auto_tasks"
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect auto-task '{name}' at {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+        Ok(Some(path))
     }
 
     fn require_auto_task(&self, name: &str) -> Result<AutoTaskDefinition, OrbitError> {
