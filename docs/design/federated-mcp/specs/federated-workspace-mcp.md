@@ -181,6 +181,8 @@ Classification and delivery are budgeted separately [ORB-11023]. SSH setup, the 
 
 Once that request is written the call may already have executed and committed on the destination, and killing the transport does not undo it. A lost answer there is therefore `outcome_unknown`, never `unreachable_destination`: the latter means a delivery miss and invites the retry that would duplicate the write. This is a post-dispatch outcome and does **not** enter the precedence ladder above — everything in that ladder is decided before the destination sees the call.
 
+Both budgets bound writing a request as well as awaiting its answer, and unrelated messages the destination emits never extend them. A write still blocked at its deadline ends the session: `unreachable_destination` if the request line never fully left, otherwise `outcome_unknown` for a routed `tools/call`.
+
 | Class | Error identity | When |
 |---|---|---|
 | outcome unknown | `outcome_unknown` | The routed `tools/call` request was written and its answer never arrived (budget exceeded, or the session ended mid-call) |
