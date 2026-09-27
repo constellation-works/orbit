@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -24,9 +24,8 @@ The v1 design rests on six invariants:
 3. The client-side proxy is byte-transparent and policy-free.
 4. Every tools/call enters Core's dispatch and audit boundary exactly once,
    including global discovery, unknown raw names, and setup failures.
-5. A forwarded caller label is audit metadata; destination-side caller policy,
-   not that label, grants remote authority. A forced-command SSH acceptance can
-   bind the label to the key sshd authenticated.
+5. The destination serves the authority its argv requests. A forwarded caller
+   label is self-asserted audit metadata and does not grant or restrict authority.
 6. Direct local, remote, and socket calls use the same server implementation;
    federated mode is a separate mux that delivers to those destination servers.
 
@@ -37,7 +36,7 @@ The v1 design rests on six invariants:
 The framing kernel owns MCP framing, advertised-name translation, structured
 responses, canonical surface composition, per-call trace creation, server
 identity context, and the TCP listener. The crate also owns the direct SSH
-stdio proxy, destination-side caller policy, and the explicit federated mux.
+stdio proxy and the explicit federated mux.
 Its `McpHost` boundary accepts canonical tool calls with a trusted session
 context; runtime opening remains in `orbit-cli`, while Core enforces effective
 capabilities and governed operations.
