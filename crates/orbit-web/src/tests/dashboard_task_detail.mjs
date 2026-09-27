@@ -21,6 +21,7 @@ const settle = async () => {
 
 const requests = [];
 let detailFailure = null;
+let patchFailure = null;
 const fullTask = () => ({
   id: "ORB-2",
   title: "summary row",
@@ -67,7 +68,14 @@ globalThis.fetch = async (path, options = {}) => {
   }
   requests.push({ method, path: url.pathname, body: options.body ? JSON.parse(options.body) : null });
   if (url.pathname !== "/api/tasks/ORB-2") throw new Error(`unexpected request ${method} ${url.pathname}`);
-  if (method === "PATCH") return response({ ...fullTask(), status: options.body ? JSON.parse(options.body).status : "review" });
+  if (method === "PATCH") {
+    if (patchFailure) return response({ error: patchFailure }, 500);
+    const status = options.body ? JSON.parse(options.body).status : "review";
+    const statusTransitions = status === "done"
+      ? [{ status: "review", required_field: null }]
+      : fullTask().status_transitions;
+    return response({ ...fullTask(), status, status_transitions: statusTransitions });
+  }
   if (detailFailure) return response({ error: detailFailure }, 500);
   return response(fullTask());
 };
@@ -84,8 +92,8 @@ const context = {
     tasks = tasks.map((existing) => (existing.id === task.id ? task : existing));
   },
   getSearchQuery: () => "",
-  getActiveStatuses: () => new Set(["review"]),
-  statusOrder: ["review", "done", "backlog"],
+  getActiveStatuses: () => new Set(["proposed", "backlog", "review", "done"]),
+  statusOrder: ["review", "done", "backlog", "proposed"],
   fmtAbsTime: (value) => value,
   refreshDashboard: () => Promise.resolve(),
 };
@@ -215,5 +223,54 @@ const patch = requests.find((r) => r.method === "PATCH");
 assert.ok(patch, "the change is written");
 assert.deepEqual(patch.body, { status: "done", execution_summary: "Completed in the dashboard" });
 assert.equal(patch.body.force, undefined, "a governed change is never forced");
+assert.equal(detail(), undefined, "successful status changes collapse the row");
+assert.ok(row().textContent.includes("status saved"), "success feedback stays visible on the collapsed row");
+const firstUndo = row().querySelector("button.mutation-undo");
+assert.ok(firstUndo, "the bounded undo button stays visible on the collapsed row");
+
+// Undo is also a status change: when invoked from an expanded row it collapses
+// on success and leaves its feedback visible in the row header.
+row().dispatch("click");
+await settle();
+assert.ok(detail(), "the row can be expanded before undo");
+row().querySelector("button.mutation-undo").dispatch("click");
+await settle();
+assert.equal(detail(), undefined, "successful undo collapses the expanded row");
+assert.ok(row().textContent.includes("status saved"), "undo success feedback remains visible");
+
+// A failed write keeps an expanded row open and exposes the error beside its
+// status control.
+row().dispatch("click");
+await settle();
+assert.ok(detail(), "the row is expanded before the failing status change");
+patchFailure = "store refused the status update";
+const failedSelect = row().querySelector("select.task-status-select");
+failedSelect.value = "done";
+failedSelect.dispatch("change");
+await settle();
+assert.ok(detail(), "a failed status change leaves the row expanded");
+assert.ok(row().textContent.includes("status update failed: store refused the status update"));
+assert.ok(row().querySelector(".mutation-feedback.error"), "the failed PATCH error stays visible");
+patchFailure = null;
+
+// A cancelled forced change is also an error state and must not collapse the
+// expanded row. Confirming the same forced target and succeeding then does.
+globalThis.window.confirm = () => false;
+const cancelledSelect = row().querySelector("select.task-status-select");
+cancelledSelect.value = "proposed";
+cancelledSelect.dispatch("change");
+await settle();
+assert.ok(detail(), "cancelling a forced change leaves the row expanded");
+assert.ok(row().textContent.includes("status update cancelled"));
+
+globalThis.window.confirm = () => true;
+const forcedSelect = row().querySelector("select.task-status-select");
+forcedSelect.value = "proposed";
+forcedSelect.dispatch("change");
+await settle();
+assert.equal(detail(), undefined, "a successful forced status change collapses the row");
+assert.ok(row().textContent.includes("status forced"), "forced success feedback stays visible");
+const forcedPatch = requests.filter((r) => r.method === "PATCH").at(-1);
+assert.deepEqual(forcedPatch.body, { status: "proposed", force: true });
 
 console.log("dashboard summary rows expand through the detail endpoint");
