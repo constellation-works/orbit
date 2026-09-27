@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-09-07
+last_validated: 2026-09-27
 ---
 # RAII Guard Pattern
 
@@ -23,11 +23,12 @@ Four shapes in the codebase carry distinct lessons.
 
 ## Reference: `AuditGuard` — record the scope's outcome once
 
-From `crates/orbit-cli/src/audit_middleware.rs:28`:
+From `crates/orbit-cli/src/audit_middleware.rs:29`:
 
 ```rust
 pub struct AuditGuard<'a> {
     runtime: &'a OrbitRuntime,
+    execution_id: String,
     meta: CommandMeta,
     start: Instant,
     status: AuditEventStatus,    // defaults to Failure
@@ -60,12 +61,14 @@ Patterns to copy:
 
 ## Reference: `StagedTextFile` — `Drop` as rollback
 
-From `crates/orbit-common/src/fs/io.rs:112`:
+From `crates/orbit-common/src/fs/io.rs:143`:
 
 ```rust
 pub struct StagedTextFile {
     target_path: PathBuf,
     temp_path: PathBuf,
+    parent_dir: Option<File>,
+    sync_parent: bool,
     committed: bool,
 }
 

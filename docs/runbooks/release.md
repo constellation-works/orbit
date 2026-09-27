@@ -4,7 +4,7 @@ summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub art
 tags: [operations, release, plugins, npm, signing]
 paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh", "scripts/cursor-marketplace-followup.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-09-06
+last_validated: 2026-09-27
 ---
 
 # Release Orbit
