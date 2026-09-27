@@ -25,102 +25,103 @@ impl Execute for WorkspaceTeardownArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let registry = workspace_registry::load_registry_from(&registry_path)?;
-        let (workspace, checkout) = resolve_teardown_target(&registry, &self.workspace)?;
-        refuse_if_cwd_belongs_to_another_checkout(&registry, &checkout)?;
-
-        let orbit_dir = checkout.orbit_dir.clone();
-        let repo_root = checkout.repo_root.clone();
-        let workspace_id = workspace.id.clone();
-        let workspace_name = workspace.name.clone();
-
-        let orbit_canonical =
-            std::fs::canonicalize(&orbit_dir).unwrap_or_else(|_| orbit_dir.clone());
-        let global_canonical =
-            std::fs::canonicalize(&global_root).unwrap_or_else(|_| global_root.clone());
-        if orbit_canonical == global_canonical {
-            return Err(OrbitError::InvalidInput(
-                "refusing to teardown the global ~/.orbit/ directory".to_string(),
-            ));
-        }
-        if orbit_dir.file_name().and_then(|n| n.to_str()) != Some(".orbit") {
-            return Err(OrbitError::InvalidInput(format!(
-                "data root '{}' does not end with .orbit — aborting teardown",
-                orbit_dir.display()
-            )));
-        }
-
-        let partitions =
-            planned_task_store_partitions(&global_root, &orbit_dir, Some(workspace_id.as_str()))?;
-        let plan = format_teardown_plan(&workspace, &checkout, &partitions);
-        if !self.confirm {
-            return Err(OrbitError::InvalidInput(format!(
-                "teardown is destructive. Resolved target:\n{plan}\nPass --confirm to proceed."
-            )));
-        }
-
-        println!("teardown plan:\n{plan}");
-
-        let mut removed: Vec<String> = Vec::new();
-
-        // 1. Deregister from workspace registry (before deleting .orbit/)
-        let mut catalog_workspace_id = None;
-        if registry_path.exists() {
+        // Keep target validation, deregistration and local deletion together;
+        // another initializer must not register this checkout midway through teardown.
+        workspace_registry::with_registry_lock(&registry_path, || {
             let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            if workspace_registry::find_workspace_by_id(&registry, &workspace_id).is_some() {
-                let ws = workspace_registry::remove_workspace(&mut registry, &workspace_id)?;
-                workspace_registry::save_registry_to(&registry, &registry_path)?;
-                removed.push(format!(
-                    "deregistered workspace '{}' from registry",
-                    ws.name
+            let (workspace, checkout) = resolve_teardown_target(&registry, &self.workspace)?;
+            refuse_if_cwd_belongs_to_another_checkout(&registry, &checkout)?;
+
+            let orbit_dir = checkout.orbit_dir.clone();
+            let repo_root = checkout.repo_root.clone();
+            let workspace_id = workspace.id.clone();
+            let workspace_name = workspace.name.clone();
+
+            let orbit_canonical =
+                std::fs::canonicalize(&orbit_dir).unwrap_or_else(|_| orbit_dir.clone());
+            let global_canonical =
+                std::fs::canonicalize(&global_root).unwrap_or_else(|_| global_root.clone());
+            if orbit_canonical == global_canonical {
+                return Err(OrbitError::InvalidInput(
+                    "refusing to teardown the global ~/.orbit/ directory".to_string(),
                 ));
-                catalog_workspace_id = Some(workspace_id.clone());
             }
-        }
+            if orbit_dir.file_name().and_then(|n| n.to_str()) != Some(".orbit") {
+                return Err(OrbitError::InvalidInput(format!(
+                    "data root '{}' does not end with .orbit — aborting teardown",
+                    orbit_dir.display()
+                )));
+            }
 
-        // 2. Delete the task-store partition this checkout's task state is
-        //    bound to. The catalog id above is not that partition's name
-        //    unless the two id spaces happen to coincide, so the task registry
-        //    resolves it and retires its bindings [ORB-12119].
-        for partition in
-            remove_checkout_task_stores(&global_root, &orbit_dir, catalog_workspace_id.as_deref())?
-        {
-            removed.push(format_deleted_partition(&partition, &workspace_name));
-        }
+            let partitions = planned_task_store_partitions(
+                &global_root,
+                &orbit_dir,
+                Some(workspace_id.as_str()),
+            )?;
+            let plan = format_teardown_plan(&workspace, &checkout, &partitions);
+            if !self.confirm {
+                return Err(OrbitError::InvalidInput(format!(
+                    "teardown is destructive. Resolved target:\n{plan}\nPass --confirm to proceed."
+                )));
+            }
 
-        // 3. Remove legacy repo-local skill symlinks from .agents/skills/ and .claude/skills/
-        for dir_name in &[".agents", ".claude"] {
-            let skills_dir = repo_root.join(dir_name).join("skills");
-            if skills_dir.is_dir() {
-                remove_symlinks_in(&skills_dir)?;
-                removed.push(format!("removed symlinks from {}/skills/", dir_name));
+            println!("teardown plan:\n{plan}");
 
-                if is_dir_empty(&skills_dir) {
-                    std::fs::remove_dir(&skills_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
-                }
-                let parent = repo_root.join(dir_name);
-                if parent.is_dir() && is_dir_empty(&parent) {
-                    std::fs::remove_dir(&parent).map_err(|e| OrbitError::Io(e.to_string()))?;
-                    removed.push(format!("removed empty {}/", dir_name));
+            let mut removed: Vec<String> = Vec::new();
+
+            // 1. Deregister from workspace registry (before deleting .orbit/)
+            let ws = workspace_registry::remove_workspace(&mut registry, &workspace_id)?;
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+            removed.push(format!(
+                "deregistered workspace '{}' from registry",
+                ws.name
+            ));
+
+            // 2. Delete the task-store partition this checkout's task state is
+            //    bound to. The catalog id above is not that partition's name
+            //    unless the two id spaces happen to coincide, so the task registry
+            //    resolves it and retires its bindings [ORB-12119].
+            for partition in
+                remove_checkout_task_stores(&global_root, &orbit_dir, Some(&workspace_id))?
+            {
+                removed.push(format_deleted_partition(&partition, &workspace_name));
+            }
+
+            // 3. Remove legacy repo-local skill symlinks from .agents/skills/ and .claude/skills/
+            for dir_name in &[".agents", ".claude"] {
+                let skills_dir = repo_root.join(dir_name).join("skills");
+                if skills_dir.is_dir() {
+                    remove_symlinks_in(&skills_dir)?;
+                    removed.push(format!("removed symlinks from {}/skills/", dir_name));
+
+                    if is_dir_empty(&skills_dir) {
+                        std::fs::remove_dir(&skills_dir)
+                            .map_err(|e| OrbitError::Io(e.to_string()))?;
+                    }
+                    let parent = repo_root.join(dir_name);
+                    if parent.is_dir() && is_dir_empty(&parent) {
+                        std::fs::remove_dir(&parent).map_err(|e| OrbitError::Io(e.to_string()))?;
+                        removed.push(format!("removed empty {}/", dir_name));
+                    }
                 }
             }
-        }
 
-        // 4. Delete .orbit/ directory
-        if orbit_dir.is_dir() {
-            std::fs::remove_dir_all(&orbit_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
-            removed.push(format!("deleted {}", orbit_dir.display()));
-        }
+            // 4. Delete .orbit/ directory
+            if orbit_dir.is_dir() {
+                std::fs::remove_dir_all(&orbit_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+                removed.push(format!("deleted {}", orbit_dir.display()));
+            }
 
-        println!("teardown complete:");
-        for item in &removed {
-            println!("  - {item}");
-        }
-        if removed.is_empty() {
-            println!("  (nothing to remove)");
-        }
+            println!("teardown complete:");
+            for item in &removed {
+                println!("  - {item}");
+            }
+            if removed.is_empty() {
+                println!("  (nothing to remove)");
+            }
 
-        Ok(CommandOutput::Silent)
+            Ok(CommandOutput::Silent)
+        })
     }
 }
 

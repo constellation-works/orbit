@@ -44,20 +44,24 @@ impl Execute for WorkspaceRoleArgs {
             MachineIdentityState::Absent => None,
         };
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-
         let role: WorkspaceCheckoutRole = self.role.into();
-        workspace_registry::assign_checkout_role(
-            &mut registry,
-            &self.workspace,
-            role,
-            self.owner.as_deref(),
-            local_machine_id.as_deref(),
-        )?;
-        // save_registry_to validates a clone before writing, so a contradictory
-        // declaration (owner role on a non-owner machine, replica of self, …)
-        // fails here and leaves the previous registry file byte-valid.
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        workspace_registry::with_registry_lock(&registry_path, || {
+            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+
+            workspace_registry::assign_checkout_role(
+                &mut registry,
+                &self.workspace,
+                role,
+                self.owner.as_deref(),
+                local_machine_id.as_deref(),
+            )?;
+            // save_registry_to validates a clone before writing, so a contradictory
+            // declaration (owner role on a non-owner machine, replica of self, …)
+            // fails here and leaves the previous registry file byte-valid.
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+
+            Ok(())
+        })?;
 
         println!("workspace '{}' local role set to {}", self.workspace, role);
         Ok(CommandOutput::Silent)

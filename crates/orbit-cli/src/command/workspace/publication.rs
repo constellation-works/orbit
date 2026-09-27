@@ -61,31 +61,35 @@ impl WorkspacePublicationBindArgs {
         let global_root = runtime.global_root();
         let machine_id = load_machine_identity(&global_root)?.id;
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let binding = if rebind {
-            workspace_registry::rebind_publication_by_id(
-                &mut registry,
-                &workspace_id,
-                &self.remote,
-                &self.branch,
-                &self.publication_id,
-                Some(&machine_id),
-            )?
-        } else {
-            workspace_registry::bind_publication_by_id(
-                &mut registry,
-                &workspace_id,
-                &self.remote,
-                &self.branch,
-                &self.publication_id,
-                Some(&machine_id),
-            )?
-        };
-        runtime.record_task_publication_source(
-            &task_workspace_id,
-            &binding.source_repository_fingerprint,
-        )?;
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        let binding = workspace_registry::with_registry_lock(&registry_path, || {
+            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+            let binding = if rebind {
+                workspace_registry::rebind_publication_by_id(
+                    &mut registry,
+                    &workspace_id,
+                    &self.remote,
+                    &self.branch,
+                    &self.publication_id,
+                    Some(&machine_id),
+                )?
+            } else {
+                workspace_registry::bind_publication_by_id(
+                    &mut registry,
+                    &workspace_id,
+                    &self.remote,
+                    &self.branch,
+                    &self.publication_id,
+                    Some(&machine_id),
+                )?
+            };
+            runtime.record_task_publication_source(
+                &task_workspace_id,
+                &binding.source_repository_fingerprint,
+            )?;
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+
+            Ok(binding)
+        })?;
 
         let action = if rebind { "rebound" } else { "bound" };
         Ok(Payload::detail(
@@ -152,13 +156,16 @@ impl Execute for WorkspacePublicationRemoveArgs {
         let global_root = runtime.global_root();
         let machine_id = load_machine_identity(&global_root)?.id;
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        let removed = workspace_registry::unbind_publication_by_id(
-            &mut registry,
-            &workspace_id,
-            Some(&machine_id),
-        )?;
-        workspace_registry::save_registry_to(&registry, &registry_path)?;
+        let removed = workspace_registry::with_registry_lock(&registry_path, || {
+            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+            let removed = workspace_registry::unbind_publication_by_id(
+                &mut registry,
+                &workspace_id,
+                Some(&machine_id),
+            )?;
+            workspace_registry::save_registry_to(&registry, &registry_path)?;
+            Ok(removed)
+        })?;
         Ok(Payload::detail(
             json!({
                 "workspace_id": removed.workspace_id,
