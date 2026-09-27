@@ -247,6 +247,121 @@ fn default_provider_checks_ignore_unused_executor_definitions() {
     );
 }
 
+/// A disabled pool member is not a provider-readiness failure, even when its
+/// CLI is absent. The enabled member of the same pool is still checked, and a
+/// default or system lane aimed at the disabled crew remains a config warning.
+#[test]
+fn doctor_skips_disabled_pool_crew_and_warns_on_disabled_lanes() {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    std::fs::write(
+        runtime.shared_root().join("config.toml"),
+        "\
+[crews.sol]
+model = \"test-model\"
+provider = \"codex\"
+enabled = true
+
+[crews.gemini]
+model = \"test-model\"
+provider = \"gemini\"
+enabled = false
+
+[workflow]
+default_crew = \"gemini\"
+system_crew = \"gemini\"
+low_complexity_crews = [\"sol:100\", \"gemini:100\"]
+",
+    )
+    .expect("write isolated crew routing");
+
+    let present = std::env::current_exe().expect("test executable path");
+    let missing = runtime.paths().repo_root.join("missing-gemini-cli");
+    for (name, command) in [("codex", present.as_path()), ("gemini", missing.as_path())] {
+        let resource: ExecutorResource = serde_yaml::from_str(&format!(
+            "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: {name}\nspec:\n  executor_type: direct_agent\n  command: {}\n",
+            command.display()
+        ))
+        .expect("executor YAML");
+        let def = ExecutorDef::from_resource_spec(
+            resource.metadata.name,
+            resource.spec.clone(),
+            resource.spec.created_at,
+            resource.spec.updated_at,
+        );
+        runtime.upsert_executor_def(&def).expect("store executor");
+    }
+
+    let output = super::super::doctor::DoctorCommand {
+        command: None,
+        json: false,
+        fix_stale_locks: false,
+        fix_stale_task_locks: false,
+        remove_graph: false,
+        fix_stale_artifacts: false,
+        fix_retired_activity_backends: false,
+        fix_orphan_task_stores: false,
+        confirm: false,
+    }
+    .execute(&runtime)
+    .expect("doctor report");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("doctor report must be a payload");
+    };
+    assert_eq!(payload.exit_code(), 0);
+    let (document, _) = payload.into_view();
+    let rows = document.as_array().expect("doctor rows");
+    let row = |check: &str| {
+        rows.iter()
+            .find(|row| row["check"] == check)
+            .unwrap_or_else(|| panic!("missing {check} row: {document}"))
+    };
+
+    let enabled = row("provider:sol");
+    assert_eq!(enabled["status"], "ok", "{enabled}");
+    assert!(
+        enabled["message"]
+            .as_str()
+            .expect("enabled crew message")
+            .contains("found"),
+        "{enabled}"
+    );
+    assert!(
+        rows.iter().all(|row| row["check"] != "provider:gemini"),
+        "disabled pool member must not be probed: {document}"
+    );
+    assert!(
+        rows.iter().all(|row| {
+            let message = row["message"].as_str().unwrap_or("");
+            !message.contains("provider 'gemini'") && !message.contains("CLI 'gemini'")
+        }),
+        "disabled crew must not produce a missing CLI or executor error: {document}"
+    );
+
+    let config_warnings: Vec<_> = rows
+        .iter()
+        .filter(|row| row["check"] == "config" && row["status"] == "warning")
+        .collect();
+    assert!(
+        config_warnings.iter().any(|row| {
+            row["message"].as_str().is_some_and(|message| {
+                message.contains("workflow.default_crew") && message.contains("gemini")
+            })
+        }),
+        "default lane aimed at a disabled crew must warn: {config_warnings:?}"
+    );
+    assert!(
+        config_warnings.iter().any(|row| {
+            row["message"].as_str().is_some_and(|message| {
+                message.contains("workflow.system_crew") && message.contains("gemini")
+            })
+        }),
+        "system lane aimed at a disabled crew must warn: {config_warnings:?}"
+    );
+}
+
 #[test]
 fn mcp_registration_warns_when_absent_and_recognizes_workspace_config() {
     let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");

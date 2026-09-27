@@ -231,9 +231,12 @@ impl Execute for DoctorCommand {
     }
 }
 
-/// Check only crews that normal workflow routing can select. Provider auth is
-/// deliberately not probed: a status command may refresh credentials or call
-/// the network, while `doctor` must stay fast and read-only.
+/// Check only crews that normal workflow routing can select. A disabled crew
+/// is never drawn, so a missing CLI or executor for it is not a readiness
+/// failure; a disabled default or system lane is reported separately as a
+/// config warning. Provider auth is deliberately not probed: a status command
+/// may refresh credentials or call the network, while `doctor` must stay fast
+/// and read-only.
 pub(crate) fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     use std::collections::BTreeSet;
 
@@ -255,10 +258,14 @@ pub(crate) fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDocto
     };
 
     let mut names = BTreeSet::new();
-    if let Some(name) = &config.default_crew {
+    if let Some(name) = &config.default_crew
+        && routing_selects_crew(&config, name)
+    {
         names.insert(name.clone());
     }
-    names.insert(config.system_crew.clone());
+    if routing_selects_crew(&config, &config.system_crew) {
+        names.insert(config.system_crew.clone());
+    }
     for (complexity, entries) in [
         ("low", &config.complexity_crews.low),
         ("medium", &config.complexity_crews.medium),
@@ -274,7 +281,9 @@ pub(crate) fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDocto
                 Ok(pool) => names.extend(
                     pool.entries
                         .into_iter()
-                        .filter(|entry| entry.weight > 0)
+                        .filter(|entry| {
+                            entry.weight > 0 && routing_selects_crew(&config, &entry.name)
+                        })
                         .map(|entry| entry.name),
                 ),
                 Err(error) => {
@@ -340,6 +349,15 @@ pub(crate) fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDocto
             },
         }
     }).collect()
+}
+
+/// Provider readiness follows dispatch. A disabled crew is omitted. A name
+/// absent from the registry stays included so the probe can report it missing.
+fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
+    match config.crews.get(name) {
+        Some(crew) => crew.enabled,
+        None => true,
+    }
 }
 
 pub(crate) fn mcp_registration_row(
