@@ -26,6 +26,8 @@ use crate::application::job::pipeline::worker::supervisor::{
 };
 use crate::runtime::event_bus::EventLog;
 
+#[cfg(target_os = "linux")]
+use crate::application::job::pipeline::worker::scope::WorkerScopeCgroup;
 #[cfg(unix)]
 use crate::application::job::run::{CANCELLATION_REQUEST_AUDIT, CANCELLATION_WORKER_EXIT_AUDIT};
 
@@ -343,84 +345,422 @@ fn claimed_ship_worker_sigterm_observer_first_is_interrupted() {
     }));
 }
 
+/// `TasksMax` of every scope the live containment tests launch.
+#[cfg(target_os = "linux")]
+const LIVE_TASKS_MAX: u32 = 32;
+
+/// A contained sibling with one descendant, alive until it is reaped.
+#[cfg(target_os = "linux")]
+const SIBLING_WORKER: [&str; 3] = ["sh", "-c", "sleep 120 & wait"];
+
+/// A fork bomb that refuses to run outside a worker scope and holds its one
+/// descendant until the test opens the gate file named by `$1`.
+#[cfg(target_os = "linux")]
+const GATED_FORK_BOMB: &str = r#"case "$(cat /proc/self/cgroup)" in */orbit-worker-*.scope) ;; *) exit 97 ;; esac
+sleep 120 &
+while [ ! -e "$1" ]; do sleep 0.05; done
+while :; do sleep 120 & done"#;
+
+/// The contained workers one live test launched, reaped on every exit path.
+///
+/// Launches are strict: an unavailable scope refuses the spawn, and any built
+/// command that would not start `systemd-run --scope` under a fresh unit is
+/// refused too, so no payload can fall back to this process's cgroup. Cleanup
+/// only signals a process proven to belong to one of those units.
+#[cfg(target_os = "linux")]
+struct ContainedWorkers {
+    command: WorkerCommandConfig,
+    workspace: std::path::PathBuf,
+    logs: std::path::PathBuf,
+    owned: Vec<OwnedWorker>,
+}
+
+#[cfg(target_os = "linux")]
+struct OwnedWorker {
+    pid: u32,
+    unit: String,
+    scope: Option<WorkerScopeCgroup>,
+}
+
+#[cfg(target_os = "linux")]
+impl ContainedWorkers {
+    fn new(fixture: &Fixture) -> Self {
+        use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
+
+        use crate::application::job::pipeline::worker::scope::WorkerLimits;
+
+        let workspace = fixture._root.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("fixture workspace");
+        let command = WorkerCommandConfig::for_paths(&WorkspacePaths::new(
+            workspace.clone(),
+            workspace.join(".orbit"),
+            fixture._root.path().join("global"),
+        ))
+        .contained(WorkerLimits::from_settings(&WorkerContainmentSettings {
+            enabled: true,
+            strict: true,
+            memory_high: MemoryLimit::Bytes {
+                amount: 48,
+                unit: Some(MemoryUnit::M),
+            },
+            memory_max: MemoryLimit::Bytes {
+                amount: 64,
+                unit: Some(MemoryUnit::M),
+            },
+            tasks_max: LIVE_TASKS_MAX,
+        }))
+        .strict_containment(true);
+        Self {
+            command,
+            logs: workspace.join(".orbit/logs"),
+            workspace,
+            owned: Vec::new(),
+        }
+    }
+
+    /// Launch `argv` as `run`'s worker in its own scope, and wait until it
+    /// runs there.
+    fn spawn(
+        &mut self,
+        supervisor: &PipelineWorkerSupervisor,
+        run: &JobRun,
+        argv: &[&str],
+    ) -> Result<(u32, WorkerScopeCgroup), OrbitError> {
+        use std::time::{Duration, Instant};
+
+        use crate::application::job::pipeline::worker::command::worker_command_override;
+        use crate::application::job::pipeline::worker::log::configure_pipeline_worker_stdio;
+
+        worker_command_override::set(argv.iter().copied());
+        let built = self.command.build(&self.workspace, &run.run_id);
+        worker_command_override::clear();
+        let mut worker = built?;
+        let unit = contained_unit(&worker).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "refusing to launch {:?} outside a fresh worker scope",
+                worker.get_program()
+            ))
+        })?;
+        let log = configure_pipeline_worker_stdio(&mut worker, &self.logs, &run.run_id)?;
+        let pid = supervisor.spawn_process(&run.run_id, None, worker, log)?;
+        self.owned.push(OwnedWorker {
+            pid,
+            unit: unit.clone(),
+            scope: None,
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(scope) = scope_named(pid, &unit) {
+                if let Some(worker) = self.owned.iter_mut().find(|worker| worker.pid == pid) {
+                    worker.scope = Some(scope.clone());
+                }
+                return Ok((pid, scope));
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker {pid} never entered {unit}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// SIGKILL every process in the owned scopes, then wait until each worker
+    /// was reaped by its observer and each scope is empty. Names what is left
+    /// when that does not happen in time.
+    fn reap(&mut self) -> Result<(), String> {
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut leftovers = Vec::new();
+            for worker in &mut self.owned {
+                // A worker killed before its scope was located may already
+                // have created it; its descendants are only reachable there.
+                if worker.scope.is_none() {
+                    worker.scope = scope_named(worker.pid, &worker.unit);
+                }
+                let members = worker
+                    .scope
+                    .as_ref()
+                    .map(|scope| scope_members(scope.directory()))
+                    .unwrap_or_default();
+                for pid in std::iter::once(worker.pid).chain(members.iter().copied()) {
+                    kill_if_owned(pid, &worker.unit);
+                }
+                if !reaped(worker.pid, &worker.unit) {
+                    leftovers.push(format!("worker {} is not reaped", worker.pid));
+                }
+                if !members.is_empty() {
+                    leftovers.push(format!("{} still holds {members:?}", worker.unit));
+                }
+            }
+            if leftovers.is_empty() {
+                self.owned.clear();
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(leftovers.join("; "));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ContainedWorkers {
+    fn drop(&mut self) {
+        let outcome = self.reap();
+        // A second panic while unwinding would abort and hide the first
+        // failure, so an unwinding test only logs what it could not reap.
+        if let Err(leftovers) = &outcome
+            && std::thread::panicking()
+        {
+            tracing::error!(%leftovers, "live containment fixture left processes behind");
+            return;
+        }
+        outcome.expect("live containment fixture reaps every process it owns");
+    }
+}
+
+/// The unit a built worker command launches in, or `None` unless it is
+/// `systemd-run --scope` under a fresh worker unit.
+#[cfg(target_os = "linux")]
+fn contained_unit(command: &std::process::Command) -> Option<String> {
+    if command.get_program() != "systemd-run" {
+        return None;
+    }
+    let options = command
+        .get_args()
+        .map_while(|arg| arg.to_str().filter(|arg| *arg != "--"))
+        .collect::<Vec<_>>();
+    if !options.contains(&"--scope") {
+        return None;
+    }
+    options
+        .iter()
+        .find_map(|option| option.strip_prefix("--unit="))
+        .filter(|unit| unit.starts_with("orbit-worker-") && unit.ends_with(".scope"))
+        .map(str::to_string)
+}
+
+/// `pid`'s worker scope, only when it is the unit this fixture launched.
+#[cfg(target_os = "linux")]
+fn scope_named(pid: u32, unit: &str) -> Option<WorkerScopeCgroup> {
+    WorkerScopeCgroup::of_process(pid).filter(|scope| scope.directory().ends_with(unit))
+}
+
+/// Whether `pid` runs in `unit`, or is the `systemd-run` about to create it.
+#[cfg(target_os = "linux")]
+fn owned_by(pid: u32, unit: &str) -> bool {
+    let launcher = format!("--unit={unit}");
+    scope_named(pid, unit).is_some()
+        || std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|argv| {
+            argv.split(|byte| *byte == 0)
+                .any(|arg| arg == launcher.as_bytes())
+        })
+}
+
+/// SIGKILL `pid` only if it belongs to `unit`. The pidfd pins the process
+/// before the ownership check, so a PID reaped and reused in between is
+/// never signalled.
+#[cfg(target_os = "linux")]
+fn kill_if_owned(pid: u32, unit: &str) {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let Ok(raw_pid) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    // SAFETY: pidfd_open takes a PID and flags and returns a new descriptor.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, raw_pid, 0) };
+    let Ok(fd) = libc::c_int::try_from(fd) else {
+        return;
+    };
+    if fd < 0 {
+        return;
+    }
+    // SAFETY: the kernel returned a new descriptor we now own.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(fd) };
+    if owned_by(pid, unit) {
+        // SAFETY: the pidfd is owned and open; no siginfo is passed.
+        unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                pidfd.as_raw_fd(),
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            );
+        }
+    }
+}
+
+/// Whether `pid` from `unit` is gone: not an unreaped child of this process
+/// and no longer a process of that unit.
+#[cfg(target_os = "linux")]
+fn reaped(pid: u32, unit: &str) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return true;
+    };
+    // `state ppid …` follow the parenthesised command name.
+    let mut fields = stat
+        .rsplit_once(')')
+        .map(|(_, rest)| rest.split_whitespace())
+        .into_iter()
+        .flatten();
+    let zombie_child = fields.next() == Some("Z")
+        && fields.next().and_then(|ppid| ppid.parse::<u32>().ok()) == Some(std::process::id());
+    !zombie_child && !owned_by(pid, unit)
+}
+
+/// The processes in a scope; none once its cgroup is collected.
+#[cfg(target_os = "linux")]
+fn scope_members(directory: &Path) -> Vec<u32> {
+    std::fs::read_to_string(directory.join("cgroup.procs"))
+        .map(|procs| {
+            procs
+                .lines()
+                .filter_map(|pid| pid.trim().parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Without a reachable scope the fixture refuses to start anything, rather
+/// than running its payload in this process's cgroup.
+#[cfg(target_os = "linux")]
+#[test]
+fn contained_workers_refuse_to_launch_without_a_scope() {
+    use crate::application::job::pipeline::worker::scope::TestScopeAvailability;
+
+    let fixture = Fixture::new();
+    let mut workers = ContainedWorkers::new(&fixture);
+    let _unavailable = TestScopeAvailability::unavailable("no user manager in this fixture");
+    let marker = fixture._root.path().join("payload-ran");
+    let marker_arg = marker.to_str().expect("utf-8 marker path");
+    let run = fixture.pending_run("refused_fork_bomb");
+
+    let error = workers
+        .spawn(
+            &fixture.supervisor,
+            &run,
+            &["sh", "-c", r#"touch "$1""#, "sh", marker_arg],
+        )
+        .expect_err("an unavailable scope refuses the launch");
+
+    assert!(
+        matches!(error, OrbitError::WorkerContainmentUnavailable { .. }),
+        "{error}"
+    );
+    assert!(workers.owned.is_empty(), "nothing was spawned to own");
+    assert!(!marker.exists(), "the payload never ran");
+    let stored = fixture
+        .runs
+        .get_job_run(&run.run_id)
+        .expect("read refused run")
+        .expect("refused run exists");
+    assert_eq!(stored.state, JobRunState::Pending);
+    assert_eq!(stored.pid, None);
+}
+
+/// A live fixture that fails before its stress payload is released still
+/// leaves nothing behind: its shells, their descendants and the sibling are
+/// killed and reaped while the panic unwinds, and the fork loop never starts.
+///
+/// Ignored by default because CI and sandboxes have no user bus. On a Linux
+/// host with one: `cargo test -p orbit-core contained_ -- --ignored`.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs a reachable systemd user manager"]
+fn contained_workers_are_reaped_when_the_fixture_fails_early() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::new();
+    let gate = fixture._root.path().join("never-opened");
+    let gate_arg = gate.to_str().expect("utf-8 gate path");
+    let mut owned = Vec::new();
+
+    let failure = catch_unwind(AssertUnwindSafe(|| {
+        let mut workers = ContainedWorkers::new(&fixture);
+        let sibling = fixture.pending_run("reaped_sibling");
+        workers
+            .spawn(&fixture.supervisor, &sibling, &SIBLING_WORKER)
+            .expect("spawn contained sibling");
+        let bomb = fixture.pending_run("reaped_gated_fork_bomb");
+        let (_, bomb_scope) = workers
+            .spawn(
+                &fixture.supervisor,
+                &bomb,
+                &["sh", "-c", GATED_FORK_BOMB, "sh", gate_arg],
+            )
+            .expect("spawn gated fork bomb");
+        // Each shell is up with its descendant before the failure.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        for worker in &workers.owned {
+            let scope = worker.scope.as_ref().expect("located scope");
+            while scope_members(scope.directory()).len() < 2 {
+                assert!(Instant::now() < deadline, "{} never forked", worker.unit);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            owned.push((
+                worker.pid,
+                worker.unit.clone(),
+                scope.directory().to_path_buf(),
+                scope_members(scope.directory()),
+            ));
+        }
+        assert_eq!(bomb_scope.limit_breach(), None, "the gate held the loop");
+        panic!("controlled failure before the fork bomb's gate opens");
+    }));
+
+    assert!(failure.is_err(), "the controlled failure unwound");
+    assert!(!gate.exists());
+    assert_eq!(owned.len(), 2, "sibling and fork bomb were both running");
+    for (pid, unit, directory, members) in owned {
+        assert!(members.contains(&pid), "{unit} held its worker");
+        assert!(members.len() >= 2, "{unit} held a descendant: {members:?}");
+        for member in members {
+            assert!(reaped(member, &unit), "{member} of {unit} survived");
+        }
+        assert!(scope_members(&directory).is_empty(), "{unit} is empty");
+    }
+}
+
 /// [ORB-12903] Live containment against the host's systemd user manager: a
 /// worker that forks without bound under a tight `TasksMax` settles its own
 /// run with `worker_resource_limit`, while a sibling worker in its own scope
-/// and this parent process keep running.
+/// and this parent process keep running. The loop only starts once its scope
+/// and limits are verified, and every process is reaped however it ends.
 ///
 /// Ignored by default because CI and sandboxes have no user bus. On a Linux
-/// host with one: `cargo test -p orbit-core contained_fork_bomb -- --ignored`.
+/// host with one: `cargo test -p orbit-core contained_ -- --ignored`.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "needs a reachable systemd user manager"]
 fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
     use std::time::{Duration, Instant};
 
-    use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
+    use crate::application::job::pipeline::worker::scope::WORKER_RESOURCE_LIMIT_ERROR_CODE;
 
-    use crate::application::job::pipeline::worker::command::worker_command_override;
-    use crate::application::job::pipeline::worker::log::configure_pipeline_worker_stdio;
-    use crate::application::job::pipeline::worker::scope::{
-        WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerLimits, WorkerScopeCgroup,
-    };
-
-    const TASKS_MAX: u32 = 32;
     let fixture = Fixture::new();
-    let workspace = fixture._root.path().join("repo");
-    std::fs::create_dir_all(&workspace).expect("fixture workspace");
-    let logs_dir = workspace.join(".orbit/logs");
-    let command = WorkerCommandConfig::for_paths(&WorkspacePaths::new(
-        workspace.clone(),
-        workspace.join(".orbit"),
-        fixture._root.path().join("global"),
-    ))
-    .contained(WorkerLimits::from_settings(&WorkerContainmentSettings {
-        enabled: true,
-        strict: false,
-        memory_high: MemoryLimit::Bytes {
-            amount: 48,
-            unit: Some(MemoryUnit::M),
-        },
-        memory_max: MemoryLimit::Bytes {
-            amount: 64,
-            unit: Some(MemoryUnit::M),
-        },
-        tasks_max: TASKS_MAX,
-    }));
-    let spawn = |run: &JobRun, argv: &[&str]| -> u32 {
-        worker_command_override::set(argv.iter().copied());
-        let mut worker = command
-            .build(&workspace, &run.run_id)
-            .expect("build contained worker");
-        worker_command_override::clear();
-        let log = configure_pipeline_worker_stdio(&mut worker, &logs_dir, &run.run_id)
-            .expect("worker log");
-        fixture
-            .supervisor
-            .spawn_process(&run.run_id, None, worker, log)
-            .expect("spawn contained worker")
-    };
-    let scope_of = |pid: u32| {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(scope) = WorkerScopeCgroup::of_process(pid) {
-                return scope;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "worker {pid} never entered a scope"
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    };
+    let mut workers = ContainedWorkers::new(&fixture);
+    let gate = fixture._root.path().join("fork-bomb-gate");
+    let gate_arg = gate.to_str().expect("utf-8 gate path");
 
     let sibling = fixture.pending_run("contained_sibling");
-    let sibling_pid = spawn(&sibling, &["sh", "-c", "sleep 8"]);
-    let sibling_scope = scope_of(sibling_pid);
+    let (sibling_pid, sibling_scope) = workers
+        .spawn(&fixture.supervisor, &sibling, &SIBLING_WORKER)
+        .expect("spawn contained sibling");
 
     let bomb = fixture.pending_run("contained_fork_bomb");
-    let bomb_pid = spawn(&bomb, &["sh", "-c", "while :; do sleep 120 & done"]);
-    let bomb_scope = scope_of(bomb_pid);
+    let (_, bomb_scope) = workers
+        .spawn(
+            &fixture.supervisor,
+            &bomb,
+            &["sh", "-c", GATED_FORK_BOMB, "sh", gate_arg],
+        )
+        .expect("spawn gated fork bomb");
     assert_ne!(bomb_scope, sibling_scope, "each run gets its own scope");
     let limit = |name: &str| {
         std::fs::read_to_string(bomb_scope.directory().join(name))
@@ -428,8 +768,9 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
             .trim()
             .to_string()
     };
-    assert_eq!(limit("pids.max"), TASKS_MAX.to_string());
+    assert_eq!(limit("pids.max"), LIVE_TASKS_MAX.to_string());
     assert_eq!(limit("memory.max"), (64 * 1024 * 1024).to_string());
+    std::fs::write(&gate, "").expect("release the verified fork bomb");
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let settled = loop {
@@ -447,10 +788,6 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
         );
         std::thread::sleep(Duration::from_millis(100));
     };
-    // The bomb's leftover children are in its session; reap the scope.
-    unsafe {
-        libc::kill(-(bomb_pid as i32), libc::SIGKILL);
-    }
 
     let diagnostic = settled.steps.last().expect("bomb diagnostic step");
     assert_eq!(
@@ -465,9 +802,8 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
             .as_deref()
             .is_some_and(|message| message.contains("task limit"))
     );
-    assert_eq!(
-        unsafe { libc::kill(sibling_pid as i32, 0) },
-        0,
+    assert!(
+        !reaped(sibling_pid, &workers.owned[0].unit),
         "the sibling worker outlives the bomb's run"
     );
     assert_eq!(sibling_scope.limit_breach(), None);
@@ -477,9 +813,9 @@ fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
         .expect("read sibling run")
         .expect("sibling run exists");
     assert!(!sibling_run.state.is_terminal());
-    unsafe {
-        libc::kill(-(sibling_pid as i32), libc::SIGKILL);
-    }
+    workers
+        .reap()
+        .expect("the bomb's leftovers and the sibling are reaped");
 }
 
 /// Exercise the production host (including reservation cleanup) in a child
