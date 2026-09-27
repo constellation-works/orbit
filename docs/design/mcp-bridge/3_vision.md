@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Vision
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -22,23 +22,15 @@ The separately selected federated mode adds an operator-configured mux and
 host-qualified routing. Future work should preserve the direct shape and add
 complexity only for a demonstrated requirement.
 
-## 1. Authorization in Core
+## 1. Direct SSH authority
 
-Authorization is split between destination-side session policy and Core, not the
-local proxy, client UI, or tool advertisement path. The shipped policy answers
-the session-authority questions for direct SSH:
-
-- What authenticated principal does the accepting server receive?
-- How is that principal bound to a machine or operator?
-- Which rules apply globally and which apply per workspace or operation?
-- How are denials audited without creating a second dispatch path?
-
-The ordinary `caller_machine_id` label is self-asserted and `caller_ip` is neither
-stable nor a machine credential, so those fields alone are insufficient for
-enforcement. The optional Tier 2 path uses destination-generated forced-command
-metadata alongside the key sshd authenticated; the resulting key-bound proof is
-recorded separately from the audit-only IP. Further mechanisms should not be
-chosen before the required trust model is concrete.
+For direct SSH, the accepting server serves the authority requested by the
+`--operator` argument in its startup argv, and Core enforces the resulting
+capabilities. The proxy propagates that argument only when it runs with operator
+authority; an agent-run proxy never propagates it. The forwarded
+`caller_machine_id` and observed `caller_ip` are audit attribution only, not
+credentials. Any future authentication mechanism needs a concrete trust model
+before it is selected.
 
 ## 2. Better provenance
 

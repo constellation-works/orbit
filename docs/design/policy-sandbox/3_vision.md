@@ -3,12 +3,12 @@ summary: "Policy & Sandboxing — Vision"
 type: design
 title: "Policy & Sandboxing — Vision"
 owner: claude
-last_updated: 2026-08-15
+last_updated: 2026-09-27
 status: Draft
 feature: policy-sandbox
 doc_role: vision
 tags: ["policy-sandbox"]
-last_validated: 2026-09-07
+last_validated: 2026-09-27
 ---
 
 # Policy & Sandboxing — Vision
@@ -21,8 +21,8 @@ This document captures the questions Orbit must answer before policy and sandbox
 
 1. **How far should Linux sandboxing go after the first backend?** §1.1 records the shipped Bubblewrap write-confinement boundary. Full read-policy parity, network policy, seccomp, and generic `run_process` adoption remain separate decisions.
 2. **Should enforcement move below the tool layer?** The in-process `fs.*` helper is gone ([ORB-10833]). A revived harness, or any future tool that performs filesystem work, is unguarded unless Orbit adds a `PolicyAwareFs` trait, syscall interception, or linting.
-3. **Should `proc.spawn` consult policy?** Activity program allowlists are not `PolicyDef`; future shapes include `allowExec` / `denyExec` or env access tied to `fsProfile`.
-4. **What is the symlink contract?** `workspace_relative_path` follows symlinks and denies out-of-workspace targets, but the invariant is not yet specified.
+3. **Should process controls move into `PolicyDef`?** `proc.spawn` already applies activity program allowlists and checks path arguments against `fsProfile`; Linux activity-scoped calls also apply a Landlock read boundary or fail closed if it is unavailable. The program allowlist is not part of `PolicyDef`; future shapes include `allowExec` / `denyExec` or env access tied to `fsProfile`.
+4. **What is the symlink contract?** `PolicyEngine::check_resolved` follows symlinks and denies resolved paths outside the workspace; TOCTOU between that check and filesystem access remains an OS-level concern.
 5. **Should glob syntax grow?** Character classes, braces, and broader `**` forms would reduce user surprise but may re-evaluate existing profiles differently.
 6. **Should `PolicyDecision` and `FsPolicyEvaluation` converge?** A unified outcome could serve future network, exec, and env policy checks.
 7. **Should profiles be composable?** `extends:`, `includes:`, or mixins would reduce repetition but add resolution-order questions.
@@ -45,9 +45,9 @@ semantics visible instead of silently calling them enforced.
 
 #### Backend and availability contract
 
-- Add `linux-bwrap` as a concrete `ExecutorSandboxKind`; shipped agent executors select it on
-  Linux while `local-shell` remains explicitly unsandboxed. Custom executor definitions keep
-  their concrete backend choice.
+- `linux-bwrap` is a concrete `ExecutorSandboxKind`; shipped agent executors select it on Linux,
+  while `local-shell` remains explicitly unsandboxed. Custom executor definitions keep their
+  concrete backend choice.
 - Resolve Bubblewrap only from a trusted absolute location, initially `/usr/bin/bwrap`. Never
   accept a `PATH`-shadowed wrapper as the security boundary.
 - Probe capability, not just file existence. The probe must prove that the installed binary can
@@ -60,7 +60,7 @@ semantics visible instead of silently calling them enforced.
 
 #### Namespace and filesystem shape
 
-The wrapper should construct a deterministic Bubblewrap argv with these properties:
+The wrapper constructs a deterministic Bubblewrap argv with these properties:
 
 1. Start from the host filesystem mounted read-only, then bind only resolved positive `modify`
    roots and Orbit-owned provider/runtime state roots back as writable.
@@ -81,19 +81,20 @@ This gives a kernel-enforced guarantee that the child cannot mutate the host out
 materialized writable mounts. Non-subtree filename globs such as `**/*.env` have one unavoidable
 Bubblewrap limitation: a mount namespace cannot reject a matching filename that the child creates
 later inside an otherwise writable directory. Orbit must not describe those rules as fully
-kernel-enforced. For a managed shipment worktree, the implementation must add a post-run policy
-check that rejects forbidden newly-created paths before commit; the disposable worktree is the
-containment boundary, and the design assumes it has one writer for the duration of the invocation.
+kernel-enforced. For a managed shipment worktree, Orbit uses a post-run policy check to reject
+forbidden newly-created paths before commit; the disposable worktree is the containment boundary,
+and the implementation assumes it has one writer for the duration of the invocation.
 A direct invocation without that disposable boundary must fail closed when a non-subtree
 `denyModify` overlaps a writable root rather than downgrading silently.
 
 #### Read-policy boundary
 
-The initial backend keeps the host's executable, library, certificate, and provider state surface
-readable so existing CLIs can start. It may hide concrete existing matches for `denyRead`, but it
-does not claim general `read` allowlist or arbitrary negative-glob parity. The invocation audit
-must distinguish `write_enforced` from `read_delegated`; there is no remaining in-process `fs.*`
-evaluator on the shipped path, so CLI read restrictions remain a harness responsibility.
+The initial backend enforces writes from the resolved `modify` policy and records reads as
+`read_delegated`. The read-only bind of the host filesystem leaves the CLI's read surface
+available; the backend does not materialize `denyRead` rules or general `read` allowlists in its
+mount namespace. The invocation audit must distinguish `write_enforced` from `read_delegated`;
+there is no remaining in-process `fs.*` evaluator on the shipped CLI path, so read restrictions
+remain a harness responsibility.
 
 This is preferable to either extreme: mounting the whole host read-write would not be a sandbox,
 while constructing a minimal read tree for several independently-updated provider CLIs would
@@ -131,11 +132,11 @@ are therefore part of the security contract rather than incidental implementatio
 
 The [activity-job audit-envelope spec](../activity-job/specs/audit-envelope.md) defines how filesystem and tool denials surface as `V2AuditEvent` entries. The auditability folder ([../auditability/2_design.md §3](../auditability/2_design.md)) documents durable storage.
 
-The current policy schema and merge contract live in `crates/orbit-common/src/types/policy_def.rs` and `crates/orbit-common/src/types/resource.rs`.
+The current policy schema and merge contract live in `crates/orbit-types/src/policy/policy_def.rs`.
 
 ### 2.2 OS-Level Sandboxes
 
-`bubblewrap`, `sandbox-exec`, `firejail`, and seccomp-bpf are the near-term isolation options under the `Sandbox` trait. gVisor and Firecracker are heavier options when a workload tolerates a microVM boundary. Bubblewrap's own documentation emphasizes that it constructs namespaces and mounts but leaves the security policy to its caller; that makes the exact Orbit-generated argv part of the design surface, not an implementation detail.
+Bubblewrap and macOS `sandbox-exec` are implemented as outer wrappers for CLI agents through `orbit-engine`; the generic `Sandbox` trait serves `orbit-exec::run_process` callers separately. `firejail` and seccomp-bpf are other near-term isolation options. gVisor and Firecracker are heavier options when a workload tolerates a microVM boundary. Bubblewrap's own documentation emphasizes that it constructs namespaces and mounts but leaves the security policy to its caller; that makes the exact Orbit-generated argv part of the design surface, not an implementation detail.
 
 ### 2.3 Capability Systems
 
