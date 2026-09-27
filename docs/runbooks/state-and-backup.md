@@ -126,7 +126,10 @@ resolves symbols through it.
 
 Older worktrees may still contain worktree-local `.orbit/graph`, while the shared workspace may
 contain `.orbit/knowledge/graph`. `orbit doctor --remove-graph` removes exactly those two
-locations and is safe to repeat. Ordinary `orbit doctor` is read-only with respect to both.
+locations when each is reached without an intermediate symlink, and is safe to repeat. An
+intermediate symlink is reported and left unfollowed, so a directory outside the resolved root
+is not deleted. A symlink at the final `graph` component is unlinked without being followed.
+Ordinary `orbit doctor` is read-only with respect to both.
 
 ### Per-user `.orbit/` state
 
