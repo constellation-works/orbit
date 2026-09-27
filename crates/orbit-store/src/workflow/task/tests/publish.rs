@@ -5,13 +5,18 @@
 //! credential.
 
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use orbit_types::task::TASK_EVENTS_FILE_NAME;
+use serde::Deserialize;
 use tempfile::TempDir;
 
+use super::super::git::set_publication_git_deadline;
 use super::super::publish::{clear_before_push_hook, set_before_push_hook};
 use super::*;
 use orbit_common::OrbitError;
+use orbit_common::process::shell::quote_posix_arg;
 
 struct BeforePushGuard;
 
@@ -835,4 +840,165 @@ fn publication_preserves_crlf_bytes_and_skips_configured_filters() {
         .join(PUBLICATION_ID)
         .join("tree/tasks/ORB-00001/artifacts/files/payload.txt");
     assert_eq!(fs::read(inspected).unwrap(), CRLF_PAYLOAD);
+}
+
+#[cfg(unix)]
+struct GitDeadlineGuard;
+
+#[cfg(unix)]
+impl GitDeadlineGuard {
+    fn set(deadline: Duration) -> Self {
+        set_publication_git_deadline(Some(deadline));
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl Drop for GitDeadlineGuard {
+    fn drop(&mut self) {
+        set_publication_git_deadline(None);
+    }
+}
+
+#[cfg(unix)]
+#[derive(Debug, Deserialize)]
+struct PendingView {
+    commit: String,
+    generation: u64,
+}
+
+/// A local push whose post-receive hook stalls after the ref moves. The
+/// deadline must win, the pending record must survive, and the next publish
+/// must reconcile that commit instead of writing another one.
+#[cfg(unix)]
+#[test]
+fn a_stalled_push_times_out_keeps_pending_and_reconciles_a_landed_commit() {
+    let fixture = fixture("ws_publish_stalled_push");
+    let leader_path = fixture.root.path().join("hook-leader.pid");
+    let child_path = fixture.root.path().join("hook-child.pid");
+    install_hook(
+        &fixture.remote,
+        &format!(
+            "#!/bin/sh\necho $$ > {}\nsleep 120 &\necho $! > {}\nwait\n",
+            quote_posix_arg(&leader_path.display().to_string()),
+            quote_posix_arg(&child_path.display().to_string()),
+        ),
+    );
+
+    let deadline = Duration::from_secs(2);
+    let _guard = GitDeadlineGuard::set(deadline);
+    let started = Instant::now();
+    let error = publish(&fixture, request(&fixture, 1, None)).expect_err("stalled push");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= deadline,
+        "stalled push returned in {elapsed:?}, before the {deadline:?} budget"
+    );
+    assert!(
+        elapsed < Duration::from_secs(20),
+        "stalled push returned in {elapsed:?}; the hook sleeps for 120s"
+    );
+    match &error {
+        OrbitError::ProcessTimeout { timeout_ms, detail } => {
+            assert_eq!(*timeout_ms, u64::try_from(deadline.as_millis()).unwrap());
+            assert!(
+                !detail.contains(&fixture.remote_str()),
+                "timeout detail leaked the remote path: {detail}"
+            );
+        }
+        other => panic!("expected process timeout, got {other}"),
+    }
+
+    let leader = read_pid(&leader_path);
+    let child = read_pid(&child_path);
+    let hook_path = fixture
+        .remote
+        .join("hooks/post-receive")
+        .display()
+        .to_string();
+    assert_reaped(leader, hook_path.as_bytes());
+    assert_reaped(child, b"sleep");
+
+    let pending = read_pending(&fixture);
+    let tip = fixture
+        .remote_tip()
+        .expect("push reached the remote before stalling");
+    assert_eq!(pending.commit, tip);
+    assert_eq!(pending.generation, 1);
+    assert_eq!(fixture.remote_history(), vec![tip.clone()]);
+
+    drop(_guard);
+    let marker = fixture.root.path().join("second-push");
+    install_hook(
+        &fixture.remote,
+        &format!(
+            "#!/bin/sh\ntouch {}\n",
+            quote_posix_arg(&marker.display().to_string())
+        ),
+    );
+    let reconciled = publish(&fixture, request(&fixture, 2, None)).expect("reconcile");
+    assert_eq!(reconciled.status, PublicationPublishStatus::Reconciled);
+    assert_eq!(reconciled.commit_id, tip);
+    assert_eq!(reconciled.generation, 1);
+    assert_eq!(fixture.remote_history(), vec![tip]);
+    assert!(
+        !marker.exists(),
+        "reconcile pushed again after the timed-out publish had already landed"
+    );
+    assert!(!pending_path(&fixture).exists());
+}
+
+#[cfg(unix)]
+fn install_hook(remote: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = remote.join("hooks/post-receive");
+    fs::write(&path, body).expect("write hook");
+    let mut permissions = fs::metadata(&path).expect("hook metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("hook mode");
+}
+
+#[cfg(unix)]
+fn pending_path(fixture: &Fixture) -> PathBuf {
+    fixture
+        .cache
+        .join(PUBLICATION_ID)
+        .join("publish")
+        .join("pending-publication.yaml")
+}
+
+#[cfg(unix)]
+fn read_pending(fixture: &Fixture) -> PendingView {
+    let raw = fs::read_to_string(pending_path(fixture)).expect("pending publication record");
+    serde_yaml::from_str(&raw).expect("pending publication yaml")
+}
+
+#[cfg(unix)]
+fn read_pid(path: &Path) -> u32 {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("pid file {}: {error}", path.display()))
+        .trim()
+        .parse()
+        .expect("pid")
+}
+
+#[cfg(unix)]
+fn assert_reaped(pid: u32, marker: impl AsRef<[u8]>) {
+    let marker = marker.as_ref();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match fs::read(format!("/proc/{pid}/cmdline")) {
+            Err(_) => return,
+            Ok(cmdline) if !cmdline.windows(marker.len()).any(|window| window == marker) => {
+                return;
+            }
+            Ok(cmdline) if Instant::now() >= deadline => {
+                panic!(
+                    "pid {pid} still running: {}",
+                    String::from_utf8_lossy(&cmdline)
+                );
+            }
+            Ok(_) => thread::sleep(Duration::from_millis(20)),
+        }
+    }
 }

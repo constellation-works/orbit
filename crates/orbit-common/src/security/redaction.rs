@@ -336,6 +336,10 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
             payload: redact_sensitive_env_json(payload),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_sensitive_env_text(&m)),
+        OrbitError::ProcessTimeout { timeout_ms, detail } => OrbitError::ProcessTimeout {
+            timeout_ms,
+            detail: redact_sensitive_env_text(&detail),
+        },
         OrbitError::WorkerContainmentUnavailable { reason } => {
             OrbitError::WorkerContainmentUnavailable {
                 reason: redact_sensitive_env_text(&reason),
@@ -511,6 +515,10 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             payload: redact_json_with(payload, redact_all),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact_all(&m)),
+        OrbitError::ProcessTimeout { timeout_ms, detail } => OrbitError::ProcessTimeout {
+            timeout_ms,
+            detail: redact_all(&detail),
+        },
         OrbitError::WorkerContainmentUnavailable { reason } => {
             OrbitError::WorkerContainmentUnavailable {
                 reason: redact_all(&reason),
