@@ -241,6 +241,112 @@ fn newer_cancelled_run_with_a_failed_step_does_supersede_the_older_failure() {
     );
 }
 
+fn older_codeql_failure() -> Value {
+    run_on_branch(
+        20,
+        "CodeQL",
+        "agent-main",
+        HEAD,
+        "completed",
+        Some("failure"),
+        "2026-09-07T22:00:00Z",
+    )
+}
+
+fn retryable_operations_for(evidence: &Value, run_id: u64) -> Vec<String> {
+    evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable errors")
+        .iter()
+        .filter(|error| error["run_id"] == json!(run_id))
+        .filter_map(|error| error["operation"].as_str().map(str::to_string))
+        .collect()
+}
+
+fn assert_older_failure_stays_current_beside_unexpanded_cancellation(
+    evidence: &Value,
+    operation: &str,
+) {
+    let codeql: Vec<&Value> = evidence["current_failures"]
+        .as_array()
+        .expect("current failures")
+        .iter()
+        .filter(|failure| failure["workflow"] == json!("CodeQL"))
+        .collect();
+    let codeql_ids: Vec<u64> = codeql
+        .iter()
+        .filter_map(|failure| failure["run_id"].as_u64())
+        .collect();
+    assert_eq!(codeql_ids, [CODEQL_RUN, 20]);
+    assert_eq!(evidence["stale_or_superseded"], json!([]));
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+    assert_eq!(retryable_operations_for(evidence, CODEQL_RUN), [operation]);
+    assert_eq!(evidence["inconclusive"], json!([]));
+    assert_eq!(codeql[0]["investigated"], json!(false));
+    assert!(
+        codeql[1]["investigated"] == json!(true) && codeql[1]["job_id"] == json!(5),
+        "the older failure keeps its expanded job evidence: {evidence}"
+    );
+}
+
+#[test]
+fn newer_cancellation_whose_run_view_fails_does_not_supersede_the_older_failure() {
+    let queries = authenticated_heads()
+        .with_runs(vec![vec![codeql_run(), older_codeql_failure()]])
+        .with_run_view_error(CODEQL_RUN.to_string().as_str(), "HTTP 502")
+        .with_run_view("20", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log("20", false, "ci\tbuild\tassertion failed\n")
+        .with_log("20", true, checkout_log());
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_older_failure_stays_current_beside_unexpanded_cancellation(&evidence, "run_view");
+}
+
+#[test]
+fn newer_cancellation_skipped_by_investigation_budget_does_not_supersede_the_older_failure() {
+    // Three candidates, two slots: the newest integration failure keeps the
+    // ranked slot and cursor 1 rotates the other onto run 20, so the
+    // cancellation between them is listed but never expanded.
+    let queries = authenticated_heads()
+        .with_runs(vec![vec![
+            run_on_branch(
+                30,
+                "ci",
+                "agent-main",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-09-07T23:30:00Z",
+            ),
+            codeql_run(),
+            older_codeql_failure(),
+        ]])
+        .with_run_view("30", json!({"failed_jobs": [failed_job(7, "test")]}))
+        .with_log("30", false, "ci\ttest\tassertion failed\n")
+        .with_log("30", true, checkout_log())
+        .with_run_view("20", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log("20", false, "ci\tbuild\tassertion failed\n")
+        .with_log("20", true, checkout_log());
+
+    let evidence = collect(
+        &queries,
+        &json!({
+            "integration_branch": "agent-main",
+            "max_checkout_log_reads": 3,
+            "max_investigated_runs": 2,
+            "investigation_cursor": 1,
+        }),
+    )
+    .expect("collect");
+
+    assert_older_failure_stays_current_beside_unexpanded_cancellation(
+        &evidence,
+        "investigation_budget",
+    );
+    assert_eq!(current_ids(&evidence), [30, CODEQL_RUN, 20]);
+}
+
 #[test]
 fn queued_successor_stays_in_flight_beside_a_zero_step_cancellation() {
     let queries = authenticated_heads()
