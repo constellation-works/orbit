@@ -23,6 +23,7 @@ struct ActivityAsset {
 #[derive(Deserialize)]
 struct ActivitySpec {
     instruction: String,
+    #[serde(default)]
     tools: Vec<String>,
     model: Option<String>,
 }

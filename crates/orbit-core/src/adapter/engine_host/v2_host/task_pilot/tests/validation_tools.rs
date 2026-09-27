@@ -2,7 +2,7 @@
 //! check [ORB-11980], driven by the two frictions that motivated it:
 //! F2026-09-065 (a criterion requiring `proc.spawn` over MCP, which is
 //! CLI-only) and F2026-09-066 (a criterion requiring live workflow observation
-//! the implementation lane neither allowlists nor has the capability for).
+//! the implementation lane lacks the capability for).
 
 use std::collections::BTreeSet;
 
@@ -131,14 +131,7 @@ fn preparation_reports_distinct_reasons_for_mcp_transport_and_ungranted_observat
     );
 
     let observation = findings(&prepared, &live_observation.id);
-    assert_eq!(observation.len(), 2, "unexpected findings: {observation:?}");
-    assert!(
-        observation.iter().any(
-            |finding| finding.contains("`required_tools` does not declare")
-                && finding.contains("immutable")
-        ),
-        "one finding must name the missing declaration: {observation:?}"
-    );
+    assert_eq!(observation.len(), 1, "unexpected findings: {observation:?}");
     assert!(
         observation
             .iter()
@@ -162,12 +155,24 @@ fn preparation_reports_distinct_reasons_for_mcp_transport_and_ungranted_observat
 /// neither the operator capability nor an external credential.
 #[test]
 fn declaration_satisfies_the_allowlist_but_not_capability_or_credentials() {
+    for legacy_allowlist in [false, true] {
+        check_declaration_capability_and_credentials(legacy_allowlist);
+    }
+}
+
+fn check_declaration_capability_and_credentials(legacy_allowlist: bool) {
     let (root, runtime, repo_root) = runtime_with_workspace_layout();
     seed_implementation_activity(&root);
+    if legacy_allowlist {
+        std::fs::write(
+            root.path().join("home/.orbit/resources/activities/agent_implement.yaml"),
+            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: agent_implement\nspec:\n  type: agent_loop\n  description: Legacy lane\n  instruction: Implement\n  tools: [orbit.task.*]\n",
+        )
+        .expect("seed legacy allowlist lane");
+    }
 
-    // The same criterion twice, declared and undeclared, so a clean result
-    // proves the declaration carried it rather than the check overlooking the
-    // tool.
+    // Legacy allowlists require the declaration; deny mode grants this read
+    // either way. Neither mode supplies capabilities or credentials.
     const AUTO_TASK_LIST: &str = "Enumerate the workspace's auto-task definitions with `orbit.auto_task.list` and confirm the seeded definition appears.";
 
     let supported = seed_task(
@@ -215,14 +220,16 @@ fn declaration_satisfies_the_allowlist_but_not_capability_or_credentials() {
     let missing_declaration = findings(&prepared, &undeclared.id);
     assert_eq!(
         missing_declaration.len(),
-        1,
+        usize::from(legacy_allowlist),
         "unexpected findings: {missing_declaration:?}"
     );
-    assert!(
-        missing_declaration[0].contains("`orbit.auto_task.list`")
-            && missing_declaration[0].contains("`required_tools` does not declare"),
-        "the same criterion without the declaration must report it: {missing_declaration:?}"
-    );
+    if legacy_allowlist {
+        assert!(
+            missing_declaration[0].contains("`orbit.auto_task.list`")
+                && missing_declaration[0].contains("`required_tools` does not declare"),
+            "legacy allowlists still require a declaration: {missing_declaration:?}"
+        );
+    }
 
     let capability = findings(&prepared, &operator_reserved.id);
     assert_eq!(capability.len(), 1, "unexpected findings: {capability:?}");
@@ -401,8 +408,15 @@ fn admission_withholds_a_task_whose_validation_criteria_are_infeasible() {
             .as_array()
             .expect("reported findings")
             .len(),
-        2,
+        1,
         "apply must report the findings the pilot could not see: {assessment:?}"
+    );
+    assert!(
+        assessment["validation_tool_warnings"][0]
+            .as_str()
+            .expect("capability finding")
+            .contains("operator handoff"),
+        "deny-mode admission must retain the capability finding: {assessment:?}"
     );
     assert!(
         !member_ready(assessment),

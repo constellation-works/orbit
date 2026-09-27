@@ -231,18 +231,22 @@ fn reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths() {
     let ActivityV2Spec::AgentLoop(agent) = &activity.spec.spec else {
         panic!("task-pilot must remain an agent-loop activity");
     };
-    assert!(
-        agent
-            .tools
-            .iter()
-            .any(|tool| tool == "orbit.task.update" || tool == "orbit.task.show")
+    assert_eq!(
+        agent.tool_policy_mode(),
+        orbit_types::workflow::ActivityToolPolicyMode::Deny
     );
-    assert!(!agent.tools.iter().any(|tool| {
-        matches!(
-            tool.as_str(),
-            "fs.write" | "fs.patch" | "fs.create" | "orbit.pipeline.invoke"
-        )
-    }));
+    let policy = orbit_types::workflow::ActivityToolDenyPolicy {
+        activity: activity.name.clone(),
+        disallow_list: agent.tool_disallow_list.clone().expect("deny policy"),
+    };
+    assert!(!policy.denies("orbit.task.show"));
+    for tool in [
+        "orbit.task.update",
+        "orbit.friction.add",
+        "orbit.agent.invoke",
+    ] {
+        assert!(policy.denies(tool), "read-only pilot must refuse {tool}");
+    }
 
     let resource =
         parse_policy_resource(DEFAULT_POLICY, "default reviewer policy").expect("parse policy");
