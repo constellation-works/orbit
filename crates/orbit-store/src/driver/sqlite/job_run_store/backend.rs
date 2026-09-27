@@ -19,7 +19,7 @@ use super::queries::{
 use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunQuery, JobRunStepParams,
-    JobRunStoreBackend,
+    JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -102,6 +102,50 @@ fn live_lineage_run_conn(
     )
     .optional()
     .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// The newest run among `params.job_id`'s newest `params.scan_limit` whose
+/// input carries `key` under `params.retry_key_field`. The window uses the
+/// run list's default `created_at DESC, run_id ASC` order.
+fn keyed_run_in_window_conn(
+    conn: &rusqlite::Connection,
+    workspace_id: &str,
+    params: &KeyedJobRunParams,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT run_id, input_json FROM job_runs WHERE workspace_id = ?1 AND job_id = ?2 \
+             ORDER BY created_at DESC, run_id ASC LIMIT ?3",
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![
+                workspace_id,
+                params.job_id,
+                i64::try_from(params.scan_limit).unwrap_or(i64::MAX)
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+    for row in rows {
+        let (run_id, input_json) = row.map_err(|error| OrbitError::Store(error.to_string()))?;
+        // An unreadable input cannot carry the key; it must not wedge every
+        // later submission of the job.
+        let matches = input_json
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .is_some_and(|input| {
+                input
+                    .get(&params.retry_key_field)
+                    .and_then(serde_json::Value::as_str)
+                    == Some(key)
+            });
+        if matches {
+            return Ok(Some(run_id));
+        }
+    }
+    Ok(None)
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
@@ -337,6 +381,63 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 };
                 upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
                 Ok(run)
+            })
+    }
+
+    /// The window probe and the insert share one SQLite `IMMEDIATE`
+    /// transaction, so the process-wide writer lock orders every submitter of
+    /// one key: the first to commit inserts, and every later probe sees it.
+    fn insert_keyed_job_run(
+        &self,
+        params: &KeyedJobRunParams,
+    ) -> Result<KeyedJobRunAdmission, OrbitError> {
+        validate_path_stem(&params.job_id, "job")?;
+        let key = params
+            .input
+            .get(&params.retry_key_field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "keyed job run input must carry a non-blank `{}`",
+                    params.retry_key_field
+                ))
+            })?;
+        let created_at = Utc::now();
+        self.store
+            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                if let Some(run_id) =
+                    keyed_run_in_window_conn(&tx.tx, &self.workspace_id, params, key)?
+                {
+                    let run = get_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run_id)?
+                        .ok_or_else(|| OrbitError::Store("keyed run disappeared".into()))?;
+                    return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
+                }
+                let run_id =
+                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run = JobRun {
+                    executed_on: self.executed_on.clone(),
+                    run_id,
+                    job_id: params.job_id.clone(),
+                    attempt: 1,
+                    state: JobRunState::Pending,
+                    scheduled_at: params.scheduled_at,
+                    started_at: None,
+                    finished_at: None,
+                    duration_ms: None,
+                    created_at,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(params.input.clone()),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                upsert_job_run_for_workspace_conn(&tx.tx, &self.workspace_id, &run, None)?;
+                Ok(KeyedJobRunAdmission::Admitted(Box::new(run)))
             })
     }
 

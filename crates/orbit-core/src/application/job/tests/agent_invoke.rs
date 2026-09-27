@@ -95,6 +95,75 @@ impl Drop for IdleWorker {
     }
 }
 
+/// Replaces the pipeline worker with a program that records which run it was
+/// launched for, so a test can count launched invocations rather than runs.
+struct SpawnLog {
+    dir: PathBuf,
+}
+
+impl SpawnLog {
+    fn dir(root: &std::path::Path) -> PathBuf {
+        let dir = root.join("spawns");
+        std::fs::create_dir_all(&dir).expect("create spawn log dir");
+        dir
+    }
+
+    fn install(root: &std::path::Path) -> Self {
+        Self::install_at(&Self::dir(root))
+    }
+
+    /// Installs for the calling thread only; the override is thread-local.
+    fn install_at(dir: &std::path::Path) -> Self {
+        worker_command_override::set([
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("mktemp '{}/{{run_id}}.XXXXXX' >/dev/null", dir.display()),
+        ]);
+        Self {
+            dir: dir.to_path_buf(),
+        }
+    }
+
+    /// Run ids launched, sorted, once detached launches have had time to land.
+    fn settled(&self) -> Vec<String> {
+        Self::settled_in(&self.dir)
+    }
+
+    fn settled_in(dir: &std::path::Path) -> Vec<String> {
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        let mut launched = std::fs::read_dir(dir)
+            .expect("read spawn log dir")
+            .map(|entry| {
+                let name = entry.expect("spawn entry").file_name();
+                let name = name.to_string_lossy();
+                name.rsplit_once('.')
+                    .map_or_else(|| name.to_string(), |(run_id, _)| run_id.to_string())
+            })
+            .collect::<Vec<_>>();
+        launched.sort();
+        launched
+    }
+}
+
+impl Drop for SpawnLog {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
+}
+
+fn agent_invoke_run_ids(runtime: &OrbitRuntime) -> Vec<String> {
+    let mut ids = runtime
+        .stores()
+        .jobs()
+        .list_job_runs(AGENT_INVOKE_JOB_ID)
+        .expect("list agent invoke runs")
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
 /// A session an MCP operator surface would present.
 fn operator_session() -> ToolSessionContext {
     ToolSessionContext {
@@ -588,7 +657,8 @@ fn an_admitted_run_cannot_be_resumed() {
 /// finished should hand back the original result, not re-run the investigation.
 #[test]
 fn a_repeated_idempotency_key_resolves_the_original_run() {
-    let (_root, runtime, _repo_root) = test_runtime();
+    let (root, runtime, _repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let spawns = SpawnLog::install(root.path());
     let first = runtime
         .stores()
         .jobs()
@@ -600,6 +670,11 @@ fn a_repeated_idempotency_key_resolves_the_original_run() {
             None,
         )
         .expect("insert first run");
+    let jobs = runtime.stores().jobs();
+    jobs.mark_job_run_running(&first.run_id, Utc::now(), std::process::id())
+        .expect("start the original");
+    jobs.finalize_job_run(&first.run_id, JobRunState::Success, Utc::now(), Some(10))
+        .expect("finish the original");
 
     let (resolved, deduplicated) = runtime
         .submit_trusted_host_pipeline_run(
@@ -612,11 +687,128 @@ fn a_repeated_idempotency_key_resolves_the_original_run() {
     assert!(deduplicated, "a repeated key must not start a second agent");
     assert_eq!(resolved.run_id, first.run_id);
     assert_eq!(resolved.job_name, AGENT_INVOKE_JOB_ID);
+    assert_eq!(agent_invoke_run_ids(&runtime), vec![first.run_id]);
+    assert!(
+        spawns.settled().is_empty(),
+        "a resolved retry spawns nothing"
+    );
+}
 
-    let runs = runtime
-        .list_job_runs(crate::application::job::JobRunListParams::default())
-        .expect("list runs");
-    assert_eq!(runs.len(), 1, "no second run may be created");
+/// [ORB-13560] A retry after the first response was lost resolves the run
+/// the first submission admitted and launches nothing further; a different
+/// key is a different invocation.
+#[test]
+fn a_retry_after_a_lost_response_returns_the_original_run() {
+    let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let spawns = SpawnLog::install(root.path());
+    let session = operator_session();
+    let cwd = repo_root.display().to_string();
+    let keyed = |key| AgentInvokeRequest {
+        idempotency_key: Some(key),
+        ..request(&cwd, &session)
+    };
+
+    let first = runtime
+        .submit_agent_invoke_run(keyed("incident-7"))
+        .expect("first submission");
+    let retry = runtime
+        .submit_agent_invoke_run(keyed("incident-7"))
+        .expect("retried submission");
+    let other = runtime
+        .submit_agent_invoke_run(keyed("incident-8"))
+        .expect("another key");
+
+    assert!(!first.deduplicated);
+    assert!(retry.deduplicated, "the retry must resolve, not admit");
+    assert_eq!(retry.run_id, first.run_id);
+    assert!(!other.deduplicated, "a different key is independent");
+    assert_ne!(other.run_id, first.run_id);
+    let mut expected = vec![first.run_id, other.run_id];
+    expected.sort();
+    assert_eq!(agent_invoke_run_ids(&runtime), expected);
+    assert_eq!(spawns.settled(), expected, "one worker per admitted run");
+}
+
+/// [ORB-13560] Concurrent submissions of one key from independent runtimes —
+/// each with its own store connection, as separate MCP, CLI, and dashboard
+/// processes have — admit exactly one run and spawn exactly one worker, and
+/// every caller is handed that run.
+#[test]
+fn concurrent_submissions_of_one_key_admit_one_run_and_one_worker() {
+    const RACERS: usize = 6;
+    let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let spawn_dir = SpawnLog::dir(root.path());
+    let global_root = root.path().join("global");
+    let workspace_root = repo_root.join(".orbit");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(RACERS));
+
+    let racers = (0..RACERS)
+        .map(|_| {
+            let barrier = std::sync::Arc::clone(&barrier);
+            let (global_root, workspace_root) = (global_root.clone(), workspace_root.clone());
+            let (repo_root, spawn_dir) = (repo_root.clone(), spawn_dir.clone());
+            std::thread::spawn(move || {
+                let _spawns = SpawnLog::install_at(&spawn_dir);
+                let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
+                    .expect("independent runtime");
+                let session = operator_session();
+                let cwd = repo_root.display().to_string();
+                barrier.wait();
+                runtime.submit_agent_invoke_run(AgentInvokeRequest {
+                    idempotency_key: Some("incident-race"),
+                    ..request(&cwd, &session)
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let submissions = racers
+        .into_iter()
+        .map(|racer| {
+            racer
+                .join()
+                .expect("racer thread")
+                .expect("every racer succeeds")
+        })
+        .collect::<Vec<_>>();
+
+    let winner = submissions[0].run_id.clone();
+    assert!(
+        submissions
+            .iter()
+            .all(|submission| submission.run_id == winner),
+        "every caller receives the one admitted run: {submissions:?}"
+    );
+    assert_eq!(
+        submissions
+            .iter()
+            .filter(|submission| !submission.deduplicated)
+            .count(),
+        1,
+        "exactly one caller admits"
+    );
+    assert_eq!(agent_invoke_run_ids(&runtime), vec![winner.clone()]);
+    assert_eq!(
+        SpawnLog::settled_in(&spawn_dir),
+        vec![winner],
+        "exactly one invocation worker is launched"
+    );
+}
+
+/// [ORB-13560] Authorization precedes the keyed claim: a refused caller that
+/// names a key leaves no run behind that a later operator retry would resolve.
+#[test]
+fn an_unauthorized_keyed_submission_claims_nothing() {
+    let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let session = agent_session();
+    let cwd = repo_root.display().to_string();
+    let error = runtime
+        .submit_agent_invoke_run(AgentInvokeRequest {
+            idempotency_key: Some("incident-9"),
+            ..request(&cwd, &session)
+        })
+        .expect_err("an agent must not start an unsandboxed process");
+    assert_denied(error, "agent session with a retry key");
+    assert_no_run_created(&runtime);
 }
 
 /// A blank key is no key: it must not collide with every other blank one.

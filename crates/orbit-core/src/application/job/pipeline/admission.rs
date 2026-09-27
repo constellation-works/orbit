@@ -40,8 +40,19 @@ impl OrbitRuntime {
         &self,
         submission: PipelineSubmission<'_>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.submit_keyed_pipeline_run(submission)
+            .map(|(result, _)| result)
+    }
+    /// [`Self::submit_persisted_pipeline_run`], also reporting whether a
+    /// keyed submission resolved an existing run (`true`) instead of
+    /// admitting a new one.
+    pub(crate) fn submit_keyed_pipeline_run(
+        &self,
+        submission: PipelineSubmission<'_>,
+    ) -> Result<(PipelineInvokeResult, bool), OrbitError> {
         match self.submit_persisted_pipeline_run_with_admission(submission, None)? {
-            ChildSubmission::Submitted(result) => Ok(result),
+            ChildSubmission::Submitted(result) => Ok((result, false)),
+            ChildSubmission::Resolved(result) => Ok((result, true)),
             ChildSubmission::Skipped(reason) => Err(OrbitError::Execution(format!(
                 "unconditional pipeline submission was refused as {reason}"
             ))),
@@ -59,6 +70,7 @@ impl OrbitRuntime {
             resume,
             actor,
             action_key,
+            retry_key,
             trusted_host,
             trigger,
         } = submission;
@@ -130,6 +142,34 @@ impl OrbitRuntime {
                 self.stores()
                     .jobs()
                     .insert_automation_job_run(job_name, input.clone(), key)?
+            } else if let Some(retry_key) = retry_key {
+                // [ORB-13560] The retry-key probe and the insert are one store
+                // transaction, so concurrent submitters of one key — in any
+                // process — admit one run. A resolved retry spawns nothing: the
+                // original admission already delivered its worker.
+                match self
+                    .stores()
+                    .jobs()
+                    .insert_keyed_job_run(&KeyedJobRunParams {
+                        job_id: job_name.to_string(),
+                        retry_key_field: retry_key.field.to_string(),
+                        scan_limit: retry_key.scan_limit,
+                        scheduled_at: submitted_at,
+                        input: input.clone(),
+                    })? {
+                    KeyedJobRunAdmission::Admitted(run) => {
+                        self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
+                        *run
+                    }
+                    KeyedJobRunAdmission::Existing(run) => {
+                        return Ok(ChildSubmission::Resolved(PipelineInvokeResult {
+                            run_id: run.run_id,
+                            job_name: job_name.to_string(),
+                            submitted_at: run.scheduled_at.to_rfc3339(),
+                            queued: run.state == JobRunState::Pending,
+                        }));
+                    }
+                }
             } else {
                 // A resume admits through the lineage-guarded insert: while any
                 // run in the source's retry lineage is live, it is refused with
