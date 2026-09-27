@@ -1,14 +1,15 @@
 # Distributed drain setup and recovery
 
-One owner checkout, optional replica checkouts, and a read-only owner preflight.
-Use this when the user wants a second machine to execute the same logical
-workspace later, or when a claimed attempt needs inspection. Installing matching
-binaries is not a rollout.
+One owner checkout, replica checkouts on other machines, and a pull drain on
+each replica. Use this when the user wants a second machine to execute the same
+logical workspace, or when a claimed attempt needs inspection. Installing
+matching binaries is not a rollout; starting `orbit run auto --pull` is.
 
-Public pull, binding, settlement, handoff approval, and `orbit run auto --pull`
-are **not registered**. Do not invent those tools, write a callers file, or try
-to enable the gated mutation surface. Owner-local claimed leaves already exist
-on the owner; a follower destination still fails that gate.
+The owner serves `orbit.task.pull`, `orbit.drain.claim.bind` and
+`orbit.drain.claim.settle` to a follower's drain. Handoff approval, revocation
+and claim recovery are **not** tools: they are owner-operator actions on the
+owner's dashboard. Do not invent tools for them, write a callers file, or
+start a second owner store.
 
 Owner/replica registration lives in
 [multi-host.md](../../../orbit-setup/references/multi-host.md). SSH federation
@@ -90,6 +91,32 @@ orbit task lint <task-id> --restore-pruned
 Missing files are valid declarations. `--restore-pruned` never guesses.
 Reservation TTL on a pulled claim is 14,400 seconds and does not revoke the
 claim or shrink the frozen footprint.
+
+## Start a follower's drain
+
+On the follower, from the replica checkout, with the owner in
+`~/.orbit/mcp-destinations.toml` and the same
+`workflow.required_validation_commands` the owner declares:
+
+```bash
+orbit run auto --pull <selector> --for 8h --concurrency 3
+```
+
+`<selector>` is the owner's host-qualified selector (`<owner-machine>/<ws_id>`)
+from federated `orbit.workspace.list`. The command refuses before submitting
+unless the checkout is a replica of that owner and workspace and the owner's
+probe admits this executor. It prints a `workspace_pull_pipeline` run ID and
+returns.
+
+- Each claim runs locally as `task_claimed_pr_pipeline` and ends at a pull
+  request handed to the owner, which moves the task to `review`. The owner
+  approves before anything lands; the follower never merges.
+- The drain keeps settling claims after `--for` expires, until none is left.
+  `orbit run auto --stop` closes the window early; live leaves keep running.
+- An unreachable or refusing owner is reported in each iteration's output and
+  retried. A request the owner refused and holds no receipt for closes as
+  `Refused`; a committed one is carried forward.
+- `orbit run concurrency <run-id> --set N` retunes the slot ceiling live.
 
 ## Read-only owner surface
 
@@ -173,8 +200,10 @@ own context; nothing inherits the old union.
 Failed-run triage is gone. Re-backlog is a deliberate status write after
 someone inspects `blocked` and `job_run_machine`.
 
-## Verify, then stop
+## Verify
 
 A clean probe, matching versions, `review_policy = none`, and a replica role
-mean the hosts are **installed**. They do not mean pull is enabled. Confirm
-`orbit run auto --help` has no `--pull`, and leave schedules untouched.
+mean the hosts are **installed**. Start a drain only when the user asked for
+one, and leave schedules untouched. After the first claim, confirm on the owner
+that `orbit.drain.claims` shows it on the follower's machine, and that after
+handoff the task is in `review` with its PR and nothing merged.

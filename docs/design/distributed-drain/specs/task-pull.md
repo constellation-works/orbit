@@ -1,14 +1,14 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-09-20
+last_validated: 2026-09-27
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616, ORB-12500]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625]
 ---
 
 # Spec: `orbit.task.pull`
@@ -20,9 +20,11 @@ receipt. The internal store foundation now implements admission receipts, claims
 and compaction, and [ORB-12495] exposed the owner's read-only half — the
 [preflight probe](../2_design.md#41-read-only-admission-probe) and the
 [receipt lookup](#read-only-receipt-reconciliation) below — on the managed MCP and registered CLI
-surfaces. The public pull tool and the mutating lifecycle operations remain unavailable behind one
-named gate (`orbit-core`'s `application::distributed`), so no configuration can reach them; the
-contracts for those entry points below are still proposed v1 behavior.
+surfaces. [ORB-13625] registered the executor's mutating half — `orbit.task.pull`,
+`orbit.drain.claim.bind` and `orbit.drain.claim.settle` — and opened the one named gate
+(`orbit-core`'s `application::distributed`) that every mutating entry point still names, so the
+feature is closed again only by a source change. Approval, revocation and recovery are not
+registered tools.
 
 ## Why This Exists
 
@@ -181,6 +183,8 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `review_policy_unsupported` | Owner/executor review policy is not `none` |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
+| `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now; replays keep their stored contract |
+| `stale_claim` | Bind or settle names a claim this owner workspace does not hold |
 
 An atomic commit failure returns no successful admission response; the caller retries the same
 request because transport uncertainty cannot establish whether the transaction committed.
@@ -337,8 +341,9 @@ recorded mutation result. Generic review transitions still require typed handoff
 executor-local Git checks are not forwarded as remote filesystem operations. Artifact bytes are
 read locally, with origins and task run links derived from runtime claim provenance.
 
-These internal seams do not enable pull, claims, recovery or approval public entry points.
-`DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` remains false. No schedules or live hosts change.
+These internal seams carry no public entry point of their own; the registered executor lifecycle
+([ORB-13625]) reaches them. Recovery and approval stay owner-operator actions. No schedules
+change.
 
 ### Caller checkpoint status
 
@@ -376,8 +381,16 @@ handoff acceptance and the landing attempt both call. Already-landed delivery
 keeps its refusal: no-diff work carries its own typed report through the
 existing verifier.
 
-Not yet delivered: the routed follower peer — a `PullPeer` speaking this
-protocol over the federated SSH transport — and the mutating distributed entry
-points as registered tools. A follower destination therefore still fails on the
-public mutation gate, and `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` remains
-false. See the caller-side implementation status in design §3.
+[ORB-13625] delivered the follower half. The owner's `orbit.task.pull` input is
+the caller's durable `AdmissionRequest` (request ID, caller version and schema,
+review policy, run context, and the ship contract its probe reported); it
+answers `{receipt, claim_state}`. `orbit.drain.claim.bind` takes `claim_id`,
+`run_id` and the receipt's `ship`; `orbit.drain.claim.settle` takes `claim_id`,
+an optional `run_id`, and the executor's durable settlement (`AcceptHandoff` or
+`Fail`, nothing else). Each resolves the caller machine from the trusted
+session and replays under a per-claim mutation ID (`pull-bind:`, `pull-fail:`,
+`pull-handoff:`). The follower's `RoutedPullPeer` calls them over the federated
+transport, and `orbit run auto --pull <selector>` runs the refill loop as the
+`workspace_pull_pipeline` job. A local request the owner refused and holds no
+receipt for closes as `Refused` (a new terminal phase that releases its slot);
+see the caller-side implementation status in design §3.

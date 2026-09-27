@@ -317,6 +317,12 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::DrainClaims
         | OrbitBuiltinAction::DrainProbe
         | OrbitBuiltinAction::DrainReceiptLookup
+        // [ORB-13625] Claim-lifecycle payloads are the owner's durable
+        // settlement record: the claim journal compares a replay against the
+        // exact input, so rewriting any of it would make a retry mismatch.
+        | OrbitBuiltinAction::DrainClaimBind
+        | OrbitBuiltinAction::DrainClaimSettle
+        | OrbitBuiltinAction::TaskPull
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search

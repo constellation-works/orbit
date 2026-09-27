@@ -48,6 +48,22 @@ impl OrbitRuntime {
         self
     }
 
+    /// Install the transport a follower drain reaches its owner through
+    /// [ORB-13625]. Composition supplies it; nothing in a payload can.
+    pub fn with_drain_owner_transport(
+        mut self,
+        transport: Arc<dyn orbit_tools::DrainOwnerTransport>,
+    ) -> Self {
+        self.drain_owner_transport = Some(transport);
+        self
+    }
+
+    pub(crate) fn drain_owner_transport(
+        &self,
+    ) -> Option<&Arc<dyn orbit_tools::DrainOwnerTransport>> {
+        self.drain_owner_transport.as_ref()
+    }
+
     pub(crate) fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
         if let Some(binding) = self.worker_invocation() {
             super::recovery_authority::RecoveryAuthority::open(&self.global_root())?

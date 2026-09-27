@@ -77,10 +77,18 @@ impl OrbitRuntime {
         self.require_workspace_claim(STOP_OPERATION, request.claim_token)?;
         let request_id = audit_execution_id("admissions_stop");
         let drain_job_id = workflow_job_id(AUTO_WORKFLOW_ALIAS)?;
-        let coordinators = self
+        let mut coordinators = self
             .stores()
             .jobs()
             .list_pending_or_running_job_runs(drain_job_id)?;
+        // [ORB-13625] A replica's pull drain is this workspace's coordinator
+        // too; stopping it closes its window while its leaves keep running
+        // and it keeps settling them with the owner.
+        coordinators.extend(
+            self.stores().jobs().list_pending_or_running_job_runs(
+                crate::application::distributed::PULL_DRAIN_JOB,
+            )?,
+        );
 
         self.record_stop_request(&request_id, request, drain_job_id, coordinators.len())?;
 

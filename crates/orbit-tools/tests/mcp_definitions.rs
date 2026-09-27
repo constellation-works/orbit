@@ -63,8 +63,10 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.auto_task.toggle",
             "orbit.auto_task.update",
             "orbit.command.exec",
-            // [ORB-12495] The distributed drain's read-only half: a follower
-            // reaches these over federated MCP before pull exists at all.
+            // [ORB-12495] The distributed drain's read-only half, and
+            // [ORB-13625] the executor lifecycle a follower's drain calls.
+            "orbit.drain.claim.bind",
+            "orbit.drain.claim.settle",
             "orbit.drain.probe",
             "orbit.drain.receipt.lookup",
             "orbit.friction.add",
@@ -76,6 +78,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.artifact.get",
             "orbit.task.artifact.put",
             "orbit.task.list",
+            "orbit.task.pull",
             "orbit.task.show",
             "orbit.task.update",
             "orbit.workflow.run.list",

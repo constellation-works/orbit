@@ -43,6 +43,7 @@ macro_rules! deterministic_action_catalog {
                 PluginToolCall => "plugin.tool_call",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
+                PullRefill => "pull_refill",
                 ReleaseLocks => "release_locks",
                 ReserveLocks => "reserve_locks",
                 ResolveWorkspaceShipInput => "resolve_workspace_ship_input",

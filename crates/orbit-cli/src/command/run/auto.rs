@@ -1,7 +1,9 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
-use orbit_core::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
+use orbit_core::{
+    CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime, WorkspacePullRequest,
+};
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -15,7 +17,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 #[command(
     about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
-    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
+    after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
                   waiting for the batch.\n\n\
@@ -34,6 +36,13 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   crew is excluded is simply not started, and `orbit run readiness --allow-crew`\n\
                   names it. To actually move that work, reassign its crew yourself. Tasks a\n\
                   different invocation already has in flight keep running.\n\n\
+                  `--pull <SELECTOR>` runs on a replica checkout instead. The owner named by\n\
+                  the host-qualified selector orders the work and admits one claim at a\n\
+                  time; each claim runs here as a leaf that ends at a pull request handed\n\
+                  back to the owner, which keeps landing authority. The selector must name\n\
+                  this replica's own owner and workspace, and the owner's probe must admit\n\
+                  this executor, before anything is submitted. The drain keeps settling its\n\
+                  claims with the owner after the window closes, until none is left.\n\n\
                   `--stop` ends new admissions for this workspace's active auto coordinator.\n\
                   You do not need a run ID. Already admitted workers keep running under the\n\
                   completion authority they were started with; this is not cancellation.\n\
@@ -97,6 +106,16 @@ pub struct AutoCommand {
     /// workflow pool; pass the flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub xhard_complexity_crews: Option<Vec<String>>,
+    /// Pull from this owner instead of draining a local backlog. Takes the
+    /// owner's host-qualified selector from federated discovery and runs only
+    /// on that owner's replica checkout. Pulled work always stops at a handoff
+    /// the owner lands; `--complete` and the crew options do not apply.
+    #[arg(
+        long,
+        value_name = "SELECTOR",
+        conflicts_with_all = ["complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "claim_token"]
+    )]
+    pub pull: Option<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -109,7 +128,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "strict_worker_containment", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews", "pull"]
     )]
     pub stop: bool,
 }
@@ -118,6 +137,38 @@ impl Execute for AutoCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.stop {
             return execute_stop(runtime, self.claim_token.as_deref());
+        }
+        if let Some(selector) = self.pull.as_deref() {
+            let for_seconds = self
+                .for_duration
+                .as_deref()
+                .map(parse_duration_seconds)
+                .transpose()?;
+            let invoke = runtime.submit_workspace_pull_run(
+                WorkspacePullRequest {
+                    selector,
+                    for_seconds,
+                    max_active_leaf_runs: self.concurrency,
+                    actor: None,
+                },
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )?;
+            return workflow_dispatch_payload(
+                AUTO_WORKFLOW,
+                &[WorkflowDispatchResult {
+                    workflow_alias: AUTO_WORKFLOW,
+                    job_id: invoke.job_name,
+                    run_id: invoke.run_id,
+                    state: if invoke.queued {
+                        "queued".to_string()
+                    } else {
+                        "submitted".to_string()
+                    },
+                    attempt: 1,
+                    error_code: None,
+                    error_message: None,
+                }],
+            );
         }
         let complexity_crews = orbit_config::ComplexityCrewPools {
             low: self.low_complexity_crews,

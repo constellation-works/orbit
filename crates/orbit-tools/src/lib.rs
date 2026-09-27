@@ -93,6 +93,23 @@ pub trait OwnerCoordinator: Send + Sync {
     ) -> Result<Value, OrbitError>;
 }
 
+/// A follower drain's transport to its owner, injected by composition
+/// [ORB-13625].
+///
+/// It carries the distributed drain's own protocol — probe, pull, bind,
+/// settle and receipt lookup — which a drain coordinator speaks before any
+/// worker binding exists, so it cannot ride [`OwnerCoordinator`], whose every
+/// call is a bound worker's. Implementations deliver to the destination the
+/// host-qualified selector names and never answer from a local store.
+pub trait DrainOwnerTransport: Send + Sync {
+    /// Deliver `name` to the owner workspace `selector` names.
+    fn call(&self, selector: &str, name: &str, input: Value) -> Result<Value, OrbitError>;
+
+    /// The coordinator a claimed leaf bound to this transport's owner routes
+    /// its worker reads and writes through.
+    fn worker_coordinator(&self) -> std::sync::Arc<dyn OwnerCoordinator>;
+}
+
 /// Materialize a task artifact before a spoke sends the coordination request
 /// to its hub. The returned value contains artifact bytes but no source path.
 ///
@@ -128,6 +145,8 @@ pub enum OrbitBuiltinAction {
     AutoTaskDelete,
     AgentInvoke,
     CommandExec,
+    DrainClaimBind,
+    DrainClaimSettle,
     DrainClaims,
     DrainProbe,
     DrainReceiptLookup,
@@ -147,6 +166,7 @@ pub enum OrbitBuiltinAction {
     TaskLocks,
     TaskLocksRelease,
     TaskLocksReserve,
+    TaskPull,
     TaskReject,
     TaskShow,
     TaskUpdate,

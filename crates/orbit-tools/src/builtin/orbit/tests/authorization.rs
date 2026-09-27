@@ -66,6 +66,8 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // [ORB-12581] Unadvertised, but registered active: `orbit tool run` is the
     // operator's only route to it, and the governed row — not placement — is
     // what refuses an agent.
+    ("orbit.drain.claim.bind", Placement::Advertised),
+    ("orbit.drain.claim.settle", Placement::Advertised),
     ("orbit.drain.claims", Placement::Unadvertised),
     // [ORB-12582] The read-only drain surface beside it: advertised, because a
     // follower reaches it over MCP, and governed to the `agent` floor in
@@ -75,6 +77,10 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.task.delete", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
     ("orbit.task.locks.reserve", Placement::Unadvertised),
+    // [ORB-13625] The executor lifecycle: advertised for the same reason as the
+    // probe, and on the same `agent` floor. What fences an attempt is the
+    // claim journal, not the capability.
+    ("orbit.task.pull", Placement::Advertised),
     ("orbit.task.reject", Placement::Unadvertised),
     ("orbit.workspace.claim.release", Placement::Unadvertised),
 ];
@@ -91,7 +97,18 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
 /// question about its own workspace. The floor has to be a governed row rather
 /// than a session read inside the application function, because only the
 /// chokepoint sees the process envelope a CLI caller's authority lives in.
-const AGENT_FLOOR_GOVERNED_TOOLS: &[&str] = &["orbit.drain.probe", "orbit.drain.receipt.lookup"];
+///
+/// [ORB-13625] extended the floor to the executor lifecycle — pull, bind and
+/// settle — for the same reason: a follower's drain holds `agent` and nothing
+/// more, and attempt ownership is decided by the claim journal against the
+/// session's own machine, not by a stronger capability.
+const AGENT_FLOOR_GOVERNED_TOOLS: &[&str] = &[
+    "orbit.drain.claim.bind",
+    "orbit.drain.claim.settle",
+    "orbit.drain.probe",
+    "orbit.drain.receipt.lookup",
+    "orbit.task.pull",
+];
 
 /// Reads an agent performs as ordinary work, which must stay ungoverned.
 ///

@@ -65,6 +65,12 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         // answer about itself [ORB-12495].
         | "orbit_drain_probe"
         | "orbit_drain_receipt_lookup"
+        // [ORB-13625] Admission, binding and settlement are owner store
+        // transactions; a replica answering them would mint claims no owner
+        // holds.
+        | "orbit_task_pull"
+        | "orbit_drain_claim_bind"
+        | "orbit_drain_claim_settle"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason

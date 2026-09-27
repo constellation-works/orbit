@@ -1,5 +1,6 @@
-//! Internal admission foundation. No tool or drain invokes this until claim
-//! binding, fencing and settlement are integrated by the lifecycle layer.
+//! Owner admission foundation. Reached only through `orbit-core`'s trusted
+//! owner seams — the `orbit.task.pull` tool and the owner-local drain adapter —
+//! which supply the caller identity from the session, never from the request.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

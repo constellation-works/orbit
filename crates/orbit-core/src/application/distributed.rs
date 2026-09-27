@@ -17,14 +17,15 @@
 //! is attribution: it names a receipt namespace and appears in diagnostics,
 //! and it never adds a capability the caller did not already hold.
 //!
-//! # What this module does not do
+//! # The mutating half
 //!
 //! Nothing in the read-only surface creates an admission receipt, a claim, a
 //! reservation, or a task transition, and nothing here grants execution
-//! authority. The mutating distributed entry points — pull, run binding,
-//! settlement, handoff, completion approval — stay unavailable behind
-//! [`ensure_distributed_mutation_available`] until the routed peer and the
-//! tools that carry them exist.
+//! authority. The mutating entry points a follower's drain needs — pull, run
+//! binding and settlement — live in [`serve`] [ORB-13625]. They still name
+//! [`ensure_distributed_mutation_available`], so turning the whole feature off
+//! again is one source change. Completion approval, revocation and recovery
+//! are not among them: those stay owner-operator actions on the dashboard.
 //!
 //! # The retained entry points
 //!
@@ -50,24 +51,32 @@ use serde::Serialize;
 use crate::runtime::authorization::resolved_caller_capabilities;
 use crate::runtime::host_signal::{HOST_SHUTDOWN_SCHEDULED, ScheduledShutdown};
 
+mod follower;
+mod serve;
+
+pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
+pub use serve::TaskPullResponse;
+
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
 ///
-/// It is a constant rather than configuration on purpose: an incomplete feature
-/// must not become reachable because an operator set a key or an environment
-/// variable. Flipping it is a deliberate source change made by the slice that
-/// lands routed mutations, and every gated entry point names it.
-pub const DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED: bool = false;
+/// It is a constant rather than configuration on purpose: the feature must not
+/// become reachable, or unreachable, because an operator set a key or an
+/// environment variable. [ORB-13625] opened it once the routed follower peer,
+/// the owner's pull/bind/settle tools and `orbit run auto --pull` landed
+/// together; every gated entry point still names it, so closing the feature
+/// again is one deliberate source change.
+pub const DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED: bool = true;
 
-/// Refuse a mutating distributed entry point while the feature is incomplete.
+/// Refuse a mutating distributed entry point while the feature is closed.
 pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), OrbitError> {
     if DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED {
         return Ok(());
     }
     Err(OrbitError::CapabilityRefused(format!(
-        "distributed entry point '{entry_point}' is unavailable: claim binding, routed \
-         mutations, settlement, and handoff integration have not landed, so the owner serves \
-         only the read-only preflight and receipt lookup"
+        "distributed entry point '{entry_point}' is unavailable: the distributed drain's \
+         mutating entry points are closed in this build, so the owner serves only the read-only \
+         preflight and receipt lookup"
     )))
 }
 
@@ -285,6 +294,12 @@ impl crate::OrbitRuntime {
             .iter()
             .map(|claim| serde_json::to_value(claim).map_err(json_error))
             .collect()
+    }
+
+    /// This host's effective review policy, as the distributed protocol spells
+    /// it. A follower declares it on every probe and pull.
+    pub(crate) fn local_review_policy_label(&self) -> String {
+        review_policy_label(self.operation_policy().review_policy.value)
     }
 
     /// Only the owner checkout serves the distributed control plane.

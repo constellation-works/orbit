@@ -22,6 +22,8 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.command.exec", McpToolClass::Execute),
     ("orbit.crew.list", McpToolClass::Unclassified),
     ("orbit.agent.invoke", McpToolClass::Execute),
+    ("orbit.drain.claim.bind", McpToolClass::ControlPlane),
+    ("orbit.drain.claim.settle", McpToolClass::ControlPlane),
     ("orbit.drain.probe", McpToolClass::ControlPlane),
     ("orbit.drain.receipt.lookup", McpToolClass::ControlPlane),
     ("orbit.friction.add", McpToolClass::ControlPlane),
@@ -33,6 +35,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.task.artifact.get", McpToolClass::ControlPlane),
     ("orbit.task.artifact.put", McpToolClass::ControlPlane),
     ("orbit.task.list", McpToolClass::ControlPlane),
+    ("orbit.task.pull", McpToolClass::ControlPlane),
     ("orbit.task.show", McpToolClass::ControlPlane),
     ("orbit.task.update", McpToolClass::ControlPlane),
     ("orbit.workflow.run.list", McpToolClass::Execute),
@@ -75,7 +78,13 @@ fn the_locked_mapping_covers_exactly_the_advertised_surface() {
 fn a_replica_refuses_the_distributed_drain_read_only_surface() {
     let held = CapabilityClasses::new(false, true);
 
-    for tool in ["orbit.drain.probe", "orbit.drain.receipt.lookup"] {
+    for tool in [
+        "orbit.drain.probe",
+        "orbit.drain.receipt.lookup",
+        "orbit.task.pull",
+        "orbit.drain.claim.bind",
+        "orbit.drain.claim.settle",
+    ] {
         let error = ensure_tool_class_held(tool, held).expect_err("replica refuses");
         assert!(
             matches!(error, OrbitError::CapabilityRefused(_)),

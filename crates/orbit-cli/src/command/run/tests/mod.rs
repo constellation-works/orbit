@@ -276,12 +276,72 @@ fn auto_stop_with_no_coordinator_is_idle() {
         complete: false,
         allow_crew: Vec::new(),
         strict_worker_containment: false,
+        pull: None,
         json: true,
         claim_token: None,
         stop: true,
     }
     .execute(&runtime)
     .expect("idle stop succeeds");
+}
+
+#[test]
+fn parses_pull_drain_selector_and_rejects_owner_only_flags() {
+    let command = parse_run(&[
+        "orbit",
+        "run",
+        "auto",
+        "--pull",
+        "hm_owner/ws_orbit",
+        "--for",
+        "8h",
+        "--concurrency",
+        "3",
+    ]);
+    match command.command {
+        RunSubcommand::Auto(args) => {
+            assert_eq!(args.pull.as_deref(), Some("hm_owner/ws_orbit"));
+            assert_eq!(args.concurrency, Some(3));
+        }
+        _ => panic!("expected auto"),
+    }
+    for extra in [
+        ["--complete"].as_slice(),
+        &["--allow-crew", "opus"],
+        &["--stop"],
+    ] {
+        let mut argv = vec!["orbit", "run", "auto", "--pull", "hm_owner/ws_orbit"];
+        argv.extend_from_slice(extra);
+        assert!(
+            Cli::try_parse_from(argv).is_err(),
+            "--pull must conflict with {extra:?}"
+        );
+    }
+}
+
+#[test]
+fn pull_on_an_owner_checkout_is_refused_before_submission() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let outcome = super::auto::AutoCommand {
+        low_complexity_crews: None,
+        medium_complexity_crews: None,
+        hard_complexity_crews: None,
+        xhard_complexity_crews: None,
+        for_duration: None,
+        concurrency: None,
+        complete: false,
+        allow_crew: Vec::new(),
+        strict_worker_containment: false,
+        pull: Some("hm_owner/ws_memory".into()),
+        json: true,
+        claim_token: None,
+        stop: false,
+    }
+    .execute(&runtime);
+    let Err(error) = outcome else {
+        panic!("an owner checkout cannot pull");
+    };
+    assert!(error.to_string().contains("replica checkout"), "{error}");
 }
 
 #[test]

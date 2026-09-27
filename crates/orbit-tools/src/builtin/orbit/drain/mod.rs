@@ -1,20 +1,26 @@
-//! The owner-served read-only surface of the distributed drain.
+//! The owner-served surface of the distributed drain.
 //!
-//! Only the read-only half exists: a preflight probe, receipt reconciliation,
-//! and claim inspection. Pull, run binding, settlement, handoff, and completion
-//! approval are not registered tools — their integration slice has not landed,
-//! and `orbit-core`'s distributed gate refuses them from every surface so an
-//! incomplete feature cannot be turned on by registering a tool.
+//! Two halves:
 //!
-//! Placement follows the same rule as the rest of the registry: the probe and
-//! the receipt lookup are advertised because a follower must reach them over
-//! federated MCP before it can enable pull, while claim inspection stays off
-//! the MCP surface as an operator surface. Unadvertised is not unreachable:
-//! claim inspection is registered active so `orbit tool run orbit.drain.claims`
-//! resolves, which is the invocation the shipped skill reference names and the
-//! only entry point it has [ORB-12581]. Its operator requirement comes from
-//! the governed-operation registry, not from placement.
+//! - **Read-only:** a preflight probe, receipt reconciliation, and claim
+//!   inspection.
+//! - **Mutating** [ORB-13625]: pull admission, run binding, and claim
+//!   settlement — exactly what a follower's drain needs to carry one attempt
+//!   from admission to handoff. Completion approval, revocation and recovery
+//!   are not here: they stay owner-operator actions on the dashboard.
+//!
+//! Placement follows the same rule as the rest of the registry: everything a
+//! follower must reach over federated MCP is advertised, while claim
+//! inspection stays off the MCP surface as an operator surface. Unadvertised
+//! is not unreachable: claim inspection is registered active so
+//! `orbit tool run orbit.drain.claims` resolves, which is the invocation the
+//! shipped skill reference names and the only entry point it has [ORB-12581].
+//! Its operator requirement comes from the governed-operation registry, not
+//! from placement.
 
+pub mod claim_bind;
+pub mod claim_settle;
 pub mod claims;
 pub mod probe;
+pub mod pull;
 pub mod receipt_lookup;

@@ -1,0 +1,339 @@
+//! Owner-served mutating half of the distributed drain [ORB-13625]: pull
+//! admission, run binding and claim settlement.
+//!
+//! # Authority
+//!
+//! These are the entry points a follower's drain reaches over federated MCP,
+//! so every authority fact is read from the trusted session the transport
+//! built, exactly as the read-only half does:
+//!
+//! - **Access** is SSH login plus the `agent` or `operator` capability the
+//!   governed-operation rows require [ORB-12564]. There is no callers file.
+//! - **Attempt ownership** is the claim journal's own fence. Every mutation
+//!   here reaches it as a [`ClaimInvocation`] whose machine is the session's
+//!   trusted caller machine, never a machine named in tool input. A follower
+//!   can only name *which* claim it is settling; the journal refuses it unless
+//!   that claim was admitted to this same machine and is still in a phase
+//!   that permits the write.
+//! - **Observations** are the owner's own. A handoff payload names the
+//!   candidate to look at; the owner reads the published pull request from the
+//!   provider and resolves both commits in its own checkout before the journal
+//!   compares them.
+//!
+//! A remote executor is refused local ship mode by the admission ladder and a
+//! local-candidate handoff here: followers never run owner-local leaves, so
+//! only the owner may hand off a candidate that exists solely in its checkout.
+
+use orbit_common::OrbitError;
+use orbit_store::TaskCommitBoundary;
+use orbit_store::contracts::{
+    AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
+    ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
+    HandoffObservation,
+};
+use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::tool::ToolSessionContext;
+use orbit_types::workflow::handoff::{HandoffDelivery, TaskHandoff};
+use serde::Serialize;
+
+use super::{
+    ensure_distributed_mutation_available, is_remote, owner_binary_version, session_machine_id,
+    trusted_identity,
+};
+
+/// What `orbit.task.pull` answers: the immutable receipt and, separately, the
+/// claim's phase right now. A replayed receipt is historical evidence; the
+/// current phase is what says whether the attempt may still execute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskPullResponse {
+    pub receipt: AdmissionReceipt,
+    pub claim_state: Option<ExecutionClaimPhase>,
+}
+
+/// The mutation ids a follower's retries replay under. One per claim and
+/// operation, so a lost answer retried with the same claim returns the
+/// recorded outcome instead of performing the write again, and a second,
+/// different run can never be bound to the same claim.
+fn bind_mutation_id(claim_id: &str) -> String {
+    format!("pull-bind:{claim_id}")
+}
+fn fail_mutation_id(claim_id: &str) -> String {
+    format!("pull-fail:{claim_id}")
+}
+fn handoff_mutation_id(claim_id: &str) -> String {
+    format!("pull-handoff:{claim_id}")
+}
+
+fn refused(message: impl Into<String>) -> OrbitError {
+    OrbitError::PolicyDenied(message.into())
+}
+
+impl crate::OrbitRuntime {
+    /// Serve one pull admission for a caller this session speaks for.
+    ///
+    /// Refusal order follows the spec: the distributed gate and destination
+    /// authority first, then the trusted caller identity, then the store's
+    /// shape/version/mode/policy ladder inside [`TaskCommitBoundary::admit_task`].
+    /// A new request must carry the ship contract this owner resolves now — the
+    /// one the probe reported — because the receipt freezes it; a replay keeps
+    /// whatever its original request carried and is compared byte-for-byte.
+    pub fn serve_task_pull(
+        &self,
+        session: &ToolSessionContext,
+        request: &AdmissionRequest,
+    ) -> Result<TaskPullResponse, OrbitError> {
+        ensure_distributed_mutation_available("orbit.task.pull")?;
+        self.ensure_distributed_owner_workspace()?;
+        let identity = self.session_admission_identity(session)?;
+        let boundary = self.admission_boundary()?;
+        if matches!(
+            boundary.lookup_admission(&identity, &request.request_id)?,
+            AdmissionLookup::NotFound
+        ) {
+            let owner = self.owner_ship_contract();
+            if request.ship != owner {
+                return Err(OrbitError::InvalidInput(format!(
+                    "ship_contract_mismatch: this owner now resolves mode '{}', base '{}', landing \
+                     '{}', review policy '{}'; re-read the probe before sending a new request",
+                    owner.mode, owner.base_branch, owner.landing_branch, owner.review_policy
+                )));
+            }
+        }
+        match self.admit_pull_request(&boundary, &identity, request)? {
+            AdmissionLookup::Found {
+                receipt,
+                current_claim,
+            } => Ok(TaskPullResponse {
+                receipt: *receipt,
+                claim_state: current_claim.map(|claim| claim.phase),
+            }),
+            AdmissionLookup::Expired => Err(OrbitError::InvalidInput("request_expired".into())),
+            AdmissionLookup::NotFound => Err(OrbitError::Store(
+                "admission committed no receipt for this request".into(),
+            )),
+        }
+    }
+
+    /// Bind the follower's one local leaf run to its claim, `claimed → running`.
+    ///
+    /// Idempotent per claim: the journal replays a repeated bind of the same
+    /// run and refuses a different one, so a lost answer is safe to retry and a
+    /// second leaf can never take over the attempt.
+    pub fn serve_claim_bind(
+        &self,
+        session: &ToolSessionContext,
+        claim_id: &str,
+        run_id: &str,
+        ship: orbit_store::contracts::AdmissionShipContract,
+    ) -> Result<ClaimMutationResult, OrbitError> {
+        ensure_distributed_mutation_available("orbit.drain.claim.bind")?;
+        self.ensure_distributed_owner_workspace()?;
+        let machine = self.session_caller_machine(session)?;
+        let claim = self.current_claim(claim_id)?;
+        let run_id = run_id.trim();
+        if run_id.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "invalid_input: `run_id` is required".into(),
+            ));
+        }
+        // The invocation carries no run yet: binding is what creates that
+        // association, so asserting one beforehand would fence the very
+        // mutation being made.
+        let context = ClaimInvocation::trusted_worker(
+            claim.task_id.clone(),
+            claim.claim_id.clone(),
+            machine.clone(),
+            None,
+        );
+        self.mutate_execution_claim(
+            Some(&context),
+            &bind_mutation_id(&claim.claim_id),
+            &ClaimMutation::Bind {
+                run: ClaimRun {
+                    machine_id: machine,
+                    run_id: run_id.to_string(),
+                },
+                ship,
+            },
+        )
+    }
+
+    /// Settle a claim with the follower's durable settlement: a typed handoff
+    /// or a failure. Anything else is a lifecycle operation the executor does
+    /// not own — approval, revocation and recovery stay owner-operator acts.
+    pub fn serve_claim_settle(
+        &self,
+        session: &ToolSessionContext,
+        claim_id: &str,
+        run_id: Option<&str>,
+        settlement: ClaimMutation,
+    ) -> Result<ClaimMutationResult, OrbitError> {
+        ensure_distributed_mutation_available("orbit.drain.claim.settle")?;
+        self.ensure_distributed_owner_workspace()?;
+        let machine = self.session_caller_machine(session)?;
+        let claim = self.current_claim(claim_id)?;
+        let run = run_id
+            .map(str::trim)
+            .filter(|run| !run.is_empty())
+            .map(|run_id| ClaimRun {
+                machine_id: machine.clone(),
+                run_id: run_id.to_string(),
+            });
+        let context = ClaimInvocation::trusted_worker(
+            claim.task_id.clone(),
+            claim.claim_id.clone(),
+            machine,
+            run,
+        );
+        match settlement {
+            ClaimMutation::Fail(evidence) => self.mutate_execution_claim(
+                Some(&context),
+                &fail_mutation_id(&claim.claim_id),
+                &ClaimMutation::Fail(evidence),
+            ),
+            ClaimMutation::AcceptHandoff(handoff) => {
+                let observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
+                self.accept_task_handoff(
+                    &context,
+                    &handoff_mutation_id(&claim.claim_id),
+                    handoff,
+                    observation,
+                )
+            }
+            _ => Err(refused(
+                "only a typed handoff or a failure settles a claimed leaf; approval, revocation \
+                 and recovery are owner-operator actions",
+            )),
+        }
+    }
+
+    /// The owner's own reading of the candidate a claim is settling.
+    ///
+    /// Read from the owner checkout — and, for a published delivery, from the
+    /// provider — with the shared observation rules, so the worker's handoff
+    /// payload contributes nothing but the identity to look *at*. The claim
+    /// journal then compares this observation against the submitted candidate.
+    ///
+    /// `remote` refuses a local candidate: it exists only in the executor's
+    /// checkout, which the owner cannot read, and followers never run local
+    /// mode. Already-landed delivery keeps its own typed report through the
+    /// no-diff verifier and is not a route a claimed leaf takes.
+    pub(crate) fn observe_claim_handoff(
+        &self,
+        handoff: &TaskHandoff,
+        remote: bool,
+    ) -> Result<HandoffObservation, OrbitError> {
+        let candidate = match handoff.candidate.delivery {
+            HandoffDelivery::LocalCandidate if remote => {
+                return Err(refused(
+                    "a follower cannot hand off a local candidate: followers never execute \
+                     owner-local leaves, and the owner cannot observe a candidate that exists \
+                     only in the executor's checkout",
+                ));
+            }
+            HandoffDelivery::LocalCandidate => orbit_engine::observe_candidate(
+                &self.paths().repo_root,
+                Some(&handoff.candidate.source_branch),
+                &handoff.candidate.base_branch,
+                &handoff.candidate.landing_branch,
+                HandoffDelivery::LocalCandidate,
+                &handoff.workspace_id,
+                // An owner-local candidate has no origin to fetch and must
+                // keep reading the local base it was synchronized onto.
+                "local",
+            )?,
+            // [ORB-12500] The owner reads the published pull request itself:
+            // the provider names the delivery, and the candidate and base
+            // objects are resolved in this checkout.
+            HandoffDelivery::PullRequest { .. } => orbit_engine::observe_published_candidate(
+                self,
+                &self.paths().repo_root,
+                &handoff.candidate,
+            )?,
+            HandoffDelivery::AlreadyLanded { .. } => {
+                return Err(refused(
+                    "already-landed delivery carries its own typed report through the no-diff \
+                     verifier; a claimed leaf does not hand one off",
+                ));
+            }
+        };
+        let required_commands = self.workflow_required_validation_commands().to_vec();
+        if required_commands.is_empty() {
+            return Err(refused(
+                "this owner declares no required validation commands \
+                 (`workflow.required_validation_commands`), so no handoff can be accepted",
+            ));
+        }
+        Ok(HandoffObservation {
+            candidate,
+            required_commands,
+        })
+    }
+
+    /// One admission on this owner's commit boundary. Shared by the routed
+    /// tool above and the owner-local drain adapter, so both reach the same
+    /// transaction with the same owner version and repository roots.
+    pub(crate) fn admit_pull_request(
+        &self,
+        boundary: &TaskCommitBoundary,
+        identity: &AdmissionIdentity,
+        request: &AdmissionRequest,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        boundary.admit_task(
+            identity,
+            request,
+            owner_binary_version(),
+            &self.paths().repo_root,
+            &self.data_root(),
+        )
+    }
+
+    pub(crate) fn admission_boundary(&self) -> Result<TaskCommitBoundary, OrbitError> {
+        TaskCommitBoundary::new(
+            self.sqlite_store()?,
+            TaskRegistryStore::open(&task_registry_path(&self.global_root()))?,
+            self.workspace_id()?,
+        )
+    }
+
+    /// The machine this session speaks for. Required: a claim is fenced on it,
+    /// so a session the transport could not attribute gets no admission.
+    fn session_caller_machine(&self, session: &ToolSessionContext) -> Result<String, OrbitError> {
+        session_machine_id(session).ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "invalid_input: no trusted caller machine on this session; a follower reaches \
+                 the owner through federated SSH, which names its machine"
+                    .into(),
+            )
+        })
+    }
+
+    fn session_admission_identity(
+        &self,
+        session: &ToolSessionContext,
+    ) -> Result<AdmissionIdentity, OrbitError> {
+        let machine = self.session_caller_machine(session)?;
+        Ok(trusted_identity(&machine, session))
+    }
+
+    /// The claim a follower names, read from the journal. Absence is the
+    /// stale-attempt answer: a revoked or superseded claim is still listed, so
+    /// an id that resolves to nothing was never this owner's.
+    fn current_claim(&self, claim_id: &str) -> Result<ExecutionClaim, OrbitError> {
+        let claim_id = claim_id.trim();
+        if claim_id.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "invalid_input: `claim_id` is required".into(),
+            ));
+        }
+        self.inspect_execution_claims()?
+            .into_iter()
+            .map(|inspection| inspection.claim)
+            .find(|claim| claim.claim_id == claim_id)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "stale_claim: claim '{claim_id}' is not held by this owner workspace"
+                ))
+            })
+    }
+}

@@ -426,6 +426,33 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
                     binary, ship contract, and review policy — so the caller has to be someone \
                     this process can name",
     },
+    // [ORB-13625] The mutating half follows the same floor: a follower's drain
+    // holds `agent`, and what fences an attempt is the claim journal, which
+    // compares every write against the session's own machine and the claim's
+    // current phase. Approval, revocation and recovery are not tools at all.
+    GovernedOperation {
+        id: "orbit.task.pull",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "pull admission claims a backlog task for the calling machine, so the caller \
+                    has to be someone this process can name; the claim itself grants only that \
+                    one attempt's execution",
+    },
+    GovernedOperation {
+        id: "orbit.drain.claim.bind",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "binding a leaf run starts an admitted attempt; the claim journal refuses any \
+                    machine but the one the claim was admitted to",
+    },
+    GovernedOperation {
+        id: "orbit.drain.claim.settle",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "settlement records an attempt's handoff or failure; the claim journal fences \
+                    it to the admitted machine and bound run, and a handoff still needs owner \
+                    approval before anything lands",
+    },
     GovernedOperation {
         id: "orbit.drain.receipt.lookup",
         surface: OperationSurface::Tool,

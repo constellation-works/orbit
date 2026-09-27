@@ -31,6 +31,11 @@ pub(crate) type AfterLockedStateReadHook = Arc<dyn Fn(&orbit_types::task::Task) 
 pub struct OrbitRuntime {
     pub(super) worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
     pub(super) owner_coordinator: Option<Arc<dyn orbit_tools::OwnerCoordinator>>,
+    /// A follower drain's owner transport, supplied by the registry-owning
+    /// composition layer that holds the federated destinations [ORB-13625].
+    /// Absent on a standalone runtime, whose pull drain then refuses rather
+    /// than reaching for a local store.
+    pub(super) drain_owner_transport: Option<Arc<dyn orbit_tools::DrainOwnerTransport>>,
     pub(crate) context: OrbitContext,
     workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
     /// A higher-level registry may mark this local checkout as a replica. Core
@@ -168,6 +173,7 @@ impl OrbitRuntime {
             workspace_binding: binding.map(Arc::new),
             worker_invocation: worker_coordination::restore_process_binding(global_root)?,
             owner_coordinator: None,
+            drain_owner_transport: None,
             coordination_write_owner: None,
             automation_machine_identity: None,
             workspace_catalog: None,
@@ -213,6 +219,7 @@ impl OrbitRuntime {
             workspace_binding: Some(Arc::new(binding)),
             worker_invocation: None,
             owner_coordinator: None,
+            drain_owner_transport: None,
             coordination_write_owner: None,
             automation_machine_identity: None,
             workspace_catalog: None,
