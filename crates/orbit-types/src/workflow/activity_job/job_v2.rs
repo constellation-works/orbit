@@ -30,6 +30,10 @@ impl std::fmt::Display for JobKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobV2 {
     pub state: JobScheduleState,
+    /// This job creates a task-scoped worktree and may collect it after a
+    /// successful delivery. The collector still checks task and Git safety.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owns_task_worktree: bool,
     #[serde(default)]
     pub default_input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,6 +51,10 @@ pub struct JobV2 {
     #[serde(default)]
     pub kind: JobKind,
     pub steps: Vec<JobV2Step>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// A step in a v2 job. Carries `id`, optional `when` / `retry` modifiers,

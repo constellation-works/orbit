@@ -16,6 +16,7 @@ metadata:
   name: task_local_pipeline
 spec:
   state: enabled
+  owns_task_worktree: true
   kind: workflow
   max_active_runs: 10
   default_input:

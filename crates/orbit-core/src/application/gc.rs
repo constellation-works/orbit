@@ -24,7 +24,11 @@ impl OrbitRuntime {
         run_id: &str,
     ) -> Result<Option<WorktreeGcResult>, OrbitError> {
         let run = self.show_job_run(run_id)?;
-        if !delivery_job_owns_worktree(&run) {
+        if !self
+            .load_v2_job_asset_by_name(&run.job_id)?
+            .1
+            .owns_task_worktree
+        {
             return Ok(None);
         }
 
@@ -74,19 +78,4 @@ impl OrbitRuntime {
             },
         )
     }
-}
-
-/// These jobs create the task-scoped worktrees that are safe to reap after a
-/// successful, completion-authorized delivery. Coordinators such as
-/// `workspace_auto_pipeline` and `task_gate_pipeline` only own child runs.
-///
-/// Retired jobs are deliberately absent: no new run can be theirs, and a
-/// historical worktree left by one is reaped by the scheduled sweep, which
-/// classifies every recorded run rather than only the delivery jobs
-/// [ORB-12491].
-fn delivery_job_owns_worktree(run: &JobRun) -> bool {
-    matches!(
-        run.job_id.as_str(),
-        "task_pr_pipeline" | "task_local_pipeline"
-    )
 }

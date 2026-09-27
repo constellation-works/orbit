@@ -18,6 +18,7 @@ metadata:
   name: task_pr_pipeline
 spec:
   state: enabled
+  owns_task_worktree: true
   kind: workflow
   max_active_runs: 10
   # Preserve recoverable work after terminal failures while keeping the
