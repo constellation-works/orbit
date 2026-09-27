@@ -89,8 +89,7 @@ impl OrbitRuntime {
         request: Value,
     ) -> Result<T, OrbitError> {
         let value = self.route_worker_tool("orbit.task.show", request, Default::default())?;
-        serde_json::from_value(value)
-            .map_err(|error| OrbitError::Store(format!("owner read response: {error}")))
+        decode_owner_read(value)
     }
 
     pub(crate) fn bind_worker_session(
@@ -151,6 +150,31 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?
             .call(name, input, session)
     }
+}
+
+/// Decode an owner read into the type the reader asked for.
+///
+/// An in-process owner returns the projection as-is. A routed owner answers
+/// over MCP, whose `structuredContent` must be an object, so a list arrives as
+/// `{"items": [...]}` and a scalar as `{"value": ...}` [ORB-13625]. The value
+/// is parsed as sent first, so a projection that genuinely is an object never
+/// loses a field; only when that fails is the single-key transport envelope
+/// unwrapped.
+pub(crate) fn decode_owner_read<T: serde::de::DeserializeOwned>(
+    value: Value,
+) -> Result<T, OrbitError> {
+    let direct = match serde_json::from_value::<T>(value.clone()) {
+        Ok(decoded) => return Ok(decoded),
+        Err(error) => error,
+    };
+    if let Value::Object(object) = &value
+        && object.len() == 1
+        && let Some(inner) = object.get("items").or_else(|| object.get("value"))
+        && let Ok(decoded) = serde_json::from_value::<T>(inner.clone())
+    {
+        return Ok(decoded);
+    }
+    Err(OrbitError::Store(format!("owner read response: {direct}")))
 }
 
 pub(crate) fn is_coordination_tool(name: &str) -> bool {

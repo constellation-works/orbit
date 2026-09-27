@@ -637,3 +637,31 @@ fn a_required_worker_context_fails_closed_when_no_binding_resolves() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// [ORB-13625] A routed owner answers over MCP, which wraps a list as
+/// `{"items": [...]}` and a scalar as `{"value": ...}`; an in-process owner
+/// answers the bare value. Both decode to what the reader asked for, and a
+/// genuine object is never mistaken for the envelope.
+#[test]
+fn owner_reads_decode_bare_values_and_the_mcp_envelope() {
+    use crate::runtime::worker_coordination::decode_owner_read;
+
+    let bare: Vec<String> = decode_owner_read(json!(["a", "b"])).expect("bare list");
+    assert_eq!(bare, ["a", "b"]);
+    let wrapped: Vec<String> =
+        decode_owner_read(json!({"items": ["a", "b"]})).expect("wrapped list");
+    assert_eq!(wrapped, ["a", "b"]);
+    let scalar: u32 = decode_owner_read(json!({"value": 7})).expect("wrapped scalar");
+    assert_eq!(scalar, 7);
+
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct Holder {
+        items: Vec<u32>,
+    }
+    let object: Holder = decode_owner_read(json!({"items": [1, 2]})).expect("object");
+    assert_eq!(object, Holder { items: vec![1, 2] });
+
+    let error = decode_owner_read::<Vec<String>>(json!({"items": 3, "other": 1}))
+        .expect_err("not an envelope");
+    assert!(error.to_string().contains("owner read response"), "{error}");
+}
