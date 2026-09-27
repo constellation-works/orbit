@@ -5,14 +5,14 @@
 
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{TaskPriority, TaskStatus};
+use orbit_types::task::{TaskPriority, TaskStatus, task_dependencies_ready};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_layout, write_workspace_file,
 };
-use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::application::task::{TaskAddParams, TaskListQuery, TaskUpdateParams};
 
 use super::filing::{code_alert, expanded_snapshot, file};
 
@@ -350,4 +350,121 @@ fn a_lone_task_for_its_cause_is_reported_unchanged() {
         .map(|entry| entry["task_id"].as_str().unwrap_or_default().to_string())
         .collect::<Vec<_>>();
     assert_eq!(unchanged, sources);
+}
+
+#[test]
+fn consolidation_drops_internal_dependency_edges_and_preserves_external_prerequisites() {
+    let (_root, runtime, repo) = runtime_with_workspace_layout();
+    write_workspace_file(&repo, RECONCILE);
+    let sources = seed_per_alert_tasks(&runtime, &[hash_alert(101, 118), hash_alert(102, 246)]);
+    let external_prerequisite = runtime
+        .add_task(TaskAddParams {
+            title: "Shared crypto prerequisite".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed external prerequisite")
+        .id;
+
+    // Source 0 depends on Source 1 (internal edge) and the external prerequisite.
+    runtime
+        .update_task(
+            &sources[0],
+            TaskUpdateParams {
+                dependencies: Some(vec![sources[1].clone(), external_prerequisite.clone()]),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("record internal and external dependency on source 0");
+
+    // Source 1 also depends on the external prerequisite (testing deduplication).
+    runtime
+        .update_task(
+            &sources[1],
+            TaskUpdateParams {
+                dependencies: Some(vec![external_prerequisite.clone()]),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("record external prerequisite on source 1");
+
+    let applied = consolidate(&runtime, json!({"apply": true}));
+
+    assert_eq!(applied["outcome"], "applied");
+    assert_eq!(applied["groups"][0]["applied"], json!(true));
+    assert_eq!(applied["groups"][0]["sources_not_retired"], json!([]));
+    assert_eq!(
+        applied["groups"][0]["carried_dependencies"],
+        json!([external_prerequisite])
+    );
+
+    let replacement_id = applied["groups"][0]["replacement_task_id"]
+        .as_str()
+        .expect("replacement task id");
+    let replacement = runtime.get_task(replacement_id).expect("replacement");
+    assert_eq!(replacement.status, TaskStatus::Backlog);
+    assert_eq!(
+        replacement.dependencies(),
+        vec![external_prerequisite.clone()]
+    );
+
+    for source in &sources {
+        assert!(!replacement.dependencies().contains(source));
+        let retired = runtime.get_task(source).expect("source");
+        assert_eq!(retired.status, TaskStatus::Rejected);
+    }
+
+    // While external prerequisite is not done, replacement is not ready for admission.
+    let statuses = runtime.task_status_index().expect("task status index");
+    assert!(!task_dependencies_ready(&replacement, &statuses));
+    assert!(
+        !replacement
+            .dependencies()
+            .iter()
+            .all(|id| statuses.get(id) == Some(&TaskStatus::Done))
+    );
+    let ready_tasks = runtime
+        .query_task_rows(&TaskListQuery {
+            ready: true,
+            ..Default::default()
+        })
+        .expect("query ready tasks");
+    assert!(
+        !ready_tasks
+            .items
+            .iter()
+            .any(|row| row.task.id == replacement.id)
+    );
+
+    // Once external prerequisite is Done, replacement becomes eligible for admission.
+    runtime
+        .update_task(
+            &external_prerequisite,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("complete external prerequisite");
+
+    let statuses = runtime.task_status_index().expect("task status index");
+    assert!(task_dependencies_ready(&replacement, &statuses));
+    assert!(
+        replacement
+            .dependencies()
+            .iter()
+            .all(|id| statuses.get(id) == Some(&TaskStatus::Done))
+    );
+    let ready_tasks = runtime
+        .query_task_rows(&TaskListQuery {
+            ready: true,
+            ..Default::default()
+        })
+        .expect("query ready tasks");
+    assert!(
+        ready_tasks
+            .items
+            .iter()
+            .any(|row| row.task.id == replacement.id)
+    );
 }
