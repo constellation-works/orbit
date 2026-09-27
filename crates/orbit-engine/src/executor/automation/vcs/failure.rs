@@ -11,10 +11,14 @@ use crate::executor::automation::input::{
 };
 
 use super::commit::commit_failure_candidate;
-use super::freshness::{commit_sha, original_base_sha, remote_branch_sha};
+use super::freshness::{
+    commit_sha, original_base_sha, rebase_belongs_to_attempt, rebase_provenance_summary,
+    remote_branch_sha,
+};
 use super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
+use super::handoff::rebase_in_progress;
 use super::pr::open_or_reuse_unchecked;
 use super::push::push_batch_changes_inner;
 use super::resume::ensure_retry_descends_from;
@@ -23,6 +27,8 @@ pub(super) use super::resume::commit_head_matches_failure_handoff;
 
 const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
+/// The handoff found a rebase this run did not start and left it intact [ORB-13455].
+const FOREIGN_REBASE_EVENT: &str = "pr_foreign_rebase_refused";
 /// A before-PR review gate stopped delivery [ORB-11333].
 const REVIEW_GATE_EVENT: &str = "review_gate_escalation";
 
@@ -97,7 +103,25 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     )?;
 
     let mut conflicting_paths = unmerged_paths(&workspace_path)?;
-    let rebase_aborted = git_command_success(&workspace_path, &["rebase", "--abort"])?;
+    // [ORB-13455] Task and run ownership do not prove this run started the
+    // Git rebase. Only the rebase `sync_base` started from the prepared
+    // checkpoint may be aborted; any other rebase is left exactly as found.
+    let rebase_aborted = if rebase_in_progress(&workspace_path)? {
+        if !prepared_attempt_owns_rebase(input, &workspace_path)? {
+            return refuse_foreign_rebase(
+                host,
+                &task,
+                run_id,
+                failed_step_id,
+                error_code,
+                error_message,
+                &workspace_path,
+            );
+        }
+        git_command_success(&workspace_path, &["rebase", "--abort"])?
+    } else {
+        false
+    };
     if !conflicting_paths.is_empty() && !rebase_aborted {
         return Err(OrbitError::Execution(
             "pr_failure_handoff: conflicts exist but the in-progress rebase could not be aborted"
@@ -484,6 +508,74 @@ fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
         "pr_url": pr_url,
         "candidate_preserved": true,
         "task_status": task.status.to_string(),
+    }))
+}
+
+/// Whether the in-progress rebase is the one `sync_base` started from this
+/// run's `prepare_branch` checkpoint: its `orig-head`, `onto`, and
+/// `head-name` must name the prepared head SHA, base SHA, and branch. Without
+/// that checkpoint no Orbit step started a rebase, so none is owned.
+fn prepared_attempt_owns_rebase(input: &Value, workspace_path: &Path) -> Result<bool, OrbitError> {
+    let (Some(head), Some(head_sha), Some(base_sha)) = (
+        pipeline_checkpoint_string(input, "prepare_branch", "head"),
+        pipeline_checkpoint_string(input, "prepare_branch", "head_sha"),
+        pipeline_checkpoint_string(input, "prepare_branch", "base_sha"),
+    ) else {
+        return Ok(false);
+    };
+    rebase_belongs_to_attempt(workspace_path, &head, &head_sha, &base_sha)
+}
+
+/// Leave a rebase this run did not start untouched: no abort, commit, push,
+/// or PR. The task is blocked with the rebase provenance so an operator can
+/// inspect the worktree; the original step error stays authoritative.
+fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_code: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let provenance = rebase_provenance_summary(workspace_path);
+    let note = format!(
+        "failure handoff refused a rebase this run did not start: run={run_id}, \
+         failed_step={failed_step_id}, {provenance}; nothing was aborted, committed, pushed, \
+         or published"
+    );
+    let message = format!(
+        "{note}\n\nThe in-progress rebase does not match this run's prepared branch checkpoint, \
+         so its rebase metadata, index, and worktree edits were left intact. Inspect \
+         `{}` before retrying delivery.\n\n- Error code: `{error_code}`\n\n\
+         Failure:\n```text\n{error_message}\n```",
+        workspace_path.display()
+    );
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Blocked),
+            status_event: Some(FOREIGN_REBASE_EVENT.to_string()),
+            status_note: Some(note),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+
+    Ok(json!({
+        "phase": "failure_handoff",
+        "decision": "foreign_rebase_refused",
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "workspace_path": workspace_path,
+        "rebase_provenance": provenance,
+        "pr_created": false,
+        "task_status": "blocked",
     }))
 }
 
