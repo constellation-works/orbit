@@ -11,6 +11,7 @@ use super::super::spawn::linux_bwrap_mount_authority;
 use orbit_exec::BwrapProbeOutcome;
 #[cfg(target_os = "linux")]
 use orbit_exec::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority, probe_bwrap};
+#[cfg(target_os = "linux")]
 use orbit_types::workflow::ExecutorSandboxKind;
 use tempfile::tempdir;
 
@@ -20,7 +21,9 @@ use super::super::spawn::{
     prepare_macos_codex_ca_environment_with, reject_unsatisfiable_managed_grants, spawn_bare,
     spawn_macos_sandboxed_with,
 };
-use super::test_support::{linux_sandbox_for_test, sandbox_for_test, sh_args, write_executable};
+#[cfg(target_os = "linux")]
+use super::test_support::write_executable;
+use super::test_support::{linux_sandbox_for_test, sandbox_for_test, sh_args};
 
 /// [ORB-10917] The bare launcher must hand the child exactly the environment
 /// the dispatcher composed. The ambient variables below are set by this test

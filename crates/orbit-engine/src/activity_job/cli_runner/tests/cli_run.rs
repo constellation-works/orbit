@@ -163,6 +163,7 @@ impl CliRun {
         self
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(in crate::activity_job::cli_runner) fn command_path(
         mut self,
         path: impl Into<PathBuf>,
@@ -173,6 +174,7 @@ impl CliRun {
 
     /// Install a complete fake-agent program. Used when the test's subject is
     /// the script itself (a denied write) rather than an event stream.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(in crate::activity_job::cli_runner) fn script(mut self, body: impl Into<String>) -> Self {
         self.script_body = Some(body.into());
         self
@@ -310,6 +312,7 @@ impl CliRun {
         self
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(in crate::activity_job::cli_runner) fn sandbox(mut self, sandbox: ResolvedSandbox) -> Self {
         self.sandbox = Some(sandbox);
         self

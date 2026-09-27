@@ -133,7 +133,6 @@ fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
     }
     // Safety: the full structure was written above.
     let info = unsafe { info.assume_init() };
-    let starttime = (u64::from(info.pbi_start_tvsec) << 20)
-        | u64::from(info.pbi_start_tvusec).min((1 << 20) - 1);
+    let starttime = (info.pbi_start_tvsec << 20) | info.pbi_start_tvusec.min((1 << 20) - 1);
     Some((starttime, info.pbi_ppid))
 }

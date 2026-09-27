@@ -6,7 +6,9 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RuntimeHost;
+#[cfg(target_os = "linux")]
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};

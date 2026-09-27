@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(target_os = "linux")]
 struct MaskFixture {
     _temp: tempfile::TempDir,
     root: PathBuf,
@@ -8,6 +9,7 @@ struct MaskFixture {
     targets: Vec<PathBuf>,
 }
 
+#[cfg(target_os = "linux")]
 fn mask_fixture() -> MaskFixture {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().canonicalize().expect("canonical root");
@@ -33,6 +35,7 @@ fn mask_fixture() -> MaskFixture {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn mount_index(args: &[String], mode: &str, source: &Path, destination: &Path) -> Option<usize> {
     args.windows(3).position(|triple| {
         triple[0] == mode

@@ -1,6 +1,9 @@
 //! Real process coverage: no replacement server, retries or substitute authority.
 use super::*;
-use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+#[cfg(target_os = "linux")]
+use orbit_common::fs::generation::GenerationGuard;
+use orbit_common::fs::generation::executable_generation;
+#[cfg(target_os = "linux")]
 use std::collections::BTreeMap;
 
 fn preflight(workspace: &McpWorkspace) -> std::process::Output {
@@ -18,6 +21,7 @@ fn assert_refused(output: &std::process::Output) {
     );
 }
 
+#[cfg(target_os = "linux")]
 fn distinct_candidate(workspace: &McpWorkspace) -> PathBuf {
     let candidate = workspace.home.join("candidate-orbit");
     std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &candidate).expect("candidate copy");
@@ -30,14 +34,17 @@ fn distinct_candidate(workspace: &McpWorkspace) -> PathBuf {
     candidate
 }
 
+#[cfg(target_os = "linux")]
 fn authority_root(workspace: &McpWorkspace) -> PathBuf {
     workspace.home.join(".orbit")
 }
 
+#[cfg(target_os = "linux")]
 fn generation_record(workspace: &McpWorkspace) -> String {
     std::fs::read_to_string(authority_root(workspace).join(".generation.lock")).expect("record")
 }
 
+#[cfg(target_os = "linux")]
 fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     fn walk(dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
@@ -287,6 +294,7 @@ fn listener_retains_admission_until_process_exit() {
     assert!(preflight(&workspace).status.success());
 }
 
+#[cfg(target_os = "linux")]
 fn audit_rows(workspace: &McpWorkspace) -> i64 {
     Connection::open_with_flags(
         workspace.home.join(".orbit/orbit.db"),
@@ -297,6 +305,7 @@ fn audit_rows(workspace: &McpWorkspace) -> i64 {
     .expect("audit count")
 }
 
+#[cfg(target_os = "linux")]
 fn assert_byte_identical_root(
     before: &BTreeMap<PathBuf, Vec<u8>>,
     after: &BTreeMap<PathBuf, Vec<u8>>,

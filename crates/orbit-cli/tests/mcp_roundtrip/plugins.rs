@@ -930,6 +930,7 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
 /// the sandbox is what it cannot shed — the host-owned session directory stays
 /// unreadable to it, so the call is refused rather than admitted as a local
 /// caller [ORB-12841].
+#[cfg(target_os = "linux")]
 fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
@@ -1089,7 +1090,7 @@ fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn setsid_available() -> bool {
     std::process::Command::new("setsid")
         .arg("--version")
@@ -1417,6 +1418,7 @@ fn copy_tree(source: &Path, target: &Path) {
 /// A backend that probes the boundary: it appends to each host file holding
 /// `orbit_tools` used to make writable, reads one of them back, and then makes
 /// a granted callback. Everything is reported, so a silent success is visible.
+#[cfg(target_os = "linux")]
 fn write_probe_plugin(home: &Path, namespace: &str) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
