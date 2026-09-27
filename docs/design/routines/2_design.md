@@ -34,6 +34,8 @@ and whether an enabled Linux timer is active with a finite next trigger. An enab
 without that scheduling state is `unhealthy`, has no effective cadence, and reports
 `orbit clock enable`, which rewrites a stale installed systemd timer if needed,
 restarts the timer, and verifies the resulting deadline.
+A disabled but active systemd timer is also `unhealthy`: status shows its runtime activity
+and any future trigger, and `orbit clock pause` stops and verifies it.
 An installed unit that still invokes `orbit sweep`, or one whose program path has moved or
 been deleted, is stale; `orbit clock repair` rewrites it to this binary invoking
 `orbit clock tick` and re-registers it with the native manager. Repair is also the last

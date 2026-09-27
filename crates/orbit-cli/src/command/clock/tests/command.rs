@@ -87,6 +87,20 @@ fn json_document_reports_a_paused_clock_with_inactive_cadence() {
 }
 
 #[test]
+fn active_disabled_timer_is_not_reported_as_paused() {
+    let mut status = paused_status();
+    status.running = Some(true);
+    status.schedulable = true;
+    status.effective_cadence_seconds = Some(300);
+    status.health_issue = Some("systemd timer is disabled but still active".to_string());
+    let doc = clock_status_doc(&status, None);
+    assert_eq!(doc["state"], "unhealthy");
+    assert_eq!(doc["running"], true);
+    assert_eq!(doc["effective_cadence_seconds"], 300);
+    assert!(clock_status_text(&status, None).starts_with("clock: unhealthy |"));
+}
+
+#[test]
 fn json_document_flags_an_enabled_clock_without_a_trigger_as_unhealthy() {
     let mut status = enabled_status();
     status.schedulable = false;

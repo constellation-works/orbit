@@ -320,6 +320,18 @@ button('clock-body', 'Apply cadence').click(); await tick(); await tick();
 assert(requests.some(r => r.body?.action === 'set_cadence' && r.body.cadence_seconds === 300), 'cadence canonical request');
 assert(requests.filter(r => r.path === '/api/routines/clock').every(r => ['enable', 'disable', 'set_cadence'].includes(r.body.action)), 'clock controls use the canonical action set');
 
+clock = { ...healthyClock, enabled: false, running: true, health: 'unhealthy', schedulable: true, effective_cadence_seconds: 60, health_issue: 'systemd timer is disabled but still active' };
+await fetchAndRenderOperations();
+assert(get('clock-body').textContent.includes('service active (disabled)'), 'active disabled timer is not labeled paused');
+assert(get('clock-body').textContent.includes('unhealthy'), 'active disabled timer has an unhealthy badge');
+assert(!get('clock-body').textContent.includes('Paused'), 'active disabled timer does not show a paused next tick');
+assert(button('clock-body', 'Pause clock') && !button('clock-body', 'Enable clock'), 'active disabled timer offers Pause');
+button('clock-body', 'Pause clock').click(); await tick(); await tick();
+const activePause = requests.filter(r => r.path === '/api/routines/clock').at(-1);
+assert(activePause.body.action === 'disable' && activePause.body.expected_enabled === false, 'active disabled timer sends the pause action');
+clock = healthyClock;
+await fetchAndRenderOperations();
+
 // Mint acknowledgement, duplicate warning, no dispatch, feedback and task link.
 delayPost = true;
 action = button('auto-tasks-body', 'Mint now');

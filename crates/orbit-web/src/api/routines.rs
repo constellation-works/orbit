@@ -451,7 +451,10 @@ pub(super) fn clock_json(clock: &ClockStatus) -> Value {
         "loaded": clock.loaded,
         "running": clock.running,
         "schedulable": clock.schedulable,
-        "health": if !clock.enabled { "paused" } else if clock.schedulable { "healthy" } else { "missed" },
+        "health": if !clock.enabled && clock.running == Some(true) { "unhealthy" }
+            else if !clock.enabled { "paused" }
+            else if clock.schedulable { "healthy" }
+            else { "missed" },
         "health_issue": clock.health_issue,
         "last_tick_at": clock.last_tick_at,
         "next_tick_at": clock.next_tick_at,

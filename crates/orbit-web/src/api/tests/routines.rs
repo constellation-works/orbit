@@ -147,6 +147,23 @@ fn clock_json_keeps_service_state_and_health_distinct() {
     assert_eq!(missed["enabled"], true, "enabled is not health");
     assert_eq!(missed["running"], false);
     assert!(missed["error"].is_null());
+
+    let active_disabled = clock_json(&ClockStatus {
+        configured_cadence_seconds: 300,
+        effective_cadence_seconds: Some(300),
+        enabled: false,
+        loaded: true,
+        running: Some(true),
+        schedulable: true,
+        health_issue: Some("disabled but active".to_string()),
+        last_tick_at: None,
+        next_tick_at: Some("next".to_string()),
+        platform: "systemd",
+    });
+    assert_eq!(active_disabled["health"], "unhealthy");
+    assert_eq!(active_disabled["enabled"], false);
+    assert_eq!(active_disabled["running"], true);
+    assert_eq!(active_disabled["next_tick_at"], "next");
 }
 
 #[test]

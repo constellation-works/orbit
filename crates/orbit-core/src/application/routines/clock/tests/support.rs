@@ -252,6 +252,10 @@ impl SystemdManagerFake {
             .next_trigger
     }
 
+    pub(super) fn start_timer_without_enabling(&self) {
+        self.activate_timer();
+    }
+
     pub(super) fn commands(&self) -> Vec<String> {
         self.commands.lock().expect("fake command log lock").clone()
     }
@@ -354,6 +358,15 @@ impl ClockCommandRunner for SystemdManagerFake {
             "LoadState=loaded\nActiveState={}\nNextElapseUSecRealtime=\nNextElapseUSecMonotonic={next}\nLastTriggerUSec={last}",
             if state.active { "active" } else { "inactive" }
         )))
+    }
+
+    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
+        let enabled = self.run(command)?;
+        Ok(manager_output(
+            enabled,
+            if enabled { "enabled" } else { "disabled" },
+            "",
+        ))
     }
 }
 

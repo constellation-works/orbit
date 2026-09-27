@@ -104,6 +104,12 @@ function clockUnavailableReason(clock) {
   return clock?.health_issue || clock?.error || "Clock state is unavailable; controls are disabled.";
 }
 
+function clockServiceText(clock) {
+  if (clockUnavailable(clock)) return "unknown";
+  if (clock.running === true && !clock.enabled) return "active (disabled)";
+  return clock.enabled ? "enabled" : "paused";
+}
+
 function nextEvaluationText(projection, fallbackAt) {
   const state = projection?.state;
   const at = projection?.at || (state === "disabled" || state === "paused" ? fallbackAt : null);
@@ -137,7 +143,7 @@ function clockTickText(value, clock) {
     return time(value);
   }
   if (clockUnavailable(clock)) return "Unknown";
-  if (!clock.enabled) return "Paused";
+  if (!clock.enabled && clock.running !== true) return "Paused";
   if (clock.schedulable) return "Armed; exact wall-clock time unavailable";
   return "Not scheduled";
 }
@@ -643,14 +649,15 @@ function renderClock(payload) {
     : controlReason(payload, "clock_cadence");
   const selection = selectionSnapshot();
   const key = `clock:${payload.machine_name}`;
-  const serviceLabel = unavailable ? "service unknown" : (clock.enabled ? "service enabled" : "service paused");
+  const active = clock.enabled || clock.running === true;
+  const serviceLabel = `service ${clockServiceText(clock)}`;
   const cadenceLabel = unavailable ? "Unknown" : cadenceText(clock.configured_cadence_seconds);
   const effectiveCadenceLabel = unavailable ? "Unknown" : cadenceText(clock.effective_cadence_seconds);
   const actions = el("div", { class: "operation-clock-actions" });
   actions.appendChild(clockButton(
     payload,
-    unavailable ? "enable" : (clock.enabled ? "disable" : "enable"),
-    unavailable ? "Clock unavailable" : (clock.enabled ? "Pause clock" : "Enable clock"),
+    unavailable ? "enable" : (active ? "disable" : "enable"),
+    unavailable ? "Clock unavailable" : (active ? "Pause clock" : "Enable clock"),
   ));
   // A cadence the operator picked but has not applied yet outlives this render;
   // it clears once the host reports that value as configured, whoever applied it.
@@ -685,7 +692,7 @@ function renderClock(payload) {
         expected_cadence_seconds: clock.configured_cadence_seconds, cadence_seconds: Number(cadence.value),
       }),
       refresh: fetchAndRenderOperations,
-      success: (result) => `${result.message}; service is ${result.clock.enabled ? "enabled" : "paused"}.`,
+      success: (result) => `${result.message}; service is ${clockServiceText(result.clock)}.`,
     });
   });
   actions.append(cadence, explainUnavailable(apply, reason));

@@ -140,6 +140,57 @@ fn enable_is_idempotent_for_current_on_active_sec_timer() {
     );
 }
 
+#[test]
+fn pause_stops_a_disabled_but_active_systemd_timer() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    let unit_dir = home.path().join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("create unit directory");
+    fs::write(
+        unit_dir.join("orbit-sweep.timer"),
+        render_systemd_timer(ClockSettings::default()),
+    )
+    .expect("write timer");
+    let runner = SystemdManagerFake::new(home.path(), 100);
+    runner.start_timer_without_enabling();
+    assert!(runner.next_trigger().is_some());
+
+    let status = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &runner,
+        home.path(),
+    )
+    .expect("pause an active disabled timer");
+    assert!(!status.enabled);
+    assert_eq!(status.running, Some(false));
+    assert!(!status.schedulable);
+    assert_eq!(status.next_tick_at, None);
+    assert_eq!(runner.next_trigger(), None);
+    assert_eq!(
+        runner.commands(),
+        vec![
+            "systemctl --user is-enabled orbit-sweep.timer",
+            systemd_show_command(),
+            "systemctl --user disable --now orbit-sweep.timer",
+            systemd_show_command(),
+        ]
+    );
+
+    let repeated = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &runner,
+        home.path(),
+    )
+    .expect("repeat pause");
+    assert_eq!(repeated.running, Some(false));
+    assert_eq!(runner.next_trigger(), None);
+    assert_eq!(runner.commands().len(), 6, "repeat pause only probes state");
+}
+
 /// The operator pausing the clock after a failed repair is the final word: a
 /// later `orbit clock repair` must not retry the reload and resume it.
 #[test]
@@ -327,6 +378,73 @@ fn unavailable_or_unknown_systemd_state_refuses_pause_before_mutation() {
 }
 
 #[test]
+fn disabled_timer_with_unavailable_or_ambiguous_activity_refuses_pause() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    for details in [
+        Err(OrbitError::Execution(
+            "show failed: Access denied".to_string(),
+        )),
+        Ok(Some("LoadState=loaded\nActiveState=activating".to_string())),
+    ] {
+        let runner = MockRunner::with_probes(
+            Vec::new(),
+            vec![details],
+            vec![Ok(manager_output(false, "disabled", ""))],
+        );
+        set_clock_enabled_with(
+            root.path(),
+            false,
+            ClockPlatform::Systemd,
+            &runner,
+            home.path(),
+        )
+        .expect_err("unknown runtime activity cannot be reported as paused");
+        assert_eq!(
+            runner.commands(),
+            vec![
+                "systemctl --user is-enabled orbit-sweep.timer",
+                systemd_show_command(),
+            ]
+        );
+    }
+}
+
+#[test]
+fn pause_requires_confirmation_that_systemd_stopped_scheduling() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    let runner = MockRunner::with_probes(
+        vec![Ok(true)],
+        vec![Ok(Some(
+            "LoadState=loaded\nActiveState=active\nNextElapseUSecMonotonic=5min".to_string(),
+        ))],
+        vec![Ok(manager_output(true, "enabled", ""))],
+    );
+    let error = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &runner,
+        home.path(),
+    )
+    .expect_err("manager that keeps scheduling cannot report pause success");
+    assert!(
+        error
+            .to_string()
+            .contains("did not confirm an inactive timer")
+    );
+    assert_eq!(
+        runner.commands(),
+        vec![
+            "systemctl --user is-enabled orbit-sweep.timer",
+            "systemctl --user disable --now orbit-sweep.timer",
+            systemd_show_command(),
+        ]
+    );
+}
+
+#[test]
 fn unavailable_launchd_state_refuses_pause_before_mutation() {
     let root = tempdir().expect("create global root");
     let home = tempdir().expect("create home");
@@ -428,29 +546,60 @@ fn recognized_inactive_manager_states_keep_pause_idempotent() {
     let home = tempdir().expect("create home");
 
     for diagnostic in [
-        "disabled",
         "Failed to get unit file state: No such file or directory",
         "Unit orbit-sweep.timer could not be found.",
     ] {
         let runner = MockRunner::with_probes(
             Vec::new(),
             Vec::new(),
-            vec![Ok(manager_output(false, "", diagnostic))],
+            vec![
+                Ok(manager_output(false, "", diagnostic)),
+                Ok(manager_output(false, "", diagnostic)),
+            ],
         );
-        let status = set_clock_enabled_with(
-            root.path(),
-            false,
-            ClockPlatform::Systemd,
-            &runner,
-            home.path(),
-        )
-        .expect("recognized inactive systemd state is idempotent");
-        assert!(!status.enabled);
+        for _ in 0..2 {
+            let status = set_clock_enabled_with(
+                root.path(),
+                false,
+                ClockPlatform::Systemd,
+                &runner,
+                home.path(),
+            )
+            .expect("missing timer remains safe across repeated pause");
+            assert!(!status.enabled);
+        }
         assert_eq!(
             runner.commands(),
-            vec!["systemctl --user is-enabled orbit-sweep.timer"]
+            vec![
+                "systemctl --user is-enabled orbit-sweep.timer",
+                "systemctl --user is-enabled orbit-sweep.timer",
+            ]
         );
     }
+
+    let disabled = MockRunner::with_probes(
+        Vec::new(),
+        vec![Ok(Some(
+            "LoadState=loaded\nActiveState=inactive\nNextElapseUSecRealtime=\nNextElapseUSecMonotonic=0".to_string(),
+        ))],
+        vec![Ok(manager_output(false, "disabled", ""))],
+    );
+    let status = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &disabled,
+        home.path(),
+    )
+    .expect("disabled inactive timer stays paused");
+    assert_eq!(status.running, Some(false));
+    assert_eq!(
+        disabled.commands(),
+        vec![
+            "systemctl --user is-enabled orbit-sweep.timer",
+            systemd_show_command(),
+        ]
+    );
 
     let launchd = MockRunner::with_probes(
         Vec::new(),
