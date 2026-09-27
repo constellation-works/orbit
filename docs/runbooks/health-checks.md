@@ -322,6 +322,12 @@ enable. The generated timer schedules its first sweep from every timer activatio
 recurs from service activation; installation and cadence changes perform the same
 post-activation verification.
 
+Systemd enablement and runtime activity can differ. A disabled timer that is still active is
+reported as `unhealthy` with `running: true` and its next trigger when known. Run `orbit clock
+pause` to stop it. Pause checks the resulting inactive state and absence of a future trigger
+before reporting success; an unavailable manager or ambiguous state makes pause fail. The
+dashboard also marks this state unhealthy and offers **Pause clock**.
+
 On macOS, launchd keeps reporting a loaded agent as loaded long after its program stops
 working, so `clock: enabled` is not on its own evidence that sweeps are firing. An enabled
 launchd clock is `unhealthy` with an inactive effective cadence when the plist names a

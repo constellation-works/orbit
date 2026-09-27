@@ -150,7 +150,9 @@ pub(crate) fn clock_status_text(
 }
 
 fn clock_state(status: &ClockStatus) -> &'static str {
-    if !status.enabled {
+    if status.running == Some(true) && !status.enabled {
+        "unhealthy"
+    } else if !status.enabled {
         "paused"
     } else if status.schedulable {
         "enabled"

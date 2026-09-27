@@ -16,7 +16,7 @@ use super::status::{
     ClockStatus, clock_manager_probe_error, clock_manager_unavailable_error, clock_status_from,
     launchd_manager_probe_command, launchd_reports_not_loaded, manager_command_error,
     manager_status_command, query_systemd_clock_details, systemd_reports_disabled_or_missing,
-    systemd_unschedulable_error,
+    systemd_reports_missing, systemd_unschedulable_error,
 };
 
 fn manager_set_enabled_command(
@@ -86,12 +86,15 @@ fn apply_clock_enabled(
     home: &Path,
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
-    let current = if enabled {
+    let (current, missing) = if enabled {
         // Preserve the enable/rearm path: systemd always repairs and verifies
         // the unit below, while launchd keeps its existing idempotent load.
-        runner
-            .run(&manager_status_command(platform))
-            .unwrap_or(false)
+        (
+            runner
+                .run(&manager_status_command(platform))
+                .unwrap_or(false),
+            false,
+        )
     } else {
         observe_clock_enabled_for_pause(platform, runner)?
     };
@@ -126,6 +129,49 @@ fn apply_clock_enabled(
             Some(details),
         ));
     }
+    if platform == ClockPlatform::Systemd {
+        if missing {
+            return Ok(clock_status_from(
+                settings, false, false, platform, None, None,
+            ));
+        }
+        if !current {
+            let details = query_systemd_clock_details(runner)?;
+            if details.is_stopped() {
+                return Ok(clock_status_from(
+                    settings,
+                    false,
+                    false,
+                    platform,
+                    None,
+                    Some(details),
+                ));
+            }
+            if !details.is_running() {
+                return Err(OrbitError::Execution(
+                    "systemd timer activity could not be determined; inspect `systemctl --user status orbit-sweep.timer` before pausing".to_string(),
+                ));
+            }
+        }
+        let command = manager_set_enabled_command(platform, false, home);
+        if !runner.run(&command)? {
+            return Err(manager_command_error(&command));
+        }
+        let details = query_systemd_clock_details(runner)?;
+        if !details.is_stopped() {
+            return Err(OrbitError::Execution(
+                "systemd timer pause completed, but the manager did not confirm an inactive timer without a future trigger; inspect `systemctl --user status orbit-sweep.timer`".to_string(),
+            ));
+        }
+        return Ok(clock_status_from(
+            settings,
+            false,
+            false,
+            platform,
+            None,
+            Some(details),
+        ));
+    }
     if current == enabled {
         return Ok(clock_status_from(
             settings, enabled, enabled, platform, None, None,
@@ -142,36 +188,38 @@ fn apply_clock_enabled(
 }
 
 /// Observe enough native-manager state to make pause safe and idempotent.
-/// A failed status command is inactive only when the manager's diagnostic is
-/// a recognized disabled/not-loaded state; transport and ambiguous failures
+/// A failed status command is disabled or missing only when the manager's
+/// diagnostic names that state; transport and ambiguous failures
 /// must stop before the control path can mutate the manager.
 fn observe_clock_enabled_for_pause(
     platform: ClockPlatform,
     runner: &dyn ClockCommandRunner,
-) -> Result<bool, OrbitError> {
+) -> Result<(bool, bool), OrbitError> {
     let status_command = manager_status_command(platform);
     let status_output = runner
         .probe(&status_command)
         .map_err(|error| clock_manager_probe_error(platform, &status_command, &error))?;
     if status_output.success {
-        return Ok(true);
+        return Ok((true, false));
     }
 
     match platform {
-        ClockPlatform::Systemd if systemd_reports_disabled_or_missing(&status_output) => Ok(false),
+        ClockPlatform::Systemd if systemd_reports_disabled_or_missing(&status_output) => {
+            Ok((false, systemd_reports_missing(&status_output)))
+        }
         ClockPlatform::Systemd => Err(clock_manager_unavailable_error(
             platform,
             &[(&status_command, &status_output)],
             None,
         )),
-        ClockPlatform::Launchd if launchd_reports_not_loaded(&status_output) => Ok(false),
+        ClockPlatform::Launchd if launchd_reports_not_loaded(&status_output) => Ok((false, false)),
         ClockPlatform::Launchd => {
             let manager_command = launchd_manager_probe_command();
             let manager_output = runner
                 .probe(&manager_command)
                 .map_err(|error| clock_manager_probe_error(platform, &manager_command, &error))?;
             if manager_output.success {
-                Ok(false)
+                Ok((false, false))
             } else {
                 Err(clock_manager_unavailable_error(
                     platform,

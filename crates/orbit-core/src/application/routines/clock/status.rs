@@ -23,11 +23,11 @@ pub struct ClockStatus {
     pub loaded: bool,
     /// Whether the native timer is currently active/waiting, when exposed.
     pub running: Option<bool>,
-    /// Whether an enabled native clock has a future trigger. A paused clock is
-    /// intentionally not schedulable and is not unhealthy.
+    /// Whether the native clock is active with a future trigger. A stopped
+    /// clock is intentionally not schedulable and is not unhealthy.
     pub schedulable: bool,
-    /// Actionable detail when an enabled clock cannot be shown to have a
-    /// future trigger.
+    /// Actionable detail when the manager state is inconsistent or an enabled
+    /// clock cannot be shown to have a future trigger.
     pub health_issue: Option<String>,
     /// Most recent native timer trigger, in the manager's display format.
     pub last_tick_at: Option<String>,
@@ -132,9 +132,25 @@ pub(super) fn clock_status_with(
     let (schedulable, health_issue) = if platform == ClockPlatform::Systemd {
         match query_systemd_clock_details(runner) {
             Ok(details) => {
-                let schedulable = enabled && details.is_schedulable();
+                if !enabled
+                    && (!systemd_reports_disabled_or_missing(&status_output)
+                        || details.running.is_none())
+                {
+                    return Err(clock_manager_unavailable_error(
+                        platform,
+                        &[(&status_command, &status_output)],
+                        None,
+                    ));
+                }
+                let schedulable = details.is_schedulable();
+                let disabled_running = !enabled && details.is_running();
                 manager_details = Some(details);
-                if !enabled {
+                if disabled_running {
+                    (
+                        schedulable,
+                        Some("systemd timer is disabled but still active; run `orbit clock pause` to stop scheduled sweeps".to_string()),
+                    )
+                } else if !enabled {
                     (false, None)
                 } else if schedulable {
                     (true, None)
@@ -154,7 +170,7 @@ pub(super) fn clock_status_with(
                     "systemd timer is enabled but its next trigger could not be verified ({error}); recovery: inspect `systemctl --user status orbit-sweep.timer`, then run `orbit clock enable` to rewrite a stale unit if needed, re-arm, and verify it"
                 )),
             ),
-            Err(_) if systemd_reports_disabled_or_missing(&status_output) => (false, None),
+            Err(_) if systemd_reports_missing(&status_output) => (false, None),
             Err(error) => {
                 return Err(clock_manager_unavailable_error(
                     platform,
@@ -207,6 +223,19 @@ pub(super) fn systemd_reports_disabled_or_missing(output: &ManagerCommandOutput)
     ]
     .iter()
     .any(|marker| diagnostic.contains(marker))
+}
+
+pub(super) fn systemd_reports_missing(output: &ManagerCommandOutput) -> bool {
+    let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    !systemd_reports_transport_failure(&diagnostic)
+        && [
+            "not-found",
+            "not found",
+            "failed to get unit file state: no such file or directory",
+            "could not be found",
+        ]
+        .iter()
+        .any(|marker| diagnostic.contains(marker))
 }
 
 /// systemctl prefixes every bus-connection failure with `Failed to connect to`
@@ -556,7 +585,11 @@ impl SystemdClockDetails {
         let next_elapse_monotonic = property("NextElapseUSecMonotonic");
         Self {
             loaded: property("LoadState").map(|value| value == "loaded"),
-            running: property("ActiveState").map(|value| value == "active"),
+            running: match property("ActiveState").as_deref() {
+                Some("active") => Some(true),
+                Some("inactive") => Some(false),
+                _ => None,
+            },
             last_tick_at: property("LastTriggerUSec"),
             next_elapse_known: next_tick_at.is_some() || next_elapse_monotonic.is_some(),
             next_tick_at,
@@ -565,6 +598,14 @@ impl SystemdClockDetails {
 
     pub(super) fn is_schedulable(&self) -> bool {
         self.loaded == Some(true) && self.running == Some(true) && self.next_elapse_known
+    }
+
+    pub(super) fn is_stopped(&self) -> bool {
+        self.running == Some(false) && !self.next_elapse_known
+    }
+
+    pub(super) fn is_running(&self) -> bool {
+        self.running == Some(true)
     }
 }
 
@@ -616,16 +657,14 @@ pub(super) fn clock_status_from(
     let details = manager_details.unwrap_or_default();
     ClockStatus {
         configured_cadence_seconds: settings.cadence_seconds,
-        effective_cadence_seconds: (enabled && schedulable).then_some(settings.cadence_seconds),
+        effective_cadence_seconds: schedulable.then_some(settings.cadence_seconds),
         enabled,
         loaded: details.loaded.unwrap_or(enabled),
         running: details.running,
         schedulable,
         health_issue,
         last_tick_at: details.last_tick_at,
-        next_tick_at: (enabled && schedulable)
-            .then_some(details.next_tick_at)
-            .flatten(),
+        next_tick_at: schedulable.then_some(details.next_tick_at).flatten(),
         platform: platform.name(),
     }
 }

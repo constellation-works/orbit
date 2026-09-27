@@ -132,12 +132,13 @@ fn systemd_monotonic_duration_is_not_a_wall_clock_next_tick() {
 #[test]
 fn disabled_systemd_timer_reports_loaded_state_without_becoming_schedulable() {
     let root = tempdir().expect("create global root");
-    let runner = MockRunner::with_outputs(
-        vec![Ok(false)],
+    let runner = MockRunner::with_probes(
+        Vec::new(),
         vec![Ok(Some(
             "LoadState=loaded\nActiveState=inactive\nNextElapseUSecRealtime=Sun 2026-08-16 04:30:00 UTC"
                 .to_string(),
         ))],
+        vec![Ok(manager_output(false, "disabled", ""))],
     );
 
     let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
@@ -149,6 +150,49 @@ fn disabled_systemd_timer_reports_loaded_state_without_becoming_schedulable() {
     assert!(!status.schedulable);
     assert_eq!(status.effective_cadence_seconds, None);
     assert!(status.health_issue.is_none());
+}
+
+#[test]
+fn disabled_but_active_systemd_timer_reports_scheduled_work() {
+    let root = tempdir().expect("create global root");
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        vec![Ok(Some(
+            "LoadState=loaded\nActiveState=active\nNextElapseUSecRealtime=Sun 2026-08-16 04:30:00 UTC".to_string(),
+        ))],
+        vec![Ok(manager_output(false, "disabled", ""))],
+    );
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
+        .expect("read active disabled timer");
+    assert!(!status.enabled);
+    assert_eq!(status.running, Some(true));
+    assert!(status.schedulable);
+    assert_eq!(status.effective_cadence_seconds, Some(60));
+    assert_eq!(
+        status.next_tick_at.as_deref(),
+        Some("Sun 2026-08-16 04:30:00 UTC")
+    );
+    assert!(
+        status
+            .health_issue
+            .as_deref()
+            .is_some_and(|issue| issue.contains("orbit clock pause"))
+    );
+}
+
+#[test]
+fn disabled_systemd_timer_with_unavailable_activity_is_not_reported_as_paused() {
+    let root = tempdir().expect("create global root");
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        vec![Err(OrbitError::Execution(
+            "show failed: Access denied".to_string(),
+        ))],
+        vec![Ok(manager_output(false, "disabled", ""))],
+    );
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
+        .expect_err("disabled unit can still be running when activity cannot be queried");
+    assert!(error.to_string().contains("manager is unavailable"));
 }
 
 #[test]
