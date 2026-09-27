@@ -18,6 +18,9 @@ spec:
     already running must keep flowing. `unsettled` counts admissions still
     holding a slot; the drain runs past its window until it is zero. There is
     no local fallback: a runtime without a federated owner route refuses.
+    After three consecutive claims this drain admitted settle as failures, it
+    stops requesting new work (`refusal: circuit_open`) and only keeps
+    settling; start a new drain once the cause is fixed.
   input_schema_json:
     type: object
     required: [destination]
@@ -49,6 +52,8 @@ spec:
       admitting:
         type: boolean
       refusal: {}
+      consecutive_failures:
+        type: integer
       error: {}
       host_shutdown: {}
       done:

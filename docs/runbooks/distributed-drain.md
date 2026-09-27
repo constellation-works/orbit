@@ -295,6 +295,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- After three consecutive claims settle as failures, the drain stops
+  requesting work (`circuit_open` in the iteration output) and only keeps
+  settling. Inspect the blocked tasks and their leaf logs, fix the cause,
+  re-backlog them deliberately, and start a new drain.
 - The run outlives its window until every admission has settled, so a leaf
   that finishes late still hands off.
 

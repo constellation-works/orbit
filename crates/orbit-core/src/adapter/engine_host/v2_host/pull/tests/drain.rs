@@ -594,3 +594,40 @@ fn owner_refusals_are_distinguished_from_lost_or_uncertain_deliveries() {
         assert!(!is_owner_refusal(&error), "{error}");
     }
 }
+
+/// [ORB-13625] Fast-failing leaves free their slots within seconds; the
+/// breaker counts this drain's consecutive failed settlements so a systemic
+/// executor fault stops claiming the owner's backlog.
+#[test]
+fn pull_breaker_counts_this_drains_consecutive_failed_settlements() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_breaker_counts_this_drains_consecutive_failed_settlements",
+    ) {
+        return;
+    }
+    use super::super::refill::{CONSECUTIVE_FAILURE_BREAKER, consecutive_failed_settlements};
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let run_id = template.run_context.run_id.clone();
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    launcher.fail.set(true);
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    for expected in 1..=CONSECUTIVE_FAILURE_BREAKER {
+        assert!(drain.refill(&destination, &template, 1).is_err());
+        assert_eq!(
+            consecutive_failed_settlements(&runtime, &destination, &run_id).expect("count"),
+            expected
+        );
+    }
+    // Another drain's history never trips this one.
+    assert_eq!(
+        consecutive_failed_settlements(&runtime, &destination, "another-drain").expect("count"),
+        0
+    );
+}
