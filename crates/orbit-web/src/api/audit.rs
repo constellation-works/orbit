@@ -25,7 +25,7 @@ use super::{
     HISTORY_MAX_LIMIT, bad_request, blocking, bounded_limit, map_runtime_error, server_error,
     truncate_to_hour,
 };
-use crate::parse::parse_since;
+use crate::parse::{parse_duration_seconds, parse_since};
 use crate::projections::audit_event_to_json;
 use crate::runtime_memo::AUDIT_SUMMARY_TTL;
 
@@ -33,6 +33,14 @@ use crate::runtime_memo::AUDIT_SUMMARY_TTL;
 /// `?denial_threshold=` and echoed back in the response so the dashboard can
 /// switch the tile to alert state without a second round-trip.
 const DEFAULT_DENIAL_THRESHOLD: i64 = 10;
+
+/// Longest `GET /audit/summary` window. Dashboard selections are `1h`, `24h`,
+/// `7d`, and `30d` (`all` falls back to 24h). A wider `since` is rejected.
+const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
+
+/// Inclusive UTC hours in [`MAX_SUMMARY_WINDOW_DAYS`]: 720 elapsed hours plus
+/// the truncated start hour. [`build_sparkline`] never emits more than this.
+const MAX_SUMMARY_SPARKLINE_BUCKETS: usize = MAX_SUMMARY_WINDOW_DAYS * 24 + 1;
 
 pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> Response {
     let since = match q.since.as_deref() {
@@ -257,10 +265,19 @@ pub(super) async fn audit_summary(
     Query(q): Query<AuditSummaryQuery>,
 ) -> Response {
     let raw_since = q.since.as_deref().unwrap_or(DEFAULT_SUMMARY_WINDOW);
-    let since = match parse_since(raw_since) {
+    // One clock for the parsed cutoff and the sparkline, so a 30-day window
+    // is exactly [`MAX_SUMMARY_SPARKLINE_BUCKETS`] buckets.
+    let now = Utc::now();
+    let since = match summary_since(raw_since, now) {
         Ok(ts) => ts,
         Err(e) => return map_runtime_error(e),
     };
+    let bucket_count = sparkline_bucket_count(since, now);
+    if bucket_count > MAX_SUMMARY_SPARKLINE_BUCKETS {
+        return bad_request(format!(
+            "audit summary since '{raw_since}' covers {bucket_count} hourly buckets; the maximum is {MAX_SUMMARY_SPARKLINE_BUCKETS} ({MAX_SUMMARY_WINDOW_DAYS} days)"
+        ));
+    }
     let denial_threshold = q.denial_threshold.unwrap_or(DEFAULT_DENIAL_THRESHOLD);
     let window_json = raw_since.to_string();
     let runtime_for_compute = runtime.clone();
@@ -273,7 +290,7 @@ pub(super) async fn audit_summary(
             AUDIT_SUMMARY_TTL,
             move || {
                 let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
-                Ok(summary_payload(&bundle, since, &window_json))
+                Ok(summary_payload(&bundle, since, now, &window_json))
             },
         )
         .await
@@ -333,8 +350,13 @@ struct AuditSummaryBundle {
 
 /// Stable JSON fields for a computed bundle. `denial_threshold` is request
 /// echo, not part of the scan, so the handler stamps it after the memo hit.
-fn summary_payload(bundle: &AuditSummaryBundle, since: DateTime<Utc>, window: &str) -> Value {
-    let sparkline = build_sparkline(since, &bundle.buckets);
+fn summary_payload(
+    bundle: &AuditSummaryBundle,
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+    window: &str,
+) -> Value {
+    let sparkline = build_sparkline(since, now, &bundle.buckets);
     let denials = bundle.sql_denied + bundle.v2_denials;
     json!({
         "events": bundle.total,
@@ -607,21 +629,62 @@ fn raw_failure_counts_by_tool(
     counts
 }
 
+/// `parse_since`, with relative durations measured from `now`.
+///
+/// Absolute timestamps still go through `parse_since`, so their error text
+/// is unchanged. Sharing `now` with the sparkline keeps a `30d` window on
+/// one bucket count instead of drifting when the two clocks cross an hour.
+fn summary_since(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, OrbitError> {
+    match parse_duration_seconds(raw) {
+        Ok(seconds) => {
+            let too_large = || {
+                OrbitError::InvalidInput(format!(
+                    "duration '{raw}' is too large to convert into a timestamp"
+                ))
+            };
+            let seconds = i64::try_from(seconds).map_err(|_| too_large())?;
+            let duration = Duration::try_seconds(seconds).ok_or_else(too_large)?;
+            now.checked_sub_signed(duration).ok_or_else(too_large)
+        }
+        Err(_) => parse_since(raw),
+    }
+}
+
+/// Inclusive UTC hours from the truncated `since` through `now`.
+///
+/// This is arithmetic only. A year-0001 cutoff becomes a large integer and
+/// fails the maximum-bucket check; it does not allocate a row per hour. A
+/// span that does not fit in `usize` saturates so it cannot wrap into a
+/// small accepted window.
+fn sparkline_bucket_count(since: DateTime<Utc>, now: DateTime<Utc>) -> usize {
+    let start = truncate_to_hour(since.min(now));
+    let end = truncate_to_hour(now);
+    let hours = end.signed_duration_since(start).num_hours();
+    usize::try_from(hours.saturating_add(1)).unwrap_or(usize::MAX)
+}
+
 /// Builds a contiguous hourly sparkline covering `[truncate_to_hour(since), now]`,
 /// zero-filling hours not present in `buckets`. Always returns at least 24
 /// buckets so the UI can render a stable baseline width even on a fresh
 /// workspace.
-fn build_sparkline(since: DateTime<Utc>, buckets: &[(String, i64)]) -> Vec<Value> {
+///
+/// The loop runs at most [`MAX_SUMMARY_SPARKLINE_BUCKETS`] times.
+/// `audit_summary` rejects a wider window with 400 before calling this.
+fn build_sparkline(
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+    buckets: &[(String, i64)],
+) -> Vec<Value> {
     let mut by_bucket: BTreeMap<String, i64> = BTreeMap::new();
     for (ts, count) in buckets {
         by_bucket.insert(ts.clone(), *count);
     }
-    let now = Utc::now();
     let start = truncate_to_hour(since.min(now));
     let end = truncate_to_hour(now);
-    let mut out = Vec::new();
+    let hours = sparkline_bucket_count(since, now).min(MAX_SUMMARY_SPARKLINE_BUCKETS);
+    let mut out = Vec::with_capacity(hours.max(24));
     let mut cursor = start;
-    while cursor <= end {
+    for _ in 0..hours {
         let key = cursor.format("%Y-%m-%dT%H:00:00Z").to_string();
         let count = by_bucket.get(&key).copied().unwrap_or(0);
         out.push(json!({ "ts": key, "count": count }));
