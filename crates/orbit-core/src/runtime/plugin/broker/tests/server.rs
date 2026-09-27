@@ -55,6 +55,23 @@ fn connect(running: &Running) -> UnixStream {
     stream
 }
 
+fn connect_to_peer_expected_to_close(running: &Running) -> UnixStream {
+    let stream = UnixStream::connect(running.broker.socket_path()).expect("connect");
+    match stream.set_read_timeout(Some(READ_TIMEOUT)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::InvalidInput => {
+            // On macOS the broker can close this accepted socket before the
+            // timeout is installed. A nonblocking read still distinguishes
+            // EOF from a reply or a peer that has not closed yet.
+            stream
+                .set_nonblocking(true)
+                .expect("nonblocking close assertion");
+        }
+        Err(error) => panic!("read timeout: {error}"),
+    }
+    stream
+}
+
 fn call(running: &Running, request: &[u8]) -> Value {
     let mut stream = connect(running);
     write_frame(&mut stream, request).expect("send request");
@@ -84,7 +101,10 @@ fn closed_without_reply(stream: &mut UnixStream) -> bool {
         Ok(_) => false,
         Err(error) => matches!(
             error.kind(),
-            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+            ErrorKind::InvalidInput
+                | ErrorKind::NotConnected
+                | ErrorKind::ConnectionReset
+                | ErrorKind::BrokenPipe
         ),
     }
 }
@@ -160,7 +180,7 @@ fn a_peer_outside_the_sandbox_is_closed_without_a_reply() {
     let anchor = PeerAnchor::Ancestor(process_start_key(sibling.id()).expect("sibling key"));
     let running = start(anchor);
 
-    let mut stream = connect(&running);
+    let mut stream = connect_to_peer_expected_to_close(&running);
     let _ = write_frame(&mut stream, &tool_request());
 
     assert!(closed_without_reply(&mut stream));
