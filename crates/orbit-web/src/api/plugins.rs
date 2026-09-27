@@ -1,11 +1,12 @@
 //! Installed plugins and their dashboard panels (design §4.7).
 //!
-//! Two endpoints, both read-only:
+//! Plugin reads and operator-only lifecycle writes:
 //!
 //! * `GET /api/plugins` — every installed or pinned plugin with its enable
 //!   state, diagnostics, tools, panels and link tiles.
 //! * `GET /api/plugins/<ns>/panels/<id>` — the JSON one declared panel's
 //!   source tool returns.
+//! * `POST /api/plugins/<ns>/{enable,disable}` — toggle host or workspace.
 //!
 //! A panel source is always a `read_only` tool: the manifest cannot declare
 //! a panel over a mutating one (`orbit plugin validate` refuses it, naming
@@ -15,25 +16,222 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use orbit_common::governance::authorization::{
+    DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE, GovernedOperation,
+};
 use orbit_core::adapter::command::PluginSummary;
 use orbit_types::plugin::PluginStatus;
 use serde_json::{Value, json};
 
+use super::routines::{
+    action_capability, authorization_denied, authorized_caller, record_operation_audit,
+};
 use super::{blocking, not_found, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Maximum serialized tool output retained or returned for one panel.
 pub(crate) const PANEL_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 
-pub(super) async fn list_plugins(Ws(runtime): Ws) -> Response {
+pub(super) async fn list_plugins(State(state): State<DashboardState>, Ws(runtime): Ws) -> Response {
+    let operator = state.operator_session();
     match blocking("list plugins", move || runtime.list_plugins()).await {
-        Ok(plugins) => {
-            Json(Value::Array(plugins.iter().map(plugin_to_json).collect())).into_response()
-        }
+        Ok(plugins) => Json(Value::Array(
+            plugins
+                .iter()
+                .map(|plugin| {
+                    let mut value = plugin_to_json(plugin);
+                    value["capabilities"] = json!({
+                        "enable": action_capability(&DASHBOARD_PLUGIN_ENABLE, operator),
+                        "disable": action_capability(&DASHBOARD_PLUGIN_DISABLE, operator),
+                    });
+                    value
+                })
+                .collect(),
+        ))
+        .into_response(),
         Err(response) => *response,
+    }
+}
+
+pub(super) async fn enable_plugin(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(namespace): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    mutate_plugin(state, runtime, namespace, body, true).await
+}
+
+pub(super) async fn disable_plugin(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(namespace): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    mutate_plugin(state, runtime, namespace, body, false).await
+}
+
+async fn mutate_plugin(
+    state: DashboardState,
+    runtime: Arc<orbit_core::OrbitRuntime>,
+    namespace: String,
+    body: Value,
+    enable: bool,
+) -> Response {
+    let operation: &'static GovernedOperation = if enable {
+        &DASHBOARD_PLUGIN_ENABLE
+    } else {
+        &DASHBOARD_PLUGIN_DISABLE
+    };
+    let started = Instant::now();
+    let workspace = runtime
+        .workspace_id()
+        .unwrap_or_else(|_| runtime.shared_root().display().to_string());
+    let caller = match authorized_caller(operation, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            record_operation_audit(
+                &runtime,
+                &workspace,
+                operation.id,
+                &namespace,
+                "",
+                &body,
+                None,
+                Some(&denial),
+                None,
+                started,
+            )
+            .await;
+            return authorization_denied(denial);
+        }
+    };
+    let result = if let Err(message) = validate_id(&namespace) {
+        Err(orbit_core::OrbitError::InvalidInput(format!(
+            "plugin {message}"
+        )))
+    } else {
+        match body.get("scope").and_then(Value::as_str) {
+            Some("host" | "workspace") => {
+                let scope = body["scope"].as_str().unwrap_or_default().to_string();
+                let runtime_for_write = Arc::clone(&runtime);
+                let name = namespace.clone();
+                match tokio::task::spawn_blocking(move || {
+                    if !runtime_for_write
+                        .list_plugins()?
+                        .iter()
+                        .any(|plugin| plugin.name == name)
+                    {
+                        return Ok(None);
+                    }
+                    let summary = match (enable, scope.as_str()) {
+                        (true, "host") => {
+                            runtime_for_write
+                                .enable_plugin_from_dashboard(&name)?
+                                .summary
+                        }
+                        (false, "host") => runtime_for_write.disable_plugin(&name)?,
+                        (true, _) => {
+                            runtime_for_write
+                                .enable_plugin_in_workspace(&name, false)?
+                                .summary
+                        }
+                        (false, _) => runtime_for_write.disable_plugin_in_workspace(&name)?,
+                    };
+                    Ok(Some(summary))
+                })
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => Err(orbit_core::OrbitError::Execution(format!(
+                        "plugin write panicked: {error}"
+                    ))),
+                }
+            }
+            _ => Err(orbit_core::OrbitError::InvalidInput(
+                "scope must be `workspace` or `host`".to_string(),
+            )),
+        }
+    };
+    match result {
+        Ok(Some(summary)) => {
+            record_operation_audit(
+                &runtime,
+                &workspace,
+                operation.id,
+                &namespace,
+                "",
+                &body,
+                Some(&caller),
+                None,
+                None,
+                started,
+            )
+            .await;
+            Json(json!({"plugin": plugin_to_json(&summary)})).into_response()
+        }
+        Ok(None) => {
+            let failure = format!("plugin not found: {namespace}");
+            record_operation_audit(
+                &runtime,
+                &workspace,
+                operation.id,
+                &namespace,
+                "",
+                &body,
+                Some(&caller),
+                None,
+                Some(&failure),
+                started,
+            )
+            .await;
+            not_found(failure)
+        }
+        Err(error) => {
+            let failure = error.to_string();
+            record_operation_audit(
+                &runtime,
+                &workspace,
+                operation.id,
+                &namespace,
+                "",
+                &body,
+                Some(&caller),
+                None,
+                Some(&failure),
+                started,
+            )
+            .await;
+            plugin_write_error(error)
+        }
+    }
+}
+
+fn plugin_write_error(error: orbit_core::OrbitError) -> Response {
+    match error {
+        orbit_core::OrbitError::NotFound { id, .. } => not_found(format!("plugin not found: {id}")),
+        orbit_core::OrbitError::PluginDisabledOnHost { plugin } => (
+            StatusCode::CONFLICT,
+            Json(json!({"code": "PluginDisabledOnHost", "error": format!("plugin '{plugin}' is disabled on this host; enable it on the host first")})),
+        ).into_response(),
+        orbit_core::OrbitError::PolicyDenied(message) => (
+            StatusCode::CONFLICT,
+            Json(json!({"code": "plugin_refused", "error": message})),
+        ).into_response(),
+        orbit_core::OrbitError::InvalidInput(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"code": "plugin_refused", "error": message})),
+        ).into_response(),
+        orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"code": "plugin_refused", "error": message})),
+        ).into_response(),
+        other => super::map_runtime_error(other),
     }
 }
 

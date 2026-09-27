@@ -33,6 +33,16 @@
 .plugin-chip-idle { opacity: 0.6; }
 .plugin-description { margin: 0; color: var(--fg-dim); font-size: 12px; }
 .plugin-diagnostic { margin: 0; color: var(--status-open); font-size: 12px; overflow-wrap: anywhere; }
+.plugin-enablement { display: flex; gap: 8px 20px; flex-wrap: wrap; }
+.plugin-scope { display: flex; gap: 8px; align-items: center; color: var(--fg-dim); font-size: 12px; }
+.plugin-disabled-by { color: var(--status-open); font-size: 12px; align-self: center; }
+.plugin-toggle {
+  border: 1px solid var(--border); border-radius: 2px; background: var(--bg);
+  color: var(--accent); padding: 4px 8px; font: inherit; cursor: pointer;
+}
+.plugin-toggle:hover { border-color: var(--accent); }
+.plugin-toggle:disabled { opacity: 0.5; cursor: wait; }
+.plugin-change-error { margin: 0; color: var(--status-open); font-size: 12px; overflow-wrap: anywhere; }
 .plugin-tools, .plugin-links { display: flex; gap: 6px; flex-wrap: wrap; }
 .plugin-link-tile {
   display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;

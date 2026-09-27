@@ -261,6 +261,22 @@ pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
 };
 
+/// Enable a plugin from the dashboard without changing recorded consent.
+pub const DASHBOARD_PLUGIN_ENABLE: GovernedOperation = GovernedOperation {
+    id: "plugin.enable",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "enabling a plugin exposes its tools and scheduled contributions",
+};
+
+/// Disable a plugin from the dashboard at host or workspace scope.
+pub const DASHBOARD_PLUGIN_DISABLE: GovernedOperation = GovernedOperation {
+    id: "plugin.disable",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "disabling a plugin removes its tools and scheduled contributions",
+};
+
 /// Deliberate recovery of an execution claim from the dashboard [ORB-12516].
 pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
     id: "claim.recover",
@@ -486,6 +502,8 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
+    DASHBOARD_PLUGIN_ENABLE,
+    DASHBOARD_PLUGIN_DISABLE,
     PLUGIN_TOOL_READ_ONLY,
     PLUGIN_TOOL_MUTATING,
 ];

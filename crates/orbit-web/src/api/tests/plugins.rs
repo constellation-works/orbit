@@ -9,9 +9,11 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::adapter::command::{PluginAddOptions, PluginEnableOptions, PluginSecretValue};
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode};
+use serde_json::Value;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -146,8 +148,271 @@ async fn get(state: DashboardState, uri: &str) -> axum::response::Response {
         .expect("response")
 }
 
+async fn post(state: DashboardState, uri: &str, scope: &str) -> axum::response::Response {
+    router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header("host", "localhost:7878")
+                .header("origin", "http://localhost:7878")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"scope":"{scope}"}}"#)))
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+#[allow(clippy::await_holding_lock)]
+async fn as_operator<T>(fut: impl std::future::Future<Output = T>) -> T {
+    let _env = orbit_common::test_env::scoped([(OPERATOR_OVERRIDE_ENV, Some("1"))]);
+    fut.await
+}
+
+#[allow(clippy::await_holding_lock)]
+async fn as_agent<T>(fut: impl std::future::Future<Output = T>) -> T {
+    let _env = orbit_common::test_env::scoped([
+        (OPERATOR_OVERRIDE_ENV, None),
+        ("ORBIT_AGENT_NAME", Some("plugin-api-test")),
+        ("ORBIT_AGENT_MODEL", Some("plugin-api-test")),
+    ]);
+    fut.await
+}
+
+fn audit(runtime: &OrbitRuntime, operation: &str) -> Vec<orbit_types::telemetry::AuditEvent> {
+    runtime
+        .list_audit_events_with_kind(None, None, Some(operation.to_string()), None, None, 20)
+        .expect("plugin audit events")
+}
+
 fn state(runtime: OrbitRuntime) -> DashboardState {
     DashboardState::single(Arc::new(runtime))
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn operator_can_toggle_both_scopes_and_each_write_is_audited() {
+    let fixture = PluginFixture::new();
+    write_plugin(&fixture.source());
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            fixture.source().to_str().expect("source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install");
+    runtime
+        .enable_plugin("panels", &PluginEnableOptions::default())
+        .expect("record empty-grant consent");
+    let state = fixture.dashboard_state();
+    state.set_operator_session(true);
+
+    for (path, scope, expected_host, expected_toggle) in [
+        ("/plugins/panels/disable", "workspace", true, false),
+        ("/plugins/panels/enable", "workspace", true, true),
+        ("/plugins/panels/disable", "host", false, true),
+        ("/plugins/panels/enable", "host", true, true),
+    ] {
+        let response = as_operator(post(state.clone(), path, scope)).await;
+        let status = response.status();
+        let payload = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{payload}");
+        assert_eq!(payload["plugin"]["host_enabled"], expected_host);
+        assert_eq!(payload["plugin"]["workspace_toggle"], expected_toggle);
+        let listed = body_json(get(state.clone(), "/plugins").await).await;
+        assert_eq!(
+            listed[0]["host_enabled"], expected_host,
+            "same dashboard state observes the host write without restart"
+        );
+        assert_eq!(listed[0]["workspace_toggle"], expected_toggle);
+    }
+    assert_eq!(
+        audit(&runtime, "plugin.disable")
+            .iter()
+            .filter(|event| event.status.to_string() == "success")
+            .count(),
+        2
+    );
+    assert_eq!(
+        audit(&runtime, "plugin.enable")
+            .iter()
+            .filter(|event| event.status.to_string() == "success")
+            .count(),
+        2
+    );
+    let listed = body_json(get(state, "/plugins").await).await;
+    assert_eq!(
+        listed[0]["tools"][0]["active"], true,
+        "the tool surface refreshes after re-enable"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn non_operator_is_refused_and_audited_before_any_plugin_change() {
+    let fixture = PluginFixture::new();
+    write_plugin(&fixture.source());
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            fixture.source().to_str().expect("source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install");
+    let state = fixture.dashboard_state();
+    let listed = as_agent(get(state.clone(), "/plugins")).await;
+    let listed = body_json(listed).await;
+    for action in ["enable", "disable"] {
+        assert_eq!(listed[0]["capabilities"][action]["authorized"], false);
+        let response = as_agent(post(
+            state.clone(),
+            &format!("/plugins/panels/{action}"),
+            "host",
+        ))
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let events = audit(&runtime, &format!("plugin.{action}"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].status.to_string(), "denied");
+    }
+    assert!(!runtime.list_plugins().expect("list")[0].host_enabled);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn host_enable_requires_recorded_matching_grants_and_program_paths() {
+    let fixture = PluginFixture::new();
+    write_plugin(&fixture.source());
+    let manifest = fixture.source().join("plugin.yaml");
+    let mut document = std::fs::read_to_string(&manifest).expect("manifest");
+    document.push_str("  permissions:\n    network: loopback\n  requires:\n    programs: [sh]\n");
+    std::fs::write(&manifest, document).expect("request grant and program");
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            fixture.source().to_str().expect("source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install");
+    let state = fixture.dashboard_state();
+    state.set_operator_session(true);
+
+    let response = as_operator(post(state.clone(), "/plugins/panels/enable", "host")).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::CONFLICT,
+        "unrecorded consent is refused"
+    );
+    let payload = body_json(response).await;
+    assert!(
+        payload["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("network")
+                && message.contains("orbit plugin enable panels --grant network")),
+        "{payload}"
+    );
+
+    runtime
+        .enable_plugin("panels", &PluginEnableOptions::default())
+        .expect("record an empty grant set");
+    runtime.disable_plugin("panels").expect("disable");
+    let response = as_operator(post(state.clone(), "/plugins/panels/enable", "host")).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::CONFLICT,
+        "changed requested grants are refused"
+    );
+    assert_eq!(body_json(response).await["code"], "plugin_refused");
+
+    runtime
+        .enable_plugin(
+            "panels",
+            &PluginEnableOptions {
+                grants: vec!["network".to_string()],
+                force: false,
+            },
+        )
+        .expect("record requested grant and program");
+    runtime.disable_plugin("panels").expect("disable");
+    let witness_path = fixture.global_root.join("plugins/.grants/panels.json");
+    let mut witness: Value =
+        serde_json::from_str(&std::fs::read_to_string(&witness_path).expect("witness"))
+            .expect("witness JSON");
+    witness["programs"]["sh"] = serde_json::json!("/changed/sh");
+    std::fs::write(
+        &witness_path,
+        serde_json::to_vec(&witness).expect("serialize witness"),
+    )
+    .expect("change recorded path");
+    let response = as_operator(post(state.clone(), "/plugins/panels/enable", "host")).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::CONFLICT,
+        "changed program path is refused"
+    );
+    assert!(
+        body_json(response).await["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("orbit plugin enable panels"))
+    );
+    assert!(!runtime.list_plugins().expect("list")[0].host_enabled);
+
+    runtime
+        .enable_plugin("panels", &PluginEnableOptions::default())
+        .expect("CLI reviews paths");
+    runtime.disable_plugin("panels").expect("disable");
+    let response = as_operator(post(state, "/plugins/panels/enable", "host")).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "matching consent permits re-enable"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn workspace_enable_under_host_off_and_unknown_plugin_have_structured_responses() {
+    let fixture = PluginFixture::new();
+    write_plugin(&fixture.source());
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            fixture.source().to_str().expect("source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install");
+    let state = fixture.dashboard_state();
+    state.set_operator_session(true);
+    let response = as_operator(post(state.clone(), "/plugins/panels/enable", "workspace")).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(response).await["code"], "PluginDisabledOnHost");
+    let response = as_operator(post(state, "/plugins/unknown/disable", "host")).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pinned_but_missing_install_has_a_structured_enable_refusal() {
+    let fixture = PluginFixture::new();
+    std::fs::write(
+        fixture.workspace_root.join("plugins.yaml"),
+        "schemaVersion: 1\nplugins:\n  - name: panels\n    source: /missing/plugin\n    enabled: true\n",
+    )
+    .expect("pin missing plugin");
+    let state = fixture.dashboard_state();
+    state.set_operator_session(true);
+    let response = as_operator(post(state, "/plugins/panels/enable", "host")).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload = body_json(response).await;
+    assert_eq!(payload["code"], "plugin_refused");
+    assert!(
+        payload["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("orbit plugin sync")),
+        "{payload}"
+    );
 }
 
 #[cfg(unix)]

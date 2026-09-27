@@ -72,6 +72,15 @@ impl OrbitRuntime {
         plugin::enable_plugin(self, name, options)
     }
 
+    /// Re-enable from the dashboard only when grants and program paths still
+    /// match the recorded operator decision.
+    pub fn enable_plugin_from_dashboard(
+        &self,
+        name: &str,
+    ) -> Result<PluginEnableResult, OrbitError> {
+        plugin::enable_plugin_from_dashboard(self, name)
+    }
+
     pub fn disable_plugin(&self, name: &str) -> Result<PluginSummary, OrbitError> {
         plugin::disable_plugin(self, name)
     }

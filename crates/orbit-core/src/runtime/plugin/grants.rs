@@ -234,6 +234,28 @@ pub fn recorded_program_paths(global_root: &Path, name: &str) -> BTreeMap<String
         .unwrap_or_default()
 }
 
+/// Program paths from a readable witness matching the current row's consent.
+/// `Some(empty)` still means a grant decision was recorded for a plugin that
+/// requests no programs; `None` requires explicit CLI consent.
+pub fn witnessed_program_paths(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+) -> Option<BTreeMap<String, PathBuf>> {
+    if !is_valid_namespace(&installed.name) {
+        return None;
+    }
+    std::fs::read_to_string(plugin_grant_witness_path(global_root, &installed.name))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<GrantAuthorization>(&raw).ok())
+        .filter(|witness| {
+            witness.schema_version == WITNESS_SCHEMA_VERSION
+                && witness.plugin == installed.name
+                && witness.grants_digest
+                    == plugin_grants_digest(&installed.name, installed.enabled, &installed.grants)
+        })
+        .map(|witness| witness.programs)
+}
+
 /// Drop the witness when the install goes away, so a later reinstall of the
 /// same namespace starts with no authority rather than the old one.
 pub fn forget_authorized_grants(global_root: &Path, name: &str) {

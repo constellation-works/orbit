@@ -1,6 +1,6 @@
 //! Enable, disable, remove, sync and migrate.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
@@ -20,6 +20,7 @@ use orbit_types::record::OrbitEvent;
 use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::{
     forget_authorized_grants, record_authorization, recorded_program_paths, verify_install_path,
+    witnessed_program_paths,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir, read_pin_file};
@@ -85,9 +86,29 @@ pub fn enable_plugin(
     name: &str,
     options: &PluginEnableOptions,
 ) -> Result<PluginEnableResult, OrbitError> {
+    enable_plugin_checked(runtime, name, options, false)
+}
+
+/// Dashboard re-enable keeps the CLI's recorded consent exactly. The guard
+/// runs before seeding or writing a row, and the path comparison uses the
+/// same resolution later recorded by this invocation.
+pub fn enable_plugin_from_dashboard(
+    runtime: &OrbitRuntime,
+    name: &str,
+) -> Result<PluginEnableResult, OrbitError> {
+    enable_plugin_checked(runtime, name, &PluginEnableOptions::default(), true)
+}
+
+fn enable_plugin_checked(
+    runtime: &OrbitRuntime,
+    name: &str,
+    options: &PluginEnableOptions,
+    preserve_consent: bool,
+) -> Result<PluginEnableResult, OrbitError> {
     // Seeding reads definitions and skills out of the recorded tree, so the
     // row buys nothing until the path it names is this host's install.
-    let install_path = verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
+    let installed = installed_plugin(runtime, name)?;
+    let install_path = verified_install_path(runtime, &installed)?;
     // `requested` needs the manifest, so it is resolved before the writes
     // below rather than deferred to `set_enabled`; an invalid `--grant` then
     // fails closed with nothing yet touched, as it always has.
@@ -103,6 +124,39 @@ pub fn enable_plugin(
             .map_err(OrbitError::InvalidInput)?;
         Some(resolved.to_recorded())
     };
+    // Resolve once: a dashboard comparison must be against the paths this
+    // very enable will record, not against a second PATH lookup after writes.
+    let (programs, program_warnings) = resolve_consented_programs(&runtime.global_root(), &plugin);
+    if preserve_consent {
+        let requested = resolve_grant_selection(&["requested".to_string()], &plugin.manifest)
+            .map_err(OrbitError::InvalidInput)?
+            .to_recorded();
+        let witnessed = witnessed_program_paths(&runtime.global_root(), &installed);
+        let requested_set: BTreeSet<_> = requested.iter().collect();
+        let recorded_set: BTreeSet<_> = installed.grants.iter().collect();
+        if witnessed.is_none() || requested_set != recorded_set {
+            let flags = if requested.is_empty() {
+                "--grant none".to_string()
+            } else {
+                requested
+                    .iter()
+                    .map(|grant| format!("--grant {grant}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            return Err(OrbitError::PolicyDenied(format!(
+                "plugin '{name}' requests grants [{}], which differ from recorded consent or have no recorded witness; review with `orbit plugin enable {name} {flags}`",
+                requested.join(", ")
+            )));
+        }
+        if witnessed.as_ref() != Some(&programs)
+            || (!plugin.manifest.spec.requires.programs.is_empty() && programs.is_empty())
+        {
+            return Err(OrbitError::PolicyDenied(format!(
+                "plugin '{name}' program paths differ from recorded consent (or none are recorded): requested {programs:?}, recorded {witnessed:?}; review with `orbit plugin enable {name}`"
+            )));
+        }
+    }
     let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
     let warn_against: &[String] = record_grants.as_deref().unwrap_or_default();
     let mut warnings = unrequested_grant_warnings(&plugin, warn_against);
@@ -110,7 +164,6 @@ pub fn enable_plugin(
     // Every enable is consent, with or without `--grant`, so each one
     // resolves the declared programs afresh; re-running it is how an
     // operator records a program that moved or was installed since.
-    let (programs, program_warnings) = resolve_consented_programs(&runtime.global_root(), &plugin);
     warnings.extend(program_warnings);
     warnings.extend(unset_secret_warnings(&runtime.global_root(), &plugin));
     let summary = set_enabled(
