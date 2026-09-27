@@ -1,8 +1,18 @@
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
+use orbit_common::security::release::{
+    RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
+};
+
 use crate::update::channel::{
     CANONICAL_HOMEBREW_FORMULA, InstallChannel, LEGACY_HOMEBREW_FORMULA, homebrew_remediation,
+};
+use crate::update::source::{
+    HttpReleaseSource, MAX_ARCHIVE_BYTES, MAX_MANIFEST_BYTES, MAX_METADATA_BYTES,
+    MAX_SIGNATURE_BYTES, MIRROR_LATEST_FILE, read_bounded,
 };
 use crate::update::tests::fixture::{
     CLOCK_REPAIR_REPORT, FakeBinary, Fixture, PausingLatestSource, request, tar_gz, tar_gz_named,
@@ -10,6 +20,131 @@ use crate::update::tests::fixture::{
 use crate::update::{
     EXIT_NEEDS_RECOVERY, EXIT_UPDATE_AVAILABLE, UpdateEnvironment, UpdateOutcome, run_update,
 };
+
+#[test]
+fn bounded_reader_stops_after_the_first_excess_byte() {
+    struct CountingReader(usize);
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.0 += buffer.len();
+            buffer.fill(b'x');
+            Ok(buffer.len())
+        }
+    }
+    let mut reader = CountingReader(0);
+    let error = read_bounded(&mut reader, "test input", 32).expect_err("oversized input");
+    assert!(error.to_string().contains("32-byte release input limit"));
+    assert_eq!(reader.0, 33);
+}
+
+#[test]
+fn http_rejects_declared_and_streamed_oversized_bodies() {
+    let source = HttpReleaseSource::new("unused/repo".to_string());
+    for declared in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local test server");
+        let address = listener.local_addr().expect("server address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("HTTP request");
+            let mut method = [0_u8; 3];
+            stream.read_exact(&mut method).expect("request method");
+            assert_eq!(&method, b"GET");
+            if declared {
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                    MAX_METADATA_BYTES + 1
+                )
+                .expect("response headers");
+            } else {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                    .expect("response headers");
+                stream
+                    .write_all(&vec![b'x'; (MAX_METADATA_BYTES + 1) as usize])
+                    .expect("response body");
+            }
+        });
+        let error = source
+            .get(
+                &format!("http://{address}/release"),
+                "metadata",
+                MAX_METADATA_BYTES,
+            )
+            .expect_err("oversized HTTP body");
+        server.join().expect("server completed");
+        assert!(
+            error.to_string().contains("65536-byte release input limit"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn http_accepts_normal_metadata_body() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("local test server");
+    let address = listener.local_addr().expect("server address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("HTTP request");
+        let mut method = [0_u8; 3];
+        stream.read_exact(&mut method).expect("request method");
+        assert_eq!(&method, b"GET");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 22\r\n\r\n{\"tag_name\":\"v0.19.0\"}")
+            .expect("metadata response");
+    });
+    let body = HttpReleaseSource::new("unused/repo".to_string())
+        .get(
+            &format!("http://{address}/release"),
+            "metadata",
+            MAX_METADATA_BYTES,
+        )
+        .expect("normal metadata");
+    server.join().expect("server completed");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("JSON")["tag_name"],
+        "v0.19.0"
+    );
+}
+
+#[test]
+fn oversized_mirror_inputs_fail_before_executable_replacement() {
+    let classes = [
+        (MIRROR_LATEST_FILE, MAX_METADATA_BYTES),
+        (RELEASE_CHECKSUMS_FILENAME, MAX_MANIFEST_BYTES),
+        (RELEASE_CHECKSUMS_SIGNATURE_FILENAME, MAX_SIGNATURE_BYTES),
+        ("archive", MAX_ARCHIVE_BYTES),
+    ];
+    for (asset_class, limit) in classes {
+        let fixture = Fixture::new("0.18.0");
+        fixture.publish("0.19.0", FakeBinary::Healthy);
+        let asset = if asset_class == "archive" {
+            crate::update::channel::release_archive_name(crate::update::tests::fixture::TEST_TARGET)
+        } else {
+            asset_class.to_string()
+        };
+        let input = fixture.mirror_input("0.19.0", &asset);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&input)
+            .expect("published input")
+            .set_len(limit + 1)
+            .expect("oversized sparse input");
+        let original = std::fs::read(&fixture.executable).expect("installed executable");
+        let error =
+            run_update(&fixture.environment(), &request()).expect_err("oversized mirror input");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{limit}-byte release input limit")),
+            "{asset}: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&fixture.executable).expect("installed executable"),
+            original
+        );
+        assert!(!staging_file_remains(&fixture));
+    }
+}
 
 #[test]
 fn updating_to_latest_replaces_the_binary_then_migrates_before_syncing_assets() {

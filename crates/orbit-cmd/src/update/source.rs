@@ -8,10 +8,50 @@
 //! against fixtures instead of the network.
 
 use std::fmt::Debug;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::{
+    RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
+};
+
+/// Input ceilings apply before authentication and before any complete artifact is buffered.
+pub(super) const MAX_METADATA_BYTES: u64 = 64 * 1024;
+pub(super) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+pub(super) const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
+pub(super) const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn asset_limit(asset: &str) -> u64 {
+    match asset {
+        RELEASE_CHECKSUMS_FILENAME => MAX_MANIFEST_BYTES,
+        RELEASE_CHECKSUMS_SIGNATURE_FILENAME => MAX_SIGNATURE_BYTES,
+        _ => MAX_ARCHIVE_BYTES,
+    }
+}
+
+fn too_large(what: &str, limit: u64) -> OrbitError {
+    OrbitError::Execution(format!(
+        "{what} exceeds the {limit}-byte release input limit"
+    ))
+}
+
+pub(super) fn read_bounded(
+    reader: impl Read,
+    what: &str,
+    limit: u64,
+) -> Result<Vec<u8>, OrbitError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| OrbitError::Execution(format!("failed to read {what}: {error}")))?;
+    if bytes.len() as u64 > limit {
+        return Err(too_large(what, limit));
+    }
+    Ok(bytes)
+}
 
 /// Repository the HTTP source reads releases from unless overridden.
 pub const DEFAULT_RELEASE_REPO: &str = "constellation-works/orbit";
@@ -80,7 +120,7 @@ impl HttpReleaseSource {
             })
     }
 
-    fn get(&self, url: &str, what: &str) -> Result<Vec<u8>, OrbitError> {
+    pub(super) fn get(&self, url: &str, what: &str, limit: u64) -> Result<Vec<u8>, OrbitError> {
         let response = self
             .client()?
             .get(url)
@@ -89,10 +129,13 @@ impl HttpReleaseSource {
             .map_err(|error| {
                 OrbitError::Execution(format!("failed to download {what} from {url}: {error}"))
             })?;
-        Ok(response
-            .bytes()
-            .map_err(|error| OrbitError::Execution(format!("failed to read {what}: {error}")))?
-            .to_vec())
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit)
+        {
+            return Err(too_large(what, limit));
+        }
+        read_bounded(response, what, limit)
     }
 }
 
@@ -103,7 +146,7 @@ impl ReleaseSource for HttpReleaseSource {
 
     fn latest_version(&self) -> Result<String, OrbitError> {
         let url = format!("https://api.github.com/repos/{}/releases/latest", self.repo);
-        let body = self.get(&url, "the latest release metadata")?;
+        let body = self.get(&url, "the latest release metadata", MAX_METADATA_BYTES)?;
         let document: serde_json::Value = serde_json::from_slice(&body).map_err(|error| {
             OrbitError::Execution(format!("latest release metadata is not JSON: {error}"))
         })?;
@@ -124,7 +167,7 @@ impl ReleaseSource for HttpReleaseSource {
             "https://github.com/{}/releases/download/v{version}/{asset}",
             self.repo
         );
-        self.get(&url, asset)
+        self.get(&url, asset, asset_limit(asset))
     }
 }
 
@@ -141,13 +184,27 @@ impl DirectoryReleaseSource {
         Self { root }
     }
 
-    fn read(path: &Path, what: &str) -> Result<Vec<u8>, OrbitError> {
-        std::fs::read(path).map_err(|error| {
+    fn read(path: &Path, what: &str, limit: u64) -> Result<Vec<u8>, OrbitError> {
+        let file = std::fs::File::open(path).map_err(|error| {
             OrbitError::Execution(format!(
                 "failed to read {what} from the release mirror at '{}': {error}",
                 path.display()
             ))
-        })
+        })?;
+        if file
+            .metadata()
+            .map_err(|error| {
+                OrbitError::Execution(format!(
+                    "failed to inspect {what} in the release mirror at '{}': {error}",
+                    path.display()
+                ))
+            })?
+            .len()
+            > limit
+        {
+            return Err(too_large(what, limit));
+        }
+        read_bounded(file, what, limit)
     }
 }
 
@@ -158,7 +215,7 @@ impl ReleaseSource for DirectoryReleaseSource {
 
     fn latest_version(&self) -> Result<String, OrbitError> {
         let path = self.root.join(MIRROR_LATEST_FILE);
-        let body = Self::read(&path, MIRROR_LATEST_FILE)?;
+        let body = Self::read(&path, MIRROR_LATEST_FILE, MAX_METADATA_BYTES)?;
         let version = String::from_utf8(body)
             .map_err(|error| {
                 OrbitError::Execution(format!("{MIRROR_LATEST_FILE} is not UTF-8: {error}"))
@@ -186,6 +243,10 @@ impl ReleaseSource for DirectoryReleaseSource {
                 )));
             }
         }
-        Self::read(&self.root.join(format!("v{version}")).join(asset), asset)
+        Self::read(
+            &self.root.join(format!("v{version}")).join(asset),
+            asset,
+            asset_limit(asset),
+        )
     }
 }

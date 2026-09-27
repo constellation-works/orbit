@@ -266,6 +266,12 @@ for air-gapped or staged rollouts. The layout is `latest-version.txt` plus
 checksum verification are unchanged — a mirror does not lower the bar. `ORBIT_INSTALL_REPO`
 selects a different GitHub repository, as it does for `install.sh`.
 
+Both HTTP releases and local mirrors limit each input before buffering it: latest-release
+metadata and `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB, its detached
+signature to 16 KiB, and the compressed archive to 256 MiB. An input over its limit fails
+before the installed executable is replaced, including when an HTTP server omits
+`Content-Length`. The extracted executable has a separate 256 MiB limit.
+
 ## Understand the version ledgers
 
 Two ledgers guard `.orbit/` state and auto-apply on workspace open:
