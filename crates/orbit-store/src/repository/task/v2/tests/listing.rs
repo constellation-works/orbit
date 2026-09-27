@@ -144,7 +144,7 @@ fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_ar
                 )
                 .unwrap();
             }
-            _ => fs::write(path.join("artifacts/files/proof.txt"), "wrong").unwrap(),
+            _ => unreachable!(),
         }
         let page = store
             .query_task_rows(&TaskListFilter::default(), 1, None)
@@ -422,7 +422,8 @@ fn listing_and_search_defer_artifact_payload_verification() {
         .create_task(create_params("New task", TaskStatus::Backlog))
         .unwrap();
     let path = store.bundle_store.bundle_path(&old.id).unwrap();
-    fs::write(path.join("artifacts/files/proof.txt"), "wrong").unwrap();
+    let manifest = store.get_task_artifact_manifest(&old.id).unwrap().unwrap();
+    fs::write(path.join("artifacts").join(&manifest[0].blob), "wrong").unwrap();
     let _ = take_artifact_payload_reads();
 
     let listed = store.list_tasks().unwrap();

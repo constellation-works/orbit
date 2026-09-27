@@ -291,7 +291,9 @@ files:
 
 Artifact paths must be relative, UTF-8, slash-separated, canonical paths and must not contain `.`, `..`, or leading `./` components. Writers that ingest hand-authored manifests should normalize leading `./` before validation. `sha256` must be a 64-character lowercase hex SHA-256 digest; writer code should format digest bytes with lowercase hex (`{:x}`), not uppercase.
 
-The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite or artifact files written before manifest rewrite.
+`path` is the logical artifact name; readers must open the separate `blob` path from the manifest. Existing manifests may use `files/<path>`. Replacement writes use immutable, content-addressed files under `artifacts/files/`, then atomically publish the complete updated manifest. A failure before manifest publication leaves the previous artifact set and hashes intact. Unreferenced blobs from interrupted or superseded writes may remain and are ignored by readers.
+
+The bundle format does not guarantee cross-file transactions *across a crash*. Writers must keep single-file updates atomic and keep post-crash partial multi-file states readable; generated repair/indexing commands reconcile cases such as appended events before envelope status rewrite. Artifact replacement relies on immutable blobs and atomic manifest publication, so an interrupted replacement needs no repair to remain readable.
 
 A *live* writer is a different case, and readers must not be exposed to its intermediate states. See [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
 

@@ -267,7 +267,15 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .iter()
         .find(|file| file.path == "reports/summary.md")
         .expect("summary manifest entry");
-    assert_eq!(summary.blob, "files/reports/summary.md");
+    assert!(summary.blob.starts_with("files/.blob-"));
+    assert_eq!(
+        store
+            .get_task_artifact("ORB-00000", "reports/summary.md")
+            .expect("get single artifact")
+            .expect("summary exists")
+            .text_content(),
+        Some("summary v2\n")
+    );
     assert_eq!(summary.sha256.len(), 64);
     assert!(
         summary
@@ -289,6 +297,190 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         )
         .expect_err("reject unsafe artifact path");
     assert!(err.to_string().contains(".."), "{err}");
+}
+
+#[test]
+fn artifact_replacement_reads_legacy_path_based_manifest() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let task = store
+        .create_task(create_params("Legacy artifact", TaskStatus::Backlog))
+        .expect("create task");
+    let bundle_dir = store.bundle_store.bundle_path(&task.id).expect("bundle");
+    let old_blob = bundle_dir.join("artifacts/files/report.txt");
+    fs::write(&old_blob, b"legacy bytes").expect("legacy blob");
+    store
+        .bundle_store
+        .rewrite_artifact_manifest(
+            &task.id,
+            &ArtifactManifestV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                files: vec![ArtifactManifestFileV2 {
+                    origin: None,
+                    path: "report.txt".into(),
+                    blob: "files/report.txt".into(),
+                    sha256: format!("{:x}", Sha256::digest(b"legacy bytes")),
+                    media_type: "text/plain".into(),
+                    size_bytes: 12,
+                    created_by: "test".into(),
+                    created_at: Utc::now(),
+                }],
+            },
+        )
+        .expect("legacy manifest");
+    assert_eq!(
+        store
+            .get_task_artifact(&task.id, "report.txt")
+            .expect("legacy read")
+            .expect("artifact")
+            .text_content(),
+        Some("legacy bytes")
+    );
+
+    store
+        .upsert_task_artifacts(
+            &task.id,
+            &TaskArtifactUpdateParams {
+                origin: None,
+                owner_run_id: None,
+                actor: "test".into(),
+                upsert_artifacts: vec![TaskArtifact::from_text("report.txt", "new bytes")],
+            },
+        )
+        .expect("replace legacy artifact");
+    assert_eq!(
+        fs::read(&old_blob).expect("old blob remains"),
+        b"legacy bytes"
+    );
+    assert_eq!(
+        store
+            .get_task_artifact(&task.id, "report.txt")
+            .expect("replacement read")
+            .expect("artifact")
+            .text_content(),
+        Some("new bytes")
+    );
+}
+
+#[test]
+fn artifact_replacement_failure_preserves_old_manifest_and_allows_retry() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let task = store
+        .create_task(create_params("Replacement", TaskStatus::Backlog))
+        .expect("create task");
+    let params = |content| TaskArtifactUpdateParams {
+        origin: None,
+        owner_run_id: None,
+        actor: "test".into(),
+        upsert_artifacts: vec![TaskArtifact::from_text("report.txt", content)],
+    };
+    store
+        .upsert_task_artifacts(&task.id, &params("old bytes"))
+        .expect("initial artifact");
+    let old_manifest = store
+        .get_task_artifact_manifest(&task.id)
+        .expect("manifest")
+        .expect("task");
+
+    super::super::artifacts::fail_artifact_upsert_after_blobs(1);
+    store
+        .upsert_task_artifacts(&task.id, &params("new bytes"))
+        .expect_err("failure after publishing replacement blob");
+    drop(store);
+
+    let reopened = super::store(&temp);
+    assert!(reopened.get_task(&task.id).expect("read task").is_some());
+    assert_eq!(
+        reopened
+            .get_task_artifact_manifest(&task.id)
+            .expect("manifest")
+            .expect("task"),
+        old_manifest
+    );
+    assert_eq!(
+        reopened
+            .get_task_artifact(&task.id, "report.txt")
+            .expect("single artifact")
+            .expect("report")
+            .text_content(),
+        Some("old bytes")
+    );
+    assert_eq!(
+        reopened
+            .get_task_artifacts(&task.id)
+            .expect("artifact set")
+            .expect("task")[0]
+            .text_content(),
+        Some("old bytes")
+    );
+    reopened
+        .upsert_task_artifacts(&task.id, &params("new bytes"))
+        .expect("retry after reopen");
+    assert_eq!(
+        reopened
+            .get_task_artifact(&task.id, "report.txt")
+            .expect("single artifact")
+            .expect("report")
+            .text_content(),
+        Some("new bytes")
+    );
+}
+
+#[test]
+fn multi_artifact_failure_after_later_blob_preserves_prior_bytes() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let task = store
+        .create_task(create_params("Multiple", TaskStatus::Backlog))
+        .expect("create task");
+    let params = |first, second| TaskArtifactUpdateParams {
+        origin: None,
+        owner_run_id: None,
+        actor: "test".into(),
+        upsert_artifacts: vec![
+            TaskArtifact::from_text("first.txt", first),
+            TaskArtifact::from_text("second.txt", second),
+        ],
+    };
+    store
+        .upsert_task_artifacts(&task.id, &params("first old", "second old"))
+        .expect("initial artifacts");
+    let old_manifest = store
+        .get_task_artifact_manifest(&task.id)
+        .expect("manifest")
+        .expect("task");
+
+    super::super::artifacts::fail_artifact_upsert_after_blobs(2);
+    store
+        .upsert_task_artifacts(&task.id, &params("first new", "second new"))
+        .expect_err("failure after writing later blob");
+    drop(store);
+
+    let reopened = super::store(&temp);
+    assert_eq!(
+        reopened
+            .get_task_artifact_manifest(&task.id)
+            .expect("manifest")
+            .expect("task"),
+        old_manifest
+    );
+    let artifacts = reopened
+        .get_task_artifacts(&task.id)
+        .expect("artifact set")
+        .expect("task");
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0].text_content(), Some("first old"));
+    assert_eq!(artifacts[1].text_content(), Some("second old"));
+    reopened
+        .upsert_task_artifacts(&task.id, &params("first new", "second new"))
+        .expect("retry full replacement");
+    let artifacts = reopened
+        .get_task_artifacts(&task.id)
+        .expect("new artifact set")
+        .expect("task");
+    assert_eq!(artifacts[0].text_content(), Some("first new"));
+    assert_eq!(artifacts[1].text_content(), Some("second new"));
 }
 
 #[cfg(unix)]
