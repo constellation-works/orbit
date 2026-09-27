@@ -275,6 +275,162 @@ fn pending_checks_use_auto_merge_and_completion_waits_for_the_merged_state() {
     assert_eq!(host.task_status("T1"), TaskStatus::Done);
 }
 
+/// The candidate this run published. A later head is somebody else's delivery.
+const PUBLISHED_HEAD_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const MOVED_HEAD_SHA: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
+fn published_input(workspace_path: &std::path::Path) -> Value {
+    let mut input = complete_input(workspace_path, &["T1"]);
+    input["completion"] = json!("done");
+    input["head"] = json!("orbit/test-batch");
+    input["published_head_sha"] = json!(PUBLISHED_HEAD_SHA);
+    input["base"] = json!("agent-main");
+    input
+}
+
+fn open_at(merge_state_status: &str, head_sha: &str) -> Value {
+    let mut status = state(merge_state_status);
+    status["headRefOid"] = json!(head_sha);
+    status
+}
+
+/// [ORB-13444] A published head of A and a live head of B is refused before
+/// any merge or auto-merge, whether GitHub currently calls the PR clean or
+/// still pending.
+#[test]
+fn published_head_mismatch_refuses_clean_and_pending_before_any_merge() {
+    for merge_state in ["CLEAN", "PENDING"] {
+        let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+        host.queue_pr_status([open_at(merge_state, MOVED_HEAD_SHA)]);
+        host.queue_merge_capabilities_with_auto_merge(true, true, true, true, true);
+
+        let error = pr_complete(&host, &published_input(root.path()))
+            .expect_err("a moved published head must not be merged");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("delivery_evidence_stale"),
+            "{merge_state}: {message}"
+        );
+        assert!(message.contains(MOVED_HEAD_SHA), "{merge_state}: {message}");
+        assert!(
+            message.contains(PUBLISHED_HEAD_SHA),
+            "{merge_state}: {message}"
+        );
+        assert!(
+            merge_calls(&host).is_empty(),
+            "{merge_state} must not request a merge or auto-merge"
+        );
+        assert_eq!(host.task_status("T1"), TaskStatus::Review);
+    }
+}
+
+/// [ORB-13444] The authorized published head still completes, and the merge
+/// request carries that SHA so the provider can refuse a later move.
+#[test]
+fn published_head_completes_through_the_conditional_merge() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([open_at("CLEAN", PUBLISHED_HEAD_SHA), merged_state()]);
+
+    let output = pr_complete(&host, &published_input(root.path())).expect("authorized head");
+
+    assert_eq!(output["merge"]["merged"], true);
+    assert_eq!(output["merge"]["auto_merge_requested"], false);
+    let merges = merge_calls(&host);
+    assert_eq!(merges.len(), 1);
+    assert_eq!(merges[0]["auto"], false);
+    assert_eq!(merges[0]["reviewed_head_sha"], PUBLISHED_HEAD_SHA);
+    assert_eq!(host.task_status("T1"), TaskStatus::Done);
+    assert!(
+        host.review_landings().is_empty(),
+        "an ungated published head is not a before-PR review landing"
+    );
+}
+
+/// [ORB-13444] Pending checks on the published head wait for the synchronous
+/// mutation. Auto-merge cannot keep the candidate condition.
+#[test]
+fn published_pending_head_waits_for_the_conditional_merge() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    host.queue_pr_status([
+        open_at("PENDING", PUBLISHED_HEAD_SHA),
+        open_at("CLEAN", PUBLISHED_HEAD_SHA),
+        merged_state(),
+    ]);
+    host.queue_merge_capabilities_with_auto_merge(true, true, true, true, true);
+    let mut input = published_input(root.path());
+    input["max_wait_seconds"] = json!(10);
+
+    let output = pr_complete(&host, &input).expect("wait, then merge the published head");
+
+    assert_eq!(output["merge"]["merged"], true);
+    assert_eq!(output["merge"]["auto_merge_requested"], false);
+    let merges = merge_calls(&host);
+    assert_eq!(
+        merges.len(),
+        1,
+        "auto-merge is not a substitute for the pin"
+    );
+    assert_eq!(merges[0]["auto"], false);
+    assert_eq!(merges[0]["reviewed_head_sha"], PUBLISHED_HEAD_SHA);
+    assert_eq!(host.task_status("T1"), TaskStatus::Done);
+}
+
+/// [ORB-13444] The status read saw A, then the provider head moved to B
+/// before the mutation. The conditional request refuses B and does not merge.
+#[cfg(unix)]
+#[test]
+fn published_head_race_after_the_read_is_refused_by_the_provider() {
+    use super::super::super::tests::with_fake_gh;
+
+    let script = r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" >> provider-args
+if [ "$1 $2" = "pr view" ]; then
+    if [ -f provider-merged ]; then
+        printf '%s\n' '{"state":"MERGED","headRefName":"orbit/test-batch","baseRefName":"agent-main","headRefOid":"2222222222222222222222222222222222222222","mergeCommit":{"oid":"unvalidated-merge"}}'
+    else
+        printf '%s\n' '{"state":"OPEN","mergeStateStatus":"CLEAN","headRefName":"orbit/test-batch","baseRefName":"agent-main","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+    fi
+    exit 0
+fi
+printf '%s' '2222222222222222222222222222222222222222' > provider-head
+if [ "$1" = "api" ]; then
+    for arg in "$@"; do
+        case "$arg" in
+            sha=*) if [ "${arg#sha=}" != "$(cat provider-head)" ]; then
+                echo 'HTTP 409: Head branch was modified' >&2
+                exit 1
+            fi ;;
+        esac
+    done
+fi
+printf '%s' 'merged' > provider-merged
+printf '%s\n' '{"merged":true,"sha":"unvalidated-merge"}'
+"#;
+    if !with_fake_gh(
+        module_path!(),
+        "published_head_race_after_the_read_is_refused_by_the_provider",
+        script,
+    ) {
+        return;
+    }
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    let host = host.with_provider_completion();
+    let error = pr_complete(&host, &published_input(root.path()))
+        .expect_err("provider must reject a head that moved after the read");
+
+    assert!(error.to_string().contains("HTTP 409"), "{error}");
+    assert!(!root.path().join("provider-merged").exists());
+    assert_eq!(host.task_status("T1"), TaskStatus::Review);
+    assert!(host.review_landings().is_empty());
+    let args = fs::read_to_string(root.path().join("provider-args")).expect("provider args");
+    let expected_mutation = format!(
+        "api\nrepos/{{owner}}/{{repo}}/pulls/42/merge\n--method\nPUT\n-f\nsha={PUBLISHED_HEAD_SHA}\n-f\nmerge_method=squash\n"
+    );
+    assert!(args.contains(&expected_mutation), "{args}");
+}
+
 /// The live incident shape: squash is disabled while rebase and merge commits
 /// are enabled. Linear history keeps merge commits out, so both immediate and
 /// auto merge must select rebase and retain that method in completion evidence.
@@ -486,9 +642,11 @@ fn published_pr_conflict_reuses_pinned_rebase_branch_and_pr_on_completion_retry(
     )
     .unwrap();
 
+    let mut recovered_clean = state("CLEAN");
+    recovered_clean["headRefOid"] = json!(recovered_head_sha);
     host.queue_pr_status([
         state("DIRTY"),
-        state("CLEAN"),
+        recovered_clean,
         merged_state_for(&recovered_head_sha),
     ]);
     let output = pr_complete(&host, &input).expect("retry merges recovered published PR");
@@ -507,7 +665,14 @@ fn published_pr_conflict_reuses_pinned_rebase_branch_and_pr_on_completion_retry(
     assert_eq!(pushes.len(), 1, "recovery retry pushes exactly once");
     assert_eq!(pushes[0].input["branch"], "orbit/test-batch");
     assert_eq!(pushes[0].input["force_with_lease"], true);
-    assert_eq!(merge_calls(&host).len(), 1, "the existing PR merges once");
+    let merges = merge_calls(&host);
+    assert_eq!(merges.len(), 1, "the existing PR merges once");
+    assert_eq!(merges[0]["auto"], false);
+    assert_eq!(
+        merges[0]["reviewed_head_sha"],
+        recovered_head_sha.as_str(),
+        "the repaired candidate, not the pre-repair SHA, conditions the merge"
+    );
 }
 
 #[test]
