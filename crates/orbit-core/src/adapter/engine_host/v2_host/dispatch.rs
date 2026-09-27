@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::optional_string_list_alias;
 use orbit_engine::DispatchError;
-use orbit_tools::ToolContext;
+use orbit_tools::{ToolCaller, ToolContext, WitnessedProgramGrant};
 use orbit_types::policy::Role;
 use orbit_types::task::{
     TaskReferenceIndex, UnsatisfiableTaskDependency, unmet_task_dependencies_with_index,
@@ -446,12 +446,16 @@ pub(crate) fn run_deterministic(
 /// as a plugin tool is refused here rather than executed: the action exists to
 /// let a routine drive a plugin, not to widen what a deterministic step may
 /// call.
+///
+/// A step the dispatcher marked deterministic carries the plugin's program
+/// grant re-read from its witness for this call, which is what bounds the
+/// programs the backend may spawn (§4.3) [ORB-13270].
 fn plugin_tool_call(
     runtime: &OrbitRuntime,
     action: &str,
     config: &Value,
     input: &Value,
-    tool_context: ToolContext,
+    mut tool_context: ToolContext,
 ) -> Result<Value, DispatchError> {
     let failed = |message: String| DispatchError::DeterministicActionFailed {
         action: action.to_string(),
@@ -471,12 +475,28 @@ fn plugin_tool_call(
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
 
-    if runtime.tool_registry().plugin_binding(&tool_name).is_none() {
+    let Some(binding) = runtime.tool_registry().plugin_binding(&tool_name) else {
         return Err(failed(format!(
             "tool '{tool_name}' is not a plugin tool on this host; `plugin.tool_call` dispatches \
              only tools contributed by an installed plugin — check `orbit plugin list`, or use \
              `orbit_tool_call` for a built-in tool"
         )));
+    };
+    if let ToolCaller::DeterministicStep(step) = &mut tool_context.caller {
+        let plugin = binding.provenance.name.clone();
+        let installed = runtime
+            .stores()
+            .plugins()
+            .get_plugin(&plugin)
+            .map_err(|error| format!("cannot read the plugin record: {error}"));
+        let programs = installed.and_then(|installed| {
+            crate::runtime::plugin::grants::call_time_program_grants(
+                &runtime.global_root(),
+                &plugin,
+                installed.as_ref(),
+            )
+        });
+        step.witnessed = Some(WitnessedProgramGrant { plugin, programs });
     }
 
     runtime

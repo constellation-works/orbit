@@ -620,3 +620,168 @@ fn a_plugin_job_runs_its_plugin_tool_call_end_to_end() {
         .expect("the audit row names the plugin");
     assert_eq!(plugin.name, "graph");
 }
+
+/// [ORB-13270] A deterministic step has no agent in the loop, so the programs
+/// a plugin's backend declares are bounded by what the operator granted at
+/// enable, not by the empty `proc.spawn` list every activity context carries.
+/// The granted `git` actually runs: the backend reports its output.
+#[test]
+fn a_plugin_job_step_spawns_the_program_its_operator_granted() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        &DefinitionPlugin::new("graph").with_program("git"),
+    );
+    let runtime = fixture.reopen();
+
+    let job_path = runtime
+        .show_job_catalog_entry("graph_refresh_pipeline")
+        .expect("the plugin job is in the catalog")
+        .path;
+    let result = runtime
+        .run_job_v2_from_yaml(&job_path, json!({}))
+        .expect("run the plugin job");
+    assert!(result.success, "{result:?}");
+    let pipeline = result.pipeline.to_string();
+    assert!(
+        pipeline.contains("git version"),
+        "the backend ran the granted program: {pipeline}"
+    );
+}
+
+/// [ORB-13270] The deterministic-step bound is the grant, so a declared
+/// program that did not resolve at enable is still refused, by name.
+#[test]
+fn a_plugin_job_step_is_refused_a_program_that_was_never_granted() {
+    let fixture = PluginFixture::new();
+    let missing = fixture.sources.join("absent/orbit-fixture-missing-program");
+    let missing = missing.to_str().expect("utf8 path").to_string();
+    install(
+        &fixture,
+        &DefinitionPlugin::new("graph").with_program(&missing),
+    );
+    let runtime = fixture.reopen();
+
+    let job_path = runtime
+        .show_job_catalog_entry("graph_refresh_pipeline")
+        .expect("the plugin job is in the catalog")
+        .path;
+    let message = runtime
+        .run_job_v2_from_yaml(&job_path, json!({}))
+        .expect_err("the step is refused")
+        .to_string();
+    assert!(
+        message.contains(&format!("program '{missing}'")) && message.contains("not granted"),
+        "the refusal names the program: {message}"
+    );
+}
+
+/// [ORB-13270] The grant is re-read at call time, not taken from the registry
+/// built at load: a witness whose recorded program no longer matches the
+/// loaded plugin refuses the step, and a disabled row grants nothing.
+#[test]
+fn a_plugin_job_step_rechecks_the_program_grant_at_call_time() {
+    use std::collections::BTreeMap;
+
+    use crate::runtime::plugin::grants::record_authorization;
+
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        &DefinitionPlugin::new("graph").with_program("git"),
+    );
+    let runtime = fixture.reopen();
+    let installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin("graph")
+        .expect("read row")
+        .expect("installed");
+
+    // Rewritten after this runtime loaded the plugin, as a later consent
+    // resolving `git` elsewhere would.
+    record_authorization(
+        &fixture.global_root,
+        "graph",
+        installed.enabled,
+        &installed.grants,
+        &BTreeMap::from([("git".to_string(), fixture.sources.join("elsewhere/git"))]),
+    )
+    .expect("rewrite the witness");
+
+    let job_path = runtime
+        .show_job_catalog_entry("graph_refresh_pipeline")
+        .expect("the plugin job is in the catalog")
+        .path;
+    let message = runtime
+        .run_job_v2_from_yaml(&job_path, json!({}))
+        .expect_err("the step is refused")
+        .to_string();
+    assert!(
+        message.contains("program 'git'") && message.contains("differs"),
+        "{message}"
+    );
+}
+
+/// [ORB-13270] Regression: an agent activity's context is still held to its
+/// own `proc_allowed_programs`. With none declared, the same granted plugin
+/// tool is refused, naming the program.
+#[test]
+fn an_agent_activity_without_the_program_is_still_refused_the_plugin_tool() {
+    use orbit_engine::RuntimeHost;
+
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        &DefinitionPlugin::new("graph").with_program("git"),
+    );
+    let runtime = fixture.reopen();
+
+    for allowlist in [None, Some(&[][..]), Some(&["uv".to_string()][..])] {
+        let context = <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
+            &runtime,
+            Some("jrun-agent"),
+            None,
+            None,
+            allowlist,
+        );
+        let refusal = runtime
+            .run_deterministic(
+                "plugin.tool_call",
+                &json!({ "tool": "graph.hello", "input": {} }),
+                &json!({}),
+                context,
+            )
+            .expect_err("an agent context without git is refused");
+        assert!(
+            refusal
+                .to_string()
+                .contains("program 'git' is not in the allowed list"),
+            "{allowlist:?}: {refusal}"
+        );
+    }
+
+    // Allowing the program is what admits the agent, not the grant alone.
+    let allowed = ["git".to_string()];
+    let context = <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
+        &runtime,
+        Some("jrun-agent"),
+        None,
+        None,
+        Some(&allowed),
+    );
+    let output = runtime
+        .run_deterministic(
+            "plugin.tool_call",
+            &json!({ "tool": "graph.hello", "input": {} }),
+            &json!({}),
+            context,
+        )
+        .expect("an agent allowed git reaches the tool");
+    assert!(
+        output["program_output"]
+            .as_str()
+            .is_some_and(|out| out.starts_with("git version")),
+        "{output}"
+    );
+}

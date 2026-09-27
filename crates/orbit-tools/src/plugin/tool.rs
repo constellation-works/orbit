@@ -98,7 +98,9 @@ impl Tool for PluginTool {
         // installed and enabled, gated by the activity's `allowed_tools` and
         // the governed-operation row before this point. What the backend
         // declares it *spawns* (`requires.programs`) is bounded by that
-        // allowlist, through the same gate `proc.spawn` applies.
+        // allowlist, through the same gate `proc.spawn` applies — or, for a
+        // deterministic step with no agent in the loop, by the operator's
+        // grant re-read for this call (`ToolCaller`).
         self.backend.spec().enforce_programs(ctx, &self.name)?;
         let output = match &self.backend {
             PluginBackend::Exec(spec) => self.execute_process(spec, ctx, input)?,

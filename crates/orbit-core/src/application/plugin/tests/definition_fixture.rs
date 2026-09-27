@@ -33,6 +33,9 @@ pub(super) struct DefinitionPlugin<'a> {
     pub(super) config: bool,
     /// Ship a `spec.web` dashboard panel reading the `hello` tool.
     pub(super) panel: bool,
+    /// Declare one `requires.programs` entry, which the backend then runs
+    /// with `--version` and reports as `program_output`.
+    pub(super) program: Option<&'a str>,
 }
 
 impl<'a> DefinitionPlugin<'a> {
@@ -50,7 +53,13 @@ impl<'a> DefinitionPlugin<'a> {
             skill: true,
             config: true,
             panel: false,
+            program: None,
         }
+    }
+
+    pub(super) fn with_program(mut self, program: &'a str) -> Self {
+        self.program = Some(program);
+        self
     }
 
     pub(super) fn with_panel(mut self) -> Self {
@@ -81,7 +90,7 @@ impl<'a> DefinitionPlugin<'a> {
     /// Write the plugin tree under `fixture.sources` and return its root.
     pub(super) fn write(&self, fixture: &PluginFixture) -> PathBuf {
         let root = fixture.sources.join(self.namespace);
-        write_backend(&root);
+        write_backend(&root, self.program);
 
         let activities = root.join("definitions/activities");
         let jobs = root.join("definitions/jobs");
@@ -184,6 +193,10 @@ impl<'a> DefinitionPlugin<'a> {
         } else {
             String::new()
         };
+        let requires = self
+            .program
+            .map(|program| format!("  requires:\n    programs: [\"{program}\"]\n"))
+            .unwrap_or_default();
         let web = if self.panel {
             "  web:\n    panels:\n      - id: status\n        source: tool:hello\n".to_string()
         } else {
@@ -191,7 +204,7 @@ impl<'a> DefinitionPlugin<'a> {
         };
         format!(
             "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {ns}\n  version: {version}\n  \
-             description: Fixture plugin with definitions.\nspec:\n  backend:\n    type: exec\n    \
+             description: Fixture plugin with definitions.\nspec:\n{requires}  backend:\n    type: exec\n    \
              command: bin/backend.sh\n  tools:\n    - name: hello\n      description: Say hello.\n      \
              execution_kind: read_only\n      mcp_scope: workspace\n  definitions:\n    \
              activities: [definitions/activities/*.yaml]\n    jobs: [definitions/jobs/*.yaml]\n    \
@@ -210,13 +223,23 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).expect("write fixture file");
 }
 
-fn write_backend(root: &Path) {
+fn write_backend(root: &Path, program: Option<&str>) {
     let backend = root.join("bin/backend.sh");
-    write(
-        &backend,
-        "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":{\"plugin\":\"%s\"}}\\n' \
-         \"$ORBIT_PLUGIN\"\n",
-    );
+    let body = match program {
+        None => {
+            "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":{\"plugin\":\"%s\"}}\\n' \
+                 \"$ORBIT_PLUGIN\"\n"
+                .to_string()
+        }
+        // The backend actually spawns what it declared, so a passing call
+        // proves the program ran, not only that the host let the call start.
+        Some(program) => format!(
+            "#!/bin/sh\ncat > /dev/null\nout=$({program} --version 2>&1) || exit 3\n\
+             out=$(printf '%s' \"$out\" | head -n 1 | tr -d '\"\\\\')\nprintf '{{\"ok\":true,\"output\":{{\"plugin\":\"%s\",\
+             \"program_output\":\"%s\"}}}}\\n' \"$ORBIT_PLUGIN\" \"$out\"\n"
+        ),
+    };
+    write(&backend, &body);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

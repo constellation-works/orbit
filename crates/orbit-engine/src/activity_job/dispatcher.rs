@@ -8,7 +8,9 @@ use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Determi
 
 use crate::context::RuntimeHost;
 use orbit_common::{OrbitError, RecoverableVcsConflict};
-use orbit_tools::{FsAuditLogger, FsCallEvent, FsCallEventKind};
+use orbit_tools::{
+    DeterministicStepPrograms, FsAuditLogger, FsCallEvent, FsCallEventKind, ToolCaller,
+};
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::tool::McpCapability;
@@ -443,6 +445,13 @@ fn run_deterministic(
         .session_context
         .effective_capabilities
         .insert(McpCapability::Runner);
+    // No agent chose this call: the asset fixed it. A plugin tool it reaches
+    // may spawn what the operator granted that plugin, which the dispatching
+    // action re-reads from the grants witness; `proc.spawn` itself stays on
+    // the empty, fail-closed list above. A deterministic activity declares no
+    // program allowlist of its own, so there is nothing to intersect with
+    // [ORB-13270].
+    tool_context.caller = ToolCaller::DeterministicStep(DeterministicStepPrograms::default());
     // The dispatcher names the task this step serves from the run's own input, the
     // same value a CLI agent step exports as `ORBIT_TASK_ID`. A plugin reads
     // it as host-attested context; the tool's `input`/`args` never feed it.

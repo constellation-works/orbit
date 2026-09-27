@@ -7,8 +7,8 @@ use std::path::Path;
 use orbit_types::plugin::InstalledPlugin;
 
 use super::super::grants::{
-    plugin_grant_witness_path, plugin_grants_digest, record_authorized_grants, verify_install_path,
-    verify_recorded_grants,
+    call_time_program_grants, plugin_grant_witness_path, plugin_grants_digest,
+    record_authorization, record_authorized_grants, verify_install_path, verify_recorded_grants,
 };
 use super::super::paths::plugin_install_path;
 
@@ -59,6 +59,53 @@ fn the_value_names_the_authorized_set_and_not_the_order_it_was_recorded_in() {
             "the value is keyed on the namespace, the enable flag and the set"
         );
     }
+}
+
+/// [ORB-13270] What a deterministic step may spawn is read back from the
+/// current row and its witness at call time: only an installed, enabled row
+/// whose grants the witness authorizes yields the programs it recorded.
+#[test]
+fn call_time_program_grants_come_only_from_a_verified_enabled_row() {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path();
+    let programs = BTreeMap::from([("git".to_string(), PathBuf::from("/usr/bin/git"))]);
+    record_authorization(global_root, "demo", true, &["fs".into()], &programs)
+        .expect("record the consent");
+
+    let enabled = record("demo", true, &["fs"]);
+    assert_eq!(
+        call_time_program_grants(global_root, "demo", Some(&enabled)),
+        Ok(programs),
+        "the recorded programs of a verified row"
+    );
+
+    let error = call_time_program_grants(global_root, "demo", None).expect_err("uninstalled");
+    assert!(error.contains("no longer installed"), "{error}");
+    let error =
+        call_time_program_grants(global_root, "demo", Some(&record("other", true, &["fs"])))
+            .expect_err("another plugin's row");
+    assert!(error.contains("no longer installed"), "{error}");
+    let error =
+        call_time_program_grants(global_root, "demo", Some(&record("demo", false, &["fs"])))
+            .expect_err("disabled");
+    assert!(error.contains("disabled"), "{error}");
+    let error = call_time_program_grants(
+        global_root,
+        "demo",
+        Some(&record("demo", true, &["fs", "unsandboxed"])),
+    )
+    .expect_err("a row widened after consent");
+    assert!(error.contains("do not match"), "{error}");
+
+    // Enabled without `--grant` and without a witness: verified, but nothing
+    // was consented to, so no program is granted.
+    assert_eq!(
+        call_time_program_grants(global_root, "bare", Some(&record("bare", true, &[]))),
+        Ok(BTreeMap::new())
+    );
 }
 
 #[test]
