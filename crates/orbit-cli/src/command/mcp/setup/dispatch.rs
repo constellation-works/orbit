@@ -6,7 +6,158 @@ use orbit_core::OrbitError;
 use crate::command::mcp::ORBIT_MCP_SERVER_ID;
 
 use super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
+use super::format::{load_toml_document, write_or_remove_toml_document};
 use super::providers::*;
+
+fn server_id_for_action(action: McpAction<'_>) -> &'static str {
+    match action {
+        McpAction::Init(ServerLaunch::Federated) | McpAction::RemoveFederated => {
+            ORBIT_FEDERATED_MCP_SERVER_ID
+        }
+        McpAction::Init(ServerLaunch::Local { .. }) | McpAction::Remove => ORBIT_MCP_SERVER_ID,
+    }
+}
+
+fn shared_grok_target(target: &ConfigTarget) -> ConfigTarget {
+    ConfigTarget {
+        mcp_path: target.mcp_path.clone(),
+        legacy_mcp_path: None,
+        settings_path: None,
+        scope: target.scope,
+    }
+}
+
+/// Remove only the exact Grok TOML shape emitted by older Orbit versions.
+/// A user's own server with the same name but a different launch or extra
+/// settings is left alone, since Orbit has no ownership marker in old files.
+fn cleanup_legacy_grok_path(target: &ConfigTarget, server_id: &str) -> Result<(), OrbitError> {
+    let Some(path) = target.legacy_mcp_path.as_ref().filter(|path| path.exists()) else {
+        return Ok(());
+    };
+    let mut doc = load_toml_document(path)?;
+    if doc.to_string().trim().is_empty() {
+        return Ok(());
+    }
+    if doc
+        .get("mcp_servers")
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|servers| servers.get(server_id))
+        .is_none()
+    {
+        return Ok(());
+    }
+    let parsed: toml::Value = doc.to_string().parse().map_err(|err| {
+        OrbitError::InvalidInput(format!("invalid TOML '{}': {err}", path.display()))
+    })?;
+    let owned = parsed
+        .get("mcp_servers")
+        .and_then(|servers| servers.get(server_id))
+        .is_some_and(|entry| is_legacy_orbit_grok_entry(entry, server_id));
+    if !owned {
+        return Ok(());
+    }
+    if let Some(servers) = doc
+        .get_mut("mcp_servers")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        servers.remove(server_id);
+        if servers.is_empty() {
+            doc.remove("mcp_servers");
+        }
+    }
+    write_or_remove_toml_document(path, &doc)?;
+    if !path.exists()
+        && let Some(parent) = path.parent()
+        && parent
+            .read_dir()
+            .map_err(|error| {
+                OrbitError::Io(format!("failed to read '{}': {error}", parent.display()))
+            })?
+            .next()
+            .is_none()
+    {
+        fs::remove_dir(parent).map_err(|error| {
+            OrbitError::Io(format!("failed to remove '{}': {error}", parent.display()))
+        })?;
+    }
+    Ok(())
+}
+
+fn is_legacy_orbit_grok_entry(entry: &toml::Value, server_id: &str) -> bool {
+    let Some(table) = entry.as_table() else {
+        return false;
+    };
+    if table.len() != 3
+        || table.get("command").and_then(toml::Value::as_str) != Some("orbit")
+        || table.get("enabled").and_then(toml::Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    let Some(args) = table.get("args").and_then(toml::Value::as_array) else {
+        return false;
+    };
+    let args = args
+        .iter()
+        .map(toml::Value::as_str)
+        .collect::<Option<Vec<_>>>();
+    let Some(args) = args else {
+        return false;
+    };
+    match (server_id, args.as_slice()) {
+        (ORBIT_MCP_SERVER_ID, ["mcp", "serve"])
+        | (ORBIT_MCP_SERVER_ID, ["mcp", "serve", "--operator"])
+        | (ORBIT_FEDERATED_MCP_SERVER_ID, ["mcp", "serve", "--mode", "federated"]) => true,
+        (ORBIT_MCP_SERVER_ID, ["mcp", "serve", "--workspace", workspace])
+        | (ORBIT_MCP_SERVER_ID, ["mcp", "serve", "--operator", "--workspace", workspace]) => {
+            !workspace.is_empty()
+        }
+        _ => false,
+    }
+}
+
+/// Grok stops reading project `.mcp.json` after Claude import, and its
+/// `~/.claude.json` reader can be disabled separately. Use Grok's native
+/// config when the shared reader is unavailable or cannot be checked.
+fn grok_reads_shared_location(scope: ScopeArg, home_dir: Option<&Path>) -> bool {
+    let Some(home) = home_dir else {
+        return false;
+    };
+    let path = home.join(".grok").join("config.toml");
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => return false,
+    };
+    let Ok(config) = raw.parse::<toml::Value>() else {
+        return false;
+    };
+    if config
+        .get("claude_compat")
+        .and_then(|compat| compat.get("imported"))
+        .and_then(toml::Value::as_bool)
+        == Some(true)
+    {
+        return false;
+    }
+    if scope == ScopeArg::Home {
+        if config
+            .get("compat")
+            .and_then(|compat| compat.get("claude"))
+            .and_then(|claude| claude.get("mcps"))
+            .and_then(toml::Value::as_bool)
+            == Some(false)
+        {
+            return false;
+        }
+        if std::env::var("GROK_CLAUDE_MCPS_ENABLED")
+            .ok()
+            .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false"))
+        {
+            return false;
+        }
+    }
+    true
+}
 
 pub(super) fn run_action(
     action: McpAction<'_>,
@@ -25,7 +176,18 @@ pub(super) fn run_action(
                 McpProvider::Codex => apply_toml_init(&target, launch, true)?,
                 McpProvider::Gemini => apply_gemini_init(&target, launch)?,
                 McpProvider::Antigravity => apply_simple_json_init(&target, "mcpServers", launch)?,
-                McpProvider::Grok => apply_toml_init(&target, launch, false)?,
+                McpProvider::Grok => {
+                    if target.legacy_mcp_path.is_some() {
+                        // Claude's handler provides the ~/.claude.json lock.
+                        // When Claude is selected it owns the shared write.
+                        if !providers.contains(&McpProvider::Claude) {
+                            apply_claude_init(&shared_grok_target(&target), launch)?;
+                        }
+                        cleanup_legacy_grok_path(&target, server_id_for_action(action))?;
+                    } else {
+                        apply_toml_init(&target, launch, false)?;
+                    }
+                }
                 McpProvider::Cursor => apply_simple_json_init(&target, "mcpServers", launch)?,
                 McpProvider::Vscode => apply_simple_json_init(&target, "servers", launch)?,
                 McpProvider::Windsurf => apply_simple_json_init(&target, "mcpServers", launch)?,
@@ -43,7 +205,14 @@ pub(super) fn run_action(
                     McpProvider::Antigravity => {
                         apply_simple_json_remove(&target, "mcpServers", server_id)?
                     }
-                    McpProvider::Grok => apply_toml_remove(&target, server_id)?,
+                    McpProvider::Grok => {
+                        if target.legacy_mcp_path.is_some() {
+                            apply_claude_remove(&shared_grok_target(&target), server_id)?;
+                            cleanup_legacy_grok_path(&target, server_id)?;
+                        } else {
+                            apply_toml_remove(&target, server_id)?;
+                        }
+                    }
                     McpProvider::Cursor => {
                         apply_simple_json_remove(&target, "mcpServers", server_id)?
                     }
@@ -61,10 +230,9 @@ pub(super) fn run_action(
 
 /// Resolved file targets for a single provider+scope.
 ///
-/// Each provider has at most two writable files: the MCP server registry
-/// (`mcp_path`) and an optional permissions/settings file (`settings_path`,
-/// only used by Claude today). Scope determines whether they live in HOME
-/// or in the repo.
+/// `mcp_path` is the active registry, `legacy_mcp_path` is a migration source,
+/// and `settings_path` is Claude's optional permissions file. Scope determines
+/// whether they live in HOME or in the repo.
 pub(super) struct ConfigTarget {
     pub(super) mcp_path: PathBuf,
     pub(super) legacy_mcp_path: Option<PathBuf>,
@@ -142,19 +310,34 @@ impl ConfigTarget {
             }),
             (ScopeArg::Home, McpProvider::Grok) => {
                 let home = require_home_dir(home_dir)?;
+                if !grok_reads_shared_location(scope, Some(home)) {
+                    return Ok(Self {
+                        mcp_path: home.join(".grok").join("config.toml"),
+                        legacy_mcp_path: None,
+                        settings_path: None,
+                        scope,
+                    });
+                }
                 Ok(Self {
-                    mcp_path: home.join(".grok").join("config.toml"),
-                    legacy_mcp_path: None,
+                    mcp_path: home.join(".claude.json"),
+                    legacy_mcp_path: Some(home.join(".grok").join("config.toml")),
                     settings_path: None,
                     scope,
                 })
             }
-            (ScopeArg::Workspace, McpProvider::Grok) => Ok(Self {
-                mcp_path: repo_root.join(".grok").join("config.toml"),
-                legacy_mcp_path: None,
-                settings_path: None,
-                scope,
-            }),
+            (ScopeArg::Workspace, McpProvider::Grok) => {
+                let shared = grok_reads_shared_location(scope, home_dir);
+                Ok(Self {
+                    mcp_path: if shared {
+                        repo_root.join(".mcp.json")
+                    } else {
+                        repo_root.join(".grok").join("config.toml")
+                    },
+                    legacy_mcp_path: shared.then(|| repo_root.join(".grok").join("config.toml")),
+                    settings_path: None,
+                    scope,
+                })
+            }
             (ScopeArg::Home, McpProvider::Cursor) => {
                 let home = require_home_dir(home_dir)?;
                 Ok(Self {
@@ -309,7 +492,9 @@ fn registration_matches(
     let Ok(contents) = fs::read_to_string(path) else {
         return false;
     };
-    let entry = if matches!(client, McpProvider::Codex | McpProvider::Grok) {
+    let entry = if client == McpProvider::Codex
+        || (client == McpProvider::Grok && path.extension().is_some_and(|ext| ext == "toml"))
+    {
         let Ok(doc) = contents.parse::<toml::Value>() else {
             return false;
         };
@@ -392,8 +577,7 @@ pub(super) fn auto_detected_providers(
     if gemini_repo || gemini_home {
         providers.push(McpProvider::Gemini);
     }
-    let antigravity_repo = repo_root.join(".agents").join("mcp_config.json").is_file()
-        || repo_root.join(".agents").is_dir();
+    let antigravity_repo = repo_root.join(".agents").join("mcp_config.json").is_file();
     let antigravity_home = home_dir
         .map(|home| {
             home.join(".gemini")

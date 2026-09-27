@@ -316,6 +316,23 @@ Pi has no MCP client, and `orbit mcp setup` offers none. Keep Pi's `bash` tool a
 
 A terminal `result` with `status: "SUCCESS"` completes the step. On a non-zero exit with a terminal `ERROR`, Orbit surfaces the bounded, redacted `error` string.
 
+## MCP client registration
+
+`orbit workspace init --mcp` registers Grok through the shared project
+`.mcp.json` used by Claude Code. `orbit mcp init --scope home --grok` uses
+`~/.claude.json`; Grok's [MCP compatibility documentation](https://docs.x.ai/build/features/mcp-servers)
+lists both locations. Re-running init migrates an older Orbit-generated Grok
+entry out of `.grok/config.toml` while preserving other Grok settings and
+servers. When `[claude_compat] imported = true` in `~/.grok/config.toml`,
+Grok ignores project `.mcp.json` and init retains the native `.grok/config.toml`
+target. A disabled `[compat.claude] mcps` setting or
+`GROK_CLAUDE_MCPS_ENABLED=0` likewise keeps the native home target. Inspect
+the loaded source with `grok inspect`. Removing a shared `orbit` registration
+through either Claude or Grok removes that one entry for both clients.
+Gemini CLI continues to use `.gemini/settings.json` (or
+`~/.gemini/settings.json` for home scope): its [configuration reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md)
+does not document the shared MCP locations as a settings source.
+
 ## OpenCode CLI
 
 | | |

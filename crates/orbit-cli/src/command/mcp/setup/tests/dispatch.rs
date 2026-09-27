@@ -4,7 +4,8 @@ use tempfile::tempdir;
 
 use super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
 use super::super::dispatch::{
-    auto_detected_providers, format_action_summary, run_action, vscode_home_user_dir,
+    auto_detected_providers, format_action_summary, registered_clients_for_workspace, run_action,
+    vscode_home_user_dir,
 };
 use super::super::providers::ServerLaunch;
 
@@ -32,6 +33,294 @@ fn auto_detects_expected_providers() {
             McpProvider::Grok,
         ]
     );
+}
+
+#[test]
+fn bare_agents_directory_does_not_detect_antigravity() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(repo.path().join(".agents")).expect("create shared agents dir");
+
+    assert!(
+        !auto_detected_providers(repo.path(), Some(home.path()))
+            .contains(&McpProvider::Antigravity)
+    );
+}
+
+#[test]
+fn auto_init_shares_grok_registration_without_a_grok_workspace_directory() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    std::fs::write(home.path().join(".claude.json"), "{}\n").expect("detect Claude");
+    std::fs::create_dir_all(home.path().join(".codex")).expect("create codex home");
+    std::fs::write(home.path().join(".codex/config.toml"), "\n").expect("detect Codex");
+    std::fs::create_dir_all(home.path().join(".gemini")).expect("create gemini home");
+    std::fs::write(home.path().join(".gemini/settings.json"), "{}\n").expect("detect Gemini");
+    std::fs::create_dir_all(home.path().join(".grok")).expect("create grok home");
+    std::fs::write(
+        home.path().join(".grok/config.toml"),
+        "model = \"grok-4\"\n",
+    )
+    .expect("detect Grok");
+
+    let configured = run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Auto,
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("auto init");
+    assert_eq!(
+        configured,
+        vec![
+            McpProvider::Claude,
+            McpProvider::Codex,
+            McpProvider::Gemini,
+            McpProvider::Grok
+        ]
+    );
+    assert!(repo.path().join(".mcp.json").is_file());
+    assert!(repo.path().join(".codex/config.toml").is_file());
+    assert!(repo.path().join(".gemini/settings.json").is_file());
+    assert!(!repo.path().join(".grok").exists());
+    let clients = registered_clients_for_workspace(repo.path(), None, Some(home.path()));
+    for provider in ["claude", "codex", "gemini", "grok"] {
+        assert!(
+            clients.contains(&format!("{provider} (workspace)")),
+            "{clients:?}"
+        );
+    }
+}
+
+#[test]
+fn grok_legacy_cleanup_removes_only_generated_entries_in_both_scopes() {
+    for scope in [ScopeArg::Workspace, ScopeArg::Home] {
+        let repo = tempdir().expect("repo tempdir");
+        let home = tempdir().expect("home tempdir");
+        let root = if scope == ScopeArg::Home {
+            home.path()
+        } else {
+            repo.path()
+        };
+        let legacy_dir = root.join(".grok");
+        std::fs::create_dir_all(&legacy_dir).expect("create Grok config dir");
+        let legacy_path = legacy_dir.join("config.toml");
+        std::fs::write(
+            &legacy_path,
+            "model = \"grok-4\"\n[mcp_servers.other]\ncommand = \"other\"\n[mcp_servers.orbit]\ncommand = \"orbit\"\nargs = [\"mcp\", \"serve\"]\nenabled = true\n[mcp_servers.orbit-federated]\ncommand = \"orbit\"\nargs = [\"mcp\", \"serve\", \"--mode\", \"federated\"]\nenabled = true\n",
+        )
+        .expect("write legacy entries");
+        let orbit_root = repo.path().join(".orbit");
+        std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+
+        for _ in 0..2 {
+            run_action(
+                McpAction::Init(ServerLaunch::default()),
+                repo.path(),
+                &orbit_root,
+                ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+                Some(home.path().to_path_buf()),
+                scope,
+            )
+            .expect("init and reconcile Grok");
+        }
+        run_action(
+            McpAction::Init(ServerLaunch::Federated),
+            repo.path(),
+            &orbit_root,
+            ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+            Some(home.path().to_path_buf()),
+            scope,
+        )
+        .expect("migrate federated Grok entry");
+        let legacy: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&legacy_path).expect("read legacy config"))
+                .expect("parse legacy config");
+        assert_eq!(legacy["model"].as_str(), Some("grok-4"));
+        assert_eq!(
+            legacy["mcp_servers"]["other"]["command"].as_str(),
+            Some("other")
+        );
+        assert!(legacy["mcp_servers"].get("orbit").is_none());
+        assert!(legacy["mcp_servers"].get("orbit-federated").is_none());
+        let shared = if scope == ScopeArg::Home {
+            root.join(".claude.json")
+        } else {
+            root.join(".mcp.json")
+        };
+        let registration: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(shared).expect("read shared config"))
+                .expect("parse shared config");
+        assert_eq!(registration["mcpServers"]["orbit"]["command"], "orbit");
+        assert_eq!(
+            registration["mcpServers"]["orbit-federated"]["args"],
+            serde_json::json!(["mcp", "serve", "--mode", "federated"])
+        );
+    }
+}
+
+#[test]
+fn grok_legacy_cleanup_keeps_a_same_named_user_server() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    let legacy_dir = repo.path().join(".grok");
+    std::fs::create_dir_all(&legacy_dir).expect("create legacy dir");
+    let path = legacy_dir.join("config.toml");
+    let original =
+        "[mcp_servers.orbit]\ncommand = \"custom\"\nargs = [\"serve\"]\nenabled = true\n";
+    std::fs::write(&path, original).expect("write custom entry");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("init Grok");
+    assert_eq!(
+        std::fs::read_to_string(path).expect("read custom entry"),
+        original
+    );
+}
+
+#[test]
+fn grok_legacy_cleanup_removes_empty_orbit_only_directory() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    let legacy_dir = repo.path().join(".grok");
+    std::fs::create_dir_all(&legacy_dir).expect("create legacy dir");
+    std::fs::write(
+        legacy_dir.join("config.toml"),
+        "[mcp_servers.orbit]\ncommand = \"orbit\"\nargs = [\"mcp\", \"serve\"]\nenabled = true\n",
+    )
+    .expect("write Orbit entry");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Workspace,
+    )
+    .expect("migrate Grok entry");
+    assert!(!legacy_dir.exists());
+    assert!(repo.path().join(".mcp.json").is_file());
+}
+
+#[test]
+fn grok_only_home_init_writes_one_shared_registry() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    run_action(
+        McpAction::Init(ServerLaunch::default()),
+        repo.path(),
+        &orbit_root,
+        ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+        Some(home.path().to_path_buf()),
+        ScopeArg::Home,
+    )
+    .expect("init Grok at home");
+    let registration: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.path().join(".claude.json")).expect("read shared registry"),
+    )
+    .expect("parse shared registry");
+    assert_eq!(registration["mcpServers"]["orbit"]["command"], "orbit");
+    assert!(!home.path().join(".grok").exists());
+    assert!(!home.path().join(".claude").exists());
+}
+
+#[test]
+fn grok_import_marker_keeps_native_target_in_both_scopes() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(home.path().join(".grok")).expect("create Grok home");
+    std::fs::write(
+        home.path().join(".grok/config.toml"),
+        "[claude_compat]\nimported = true\n",
+    )
+    .expect("mark Claude import");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    for scope in [ScopeArg::Workspace, ScopeArg::Home] {
+        run_action(
+            McpAction::Init(ServerLaunch::default()),
+            repo.path(),
+            &orbit_root,
+            ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+            Some(home.path().to_path_buf()),
+            scope,
+        )
+        .expect("init with Grok import marker");
+    }
+    let workspace: toml::Value = toml::from_str(
+        &std::fs::read_to_string(repo.path().join(".grok/config.toml"))
+            .expect("read workspace Grok config"),
+    )
+    .expect("parse workspace Grok config");
+    assert_eq!(
+        workspace["mcp_servers"]["orbit"]["command"].as_str(),
+        Some("orbit")
+    );
+    let user: toml::Value = toml::from_str(
+        &std::fs::read_to_string(home.path().join(".grok/config.toml"))
+            .expect("read home Grok config"),
+    )
+    .expect("parse home Grok config");
+    assert_eq!(user["claude_compat"]["imported"].as_bool(), Some(true));
+    assert_eq!(
+        user["mcp_servers"]["orbit"]["command"].as_str(),
+        Some("orbit")
+    );
+    assert!(!repo.path().join(".mcp.json").exists());
+    assert!(!home.path().join(".claude.json").exists());
+}
+
+#[test]
+fn grok_disabled_claude_compat_keeps_native_home_only() {
+    let repo = tempdir().expect("repo tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(home.path().join(".grok")).expect("create Grok home");
+    std::fs::write(
+        home.path().join(".grok/config.toml"),
+        "[compat.claude]\nmcps = false\n",
+    )
+    .expect("disable Claude MCP compatibility");
+    let orbit_root = repo.path().join(".orbit");
+    std::fs::create_dir_all(&orbit_root).expect("create orbit root");
+    for scope in [ScopeArg::Workspace, ScopeArg::Home] {
+        run_action(
+            McpAction::Init(ServerLaunch::default()),
+            repo.path(),
+            &orbit_root,
+            ProviderSelectionMode::Explicit(vec![McpProvider::Grok]),
+            Some(home.path().to_path_buf()),
+            scope,
+        )
+        .expect("init with Claude MCP compatibility disabled");
+    }
+    assert!(repo.path().join(".mcp.json").is_file());
+    assert!(!repo.path().join(".grok").exists());
+    let user: toml::Value = toml::from_str(
+        &std::fs::read_to_string(home.path().join(".grok/config.toml"))
+            .expect("read home Grok config"),
+    )
+    .expect("parse home Grok config");
+    assert_eq!(
+        user["mcp_servers"]["orbit"]["command"].as_str(),
+        Some("orbit")
+    );
+    assert!(!home.path().join(".claude.json").exists());
 }
 
 #[test]
@@ -178,20 +467,8 @@ fn home_scope_writes_to_home_paths_and_skips_repo_files() {
     assert_eq!(gemini_args.len(), 2);
     assert!(gemini_settings["mcpServers"]["orbit"]["cwd"].is_null());
 
-    let grok_config = std::fs::read_to_string(home.path().join(".grok").join("config.toml"))
-        .expect("read grok home config");
-    let grok_parsed: toml::Value = toml::from_str(&grok_config).expect("parse grok");
-    let grok_args = grok_parsed["mcp_servers"]["orbit"]["args"]
-        .as_array()
-        .expect("grok args");
-    assert_eq!(grok_args.len(), 2);
-    assert_eq!(grok_args[0].as_str(), Some("mcp"));
-    assert_eq!(grok_args[1].as_str(), Some("serve"));
-    assert_eq!(
-        grok_parsed["mcp_servers"]["orbit"]["enabled"].as_bool(),
-        Some(true)
-    );
-    assert!(grok_parsed["mcp_servers"]["orbit"].get("cwd").is_none());
+    // Grok reads the same ~/.claude.json entry Claude uses.
+    assert!(!home.path().join(".grok").exists());
 
     // Repo-local files should not have been touched.
     assert!(!repo.path().join(".mcp.json").exists());
@@ -259,30 +536,23 @@ fn federated_home_scope_preserves_v1_entries() {
             .any(|permission| permission == "mcp__orbit-federated__orbit_task_show")
     );
 
-    for (provider, path) in [
-        ("codex", home.path().join(".codex").join("config.toml")),
-        ("grok", home.path().join(".grok").join("config.toml")),
-    ] {
-        let config: toml::Value = toml::from_str(
-            &std::fs::read_to_string(path)
-                .unwrap_or_else(|error| panic!("read {provider}: {error}")),
-        )
-        .unwrap_or_else(|error| panic!("parse {provider}: {error}"));
-        assert_eq!(
-            config["mcp_servers"]["orbit"]["args"]
-                .as_array()
-                .map(Vec::len),
-            Some(2),
-            "{provider} must retain v1"
-        );
-        assert_eq!(
-            config["mcp_servers"]["orbit-federated"]["args"]
-                .as_array()
-                .map(Vec::len),
-            Some(4),
-            "{provider} must add federated"
-        );
-    }
+    let codex: toml::Value = toml::from_str(
+        &std::fs::read_to_string(home.path().join(".codex/config.toml"))
+            .expect("read Codex config"),
+    )
+    .expect("parse Codex config");
+    assert_eq!(
+        codex["mcp_servers"]["orbit"]["args"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        codex["mcp_servers"]["orbit-federated"]["args"]
+            .as_array()
+            .map(Vec::len),
+        Some(4)
+    );
 
     let gemini: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(home.path().join(".gemini").join("settings.json"))
@@ -332,13 +602,7 @@ fn federated_home_scope_preserves_v1_entries() {
     assert!(gemini["mcpServers"]["orbit"].is_object());
     assert!(gemini["mcpServers"]["orbit-federated"].is_null());
 
-    let grok: toml::Value = toml::from_str(
-        &std::fs::read_to_string(home.path().join(".grok").join("config.toml"))
-            .expect("read grok after remove"),
-    )
-    .expect("parse grok after remove");
-    assert!(grok["mcp_servers"]["orbit"].is_table());
-    assert!(grok["mcp_servers"].get("orbit-federated").is_none());
+    assert!(!home.path().join(".grok").exists());
 }
 
 #[test]

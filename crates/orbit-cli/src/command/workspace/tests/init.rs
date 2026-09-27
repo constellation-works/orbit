@@ -1333,7 +1333,12 @@ fn workspace_init_seeds_auto_detected_mcp_configs() {
 
     std::fs::create_dir_all(workspace.path().join(".claude")).expect("create .claude");
     std::fs::create_dir_all(workspace.path().join(".gemini")).expect("create .gemini");
-    std::fs::create_dir_all(workspace.path().join(".grok")).expect("create .grok");
+    std::fs::create_dir_all(home.path().join(".grok")).expect("create Grok home");
+    std::fs::write(
+        home.path().join(".grok/config.toml"),
+        "model = \"grok-4\"\n",
+    )
+    .expect("detect Grok from home");
     std::fs::create_dir_all(home.path().join(".codex")).expect("create global .codex");
     std::fs::write(
         home.path().join(".codex").join("config.toml"),
@@ -1373,7 +1378,10 @@ fn workspace_init_seeds_auto_detected_mcp_configs() {
             .join("settings.json")
             .exists()
     );
-    assert!(workspace.path().join(".grok").join("config.toml").exists());
+    assert!(
+        !workspace.path().join(".grok").exists(),
+        "Grok reads the shared .mcp.json registration"
+    );
 
     // `--mcp` from `orbit workspace init` is the operator-facing orchestrator
     // bootstrap path (ORB-10960): every auto-detected client must launch the
@@ -1399,11 +1407,6 @@ fn workspace_init_seeds_auto_detected_mcp_configs() {
         &gemini_settings["mcpServers"]["orbit"]["args"],
         &workspace_id,
     );
-
-    let grok_config = std::fs::read_to_string(workspace.path().join(".grok/config.toml"))
-        .expect("read grok config");
-    let grok_parsed: toml::Value = toml::from_str(&grok_config).expect("parse grok config");
-    assert_operator_argv_toml(&grok_parsed["mcp_servers"]["orbit"]["args"], &workspace_id);
 }
 
 /// Every generated integration's argv must be exactly `mcp serve --operator

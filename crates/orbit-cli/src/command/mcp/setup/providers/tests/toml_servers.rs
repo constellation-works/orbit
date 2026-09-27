@@ -203,25 +203,19 @@ fn grok_workspace_scope_init_and_remove_preserve_unrelated_entries() {
         .expect("read config");
     let parsed: toml::Value = toml::from_str(&config).expect("parse config");
     assert_eq!(parsed["model"].as_str(), Some("grok-4"));
-    assert_eq!(
-        parsed["mcp_servers"]["orbit"]["command"].as_str(),
-        Some("orbit")
-    );
-    let args = parsed["mcp_servers"]["orbit"]["args"]
-        .as_array()
-        .expect("args array");
-    assert_eq!(args.len(), 2);
-    assert_eq!(args[0].as_str(), Some("mcp"));
-    assert_eq!(args[1].as_str(), Some("serve"));
-    assert_eq!(
-        parsed["mcp_servers"]["orbit"]["enabled"].as_bool(),
-        Some(true)
-    );
-    assert!(parsed["mcp_servers"]["orbit"].get("env_vars").is_none());
-    assert!(parsed["mcp_servers"]["orbit"].get("cwd").is_none());
+    assert!(parsed["mcp_servers"].get("orbit").is_none());
     assert_eq!(
         parsed["mcp_servers"]["other"]["command"].as_str(),
         Some("demo")
+    );
+    let shared: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read shared MCP"),
+    )
+    .expect("parse shared MCP");
+    assert_eq!(shared["mcpServers"]["orbit"]["command"], "orbit");
+    assert_eq!(
+        shared["mcpServers"]["orbit"]["args"],
+        serde_json::json!(["mcp", "serve"])
     );
 
     run_action(
@@ -248,6 +242,7 @@ fn grok_workspace_scope_init_and_remove_preserve_unrelated_entries() {
         parsed["mcp_servers"]["other"]["command"].as_str(),
         Some("demo")
     );
+    assert!(!repo.path().join(".mcp.json").exists());
 }
 
 #[test]
@@ -266,8 +261,7 @@ fn workspace_scope_grok_init_is_idempotent() {
         ScopeArg::Workspace,
     )
     .expect("init grok");
-    let first = std::fs::read_to_string(repo.path().join(".grok").join("config.toml"))
-        .expect("read first config");
+    let first = std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read first config");
 
     run_action(
         McpAction::Init(ServerLaunch::default()),
@@ -278,10 +272,11 @@ fn workspace_scope_grok_init_is_idempotent() {
         ScopeArg::Workspace,
     )
     .expect("init grok again");
-    let second = std::fs::read_to_string(repo.path().join(".grok").join("config.toml"))
-        .expect("read second config");
+    let second =
+        std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read second config");
 
     assert_eq!(first, second);
+    assert!(!repo.path().join(".grok").exists());
 }
 
 #[test]
@@ -303,10 +298,9 @@ fn grok_operator_init_writes_single_operator_flag_and_refresh_is_idempotent() {
         .expect("operator init grok")
     };
     let assert_single_operator_entry = || {
-        let config = std::fs::read_to_string(repo.path().join(".grok").join("config.toml"))
-            .expect("read config");
-        let parsed: toml::Value = toml::from_str(&config).expect("parse config");
-        let args = parsed["mcp_servers"]["orbit"]["args"]
+        let config = std::fs::read_to_string(repo.path().join(".mcp.json")).expect("read config");
+        let parsed: serde_json::Value = serde_json::from_str(&config).expect("parse config");
+        let args = parsed["mcpServers"]["orbit"]["args"]
             .as_array()
             .expect("args array");
         assert_eq!(args.len(), 3);
