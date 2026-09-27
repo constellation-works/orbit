@@ -71,6 +71,17 @@ pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(),
     )
 }
 
+/// v32 `audit_brokered_call` migration: whether a run's plugin broker
+/// executed the call for a sandboxed agent, and the PID of the peer that
+/// asked (design `docs/design/plugins/2_agent_call_broker.md` §4.4).
+/// Additive: an older binary ignores both columns, and every earlier row
+/// reads NULL, which is not brokered.
+pub(super) fn apply_audit_brokered_call(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema(conn)?;
+    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN brokered INTEGER")?;
+    add_column_if_missing(conn, "ALTER TABLE audit_events ADD COLUMN peer_pid INTEGER")
+}
+
 /// v27 `plugin_certified_orbit_version` migration: the Orbit version a
 /// plugin's `spec.tests` goldens last passed on, written by `orbit plugin
 /// test` and printed by `orbit plugin show` (design

@@ -8,7 +8,7 @@
 use orbit_types::workflow::ExecutorSandboxKind;
 
 use super::super::dispatcher::ResolvedSandbox;
-use crate::context::{PLUGIN_BROKER_ENV, PluginBrokerHandle, RuntimeHost};
+use crate::context::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
 
 /// This launch's broker, if one bound. Dropping it stops the listener and
 /// removes the socket, so every return path out of the step tears it down.
@@ -18,12 +18,14 @@ pub(super) struct RunPluginBroker {
 }
 
 impl RunPluginBroker {
-    /// Start the host's broker when the provider runs under an agent sandbox.
-    /// An unsandboxed launch gets none (design §7), and a bind failure is a
-    /// warning that names the cause.
+    /// Start the host's broker when the provider runs under an agent sandbox,
+    /// serving the run `run` describes. An unsandboxed launch gets none
+    /// (design §7). A bind failure, or a run with no worktree to confine a
+    /// brokered backend to, is a warning that names the cause.
     pub(super) fn start(
         host: &dyn RuntimeHost,
         run_id: &str,
+        run: Option<&PluginBrokerRun>,
         sandbox: Option<&ResolvedSandbox>,
     ) -> Self {
         let sandboxed = sandbox.is_some_and(|sandbox| {
@@ -32,19 +34,22 @@ impl RunPluginBroker {
                 ExecutorSandboxKind::LinuxBwrap | ExecutorSandboxKind::MacosSandboxExec
             )
         });
-        let handle = if sandboxed {
-            host.start_plugin_broker(run_id).unwrap_or_else(|error| {
-                tracing::warn!(
-                    target: "orbit.plugin_broker",
-                    run_id,
-                    cause = %error,
-                    "plugin broker unavailable; the step runs without {PLUGIN_BROKER_ENV}"
-                );
-                None
-            })
-        } else {
-            None
+        let started = match run {
+            _ if !sandboxed => Ok(None),
+            Some(run) => host.start_plugin_broker(run),
+            None => Err(orbit_common::OrbitError::Execution(
+                "the run has no worktree to confine a brokered plugin backend to".to_string(),
+            )),
         };
+        let handle = started.unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.plugin_broker",
+                run_id,
+                cause = %error,
+                "plugin broker unavailable; the step runs without {PLUGIN_BROKER_ENV}"
+            );
+            None
+        });
         Self {
             handle,
             run_id: run_id.to_string(),

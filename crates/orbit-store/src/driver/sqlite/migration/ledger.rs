@@ -295,12 +295,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_plugin_secret_updates,
     },
+    // The plugin broker: whether a call was brokered for a sandboxed agent,
+    // and the peer PID that asked.
+    Migration {
+        version: 32,
+        name: "audit_brokered_call",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_audit_brokered_call,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 31;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 32;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

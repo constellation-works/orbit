@@ -63,6 +63,7 @@ impl Fixture {
                 modify: modify.iter().map(|rule| (*rule).to_string()).collect(),
             },
             proc_allowed_programs: Vec::new(),
+            proc_disallowed_programs: None,
         }
     }
 
@@ -263,6 +264,29 @@ fn a_declared_program_off_the_callers_allowlist_refuses_the_brokered_profile() {
         .spec
         .brokered_sandbox_profile(&caller)
         .expect("a program on the caller's allowlist is admitted");
+}
+
+#[test]
+fn a_deny_mode_caller_decides_declared_programs_by_its_disallow_list() {
+    let mut fixture = Fixture::new(&[], &[]);
+    fixture.spec.programs = vec!["git".into()];
+    let mut caller = fixture.caller(&["**"], &["**"]);
+    caller.proc_disallowed_programs = Some(Vec::new());
+
+    fixture
+        .spec
+        .brokered_sandbox_profile(&caller)
+        .expect("a program the disallow list does not name is admitted");
+
+    caller.proc_disallowed_programs = Some(vec!["git".into()]);
+    let error = fixture
+        .spec
+        .brokered_sandbox_profile(&caller)
+        .expect_err("a disallowed program refuses the call");
+    assert!(
+        matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
+        "{error:?}"
+    );
 }
 
 #[cfg(unix)]

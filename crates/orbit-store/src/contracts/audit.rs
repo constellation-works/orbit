@@ -168,6 +168,11 @@ pub struct AuditInvocationFields<'a> {
     /// `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). `None`, or an
     /// empty map, for every call that rotated nothing.
     pub plugin_secret_updates: Option<&'a BTreeMap<String, PluginSecretUpdateStatus>>,
+    /// Set when a run's plugin broker executed the call for a sandboxed
+    /// agent (design `docs/design/plugins/2_agent_call_broker.md` §4.4): the
+    /// authenticated peer's PID. The row is then written `brokered`. `None`
+    /// for every in-process call.
+    pub brokered_peer_pid: Option<u32>,
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

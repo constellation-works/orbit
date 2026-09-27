@@ -254,6 +254,24 @@ pub fn audit_role_label_for_entry_point(
     .unwrap_or_else(|| "unverified".to_string())
 }
 
+/// The run's agent family as a brokered call carries it, taken from the
+/// run's dispatch record rather than this process's environment. As for a
+/// managed nested call, the family fills the model slot too.
+pub(super) fn brokered_agent_identity(agent: Option<&str>, model: Option<&str>) -> Option<String> {
+    normalize_agent_family_for_model(agent, model)
+        .ok()
+        .flatten()
+        .or_else(|| agent.map(ToOwned::to_owned))
+}
+
+/// The audit role for a call a run's plugin broker executes, labelled from
+/// the run's agent and model the way a managed envelope's identity is.
+pub(super) fn brokered_role_label(agent: Option<&str>, model: Option<&str>) -> String {
+    let family = brokered_agent_identity(agent, model);
+    normalize_optional_attribution_label(family.as_deref().or(model), model)
+        .unwrap_or_else(|| "agent".to_string())
+}
+
 fn read_input_identity(input: &Value) -> (Option<String>, Option<String>) {
     if let Value::Object(map) = input {
         let agent = map

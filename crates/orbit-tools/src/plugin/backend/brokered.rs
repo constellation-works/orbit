@@ -24,15 +24,19 @@ pub struct BrokeredCaller {
     pub fs_profile: ResolvedFsProfile,
     /// The run's `proc.spawn` allowlist. An empty list denies every program.
     pub proc_allowed_programs: Vec<String>,
+    /// The run's program disallow list when its activity selects program deny
+    /// mode; it then decides in place of the allowlist, as for `proc.spawn`.
+    pub proc_disallowed_programs: Option<Vec<String>>,
 }
 
 impl BrokeredCaller {
     /// Narrow `ctx` to this caller: its worktree and its `proc.spawn`
-    /// allowlist, held as an activity-scoped caller's list so an empty one
-    /// denies every program rather than allowing them all.
+    /// program policy, held as an activity-scoped caller's so an empty
+    /// allowlist denies every program rather than allowing them all.
     pub fn restrict(&self, ctx: &mut ToolContext) {
         ctx.workspace_root = Some(self.worktree.clone());
         ctx.proc_allowed_programs = self.proc_allowed_programs.clone();
+        ctx.proc_disallowed_programs = self.proc_disallowed_programs.clone();
         ctx.proc_spawn_activity_scoped = true;
     }
 }

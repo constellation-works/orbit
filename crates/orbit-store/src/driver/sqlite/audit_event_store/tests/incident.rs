@@ -137,6 +137,8 @@ impl FailureFixture {
             plugin: None,
             plugin_secrets: Vec::new(),
             plugin_secret_updates: Default::default(),
+            brokered: false,
+            peer_pid: None,
         }
     }
 }

@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord};
+use orbit_tools::plugin::BrokeredCaller;
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::Role;
@@ -14,6 +15,7 @@ use orbit_types::task::{
     ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::InvocationTrace;
+use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState, PipelineState};
 use serde_json::Value;
@@ -198,6 +200,38 @@ pub struct HandoffLandingUpdate {
 /// authenticates each connection by the kernel's peer identity.
 pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
 
+/// The dispatching run as its plugin broker authorizes and executes brokered
+/// calls (`docs/design/plugins/2_agent_call_broker.md` §4.3). Every field
+/// comes from the run the host dispatched; none is read from a broker request
+/// or from the agent's environment.
+#[derive(Debug, Clone)]
+pub struct PluginBrokerRun {
+    /// The run the broker serves, for its logs.
+    pub run_id: String,
+    /// The job run a backend is told it serves (`context.job_run_id`). `None`
+    /// for an invocation without job-run authority, such as a source
+    /// inspection.
+    pub job_run_id: Option<String>,
+    /// The task a backend is told it serves (`context.task_id`).
+    pub task_id: Option<String>,
+    pub activity_name: String,
+    /// The provider the run dispatched, and its model.
+    pub agent_name: Option<String>,
+    pub model_name: Option<String>,
+    /// The run's logical workspace. A request may name only this one.
+    pub workspace: Option<String>,
+    /// Allowlist mode: the activity's effective tools. The broker treats an
+    /// empty list as "no tool", never as unrestricted.
+    pub allowed_tools: Vec<String>,
+    /// Deny mode: the activity's disallow list, which decides in place of
+    /// `allowed_tools`.
+    pub tool_deny_policy: Option<ActivityToolDenyPolicy>,
+    /// The worktree, sandbox profile and program policy the agent runs
+    /// under; a brokered backend is confined to them as well as to its own
+    /// profile (design §5).
+    pub caller: BrokeredCaller,
+}
+
 /// A per-run plugin broker a host started for one sandboxed provider launch
 /// (`docs/design/plugins/2_agent_call_broker.md`).
 ///
@@ -225,7 +259,7 @@ pub trait RuntimeHost: Send + Sync {
     /// it.
     fn start_plugin_broker(
         &self,
-        _run_id: &str,
+        _run: &PluginBrokerRun,
     ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
         Ok(None)
     }

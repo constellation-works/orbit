@@ -316,3 +316,45 @@ fn migration_adds_correlation_columns_to_legacy_table() {
     assert!(new_fields.trace_id.is_none());
     assert!(new_fields.caller_ip.is_none());
 }
+
+/// A brokered call's row is marked `brokered` with the peer PID; every other
+/// row stores neither and reads back as not brokered.
+#[test]
+fn a_brokered_row_records_the_peer_pid_and_others_read_unbrokered() {
+    let store = Store::open_in_memory().expect("open store");
+    store
+        .insert_audit_event_record_with_invocation(
+            &sample_params(),
+            AuditInvocationFields {
+                brokered_peer_pid: Some(4711),
+                ..AuditInvocationFields::default()
+            },
+        )
+        .expect("insert brokered row");
+    store
+        .insert_audit_event_record(&AuditEventInsertParams {
+            execution_id: "exec-test-in-process".to_string(),
+            ..sample_params()
+        })
+        .expect("insert in-process row");
+
+    let mut events = store
+        .list_audit_events(&AuditEventFilter::default())
+        .expect("list audit events");
+    events.sort_by_key(|event| event.id);
+    assert!(events[0].brokered);
+    assert_eq!(events[0].peer_pid, Some(4711));
+    assert!(!events[1].brokered);
+    assert_eq!(events[1].peer_pid, None);
+    let stored: (Option<i64>, Option<i64>) = store
+        .conn
+        .lock()
+        .expect("conn")
+        .query_row(
+            "SELECT brokered, peer_pid FROM audit_events WHERE id = ?1",
+            [events[1].id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read columns");
+    assert_eq!(stored, (None, None), "an in-process row stores NULL");
+}

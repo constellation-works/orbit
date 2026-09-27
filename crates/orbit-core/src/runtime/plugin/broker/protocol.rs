@@ -6,7 +6,9 @@
 //! read, so an oversized request is refused without being buffered.
 
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
+use orbit_common::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
 /// Protocol version every frame carries.
@@ -21,9 +23,15 @@ pub(crate) const BUSY: &str = "plugin_broker_busy";
 pub(crate) const REQUEST_TOO_LARGE: &str = "plugin_broker_request_too_large";
 /// The request body is not a version-1 request object.
 pub(crate) const INVALID_REQUEST: &str = "plugin_broker_invalid_request";
-/// An authenticated, well-formed request the broker cannot execute yet: plugin
-/// call forwarding lands in a later slice (design §8, step 3).
-pub(crate) const NOT_IMPLEMENTED: &str = "not_implemented";
+/// The run does not authorize this call: the tool is not a plugin tool, its
+/// activity policy or the plugin's grants refuse it, or the request names a
+/// cwd or workspace outside the run.
+pub(crate) const REFUSED: &str = "plugin_broker_refused";
+/// The tool's input does not satisfy its schema.
+pub(crate) const INVALID_INPUT: &str = "plugin_broker_invalid_input";
+/// The call was authorized but could not complete: the backend failed,
+/// timed out, or answered with something other than its envelope.
+pub(crate) const CALL_FAILED: &str = "plugin_broker_call_failed";
 
 /// Why a request frame could not be read.
 #[derive(Debug)]
@@ -72,10 +80,34 @@ pub(crate) fn error_response(code: &str, message: &str, retryable: bool) -> Vec<
     .into_bytes()
 }
 
-/// Validate a request body's envelope. The tool name is the only field read
-/// here; nothing in a request chooses the run, task, workspace authority,
-/// allowlist or profile, which come from the host's own dispatch record.
-pub(crate) fn parse_request(body: &[u8]) -> Result<String, String> {
+/// Where the nested `orbit` received the call. A hint for the audit row;
+/// it grants nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryPoint {
+    Cli,
+    Mcp,
+}
+
+/// A version-1 request (design §4.3): only what the caller legitimately
+/// chooses. Nothing here decides the run, task, allowlist or profile, which
+/// come from the host's own dispatch record.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BrokerRequest {
+    pub(crate) tool: String,
+    pub(crate) input: Value,
+    /// Where the caller runs; the broker requires it to lie within the run's
+    /// worktree.
+    pub(crate) cwd: PathBuf,
+    /// A workspace selector, which may name only the run's own workspace.
+    pub(crate) workspace: Option<String>,
+    pub(crate) entry_point: EntryPoint,
+    pub(crate) dry_run: bool,
+}
+
+/// Parse and validate a request body. `schema_version`, `tool`, `input` and
+/// an absolute `cwd` are required; `workspace` defaults to none,
+/// `entry_point` to `cli` and `dry_run` to false.
+pub(crate) fn parse_request(body: &[u8]) -> Result<BrokerRequest, String> {
     let request: Value =
         serde_json::from_slice(body).map_err(|error| format!("request is not JSON: {error}"))?;
     let object = request
@@ -90,10 +122,95 @@ pub(crate) fn parse_request(body: &[u8]) -> Result<String, String> {
             ));
         }
     }
-    object
+    let tool = object
         .get("tool")
         .and_then(Value::as_str)
         .filter(|tool| !tool.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| "request must name a `tool`".to_string())
+        .ok_or_else(|| "request must name a `tool`".to_string())?;
+    let input = object
+        .get("input")
+        .filter(|input| input.is_object())
+        .ok_or_else(|| "request `input` must be a JSON object".to_string())?;
+    let cwd = object
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .filter(|cwd| cwd.is_absolute())
+        .ok_or_else(|| "request `cwd` must be an absolute path".to_string())?;
+    let workspace = match object.get("workspace") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(workspace)) if !workspace.is_empty() => Some(workspace.clone()),
+        Some(_) => return Err("request `workspace` must be a string or null".to_string()),
+    };
+    let entry_point = match object.get("entry_point") {
+        None => EntryPoint::Cli,
+        Some(value) => match value.as_str() {
+            Some("cli") => EntryPoint::Cli,
+            Some("mcp") => EntryPoint::Mcp,
+            _ => return Err("request `entry_point` must be \"cli\" or \"mcp\"".to_string()),
+        },
+    };
+    let dry_run = match object.get("dry_run") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "request `dry_run` must be a boolean".to_string())?,
+    };
+    Ok(BrokerRequest {
+        tool: tool.to_string(),
+        input: input.clone(),
+        cwd,
+        workspace,
+        entry_point,
+        dry_run,
+    })
+}
+
+/// A call's result, rendered as the §4.3 success response.
+pub(crate) fn output_response(output: Value) -> Vec<u8> {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "ok": true,
+        "output": output,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// A call's error as the §4.3 error response. A backend's own structured
+/// error keeps its code, retryability and detail; the host's refusals and
+/// failures map onto the broker's codes, none of them retryable.
+pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
+    let code = match error {
+        OrbitError::RemoteTool {
+            code,
+            message,
+            payload,
+        } => {
+            return json!({
+                "schema_version": SCHEMA_VERSION,
+                "ok": false,
+                "error": {
+                    "code": payload.get("code").and_then(Value::as_str).unwrap_or(code),
+                    "message": payload.get("message").and_then(Value::as_str).unwrap_or(message),
+                    "retryable": payload.get("retryable").and_then(Value::as_bool).unwrap_or(false),
+                    "detail": payload.get("detail").cloned().unwrap_or(Value::Null),
+                },
+            })
+            .to_string()
+            .into_bytes();
+        }
+        OrbitError::PolicyDenied(_)
+        | OrbitError::CapabilityDenied(_)
+        | OrbitError::CapabilityRefused(_)
+        | OrbitError::PluginDisabledInWorkspace { .. }
+        | OrbitError::PluginDisabledOnHost { .. }
+        | OrbitError::NotFound {
+            kind: NotFoundKind::Tool,
+            ..
+        } => REFUSED,
+        OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => INVALID_INPUT,
+        _ => CALL_FAILED,
+    };
+    error_response(code, &error.to_string(), false)
 }

@@ -24,7 +24,7 @@ use crate::runtime::tool_exec::{
 };
 
 use super::audit::{
-    activity_binding_from_env, audit_role_label_for_entry_point, managed_run_context,
+    AuditContext, activity_binding_from_env, audit_role_label_for_entry_point, managed_run_context,
     reservation_owner_from_env, resolve_agent_identity_for_entry_point, resolve_audit_context,
 };
 use super::callback::{
@@ -85,6 +85,7 @@ where
             model_override: None,
             entry_point,
             session_context: Some(session_context),
+            brokered: None,
         },
         || {
             let audit_db = orbit_config::resolved_audit_db_path(
@@ -138,6 +139,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             model_override: None,
             entry_point,
             session_context: Some(session_context),
+            brokered: None,
         },
         || {
             let audit_db = orbit_config::resolved_audit_db_path(
@@ -213,6 +215,21 @@ struct ToolDispatchAuditContext {
     model_override: Option<String>,
     entry_point: ToolEntryPoint,
     session_context: Option<ToolSessionContext>,
+    brokered: Option<BrokeredAudit>,
+}
+
+/// What a call a run's plugin broker executes is recorded under (design
+/// `docs/design/plugins/2_agent_call_broker.md` §4.4). Every field comes from
+/// the run's dispatch record or the authenticated connection, never from this
+/// process's environment or the tool input, which describe the host rather
+/// than the agent the call is made for.
+pub(super) struct BrokeredAudit {
+    /// The authenticated peer's PID in the host's namespace.
+    pub(super) peer_pid: u32,
+    pub(super) role: String,
+    pub(super) context: AuditContext,
+    /// The `cwd` the agent made the call from.
+    pub(super) working_directory: String,
 }
 
 impl OrbitRuntime {
@@ -297,6 +314,7 @@ impl OrbitRuntime {
                 model_override: model_override.clone(),
                 entry_point,
                 session_context: Some(audit_session_context),
+                brokered: None,
             },
             |input| {
                 self.ensure_tool_agent_facing(name)?;
@@ -386,6 +404,36 @@ impl OrbitRuntime {
                 model_override: None,
                 entry_point,
                 session_context: Some(session_context),
+                brokered: None,
+            },
+            dispatch,
+        )
+    }
+
+    /// Run a plugin call a run's broker admitted inside the audit boundary,
+    /// recording it under `brokered` instead of this process's context.
+    /// Policy checks belong inside `dispatch` so a refusal lands on the row.
+    pub(super) fn execute_brokered_dispatch<F>(
+        &self,
+        name: &str,
+        input: Value,
+        entry_point: ToolEntryPoint,
+        session_context: ToolSessionContext,
+        brokered: BrokeredAudit,
+        dispatch: F,
+    ) -> Result<ToolDispatchOutcome, OrbitError>
+    where
+        F: FnOnce(Value) -> Result<Value, OrbitError>,
+    {
+        self.execute_tool_dispatch_with(
+            name,
+            input,
+            ToolDispatchAuditContext {
+                agent_override: None,
+                model_override: None,
+                entry_point,
+                session_context: Some(session_context),
+                brokered: Some(brokered),
             },
             dispatch,
         )
@@ -449,18 +497,30 @@ where
         model_override,
         entry_point,
         session_context,
+        brokered,
     } = audit;
     let start = Instant::now();
-    let role_label = audit_role_label_for_entry_point(
-        &input,
-        agent_override.as_deref(),
-        model_override.as_deref(),
-        entry_point,
-    );
-    let working_directory = std::env::current_dir()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| ".".to_string());
-    let audit_context = resolve_audit_context(&input, entry_point, session_context.as_ref());
+    let (role_label, working_directory, audit_context, brokered_peer_pid) = match brokered {
+        Some(brokered) => (
+            brokered.role,
+            brokered.working_directory,
+            brokered.context,
+            Some(brokered.peer_pid),
+        ),
+        None => (
+            audit_role_label_for_entry_point(
+                &input,
+                agent_override.as_deref(),
+                model_override.as_deref(),
+                entry_point,
+            ),
+            std::env::current_dir()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| ".".to_string()),
+            resolve_audit_context(&input, entry_point, session_context.as_ref()),
+            None,
+        ),
+    };
 
     // Keep the callback inside the audit boundary so setup, policy, and
     // implementation failures all produce a failure-status row.
@@ -582,6 +642,7 @@ where
         plugin: plugin.as_ref(),
         plugin_secrets: &plugin_secrets,
         plugin_secret_updates: Some(&plugin_secret_updates),
+        brokered_peer_pid,
     };
     let audit_write = open_audit_store()
         .and_then(|store| store.insert_audit_event_record_with_invocation(&params, invocation));

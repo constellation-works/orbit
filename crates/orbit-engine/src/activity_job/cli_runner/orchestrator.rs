@@ -14,14 +14,15 @@ use orbit_common::security::child_env::{
     MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
 };
 use orbit_common::security::redaction::argv_redactor;
+use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{
     ActivityToolPolicyMode, AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind,
 };
+use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind};
 use serde_json::Value;
 
-use crate::context::{ProvenanceEnv, provenance_env};
+use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
 
 use super::super::audit_writer::V2AuditWriter;
 use super::super::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
@@ -599,7 +600,39 @@ pub fn run_cli_backend(
     // The broker listens before the provider exists and is torn down when it
     // exits. Its path is exported only when the socket bound; an outer value
     // the allowlist forwarded never names this run's broker.
-    let plugin_broker = RunPluginBroker::start(host, run_id, sandbox);
+    // Everything the broker authorizes with is this run's own record: its
+    // tool policy, identity and the sandbox the agent was given.
+    let broker_worktree = subprocess_cwd
+        .clone()
+        .or_else(|| tool_ctx.workspace_root.clone());
+    let broker_run = sandbox
+        .zip(broker_worktree)
+        .map(|(sandbox, worktree)| PluginBrokerRun {
+            run_id: run_id.to_string(),
+            job_run_id: inspection.is_none().then(|| run_id.to_string()),
+            task_id: task_id.map(str::to_string),
+            activity_name: activity_name.to_string(),
+            agent_name: tool_ctx.agent_name.clone(),
+            model_name: tool_ctx.model_name.clone(),
+            workspace: host.orbit_workspace_selector(),
+            allowed_tools: match spec.tool_disallow_list {
+                Some(_) => Vec::new(),
+                None => activity_tools.effective_tools.clone(),
+            },
+            tool_deny_policy: spec.tool_disallow_list.as_ref().map(|disallow_list| {
+                ActivityToolDenyPolicy {
+                    activity: activity_name.to_string(),
+                    disallow_list: disallow_list.clone(),
+                }
+            }),
+            caller: BrokeredCaller {
+                worktree,
+                fs_profile: sandbox.fs_profile.clone(),
+                proc_allowed_programs: spec.proc_allowed_programs.clone().unwrap_or_default(),
+                proc_disallowed_programs: spec.proc_disallowed_programs.clone(),
+            },
+        });
+    let plugin_broker = RunPluginBroker::start(host, run_id, broker_run.as_ref(), sandbox);
     child_env.retain(|(key, _)| key != crate::context::PLUGIN_BROKER_ENV);
     child_env.extend(plugin_broker.env());
     // [ORB-10496] Record the provider child's PID the moment it exists. Emitted

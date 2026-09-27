@@ -87,3 +87,47 @@ mod tool_session_context {
         assert!("admin".parse::<McpCapability>().is_err());
     }
 }
+
+mod brokered_fields {
+    use crate::telemetry::AuditEvent;
+
+    /// A row serialized before the broker ran calls: no `brokered`, no
+    /// `peer_pid`.
+    const LEGACY_EVENT: &str = r#"{
+        "id": 7,
+        "execution_id": "exec-legacy",
+        "timestamp": "2026-09-01T00:00:00Z",
+        "command": "tool",
+        "subcommand": "run",
+        "tool_name": "demo.hello",
+        "role": "claude",
+        "status": "success",
+        "exit_code": 0,
+        "duration_ms": 3,
+        "working_directory": "/repo",
+        "pid": 4242
+    }"#;
+
+    #[test]
+    fn a_legacy_payload_reads_as_not_brokered() {
+        let event: AuditEvent = serde_json::from_str(LEGACY_EVENT).expect("legacy payload");
+
+        assert!(!event.brokered);
+        assert_eq!(event.peer_pid, None);
+    }
+
+    #[test]
+    fn brokered_fields_round_trip_and_stay_off_other_rows() {
+        let mut event: AuditEvent = serde_json::from_str(LEGACY_EVENT).expect("legacy payload");
+        let plain = serde_json::to_value(&event).expect("serialize plain row");
+        assert!(plain.get("brokered").is_none() && plain.get("peer_pid").is_none());
+
+        event.brokered = true;
+        event.peer_pid = Some(31337);
+        let brokered = serde_json::to_value(&event).expect("serialize brokered row");
+        assert_eq!(brokered["brokered"], true);
+        assert_eq!(brokered["peer_pid"], 31337);
+        let read: AuditEvent = serde_json::from_value(brokered).expect("read brokered row");
+        assert_eq!(read, event);
+    }
+}
