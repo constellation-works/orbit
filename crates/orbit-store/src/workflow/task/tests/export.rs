@@ -1,8 +1,10 @@
 use std::fs;
+use std::process::Command;
 
 use chrono::Utc;
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TaskEventRowV2, TaskStatus,
+    ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskEventRowV2,
+    TaskStatus,
 };
 use tempfile::TempDir;
 
@@ -106,9 +108,124 @@ fn export_waits_for_a_transition_and_imports_the_settled_bundle() {
 }
 
 #[test]
-fn export_excludes_pending_sidecar_but_keeps_dotfile_artifacts() {
+fn export_refuses_interrupted_status_and_document_writes() {
+    for kind in ["status", "document"] {
+        let output = Command::new(std::env::current_exe().expect("current test executable"))
+            .arg("export_refuses_interrupted_write_child")
+            .arg("--ignored")
+            .env("ORBIT_EXPORT_INTERRUPTED_WRITE_KIND", kind)
+            .output()
+            .expect("run interrupted-write child");
+        assert!(
+            output.status.success(),
+            "{kind} child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+#[ignore = "helper process for export_refuses_interrupted_status_and_document_writes"]
+fn export_refuses_interrupted_write_child() {
+    use crate::driver::file::task_bundle::{
+        BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, TaskDocumentV2,
+        append_jsonl_row, inject_bundle_write_faults,
+    };
+
+    let Ok(kind) = std::env::var("ORBIT_EXPORT_INTERRUPTED_WRITE_KIND") else {
+        return;
+    };
+
+    let src = TempDir::new().expect("tempdir");
+    let archive = src.path().join("tasks.tar.zst");
+    let ws = "export-interrupted-abcdef";
+    let registry = open_registry(src.path());
+    let binding = bind(&registry, src.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "interrupted", Vec::new()),
+    );
+    let bundle_dir = store.bundle_path("ORB-00000").expect("bundle path");
+    let pending_path = bundle_dir.join(PENDING_WRITE_FILE_NAME);
+
+    store
+        .with_bundle_write_lock("ORB-00000", || {
+            let pending = PendingWriteGuard::begin(&bundle_dir)?;
+            match kind.as_str() {
+                "status" => append_jsonl_row(
+                    &bundle_dir.join(TASK_EVENTS_FILE_NAME),
+                    &TaskEventRowV2 {
+                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                        event_id: "EV-0002".to_string(),
+                        at: Utc::now(),
+                        by: "codex".to_string(),
+                        event_type: "status_changed".to_string(),
+                        note: None,
+                        from_status: Some(TaskStatus::Backlog),
+                        to_status: Some(TaskStatus::InProgress),
+                    },
+                )?,
+                "document" => store.rewrite_document(
+                    "ORB-00000",
+                    TaskDocumentV2::Description,
+                    "uncommitted description",
+                )?,
+                other => panic!("unexpected interrupted-write kind: {other}"),
+            }
+            inject_bundle_write_faults(&[BundleWriteFault::DuringCompensation]);
+            drop(pending);
+            Ok(())
+        })
+        .expect("leave interrupted write state");
+    assert!(
+        pending_path.is_file(),
+        "pending recovery record must remain"
+    );
+
+    let error = export_tasks(&registry, ws, ExportSelection::All, &archive, exported_at())
+        .expect_err("export must refuse an interrupted write");
+    let message = error.to_string();
+    assert!(message.contains("pending-write"), "{message}");
+    assert!(message.contains("ORB-00000"), "{message}");
+    assert!(message.contains("recover or reindex"), "{message}");
+    assert!(
+        !archive.exists(),
+        "refused export must not create an archive"
+    );
+    assert!(
+        pending_path.is_file(),
+        "export must preserve recovery evidence"
+    );
+
+    match kind.as_str() {
+        "status" => {
+            let events = fs::read_to_string(bundle_dir.join(TASK_EVENTS_FILE_NAME))
+                .expect("read interrupted events");
+            assert_eq!(
+                events.lines().count(),
+                2,
+                "appended status event is retained"
+            );
+            let last: TaskEventRowV2 =
+                serde_json::from_str(events.lines().last().expect("last event"))
+                    .expect("parse appended event");
+            assert_eq!(last.to_status, Some(TaskStatus::InProgress));
+        }
+        "document" => assert_eq!(
+            fs::read_to_string(bundle_dir.join("description.md")).expect("read document"),
+            "uncommitted description"
+        ),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn archive_excludes_pending_root_sidecar_but_keeps_dotfile_artifacts() {
     let src = TempDir::new().unwrap();
-    let dst = TempDir::new().unwrap();
     let archive = src.path().join("tasks.tar.zst");
     let ws = "export-sidecars-abcdef";
     let registry = open_registry(src.path());
@@ -138,7 +255,17 @@ fn export_excludes_pending_sidecar_but_keeps_dotfile_artifacts() {
     )
     .expect("write pending sidecar");
 
-    export_tasks(&registry, ws, ExportSelection::All, &archive, exported_at()).expect("export");
+    let file = fs::File::create(&archive).expect("create archive");
+    let encoder = zstd::stream::write::Encoder::new(file, 3).expect("zstd encoder");
+    let mut builder = tar::Builder::new(encoder);
+    builder.mode(tar::HeaderMode::Deterministic);
+    super::super::archive::append_bundle_tree(&mut builder, "bundles/ORB-00000", &bundle_dir)
+        .expect("pack bundle tree");
+    builder
+        .into_inner()
+        .expect("finish tar")
+        .finish()
+        .expect("finish zstd");
 
     let extracted = TempDir::new().unwrap();
     super::super::archive::extract_archive(&archive, extracted.path()).expect("extract");
@@ -153,15 +280,10 @@ fn export_excludes_pending_sidecar_but_keeps_dotfile_artifacts() {
         b"dotfile"
     );
 
-    let target = open_registry(dst.path());
-    import_tasks(&target, &archive, None, ImportConflictPolicy::Fail).expect("import");
-    let imported = read_bundle_at(
-        &target
-            .canonical_task_bundle_path(ws, "ORB-00000")
-            .expect("canonical path"),
-    )
-    .expect("dotfile artifact round trips");
-    assert_eq!(imported.artifact_manifest.expect("manifest").files.len(), 1);
+    assert_eq!(
+        fs::read(archived_bundle.join("artifacts/files/.payload")).expect("archived payload"),
+        b"dotfile"
+    );
 }
 
 #[test]
