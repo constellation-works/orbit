@@ -359,11 +359,12 @@ fn another_runs_sandbox_and_the_host_are_refused_without_a_reply() {
 
         let probes = socket.filter(|_| owner_ready).map(|socket| {
             let intruder_result = scratch.result("intruder");
+            fs::create_dir(scratch.root.join("intruder")).expect("intruder provider dir");
             scratch.client_provider(
-                "intruder",
+                "intruder/codex",
                 &[(RESULT_ENV, &intruder_result), (TARGET_ENV, &socket)],
             );
-            let intruder = scratch.host(scratch.root.clone(), "intruder");
+            let intruder = scratch.host(scratch.root.clone(), "intruder/codex");
             let intruder_outcome = intruder.run("run-intruder", Duration::from_secs(60));
 
             let mut host_stream = UnixStream::connect(&socket).expect("host connects");

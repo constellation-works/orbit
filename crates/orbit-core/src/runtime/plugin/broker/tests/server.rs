@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use orbit_common::process::ancestry::process_start_key;
 use orbit_engine::PluginBrokerHandle;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
 
 use super::super::PluginBroker;
 use super::super::peer::PeerAnchor;
@@ -28,8 +28,9 @@ struct Running {
 }
 
 fn start(anchor: PeerAnchor) -> Running {
-    let root = tempdir().expect("global root");
-    let broker = PluginBroker::start(root.path(), "run-under-test").expect("start broker");
+    let root = super::short_tempdir();
+    let global = root.path().canonicalize().expect("canonical global root");
+    let broker = PluginBroker::start(&global, "run-under-test").expect("start broker");
     broker.bind_anchor(anchor);
     Running {
         broker,
@@ -151,7 +152,14 @@ fn a_full_broker_answers_busy_and_recovers() {
 fn call_when(running: &Running, accept: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + READ_TIMEOUT;
     loop {
-        let response = call(running, &tool_request());
+        let mut stream = connect(running);
+        // A full broker answers without reading the request. It can close
+        // before this write completes; a broken pipe does not imply its busy
+        // reply was lost. Read that reply from the same connection.
+        if let Err(error) = write_frame(&mut stream, &tool_request()) {
+            assert_eq!(error.kind(), ErrorKind::BrokenPipe, "send request: {error}");
+        }
+        let response = reply(&mut stream);
         if accept(&response) || Instant::now() >= deadline {
             return response;
         }
