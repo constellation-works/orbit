@@ -1,5 +1,6 @@
 //! Production-shaped managed nested Orbit commands under the resolved macOS
-//! child-runtime profile. [ORB-11055] [ORB-11066] [ORB-11070]
+//! child-runtime profile, and the read-only reviewer boundary under that
+//! profile. [ORB-11055] [ORB-11066] [ORB-11070] [ORB-13458]
 
 #[cfg(target_os = "macos")]
 use std::ffi::OsStr;
@@ -517,6 +518,205 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
             "managed registry discovery must not create global workspace-only path {workspace_only}"
         );
     }
+}
+
+/// [ORB-13458] A reviewer launched by Claude or Codex from an inspection
+/// checkout or a managed worktree cannot write source or primary-workspace
+/// files under the compiled profile, while the provider state directory and the
+/// global Orbit runtime stores nested tool calls need stay writable.
+#[cfg(target_os = "macos")]
+#[test]
+fn reviewer_profile_refuses_source_and_workspace_writes_under_sandbox() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    let parent = sandbox_test_parent("reviewer-read-only");
+    let _cleanup = ScopeGuard(parent.clone());
+    let parent = parent.canonicalize().expect("canonical test parent");
+    let provider_home = parent.join("provider-home");
+    let repo = parent.join("repo");
+    let inspection = parent.join("inspection");
+    std::fs::create_dir_all(&provider_home).expect("create provider home");
+    std::fs::create_dir_all(&repo).expect("create repo");
+    std::fs::create_dir_all(&inspection).expect("create inspection checkout");
+    init_git_repo(&repo);
+
+    let workspace_orbit = repo.join(".orbit");
+    let worktree = workspace_orbit.join("state/worktrees/orbit-jrun-orb-13458");
+    std::fs::create_dir_all(worktree.parent().expect("worktrees root")).expect("worktrees root");
+    let worktree_output = Command::new("git")
+        .current_dir(&repo)
+        .args(["worktree", "add", "--detach"])
+        .arg(&worktree)
+        .output()
+        .expect("create linked worktree");
+    assert!(
+        worktree_output.status.success(),
+        "git worktree add failed: {}",
+        String::from_utf8_lossy(&worktree_output.stderr)
+    );
+    std::fs::write(inspection.join("README.md"), "# inspection\n").expect("inspection source");
+    for store in ["tasks", "frictions", "state/audit", "state/logs"] {
+        std::fs::create_dir_all(workspace_orbit.join(store)).expect("workspace store");
+    }
+    let sentinels = [
+        repo.join("README.md"),
+        worktree.join("README.md"),
+        inspection.join("README.md"),
+        workspace_orbit.join("tasks/sentinel.txt"),
+        workspace_orbit.join("frictions/sentinel.txt"),
+        workspace_orbit.join("state/audit/sentinel.txt"),
+        workspace_orbit.join("state/logs/sentinel.txt"),
+        workspace_orbit.join("state/semantic.db-sentinel"),
+    ];
+    for sentinel in &sentinels {
+        if !sentinel.exists() {
+            std::fs::write(sentinel, "sentinel\n").expect("write sentinel");
+        }
+    }
+    let original = sentinels
+        .iter()
+        .map(|path| std::fs::read(path).expect("read sentinel"))
+        .collect::<Vec<_>>();
+
+    let global = parent.join("home/.orbit");
+    for store in ["tasks", "state/audit"] {
+        std::fs::create_dir_all(global.join(store)).expect("global store");
+    }
+    let runtime = OrbitRuntime::from_roots(&global, &workspace_orbit).expect("runtime");
+    let provider_home_str = provider_home.display().to_string();
+    let env = vec![
+        ("HOME".to_string(), provider_home_str.clone()),
+        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ("TMPDIR".to_string(), "/tmp".to_string()),
+    ];
+
+    for (provider, state_dir) in [("claude", ".claude"), ("codex", ".codex")] {
+        seed_executor(
+            &runtime,
+            provider,
+            Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+        );
+        for cwd in [&inspection, &worktree] {
+            let resolved = runtime
+                .resolve_executor_sandbox(provider, Some("reviewer"), Some(cwd))
+                .expect("resolve reviewer sandbox")
+                .expect("macOS sandbox");
+            let mut profile_text = {
+                let _env = orbit_common::test_env::scoped([
+                    ("HOME", Some(provider_home_str.as_str())),
+                    ("CODEX_HOME", None),
+                    ("CLAUDE_CONFIG_DIR", None),
+                ]);
+                compile_macos_sandbox_profile(&resolved.fs_profile, provider)
+                    .expect("compile reviewer sandbox profile")
+            };
+            let mask = resolved
+                .mask
+                .as_ref()
+                .expect("sandboxed agents carry the mask");
+            append_macos_subpath_mask(&mut profile_text, &mask.targets);
+            let context = format!("{provider} reviewer from {}", cwd.display());
+
+            for sentinel in &sentinels {
+                assert!(
+                    !sandboxed_write(&profile_text, &env, cwd, sentinel),
+                    "{context} must not overwrite {}",
+                    sentinel.display()
+                );
+            }
+            for created in [
+                repo.join("reviewer-created"),
+                worktree.join("reviewer-created"),
+                inspection.join("reviewer-created"),
+                workspace_orbit.join("tasks/reviewer-created.txt"),
+            ] {
+                assert!(
+                    !sandboxed_write(&profile_text, &env, cwd, &created) && !created.exists(),
+                    "{context} must not create {}",
+                    created.display()
+                );
+            }
+
+            let provider_state = provider_home.join(state_dir);
+            std::fs::create_dir_all(&provider_state).expect("provider state dir");
+            for required in [
+                provider_state.join("session.json"),
+                global.join("tasks/reviewer-runtime.txt"),
+                global.join("state/audit/reviewer-runtime.txt"),
+            ] {
+                assert!(
+                    sandboxed_write(&profile_text, &env, cwd, &required),
+                    "{context} must keep writing {}",
+                    required.display()
+                );
+            }
+        }
+    }
+
+    for (sentinel, bytes) in sentinels.iter().zip(&original) {
+        assert_eq!(
+            &std::fs::read(sentinel).expect("reread sentinel"),
+            bytes,
+            "refused writes must leave {} unchanged",
+            sentinel.display()
+        );
+    }
+
+    // Non-vacuity: the same harness observes a write when the profile grants
+    // one, so the refusals above come from the reviewer profile.
+    let implementer = runtime
+        .resolve_executor_sandbox("claude", None, Some(&worktree))
+        .expect("resolve implementer sandbox")
+        .expect("macOS sandbox");
+    let implementer_text = {
+        let _env = orbit_common::test_env::scoped([
+            ("HOME", Some(provider_home_str.as_str())),
+            ("CODEX_HOME", None),
+            ("CLAUDE_CONFIG_DIR", None),
+        ]);
+        compile_macos_sandbox_profile(&implementer.fs_profile, "claude")
+            .expect("compile implementer sandbox profile")
+    };
+    let implementer_output = worktree.join("implementer-created");
+    assert!(
+        sandboxed_write(&implementer_text, &env, &worktree, &implementer_output),
+        "an implementer keeps writing its managed worktree"
+    );
+}
+
+/// Overwrite or create `target` from a sandboxed shell; true on success.
+#[cfg(target_os = "macos")]
+fn sandboxed_write(
+    profile_text: &str,
+    env: &[(String, String)],
+    cwd: &Path,
+    target: &Path,
+) -> bool {
+    let args = [
+        "-c".to_string(),
+        "printf tampered > \"$1\"".to_string(),
+        "sh".to_string(),
+        target.display().to_string(),
+    ];
+    let (child, _profile) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        profile_text,
+        program: "/bin/sh",
+        args: &args,
+        env,
+        cwd: Some(cwd),
+        stdin: Stdio::null(),
+        stdout: Stdio::null(),
+        stderr: Stdio::null(),
+        inherited_fds: &[],
+    })
+    .expect("spawn sandboxed write");
+    child
+        .wait_with_output()
+        .expect("wait sandboxed write")
+        .status
+        .success()
 }
 
 #[cfg(target_os = "macos")]
