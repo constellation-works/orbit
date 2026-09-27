@@ -18,7 +18,7 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.adr.add` / `orbit.adr.restore` / `orbit.adr.update` | `title`, `body` | - | status, owner, related ids/features/tasks, legacy ids |
 | `orbit.adr.supersede` | - | - | `old_id`, `new_id` |
 | `orbit.task.add` | `title`, `description`, `plan`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context`, `external_refs[].url` | workspace, ids, enums, dependency/relation targets, crew, tags |
-| `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
+| `orbit.task.update` | `title`, `description`, `plan`, `execution_summary`, `acceptance_criteria[]`, `note`, `comment` | `context_files[]`, `context` | provenance/status/identity fields, tags, raw artifacts |
 | `orbit.task.reject` | `note`, `comment` | - | `id` |
 | `orbit.friction.add` | `body` / `description` | - | `model`, `during_task`, tags |
 | `orbit.friction.update` | `body` | - | `id`, status, tags, `rehome_to` |
@@ -26,7 +26,7 @@ This is the author-facing inventory for the shipped artifact-write redactor. Red
 | `orbit.auto_task.add` / `orbit.auto_task.update` | `description`, `template.title`, `template.description`, `template.acceptance_criteria[]` | - | name, schedule, dedupe, template enums/tags |
 | `orbit.docs.add` | - | - | DocsAdd only registers a validated repo-relative path; it does not persist document content. |
 
-Task and friction tags are taxonomy fields and pass through verbatim.
+For `orbit.task.update`, `note` is the optional note attached to a lifecycle status change; it is sanitized before the transition body persists it in task history. Task and friction tags are taxonomy fields and pass through verbatim.
 
 The table establishes the artifact boundary: ADRs, tasks, frictions, and auto-task definitions are covered on their listed write operations. `DocsAdd` makes an explicit no-redaction decision because it only registers a checked path; registered docs remain ordinary repository files rather than a tool mutation primitive. Session-log writes are no longer a public tool mutation, so they are not in this inventory ([ORB-11097]).
 

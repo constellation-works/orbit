@@ -244,6 +244,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 "description",
                 "plan",
                 "execution_summary",
+                "note",
                 "comment",
             ],
             free_text_arrays: &["acceptance_criteria"],

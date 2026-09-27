@@ -3,10 +3,11 @@ use std::fs;
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_tools::OrbitBuiltinAction;
+use orbit_types::task::TaskStatus;
 use serde_json::json;
 
 use super::super::artifact_redaction::{artifact_target, sanitize_tool_input};
-use super::super::test_support::test_runtime;
+use super::super::test_support::{create_task, test_runtime};
 
 /// Set one variable under the process-wide env guard shared by every
 /// env-mutating test in this binary; restored on drop.
@@ -308,6 +309,168 @@ fn projected_task_update_without_id_redacts_stored_summary_and_audits_id() {
             .expect("audit payload")
             .contains(token)
     );
+}
+
+#[test]
+fn task_update_status_notes_are_redacted_before_lifecycle_history_persistence() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let key = "sk-abcdefghijklmnopqrstuvwxyz";
+    let embedded_note = format!("Diagnostic for approval: {key} appeared in output.");
+    let proposed = create_task(
+        &runtime,
+        &repo_root,
+        "Redacted approval note",
+        "Exercise status-note redaction through dispatch.",
+        TaskStatus::Proposed,
+        &[],
+    );
+
+    let approved = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({"id": proposed.id, "status": "backlog", "note": embedded_note}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("approval succeeds after status-note redaction");
+    let redacted_note = "Diagnostic for approval: [REDACTED_SECRET] appeared in output.";
+    assert_eq!(approved["status"], "backlog");
+    assert_eq!(approved["redactions_applied"], true);
+    assert_eq!(
+        approved["redactions"],
+        json!([{
+            "field_path": "note",
+            "redaction_kinds": ["pattern"],
+            "redaction_classes": ["credential"]
+        }])
+    );
+
+    let shown = runtime
+        .execute_tool_command(
+            "orbit.task.show",
+            json!({"id": proposed.id}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task show succeeds");
+    assert_eq!(shown["status"], "backlog");
+    let stored_approval = shown["history"]
+        .as_array()
+        .expect("task history")
+        .iter()
+        .find(|entry| entry["to_status"] == "backlog")
+        .expect("approval history entry");
+    assert_eq!(stored_approval["note"], redacted_note);
+    assert!(!shown.to_string().contains(key));
+
+    let redaction_audit = runtime
+        .list_audit_events(None, Some("orbit.task.update".to_string()), None, None, 16)
+        .expect("query task-update audit events")
+        .into_iter()
+        .find(|event| event.command == "artifact_redaction")
+        .expect("task-update redaction audit event");
+    let audit_payload = redaction_audit
+        .arguments_json
+        .as_deref()
+        .expect("redaction audit payload");
+    assert!(audit_payload.contains("\"field_path\":\"note\""));
+    assert!(!audit_payload.contains(key));
+
+    let rejected_task = create_task(
+        &runtime,
+        &repo_root,
+        "Rejected whole-token approval note",
+        "A whole-token note must not change lifecycle state.",
+        TaskStatus::Proposed,
+        &[],
+    );
+    let history_before = runtime
+        .get_task_history(&rejected_task.id)
+        .expect("history before rejected write");
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": rejected_task.id,
+                "status": "backlog",
+                "note": key,
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("whole-token status note is rejected");
+    assert!(
+        matches!(error, OrbitError::SensitiveInput { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        runtime
+            .get_task(&rejected_task.id)
+            .expect("task unchanged")
+            .status,
+        TaskStatus::Proposed
+    );
+    assert_eq!(
+        runtime
+            .get_task_history(&rejected_task.id)
+            .expect("history after rejected write"),
+        history_before
+    );
+
+    let ready = create_task(
+        &runtime,
+        &repo_root,
+        "Preserve ordinary status notes",
+        "Exercise guarded start and ordinary lifecycle updates.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": ready.id,
+                "status": "in_progress",
+                "plan": "Carry out the implementation.",
+                "note": "Picking up the task.",
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("guarded start succeeds with nonsensitive note");
+    assert_eq!(started["status"], "in-progress");
+    assert_eq!(started["redactions_applied"], false);
+
+    let reviewed = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": ready.id,
+                "status": "review",
+                "note": "Ready for review.",
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("ordinary status transition preserves nonsensitive note");
+    assert_eq!(reviewed["status"], "review");
+    assert_eq!(reviewed["redactions_applied"], false);
+    let shown = runtime
+        .execute_tool_command(
+            "orbit.task.show",
+            json!({"id": ready.id}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task show succeeds after status transitions");
+    let notes = shown["history"]
+        .as_array()
+        .expect("task history")
+        .iter()
+        .filter_map(|entry| entry["note"].as_str())
+        .collect::<Vec<_>>();
+    assert!(notes.contains(&"Picking up the task."));
+    assert!(notes.contains(&"Ready for review."));
 }
 
 #[test]
