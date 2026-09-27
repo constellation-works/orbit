@@ -32,6 +32,7 @@ use super::envelope::{
 };
 use super::inspection::SourceInspection;
 use super::launcher::{orbit_tool_env, resolve_provider_launcher};
+use super::plugin_broker::RunPluginBroker;
 use super::response_diagnostics::{
     bounded_diagnostic, completion_diagnostic, declared_failure_diagnostic, response_diagnostic,
     with_sandbox_write_attribution,
@@ -446,6 +447,12 @@ pub fn run_cli_backend(
     if host.worker_invocation().is_some() {
         child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));
     }
+    // The broker listens before the provider exists and is torn down when it
+    // exits. Its path is exported only when the socket bound; an outer value
+    // the allowlist forwarded never names this run's broker.
+    let plugin_broker = RunPluginBroker::start(host, run_id, sandbox);
+    child_env.retain(|(key, _)| key != crate::context::PLUGIN_BROKER_ENV);
+    child_env.extend(plugin_broker.env());
     // [ORB-10496] Record the provider child's PID the moment it exists. Emitted
     // through the same writer, so it is persisted (and therefore readable by
     // `orbit run show` / the run-status API) while the invocation is still
@@ -489,6 +496,7 @@ pub fn run_cli_backend(
             let _ = spawned.child.wait();
             return Err(super::spawn::SpawnError::permanent(error.to_string()));
         }
+        plugin_broker.bind_sandbox(spawned.child.id());
         linux_post_run_guard = spawned.take_linux_post_run_guard();
         spawn_with_timeout(SpawnWithTimeoutRequest {
             program: &resolved_program,
@@ -513,6 +521,9 @@ pub fn run_cli_backend(
             cancel_pair: None,
         })
     });
+    // The provider has exited, timed out, or failed to start: nothing in its
+    // sandbox may reach the broker any longer.
+    drop(plugin_broker);
 
     let (stdout, stderr, exit_code, duration, timed_out) = match spawn_result {
         Ok(result) => result,

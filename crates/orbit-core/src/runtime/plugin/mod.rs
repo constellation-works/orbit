@@ -2,6 +2,8 @@
 //! install layout, and the load pass that registers them on the runtime.
 
 pub(crate) mod backend;
+#[cfg(unix)]
+pub(crate) mod broker;
 pub(crate) mod cache;
 pub(crate) mod config;
 pub(crate) mod definitions;

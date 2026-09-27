@@ -11,6 +11,7 @@ mod orchestrator_env;
 mod orchestrator_macos;
 mod orchestrator_response;
 mod orchestrator_worktree;
+mod plugin_broker;
 mod rebase_recovery;
 mod response_diagnostics;
 mod spawn;
