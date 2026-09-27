@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
 use orbit_common::fs::io::create_dir_symlink;
+use orbit_config::ConfigSeed;
 use orbit_core::OrbitRuntime;
 
 use crate::InitCommand;
@@ -113,70 +114,53 @@ fn non_interactive_init_against_non_global_root_leaves_home_skill_links_untouche
         );
     }
     let config = toml::from_str::<toml::Value>(&contents).expect("seeded config parses");
-    let crews = config.get("crews").and_then(toml::Value::as_table);
-    let expected = [
-        ("opus", "claude", "opus"),
-        ("sonnet", "claude", "sonnet"),
-        ("fable", "claude", "fable"),
-        ("sol", "codex", "gpt-6-sol"),
-        ("terra", "codex", "gpt-5.6-terra"),
-        ("luna", "codex", "gpt-6-luna"),
-        ("gemini", "gemini", "gemini-3.7-flash"),
-        ("grok", "grok", "grok-4.7"),
-        ("system", "", ""),
-    ];
-    if let Some(crews) = crews {
-        assert!(!crews.contains_key("claude"));
-        assert!(!crews.contains_key("codex"));
-        for (name, crew) in crews {
-            let (_, provider, model) = expected
-                .iter()
-                .find(|(expected_name, _, _)| expected_name == name)
-                .unwrap_or_else(|| panic!("unexpected seeded crew {name}"));
-            // [ORB-10801] Seeded crews carry no retired backend key.
-            assert!(crew.get("backend").is_none());
-            if name == "system" {
-                // Preference order: codex luna, then claude sonnet, then grok,
-                // then gemini flash. Cheapest tier per family, not the
-                // family default.
-                let (provider, model) = if crews.contains_key("luna") {
-                    ("codex", "gpt-6-luna")
-                } else if crews.contains_key("sonnet") {
-                    ("claude", "sonnet")
-                } else if crews.contains_key("grok") {
-                    ("grok", "grok-4.7")
-                } else {
-                    ("gemini", "gemini-3.7-flash")
-                };
-                assert_eq!(
-                    crew.get("provider").and_then(toml::Value::as_str),
-                    Some(provider),
-                );
-                assert_eq!(crew.get("model").and_then(toml::Value::as_str), Some(model),);
-            } else {
-                assert_eq!(
-                    crew.get("provider").and_then(toml::Value::as_str),
-                    Some(*provider),
-                );
-                assert_eq!(
-                    crew.get("model").and_then(toml::Value::as_str),
-                    Some(*model),
-                );
-            }
-        }
+    let crews = config
+        .get("crews")
+        .and_then(toml::Value::as_table)
+        .expect("init seeds the default crew catalog even with no provider CLI");
+    let expected = ConfigSeed::default().seeded_crews();
+    assert_eq!(
+        crews.len(),
+        expected.len(),
+        "seeded crew set must match the catalog"
+    );
+    assert!(!crews.contains_key("claude"));
+    assert!(!crews.contains_key("codex"));
+    assert!(!crews.contains_key("system"));
+    for (name, seeded_crew) in &expected {
+        let crew = crews
+            .get(name)
+            .unwrap_or_else(|| panic!("missing seeded crew {name}"));
+        // [ORB-10801] Seeded crews carry no retired backend key.
+        assert!(crew.get("backend").is_none(), "{name}");
+        assert_eq!(
+            crew.get("provider").and_then(toml::Value::as_str),
+            Some(seeded_crew.assignment.provider.as_str()),
+            "{name}",
+        );
+        assert_eq!(
+            crew.get("model").and_then(toml::Value::as_str),
+            Some(seeded_crew.assignment.model.as_str()),
+            "{name}",
+        );
+        assert_eq!(
+            crew.get("enabled").and_then(toml::Value::as_bool),
+            Some(false),
+            "{name} has no provider CLI on the isolated PATH",
+        );
     }
     assert!(!contents.contains("[crews.qa]"));
-    let default_crew = config
-        .get("workflow")
-        .and_then(|workflow| workflow.get("default_crew"))
-        .and_then(toml::Value::as_str);
+    let workflow = config.get("workflow").expect("seeded workflow");
+    assert!(workflow.get("default_crew").is_none());
+    assert!(workflow.get("system_crew").is_none());
+    // [ORB-13352] The system lane prefers the cheapest crew in each family,
+    // in the configured order, when those families are detected.
     assert_eq!(
-        default_crew.is_some(),
-        crews.is_some_and(|crews| !crews.is_empty()),
+        ConfigSeed::from_families(["claude", "codex", "grok", "antigravity", "gemini"])
+            .system_crew_options(),
+        ["luna", "sonnet", "grok", "antigravity", "gemini"],
+        "system-crew preference order must retain the bounded lane priority",
     );
-    if let Some(default_crew) = default_crew {
-        assert!(crews.is_some_and(|crews| crews.contains_key(default_crew)));
-    }
     drop(validation_root);
     drop(validation_home);
     assert_discovery_sentinel(&agents_link, &agents_target);
