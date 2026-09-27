@@ -15,11 +15,11 @@ last_validated: 2026-09-26
 # Design: host-side broker for agent-initiated plugin calls
 
 Status: proposal, partly implemented. The broker server exists (§4.2, "As implemented"): every
-sandboxed agent step gets a per-run socket with kernel peer authentication. The broker executes
-each authenticated request for an exec-backed plugin tool through the audited dispatch, under
-the run's own record and the §5 profile (§4.4, "As implemented"). Nothing sends it a call, and
-nothing applies the mask, until the client and mask slices land; the follow-up tasks listed at
-the end deliver the rest.
+sandboxed agent step gets a per-run socket with kernel peer authentication. With
+`ORBIT_PLUGIN_BROKER` set, nested CLI and MCP plugin calls forward to it after checking the
+server UID. The broker executes authenticated requests for exec-backed plugin tools through
+the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
+The agent sandbox mask and the remaining lifecycle checks are follow-up slices.
 Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
@@ -473,7 +473,7 @@ The mask ships last, only once every call it would break has a broker to go to:
    1_scope.md §4.2 "Call identity". Blocked by 1 and 2. [ORB-13238] Split into:
    - 3a. Broker-side execution: the audited dispatch, run-record authority, the `brokered`
      audit fields and the broker's error codes. Landed; see §4.4 "As implemented".
-   - 3b. The nested client forwarding.
+   - 3b. The nested client forwarding, implemented for CLI and MCP plugin calls.
    - 3c. `mcp` backend reuse per run, the client-disconnect kill, and an end-to-end test
      under a real agent sandbox.
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent

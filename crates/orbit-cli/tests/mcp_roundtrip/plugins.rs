@@ -2,6 +2,9 @@
 //! advertised and callable; a disabled one is absent.
 use super::*;
 
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
+
 /// Write a plugin outside the workspace checkout — installs are global, and a
 /// source inside the repository is refused on purpose.
 fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
@@ -60,6 +63,213 @@ fn advertised_tool_names(client: &mut McpClient) -> Vec<String> {
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name").to_string())
         .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_derived_and_mcp_plugin_calls_use_the_broker_without_local_audit() {
+    let workspace = McpWorkspace::init();
+    let source = write_plugin(&workspace.home, "brokerfixture");
+    std::fs::write(
+        source.join("bin/backend.sh"),
+        "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"ok\":true,\"output\":{\"value\":7}}'\n",
+    )
+    .expect("write constant backend");
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ],
+    );
+    let direct = run_orbit(
+        &workspace,
+        &["tool", "run", "brokerfixture.echo", "--input", "{}"],
+    );
+    let direct: Value = serde_json::from_slice(&direct.stdout).expect("direct output");
+    assert_eq!(direct, json!({"value": 7}));
+    let audit_before = audit_count_for_tool(&workspace, "brokerfixture.echo");
+
+    let socket = workspace.home.join("fixture-broker.sock");
+    let listener = UnixListener::bind(&socket).expect("bind fixture broker");
+    let server = std::thread::spawn(move || {
+        let mut requests = Vec::new();
+        for index in 0..7 {
+            let (mut stream, _) = listener.accept().expect("accept forwarded call");
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).expect("request header");
+            let size = u32::from_be_bytes(header) as usize;
+            let mut body = vec![0u8; size];
+            stream.read_exact(&mut body).expect("request body");
+            requests.push(serde_json::from_slice::<Value>(&body).expect("request JSON"));
+            let response = if index == 4 {
+                json!({"schema_version":1,"ok":false,"error":{
+                    "code":"plugin_broker_busy","message":"queue full","retryable":true,
+                    "detail":null}})
+            } else if index == 3 || index == 5 {
+                json!({"schema_version":1,"ok":false,"error":{
+                    "code":"bad_plan","message":"invalid post","retryable":false,
+                    "detail":{"at":"posts[0]"}}})
+            } else {
+                json!({"schema_version":1,"ok":true,"output":{"value":7}})
+            };
+            let bytes = serde_json::to_vec(&response).expect("response JSON");
+            stream
+                .write_all(&(bytes.len() as u32).to_be_bytes())
+                .expect("response header");
+            stream.write_all(&bytes).expect("response body");
+        }
+        requests
+    });
+    let socket = socket.to_str().expect("socket path");
+    let cli = run_orbit_with_env(
+        &workspace,
+        &["tool", "run", "brokerfixture.echo", "--input", "{}"],
+        &[("ORBIT_PLUGIN_BROKER", socket)],
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&cli.stdout).expect("CLI JSON"),
+        direct
+    );
+    let derived = run_orbit_with_env(
+        &workspace,
+        &["brokerfixture", "echo", "--input", "{}"],
+        &[("ORBIT_PLUGIN_BROKER", socket)],
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&derived.stdout).expect("derived JSON"),
+        direct
+    );
+    let mut client = workspace.serve_with_args_and_env(&[], &[("ORBIT_PLUGIN_BROKER", socket)]);
+    assert_eq!(client.call_tool_ok("brokerfixture_echo", json!({})), direct);
+    let error = client.call_tool_err("brokerfixture_echo", json!({}));
+    assert_eq!(
+        error,
+        json!({
+            "code":"bad_plan","message":"invalid post","retryable":false,
+            "detail":{"at":"posts[0]"}
+        })
+    );
+    let busy = client.call_tool_err("brokerfixture_echo", json!({}));
+    assert_eq!(busy["code"], "plugin_broker_busy");
+    assert_eq!(busy["retryable"], true);
+    let cli_failed = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "brokerfixture.echo",
+            "--input",
+            "{}",
+            "--format",
+            "json",
+        ])
+        .env("ORBIT_PLUGIN_BROKER", socket)
+        .output()
+        .expect("run failed brokered CLI call");
+    assert!(!cli_failed.status.success());
+    assert!(cli_failed.stdout.is_empty());
+    let cli_failed_error: Value =
+        serde_json::from_slice(&cli_failed.stderr).expect("CLI writes structured error to stderr");
+    assert_eq!(cli_failed_error, error);
+    let explicit_input = json!({"workspace": workspace.work}).to_string();
+    let explicit = run_orbit_with_env(
+        &workspace,
+        &[
+            "tool",
+            "run",
+            "brokerfixture.echo",
+            "--input",
+            &explicit_input,
+        ],
+        &[("ORBIT_PLUGIN_BROKER", socket)],
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&explicit.stdout).expect("explicit workspace output"),
+        direct
+    );
+    let requests = server.join().expect("fixture broker thread");
+    assert_eq!(requests.len(), 7);
+    for (index, request) in requests.iter().enumerate() {
+        assert_eq!(request["tool"], "brokerfixture.echo");
+        if index == 6 {
+            assert_eq!(
+                request["input"]["workspace"],
+                workspace.work.to_str().expect("work path")
+            );
+            assert!(
+                request["workspace"]
+                    .as_str()
+                    .is_some_and(|id| !id.is_empty())
+            );
+        } else {
+            assert_eq!(request["input"], json!({}));
+            assert_eq!(request["workspace"], Value::Null);
+        }
+        assert_eq!(request["cwd"], workspace.work.to_str().expect("work path"));
+        assert_eq!(
+            request["entry_point"],
+            if !(2..5).contains(&index) {
+                "cli"
+            } else {
+                "mcp"
+            }
+        );
+        assert_eq!(request["dry_run"], false);
+    }
+    let unreachable = client.call_tool_err("brokerfixture_echo", json!({}));
+    assert_eq!(unreachable["code"], "plugin_broker_unavailable");
+    assert_eq!(unreachable["retryable"], false);
+    let cli_unreachable = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "brokerfixture.echo",
+            "--input",
+            "{}",
+            "--format",
+            "json",
+        ])
+        .env("ORBIT_PLUGIN_BROKER", socket)
+        .output()
+        .expect("run unreachable CLI call");
+    assert!(!cli_unreachable.status.success());
+    assert!(cli_unreachable.stdout.is_empty());
+    let cli_error: Value = serde_json::from_slice(&cli_unreachable.stderr)
+        .expect("CLI writes structured broker error to stderr");
+    assert_eq!(cli_error["code"], "plugin_broker_unavailable");
+    assert_eq!(cli_error["retryable"], false);
+    let built_in = run_orbit_with_env(
+        &workspace,
+        &[
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            "{\"query\":\"brokerfixture\"}",
+        ],
+        &[("ORBIT_PLUGIN_BROKER", socket)],
+    );
+    let _: Value = serde_json::from_slice(&built_in.stdout).expect("built-in tool output");
+    assert_eq!(
+        audit_count_for_tool(&workspace, "brokerfixture.echo"),
+        audit_before,
+        "forwarded calls must leave no local audit rows"
+    );
+}
+
+#[cfg(unix)]
+fn audit_count_for_tool(workspace: &McpWorkspace, tool: &str) -> i64 {
+    let db = workspace.home.join(".orbit/orbit.db");
+    Connection::open(db)
+        .expect("open audit db")
+        .query_row(
+            "SELECT COUNT(*) FROM audit_events WHERE tool_name = ?1",
+            [tool],
+            |row| row.get(0),
+        )
+        .expect("count tool audit rows")
 }
 
 #[cfg(unix)]

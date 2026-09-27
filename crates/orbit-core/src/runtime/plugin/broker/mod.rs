@@ -9,6 +9,7 @@
 //! it through the host's audited plugin dispatch under the run's own
 //! authority.
 
+mod client;
 mod peer;
 mod protocol;
 mod server;
@@ -22,6 +23,7 @@ use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
 use serde_json::Value;
 
+pub(crate) use client::forward_call;
 pub(crate) use peer::PeerAnchor;
 pub(crate) use protocol::{BrokerRequest, EntryPoint};
 pub(crate) use socket::sweep_orphaned;
