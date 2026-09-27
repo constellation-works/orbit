@@ -9,6 +9,7 @@ use orbit_agent::{
     provider_invocation_diagnostic,
 };
 use orbit_common::process::identity::process_start_identity_token;
+use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::ExecutorSandboxKind;
@@ -24,7 +25,8 @@ use super::super::workspace::{
 };
 use super::argv::{
     apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups,
-    apply_trusted_host_provider_sandbox, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
+    apply_trusted_host_provider_sandbox, codex_mcp_server_launch_args, neutralize_inner_sandbox,
+    try_audit_argv_for_dispatch,
 };
 use super::envelope::{
     cli_agent_envelope_json, parse_cli_invocation_trace_from, parse_cli_response_result_from,
@@ -253,10 +255,24 @@ pub fn run_cli_backend(
     let resolved_program =
         resolve_provider_launcher(&provider, &invocation.program, subprocess_cwd.as_deref())
             .map_err(|err| DispatchError::CliInvocationPermanent(err.message))?;
+    let orbit_env =
+        orbit_tool_env().map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
 
     let mut subprocess_args = Vec::with_capacity(cli_executor.args.len() + invocation.args.len());
     subprocess_args.extend(cli_executor.args.iter().cloned());
     subprocess_args.extend(invocation.args.iter().cloned());
+    if provider == "codex" {
+        let orbit_bin = orbit_env
+            .iter()
+            .find(|(name, _)| name == "ORBIT_BIN")
+            .map(|(_, value)| value.as_str())
+            .ok_or_else(|| {
+                DispatchError::CliInvocationPermanent("managed ORBIT_BIN missing".into())
+            })?;
+        subprocess_args.extend(codex_mcp_server_launch_args(orbit_bin).map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!("encode codex MCP command: {error}"))
+        })?);
+    }
     // Combined executor + transport argv is the only place that can honor a
     // custom `--print-timeout` without duplicating it, and the remaining
     // spawn deadline is known here. [ORB-11337]
@@ -379,9 +395,7 @@ pub fn run_cli_backend(
         "ORBIT_ACTIVITY_FS_PROFILE".to_string(),
         resolved_activity_fs_profile_name(fs_profile).to_string(),
     ));
-    dispatch_env.extend(
-        orbit_tool_env().map_err(|error| DispatchError::CliInvocationPermanent(error.message))?,
-    );
+    dispatch_env.extend(orbit_env);
     // Spawned CLI agents resolve the Orbit registry from $HOME unless a
     // managed registry locator is set. A dispatching run already knows its
     // registry; inject it so a provider whose HOME is a tool-specific
@@ -397,7 +411,7 @@ pub fn run_cli_backend(
     // `ORBIT_WORKSPACE` selector below, not the linked-worktree cwd.
     // [ORB-10980] [ORB-11066] [ORB-11117]
     let registry_locator_injected = if let Some(registry_root) = host.orbit_registry_root() {
-        dispatch_env.push(("ORBIT_REGISTRY_ROOT".to_string(), registry_root));
+        dispatch_env.push((MCP_MANAGED_REGISTRY_ROOT_ENV.to_string(), registry_root));
         true
     } else {
         false
@@ -409,7 +423,7 @@ pub fn run_cli_backend(
     // an explicit `--workspace` or tool-payload selector still wins and still
     // fails closed. [ORB-11117]
     if let Some(workspace) = host.orbit_workspace_selector() {
-        dispatch_env.push(("ORBIT_WORKSPACE".to_string(), workspace));
+        dispatch_env.push((MCP_MANAGED_WORKSPACE_ENV.to_string(), workspace));
     }
     if let Some(cwd) = subprocess_cwd.as_ref() {
         let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(cwd).map_err(|error| {

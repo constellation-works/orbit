@@ -28,7 +28,8 @@ use orbit_types::workflow::{ActivityV2Spec, ExecutorSandboxKind};
 use super::super::argv::try_audit_argv_for_dispatch;
 use super::super::argv::{
     apply_provider_runtime_arg_fixups, apply_trusted_host_provider_sandbox,
-    audit_argv_for_dispatch, neutralize_inner_sandbox, rewrite_debug_file_value,
+    audit_argv_for_dispatch, codex_mcp_server_launch_args, neutralize_inner_sandbox,
+    rewrite_debug_file_value,
 };
 use super::test_support::sandbox_for_test;
 #[cfg(target_os = "linux")]
@@ -68,6 +69,14 @@ fn audit_argv_for_dispatch_returns_bare_when_no_sandbox() {
         None,
     );
     assert_eq!(argv, vec!["/usr/bin/claude", "-p", "hello"]);
+}
+
+#[test]
+fn codex_override_pins_managed_server_command_to_selected_binary() {
+    let argv = codex_mcp_server_launch_args("/managed/bin/orbit").expect("encode command");
+    assert_eq!(argv[0], "--config");
+    assert_eq!(argv[1], "mcp_servers.orbit.command=\"/managed/bin/orbit\"");
+    assert_eq!(argv.len(), 2);
 }
 
 #[cfg(target_os = "linux")]

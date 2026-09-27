@@ -37,6 +37,28 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
     "HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "TZ", "USER",
 ];
 
+/// Managed envelope names that a nested Codex MCP server needs for workspace
+/// binding and run or source-inspection attribution. These are names only;
+/// Codex copies their values from the managed child environment.
+pub const MCP_MANAGED_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
+/// Job-run identity forwarded to a nested MCP server.
+pub const MCP_MANAGED_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
+/// Source-inspection identity forwarded to a nested MCP server.
+pub const MCP_MANAGED_SESSION_ID_ENV: &str = "ORBIT_SESSION_ID";
+/// Logical workspace selector forwarded to a nested MCP server.
+pub const MCP_MANAGED_WORKSPACE_ENV: &str = "ORBIT_WORKSPACE";
+/// Registry locator forwarded to a nested MCP server.
+pub const MCP_MANAGED_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
+
+/// Exact set of managed binding and identity names Codex must forward.
+pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
+    MCP_MANAGED_CONTEXT_ENV,
+    MCP_MANAGED_RUN_ID_ENV,
+    MCP_MANAGED_SESSION_ID_ENV,
+    MCP_MANAGED_WORKSPACE_ENV,
+    MCP_MANAGED_REGISTRY_ROOT_ENV,
+];
+
 /// Exact envelope names a managed run exports or forwards into a child.
 ///
 /// The provenance subset (`ORBIT_RUN_ID`, `ORBIT_MANAGED_RUN_CONTEXT`,
@@ -46,16 +68,16 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
 /// (and that a parent process may already hold). Privilege-bearing names in the
 /// same `ORBIT_` namespace are absent from this list on purpose.
 const ORBIT_ENVELOPE_VARS: &[&str] = &[
-    "ORBIT_RUN_ID",
-    "ORBIT_MANAGED_RUN_CONTEXT",
+    MCP_MANAGED_RUN_ID_ENV,
+    MCP_MANAGED_CONTEXT_ENV,
     "ORBIT_AGENT_NAME",
     "ORBIT_AGENT_MODEL",
-    "ORBIT_SESSION_ID",
+    MCP_MANAGED_SESSION_ID_ENV,
     "ORBIT_TASK_ID",
     "ORBIT_ACTIVE_TASK_ID",
     "ORBIT_ROOT",
-    "ORBIT_REGISTRY_ROOT",
-    "ORBIT_WORKSPACE",
+    MCP_MANAGED_REGISTRY_ROOT_ENV,
+    MCP_MANAGED_WORKSPACE_ENV,
     "ORBIT_WORKTREE_ROOT",
     "ORBIT_SCRATCH_DIR",
     "ORBIT_BIN",

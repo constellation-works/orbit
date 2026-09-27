@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_common::fs::git::run_git;
+use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 use serde_json::json;
 use tempfile::{TempDir, tempdir};
@@ -393,6 +394,31 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
         outcome.message
     );
     let events = audit.events_snapshot().unwrap();
+    let argv = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::CliInvocationStarted { argv_redacted, .. } => Some(argv_redacted),
+            _ => None,
+        })
+        .expect("codex launch argv");
+    let overrides = argv
+        .windows(2)
+        .filter(|pair| pair[0] == "--config")
+        .filter_map(|pair| pair[1].split_once('='))
+        .collect::<std::collections::HashMap<_, _>>();
+    let names: Vec<String> = serde_json::from_str(overrides["mcp_servers.orbit.env_vars"])
+        .expect("managed MCP env names");
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        MCP_MANAGED_BINDING_ENV_VARS
+    );
+    let command: String =
+        serde_json::from_str(overrides["mcp_servers.orbit.command"]).expect("managed MCP command");
+    assert!(!command.is_empty());
+    let args: Vec<String> =
+        serde_json::from_str(overrides["mcp_servers.orbit.args"]).expect("managed MCP args");
+    assert_eq!(args, ["mcp", "serve"]);
+    assert_eq!(overrides["mcp_servers.orbit.enabled"], "true");
     let cwd = events
         .iter()
         .find_map(|event| match &event.kind {

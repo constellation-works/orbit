@@ -169,6 +169,7 @@ fn missing_agent_implement_contract_phrases(instruction: &str) -> Vec<&'static s
 mod args {
     #![allow(missing_docs)]
 
+    use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
     use orbit_common::test_fixtures::TEST_CODEX_MODEL;
     use orbit_types::identity::ReasoningEffort;
 
@@ -187,6 +188,14 @@ mod args {
         assert_eq!(
             transport.args(),
             vec![
+                "--config",
+                "mcp_servers.orbit.command=\"orbit\"",
+                "--config",
+                "mcp_servers.orbit.args=[\"mcp\",\"serve\"]",
+                "--config",
+                "mcp_servers.orbit.enabled=true",
+                "--config",
+                "mcp_servers.orbit.env_vars=[\"ORBIT_MANAGED_RUN_CONTEXT\",\"ORBIT_RUN_ID\",\"ORBIT_SESSION_ID\",\"ORBIT_WORKSPACE\",\"ORBIT_REGISTRY_ROOT\"]",
                 "--config",
                 "approval_policy=\"never\"",
                 "--model",
@@ -212,6 +221,14 @@ mod args {
         assert_eq!(
             transport.args(),
             vec![
+                "--config",
+                "mcp_servers.orbit.command=\"orbit\"",
+                "--config",
+                "mcp_servers.orbit.args=[\"mcp\",\"serve\"]",
+                "--config",
+                "mcp_servers.orbit.enabled=true",
+                "--config",
+                "mcp_servers.orbit.env_vars=[\"ORBIT_MANAGED_RUN_CONTEXT\",\"ORBIT_RUN_ID\",\"ORBIT_SESSION_ID\",\"ORBIT_WORKSPACE\",\"ORBIT_REGISTRY_ROOT\"]",
                 "--model",
                 TEST_CODEX_MODEL,
                 "--config",
@@ -220,5 +237,23 @@ mod args {
                 "workspace-write",
             ]
         );
+    }
+
+    #[test]
+    fn codex_mcp_override_forwards_only_shared_binding_names() {
+        let args =
+            CodexCliTransport::new(None, None, "workspace-write".into(), None, vec![]).args();
+        let value = args[7]
+            .strip_prefix("mcp_servers.orbit.env_vars=")
+            .expect("MCP override");
+        let parsed: Vec<String> = serde_json::from_str(value).expect("parse env name array");
+        assert_eq!(
+            parsed.iter().map(String::as_str).collect::<Vec<_>>(),
+            MCP_MANAGED_BINDING_ENV_VARS
+        );
+        assert_eq!(args[0], "--config");
+        assert_eq!(args[1], "mcp_servers.orbit.command=\"orbit\"");
+        assert_eq!(args[3], "mcp_servers.orbit.args=[\"mcp\",\"serve\"]");
+        assert_eq!(args[5], "mcp_servers.orbit.enabled=true");
     }
 }

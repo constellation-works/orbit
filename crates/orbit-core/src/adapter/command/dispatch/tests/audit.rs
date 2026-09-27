@@ -110,6 +110,7 @@ fn clear_audit_context_env() {
     unsafe {
         std::env::remove_var("ORBIT_TASK_ID");
         std::env::remove_var("ORBIT_RUN_ID");
+        std::env::remove_var("ORBIT_SESSION_ID");
         std::env::remove_var(ORBIT_MANAGED_RUN_CONTEXT_ENV);
         std::env::remove_var("ORBIT_ACTIVITY_ID");
         std::env::remove_var("ORBIT_STEP_INDEX");
@@ -266,9 +267,44 @@ fn managed_mcp_correlation_comes_only_from_the_managed_run_envelope() {
 
     assert_eq!(audit.task_id.as_deref(), Some("ORB-10228"));
     assert_eq!(audit.job_run_id.as_deref(), Some("jrun-managed"));
+    assert_eq!(audit.session_id, None);
     assert_eq!(audit.activity_id.as_deref(), Some("agent_implement"));
     assert_eq!(audit.step_index, Some(2));
     assert_eq!(role, "codex");
+}
+
+#[test]
+fn source_inspection_mcp_call_records_its_managed_session_id() {
+    let _g = env_guard();
+    clear_audit_context_env();
+    let runtime = fresh_runtime();
+    // SAFETY: tests serialize through `env_guard()` before mutating env.
+    unsafe {
+        std::env::set_var(ORBIT_MANAGED_RUN_CONTEXT_ENV, "1");
+        std::env::set_var("ORBIT_SESSION_ID", "inspection-session");
+    }
+    let context = ToolSessionContext::trusted_local(
+        Some("ws_orbit".to_string()),
+        Some("hm_local".to_string()),
+        Some("local-host".to_string()),
+    );
+    runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.list",
+            json!({}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            context,
+        )
+        .expect("managed inspection MCP call");
+    clear_audit_context_env();
+
+    let rows = runtime
+        .list_audit_events(None, Some("orbit.task.list".to_string()), None, None, 1)
+        .expect("read inspection audit row");
+    assert_eq!(rows[0].session_id.as_deref(), Some("inspection-session"));
+    assert_eq!(rows[0].job_run_id, None);
 }
 
 /// ORB-10727 [ADR-0358]: the run lease is withdrawn, so an unmanaged MCP call

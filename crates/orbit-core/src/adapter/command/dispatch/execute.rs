@@ -521,7 +521,7 @@ where
         error_message,
         host: std::env::var("HOSTNAME").ok(),
         pid: std::process::id(),
-        session_id: None,
+        session_id: audit_context.session_id,
         workspace_id: session_context
             .as_ref()
             .and_then(|context| context.workspace_id.clone()),
