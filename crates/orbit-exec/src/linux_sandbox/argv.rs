@@ -101,15 +101,23 @@ fn compile_plan(
 
     for (index, rule) in profile.modify.iter().enumerate() {
         if let Some(denied) = rule.strip_prefix('!') {
-            if !is_exact_or_subtree(denied)
-                && !managed_worktree
+            let paths = mount_paths_for_rule(denied, false, &expanded)?;
+            // A missing exact/subtree root cannot receive a read-only mount.
+            // A direct invocation has no post-run guard to catch its creation.
+            if !managed_worktree
                 && overlaps_writable_root(denied, &writable_roots)
+                && (!is_exact_or_subtree(denied) || paths.is_empty())
             {
+                let reason = if paths.is_empty() && is_exact_or_subtree(denied) {
+                    "absent"
+                } else {
+                    "non-subtree"
+                };
                 return Err(OrbitError::PolicyDenied(format!(
-                    "linux-bwrap cannot enforce non-subtree denyModify `{denied}` for a direct invocation; use a managed worktree"
+                    "linux-bwrap cannot enforce {reason} denyModify `{denied}` for a direct invocation; use a managed worktree"
                 )));
             }
-            for path in mount_paths_for_rule(denied, false, &expanded)? {
+            for path in paths {
                 push_mount(&mut out, "--ro-bind", &path);
             }
         } else if is_narrow_reallow(&profile.modify[..index], rule) {
@@ -160,7 +168,7 @@ fn compile_plan(
     out.extend(args.iter().cloned());
 
     // Only a managed worktree carries a post-run guard: a direct invocation
-    // already refused every non-subtree deny that overlaps a writable root.
+    // refused every overlapping deny that could not be mounted at spawn.
     let post_run_guard = if managed_worktree {
         LinuxBwrapPostRunGuard::from_expansion(profile, &expanded)
     } else {

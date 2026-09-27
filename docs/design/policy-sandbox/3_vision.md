@@ -68,14 +68,14 @@ The wrapper constructs a deterministic Bubblewrap argv with these properties:
    cleanup, a minimal `/proc` and `/dev`, and isolated scratch space. Keep the host network
    namespace because CLI agents must reach provider APIs; network restriction is not smuggled
    into this filesystem task.
-3. Canonicalize every host path before it becomes a mount argument. Reject missing or escaping
-   policy roots unless the root is an Orbit-owned state directory that Orbit creates before
-   spawn. Preserve the active-worktree and narrow inherited-Orbit write allowances already
-   appended by the v2 host.
-4. Apply exact-path and subtree `denyModify` rules as later read-only mounts so they override a
-   broader writable parent. Expand non-subtree deny globs over the pre-spawn filesystem snapshot
-   and mount every existing match read-only. Record that snapshot-bound enforcement in audit
-   metadata.
+3. Canonicalize every host path before it becomes a mount argument. Reject missing positive
+   mount roots unless the root is an Orbit-owned state directory that Orbit creates before spawn.
+   Handle missing deny roots as described below. Preserve the active-worktree and narrow
+   inherited-Orbit write allowances already appended by the v2 host.
+4. Apply existing exact-path and subtree `denyModify` roots as later read-only mounts so they
+   override a broader writable parent. Expand non-subtree deny globs over the pre-spawn filesystem
+   snapshot and mount every existing match read-only. Record that snapshot-bound enforcement in
+   audit metadata.
 
 This gives a kernel-enforced guarantee that the child cannot mutate the host outside the
 materialized writable mounts. Non-subtree filename globs such as `**/*.env` have one unavoidable
@@ -85,7 +85,9 @@ kernel-enforced. For a managed shipment worktree, Orbit uses a post-run policy c
 forbidden newly-created paths before commit; the disposable worktree is the containment boundary,
 and the implementation assumes it has one writer for the duration of the invocation.
 A direct invocation without that disposable boundary must fail closed when a non-subtree
-`denyModify` overlaps a writable root rather than downgrading silently.
+`denyModify` overlaps a writable root, or when an overlapping exact-path or subtree deny root
+is absent and cannot be mounted. Existing exact-path and subtree denies are mounted read-only;
+absent denies outside writable roots do not restrict direct invocations.
 
 #### Read-policy boundary
 
