@@ -1,13 +1,16 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime, V2AuditEventInsertParams};
+use orbit_types::workflow::{
+    ChildDispatch, ChildDispatchPhase, JobRunState, JobRunStep, JobTargetType, PipelineState,
+};
 use serde_json::{Value, json};
 
 use crate::command::Execute;
 
 use super::super::job::*;
+use super::super::{RunRead, run_show_payload};
 
 fn test_run(state: JobRunState) -> JobRun {
     let now = Utc::now();
@@ -31,6 +34,172 @@ fn test_run(state: JobRunState) -> JobRun {
         crew_model: None,
         steps: Vec::new(),
     }
+}
+
+fn persist_failed_show_run(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_id: &str,
+    error: &str,
+    children: &[&str],
+) {
+    let mut run = test_run(JobRunState::Failed);
+    run.run_id = run_id.to_string();
+    run.finished_at = run.started_at;
+    run.steps.push(JobRunStep {
+        step_index: 0,
+        target_type: JobTargetType::Activity,
+        target_id: step_id.to_string(),
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+        duration_ms: Some(1),
+        exit_code: Some(1),
+        agent_response_json: None,
+        state: JobRunState::Failed,
+        error_code: Some("step_failed".to_string()),
+        error_message: Some(error.to_string()),
+    });
+    let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    for child_id in children {
+        state.record_child_dispatch(
+            ChildDispatch::submitted(
+                (*child_id).to_string(),
+                "task_gate_pipeline".to_string(),
+                "invoke_and_wait".to_string(),
+                true,
+                false,
+                Utc::now(),
+            )
+            .with_parent_step_id(Some(step_id.to_string())),
+        );
+        state.advance_child_dispatch(
+            child_id,
+            ChildDispatchPhase::Terminal,
+            Some("failed".to_string()),
+            Some(error.to_string()),
+        );
+    }
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let store = runtime.sqlite_store().expect("store");
+    store
+        .upsert_job_run_for_workspace(&workspace_id, &run, Some(&state))
+        .expect("persist run");
+    store
+        .upsert_job_run_step_for_workspace(&workspace_id, run_id, &run.steps[0])
+        .expect("persist step");
+}
+
+fn persist_failed_audit_leaf(runtime: &OrbitRuntime, run_id: &str, step_id: &str, error: &str) {
+    // V2 can keep a synthetic job-level wrapper step alongside the actual
+    // activity failure in its audit trail.
+    persist_failed_show_run(runtime, run_id, "job", "synthetic wrapper error", &[]);
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    for (index, (event_id, mut body)) in [
+        ("step-started", json!({"body_kind": "step_started", "step_id": step_id})),
+        (
+            "step-finished",
+            json!({"body_kind": "step_finished", "step_id": step_id, "outcome": "error", "error_message": error}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let ts = Utc::now() + chrono::Duration::milliseconds(index as i64);
+        body["event_id"] = json!(event_id);
+        body["ts"] = json!(ts.to_rfc3339());
+        runtime
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: workspace_id.clone(),
+                event_id: event_id.to_string(),
+                source: "v2_envelope".to_string(),
+                schema_version: 1,
+                event_type: "test.event".to_string(),
+                ts,
+                run_id: run_id.to_string(),
+                agent_identity: "codex".to_string(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: body.to_string(),
+            })
+            .expect("persist audit step event");
+    }
+}
+
+#[test]
+fn run_show_reports_all_failed_leaves_depth_first_with_complete_errors() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let long_error = format!(
+        "{}base branch checkout must be clean before merge_batch_worktree_into_base",
+        "worktree setup context; ".repeat(8),
+    );
+    persist_failed_show_run(
+        &runtime,
+        "jrun-top",
+        "pipeline_success_guard",
+        "top-level wrapper failure",
+        &["jrun-gate", "jrun-other"],
+    );
+    persist_failed_show_run(
+        &runtime,
+        "jrun-gate",
+        "pipeline_success_guard",
+        "gate wrapper failure",
+        &["jrun-local", "jrun-local-second"],
+    );
+    persist_failed_audit_leaf(&runtime, "jrun-local", "worktree_setup", &long_error);
+    persist_failed_show_run(
+        &runtime,
+        "jrun-local-second",
+        "validate",
+        "second leaf failed",
+        &[],
+    );
+    persist_failed_show_run(&runtime, "jrun-other", "publish", "third leaf failed", &[]);
+
+    let output = run_show_payload(&runtime, Some("jrun-top"), None, RunRead::Observe)
+        .expect("show top-level run");
+    let crate::command::CommandOutput::Payload(payload) = output else {
+        panic!("run show should produce a payload");
+    };
+    let (document, view) = payload.into_view();
+    assert_eq!(document["root_cause"]["run_id"], "jrun-local");
+    assert_eq!(document["root_cause"]["step"], "worktree_setup");
+    assert_eq!(document["root_cause"]["message"], long_error);
+    assert_eq!(
+        document["additional_root_causes"],
+        json!([
+            {"run_id": "jrun-local-second", "step": "validate", "message": "second leaf failed"},
+            {"run_id": "jrun-other", "step": "publish", "message": "third leaf failed"},
+        ])
+    );
+    assert_eq!(
+        document["run"]["error_message"],
+        "top-level wrapper failure"
+    );
+
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("run show should include a human view");
+    };
+    let crate::output::payload::Block::Text(header) = &blocks[0] else {
+        panic!("run show should start with a text header");
+    };
+    assert!(header.contains(&format!(
+        "Root cause: run=jrun-local step=worktree_setup error={long_error}"
+    )));
+    let second = header
+        .find("Additional root cause: run=jrun-local-second step=validate error=second leaf failed")
+        .expect("second leaf line");
+    let third = header
+        .find("Additional root cause: run=jrun-other step=publish error=third leaf failed")
+        .expect("third leaf line");
+    assert!(
+        second < third,
+        "failed leaves should follow child dispatch order"
+    );
+    assert!(
+        header.contains("Child jrun-gate job="),
+        "wrapper lineage remains visible"
+    );
 }
 
 fn write_replay_job(runtime: &OrbitRuntime, name: &str) -> PathBuf {

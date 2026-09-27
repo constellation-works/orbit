@@ -1,11 +1,14 @@
 use clap::Args;
+use std::collections::HashSet;
+
 use orbit_core::runtime::audit::run::RunProviderProcess;
-use orbit_core::{CatalogReferenceLayer, NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_core::{CatalogReferenceLayer, JobRun, NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
-use super::format::format_backlog_exclusion_lines;
+use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_cause_lines};
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::steps::{
     RunDisplaySteps, RunRead, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
@@ -77,6 +80,7 @@ pub(crate) fn run_show_payload(
         records: steps,
         source: steps_source,
     } = run_display_steps(&run, audit.steps);
+    let root_causes = collect_failed_leaf_causes(runtime, &run, state.as_ref(), read)?;
 
     let run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
@@ -98,6 +102,8 @@ pub(crate) fn run_show_payload(
         // still tell the two apart [ORB-12113].
         "steps": steps.iter().map(run_step_record_to_json).collect::<Vec<_>>(),
         "steps_source": steps_source.as_str(),
+        "root_cause": root_causes.first(),
+        "additional_root_causes": root_causes.get(1..).unwrap_or_default(),
         // The same projection the registered/MCP run-show surface emits, so
         // both readers name a live child identically [ORB-11752].
         "provider_processes": provider_processes
@@ -107,6 +113,11 @@ pub(crate) fn run_show_payload(
     });
 
     let mut header = run_header_text_with_state(&run, state.as_ref());
+    let cause_lines = format_root_cause_lines(&root_causes);
+    if !cause_lines.is_empty() {
+        header.push('\n');
+        header.push_str(&cause_lines.join("\n"));
+    }
     if let Some(state) = &state {
         header.push_str(&format!(
             "\n{} iteration={} step_outputs={} updated_at={}",
@@ -147,6 +158,107 @@ pub(crate) fn run_show_payload(
         ],
     )
     .into())
+}
+
+/// Follow persisted child dispatches depth first. Only failed terminal leaves
+/// are reported; a wrapper's own error stays in its normal run header/steps.
+fn collect_failed_leaf_causes(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+    state: Option<&PipelineState>,
+    read: RunRead,
+) -> Result<Vec<RunRootCause>, OrbitError> {
+    let mut causes = Vec::new();
+    let mut visited = HashSet::new();
+    collect_failed_leaf_causes_from(runtime, run, state, read, &mut visited, &mut causes)?;
+    Ok(causes)
+}
+
+fn collect_failed_leaf_causes_from(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+    state: Option<&PipelineState>,
+    read: RunRead,
+    visited: &mut HashSet<String>,
+    causes: &mut Vec<RunRootCause>,
+) -> Result<(), OrbitError> {
+    if !visited.insert(run.run_id.clone()) {
+        return Ok(());
+    }
+    let before_children = causes.len();
+    for dispatch in state.into_iter().flat_map(|state| &state.child_dispatches) {
+        let child = match read.show(runtime, &dispatch.child_run_id) {
+            Ok(child) => child,
+            Err(OrbitError::NotFound { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        let child_state = runtime.read_run_state(&child.run_id)?;
+        collect_failed_leaf_causes_from(
+            runtime,
+            &child,
+            child_state.as_ref(),
+            read,
+            visited,
+            causes,
+        )?;
+    }
+    if causes.len() != before_children
+        || !matches!(
+            run.state,
+            JobRunState::Failed
+                | JobRunState::Timeout
+                | JobRunState::Cancelled
+                | JobRunState::Interrupted
+        )
+    {
+        return Ok(());
+    }
+
+    // V2 runs can store a synthetic job-level step as well as the actual YAML
+    // steps in their audit trail. Prefer an audit error so the named step is
+    // the one that failed, even when the stored step only wraps that failure.
+    let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
+    let audit_error = audit_steps.iter().rev().find(|step| {
+        step.error_message
+            .as_deref()
+            .is_some_and(|message| !message.is_empty())
+    });
+    let stored_error = run.steps.iter().rev().find(|step| {
+        step.state != JobRunState::Skipped
+            && step
+                .error_message
+                .as_deref()
+                .is_some_and(|message| !message.is_empty())
+    });
+    let audit_failed = audit_steps.iter().rev().find(|step| {
+        matches!(
+            step.state.as_deref(),
+            Some("error" | "failed" | "timeout" | "interrupted")
+        )
+    });
+    let stored_failed = run.steps.iter().rev().find(|step| {
+        matches!(
+            step.state,
+            JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+        )
+    });
+    let (step, message) = if let Some(step) = audit_error {
+        (Some(step.step_id.clone()), step.error_message.clone())
+    } else if let Some(step) = stored_error {
+        (Some(step.target_id.clone()), step.error_message.clone())
+    } else if let Some(step) = audit_failed {
+        (Some(step.step_id.clone()), step.error_message.clone())
+    } else if let Some(step) = stored_failed {
+        (Some(step.target_id.clone()), step.error_message.clone())
+    } else {
+        (None, None)
+    };
+    causes.push(RunRootCause {
+        run_id: run.run_id.clone(),
+        step,
+        message,
+    });
+    Ok(())
 }
 
 /// One line per catalog reference, naming the layer that resolved it.
