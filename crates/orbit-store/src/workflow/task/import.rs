@@ -11,7 +11,7 @@ use crate::driver::sqlite::task_registry::{
 };
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_types::task::{task_id_prefix, validate_orb_task_id};
+use orbit_types::task::{ORB_TASK_ID_MAX, task_id_prefix, validate_orb_task_id};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -240,6 +240,28 @@ pub fn import_tasks(
         });
     }
 
+    // A renumber needs an ID above every kept or registered ID. Refuse an
+    // exhausted range before registering a workspace or writing any bundles.
+    let renumber_floor = if to_renumber.is_empty() {
+        None
+    } else {
+        let kept_max = kept
+            .iter()
+            .filter_map(|staged| parse_orb_task_number(&staged.source_id))
+            .max();
+        let existing_max = registry.max_registered_task_number()?;
+        let highest = [kept_max, existing_max].into_iter().flatten().max();
+        Some(match highest {
+            Some(ORB_TASK_ID_MAX) => {
+                return Err(OrbitError::Store(
+                    "ORB task id allocator exhausted; cannot renumber import above the maximum task ID".into(),
+                ));
+            }
+            Some(value) => value + 1,
+            None => 0,
+        })
+    };
+
     // ---- Phase 2: mutate. Track writes for best-effort rollback. ----
     // Note: the monotonic allocator bumps below are intentionally never rolled
     // back — the counter only moves forward and holes are expected. A newly
@@ -257,26 +279,24 @@ pub fn import_tasks(
 
     // Reserve headroom so renumber allocations never collide with kept ids.
     // Only renumbering mints, so no other policy moves the counter here.
-    if !to_renumber.is_empty() {
-        let kept_max = kept
-            .iter()
-            .filter_map(|staged| parse_orb_task_number(&staged.source_id))
-            .max();
-        let existing_max = registry.max_registered_task_number()?;
-        let floor = [kept_max, existing_max]
-            .into_iter()
-            .flatten()
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0);
-        registry.bump_allocator_to_at_least(floor)?;
+    if let Some(floor) = renumber_floor
+        && let Err(err) = registry.bump_allocator_to_at_least(floor)
+    {
+        guard.rollback();
+        return Err(err);
     }
 
     // Allocate new ids for collisions (deterministic order by source id). The
     // whole run is reserved with a single counter bump, so a renumber of N
     // tasks costs one commit rather than N.
     to_renumber.sort_by(|a, b| a.source_id.cmp(&b.source_id));
-    let new_ids = registry.allocate_task_ids(&target.workspace_id, to_renumber.len())?;
+    let new_ids = match registry.allocate_task_ids(&target.workspace_id, to_renumber.len()) {
+        Ok(ids) => ids,
+        Err(err) => {
+            guard.rollback();
+            return Err(err);
+        }
+    };
     let id_remap: BTreeMap<String, String> = to_renumber
         .iter()
         .map(|staged| staged.source_id.clone())
@@ -367,8 +387,11 @@ pub fn import_tasks(
     }
 
     // Bump the allocator past the highest landed id so future creates don't collide.
-    if let Some(max) = landed_numbers.iter().copied().max() {
-        registry.bump_allocator_to_at_least(max + 1)?;
+    if let Some(max) = landed_numbers.iter().copied().max()
+        && let Err(err) = registry.bump_allocator_past_task_number(max)
+    {
+        guard.rollback();
+        return Err(err);
     }
 
     // Persist and surface the old→new mapping.
