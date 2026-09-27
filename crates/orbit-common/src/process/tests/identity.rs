@@ -168,3 +168,30 @@ mod liveness {
         child.0.wait().expect("reap isolated zombie");
     }
 }
+
+#[cfg(target_os = "macos")]
+mod darwin {
+    use crate::process::identity::{darwin_lstart_utc, format_lstart_utc};
+
+    /// The sandbox-safe probe must produce exactly what `ps` prints, or a
+    /// token a worker computes would never match the one the host recorded.
+    #[test]
+    fn libproc_start_time_renders_exactly_as_ps_lstart() {
+        let pid = std::process::id();
+        let output = std::process::Command::new("ps")
+            .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .env("TZ", "UTC")
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .output()
+            .expect("run ps");
+        let from_ps = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(darwin_lstart_utc(pid).as_deref(), Some(from_ps.as_str()));
+    }
+
+    #[test]
+    fn single_digit_days_are_space_padded_like_ps() {
+        // 2026-09-07T04:05:06Z
+        assert_eq!(format_lstart_utc(1_788_753_906), "Mon Sep  7 04:05:06 2026");
+    }
+}

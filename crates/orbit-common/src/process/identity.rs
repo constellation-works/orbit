@@ -2,7 +2,9 @@
 //!
 //! On Unix, the token is derived from `ps -o lstart=` with the child
 //! environment forced to `TZ=UTC` / `LC_ALL=C` / `LANG=C` so the persisted
-//! value does not depend on the caller's locale or timezone. Tokens written
+//! value does not depend on the caller's locale or timezone. macOS reads the
+//! same value from libproc first, because a sandboxed agent cannot exec the
+//! setuid `ps`. Tokens written
 //! by this helper carry a [`STABLE_TOKEN_PREFIX`] so readers can distinguish
 //! them from legacy unversioned values.
 //!
@@ -169,6 +171,10 @@ use std::process::Command;
 
 #[cfg(unix)]
 fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
+    #[cfg(target_os = "macos")]
+    if stable_env && let Some(lstart) = darwin_lstart_utc(pid) {
+        return Ok(Some(lstart));
+    }
     let mut cmd = Command::new("ps");
     cmd.args(["-o", "lstart=", "-p", &pid.to_string()]);
     if stable_env {
@@ -180,6 +186,30 @@ fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
     }
     let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok((!token.is_empty()).then_some(token))
+}
+
+/// The kernel's start time for `pid`, rendered exactly as `ps -o lstart=`
+/// prints it under `TZ=UTC LC_ALL=C` (`%c` in the C locale).
+///
+/// On macOS `ps` is setuid root, and the agent sandbox refuses to exec it,
+/// while `proc_pidinfo` stays allowed. Reading libproc directly lets a
+/// sandboxed worker compute the same token for its ancestors that the host
+/// recorded outside the sandbox. `None` sends the caller to `ps`, which still
+/// tells a missing process from an unreadable one.
+#[cfg(target_os = "macos")]
+pub(crate) fn darwin_lstart_utc(pid: u32) -> Option<String> {
+    let key = crate::process::ancestry::process_start_key(pid)?;
+    let seconds = i64::try_from(key.starttime >> 20).ok()?;
+    Some(format_lstart_utc(seconds))
+}
+
+/// `ps`'s C-locale `%c`: `Sun Sep  7 04:05:06 2026`.
+#[cfg(target_os = "macos")]
+pub(crate) fn format_lstart_utc(seconds: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
+        .unwrap_or_default()
+        .format("%a %b %e %H:%M:%S %Y")
+        .to_string()
 }
 
 /// Backs [`crate::test_env::start_identity_probe_blocker`]: the reason the

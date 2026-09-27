@@ -835,3 +835,65 @@ fn a_worker_without_write_access_reads_the_authority_after_the_host_closed_it() 
         "this process has no binding"
     );
 }
+
+/// The macOS agent sandbox refuses to exec the setuid `/bin/ps`. A worker's
+/// `orbit` call inside it must still find the binding the host recorded for
+/// its ancestor, so the identity probe cannot depend on `ps`.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_worker_that_cannot_exec_ps_still_resolves_its_binding() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    const NAME: &str = "runtime::recovery_authority::tests::a_worker_that_cannot_exec_ps_still_resolves_its_binding";
+    if let Some(root) = std::env::var_os("ORBIT_SANDBOXED_BINDING_ROOT") {
+        std::io::stdin()
+            .read_exact(&mut [0u8; 1])
+            .expect("parent binding barrier");
+        assert!(
+            Command::new("/bin/ps").arg("-p").arg("1").output().is_err(),
+            "the fixture sandbox must deny exec of /bin/ps"
+        );
+        let binding = super::current_worker_binding(Path::new(&root))
+            .expect("resolve authority")
+            .expect("bound process");
+        assert_eq!(binding.bound_run_id, "immutable-leaf");
+        return;
+    }
+    let root = TempDir::new().expect("authority root");
+    let authority = RecoveryAuthority::open(root.path()).expect("authority");
+    // sandbox-exec execs the test binary in place, so the pid and start time
+    // the host binds are the sandboxed process's own.
+    let mut command = Command::new("/usr/bin/sandbox-exec");
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let mut child = command
+        .args([
+            "-p",
+            "(version 1)(allow default)(deny process-exec (literal \"/bin/ps\"))",
+        ])
+        .arg(std::env::current_exe().expect("test binary"))
+        .args(["--exact", NAME, "--nocapture"])
+        .env("ORBIT_SANDBOXED_BINDING_ROOT", root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sandboxed child");
+    authority
+        .bind_worker_process(child.id(), &worker_binding())
+        .expect("bind");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"1")
+        .expect("release child");
+    let output = child.wait_with_output().expect("child output");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
