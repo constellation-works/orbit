@@ -64,6 +64,9 @@ orbit init
 # 3. Register a repo and connect your agents over MCP
 cd <repo> && orbit workspace init --mcp         # add --ship-mode local to skip PRs
 
+# Review and commit the checkout files listed by workspace init before the first ship.
+# Local delivery requires a clean base checkout; the list includes MCP client files.
+
 # 4. Check everything is healthy
 orbit doctor
 ```

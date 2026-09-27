@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -661,6 +662,7 @@ struct WorkspaceInitReport {
     root: PathBuf,
     orbit_dir: PathBuf,
     onboarding: &'static str,
+    checkout_files: Vec<String>,
     allocator: AllocatorOutcome,
     mcp: McpOutcome,
     rules: RulesOutcome,
@@ -695,6 +697,15 @@ fn collect_init_report(
     inject_rules: bool,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
+    let mut checkout_files = BTreeSet::new();
+    if manages_checkout_local_orbit_files(&init_result.root, &init_result.orbit_dir)
+        && let Some(gitignore_root) = init_result.orbit_dir.parent()
+    {
+        checkout_files.insert(checkout_file_label(
+            &init_result.root,
+            &gitignore_root.join(".gitignore"),
+        ));
+    }
 
     let allocator = match task_id_start {
         Some(start) => {
@@ -712,11 +723,14 @@ fn collect_init_report(
     };
 
     let mcp_outcome = if mcp {
-        let providers = crate::command::mcp::init_auto_for_workspace(
+        let (providers, files) = crate::command::mcp::init_auto_for_workspace(
             &init_result.root,
             &init_result.orbit_dir,
             &init_result.id,
         )?;
+        for file in files {
+            checkout_files.insert(checkout_file_label(&init_result.root, &file));
+        }
         if providers.is_empty() {
             McpOutcome::NoneDetected
         } else {
@@ -728,6 +742,9 @@ fn collect_init_report(
 
     let rules_outcome = if inject_rules {
         let outcome = inject_agent_rules(&init_result.root)?;
+        for entry in &outcome.outcomes {
+            checkout_files.insert(checkout_file_label(&init_result.root, &entry.path));
+        }
         RulesOutcome::Injected(
             outcome
                 .outcomes
@@ -745,10 +762,18 @@ fn collect_init_report(
         root: init_result.root,
         orbit_dir: init_result.orbit_dir,
         onboarding,
+        checkout_files: checkout_files.into_iter().collect(),
         allocator,
         mcp: mcp_outcome,
         rules: rules_outcome,
     })
+}
+
+fn checkout_file_label(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn rule_file_outcome(entry: InjectionOutcome) -> RuleFileOutcome {
@@ -769,6 +794,8 @@ fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "root": report.root.to_string_lossy(),
         "orbit_dir": report.orbit_dir.to_string_lossy(),
         "onboarding": report.onboarding,
+        "checkout_files": report.checkout_files,
+        "before_ship": if report.checkout_files.is_empty() { None } else { Some("Review and commit the listed checkout files before shipping; the base checkout must be clean for local delivery.") },
         "allocator": allocator_json(&report.allocator),
         "mcp": mcp_json(&report.mcp),
         "rules": rules_json(&report.rules),
@@ -842,6 +869,13 @@ fn format_workspace_init(report: &WorkspaceInitReport) -> String {
         format!("  orbit_dir: {}", report.orbit_dir.display()),
         format!("  onboarding: {}", report.onboarding),
     ];
+    if !report.checkout_files.is_empty() {
+        lines.push("  checkout files written:".to_string());
+        for file in &report.checkout_files {
+            lines.push(format!("    {file}"));
+        }
+        lines.push("  before ship: review and commit these files; the base checkout must be clean for local delivery".to_string());
+    }
     match &report.allocator {
         AllocatorOutcome::Skipped => {}
         AllocatorOutcome::Ran {

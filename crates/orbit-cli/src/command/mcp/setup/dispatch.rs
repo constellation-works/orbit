@@ -72,7 +72,7 @@ pub(super) struct ConfigTarget {
 }
 
 impl ConfigTarget {
-    fn resolve(
+    pub(super) fn resolve(
         scope: ScopeArg,
         provider: &McpProvider,
         repo_root: &Path,

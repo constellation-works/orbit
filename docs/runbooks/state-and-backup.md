@@ -142,6 +142,11 @@ with `git rm -r --cached .orbit`.
 `orbit workspace init` updates `.gitignore` and writes definition files under
 `.orbit/`. Those files are ignored, so they do not dirty the checkout. Orbit
 intentionally does not auto-commit, stash, or discard operator modifications.
+With `--mcp`, it also writes the detected clients' repo-local MCP configuration
+files (for example `.mcp.json` and `.claude/settings.json`). The init report
+lists every checkout file it wrote. Review and commit the listed files before
+the first local ship, which requires a clean base checkout. PR delivery uses a
+separate worktree and does not impose that local landing check.
 
 ### Recover a missing or corrupt checkout identity
 
