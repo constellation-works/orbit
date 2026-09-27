@@ -669,10 +669,8 @@ pub(super) fn repository_name(snapshot: &Value) -> &str {
 /// in another package's changelog prose.
 fn pull_request_bumps_package(pull_request: &Value, ecosystem: &str, package: &str) -> bool {
     let package = package.to_ascii_lowercase();
-    if dependabot_title_package(&field(pull_request, "title"))
-        .is_some_and(|title_package| title_package == package)
-    {
-        return true;
+    if let Some(title_package) = dependabot_title_package(&field(pull_request, "title")) {
+        return title_package == package;
     }
     dependabot_branch_names_package(&field(pull_request, "head_branch"), ecosystem, &package)
 }
@@ -699,8 +697,8 @@ fn dependabot_title_package(title: &str) -> Option<String> {
 
 /// Dependabot head refs follow `dependabot/<ecosystem>/<manifest path…>/<package>-<version>`.
 /// Require the ecosystem segment to agree and the final path segment to name
-/// the package, so a package whose name is a substring of a sibling
-/// package's branch (e.g. `time` inside `runtime`) cannot match.
+/// the package followed by a version-like suffix. Checking that suffix avoids
+/// treating a hyphenated sibling package (e.g. `time-core`) as `time`.
 fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: &str) -> bool {
     let mut segments = head_branch.split('/');
     if segments.next() != Some("dependabot") {
@@ -716,7 +714,16 @@ fn dependabot_branch_names_package(head_branch: &str, ecosystem: &str, package: 
         return false;
     };
     let last = last.to_ascii_lowercase();
-    last == package || last.starts_with(&format!("{package}-"))
+    if last == package {
+        return true;
+    }
+    last.strip_prefix(&format!("{package}-"))
+        .is_some_and(|version| {
+            version
+                .chars()
+                .next()
+                .is_some_and(|character| character.is_ascii_digit())
+        })
 }
 
 pub(super) fn severity_rank(value: &str) -> Option<u8> {

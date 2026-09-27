@@ -283,6 +283,73 @@ fn open_pr_for_an_unrelated_package_does_not_suppress_filing() {
 }
 
 #[test]
+fn open_pr_for_hyphenated_sibling_does_not_suppress_alerting_package() {
+    let (_root, runtime, _repo) = runtime_with_workspace_layout();
+    let time_core_pr = json!({
+        "number": 8,
+        "title": "Bump time-core from 0.1.2 to 0.1.3",
+        "body": "Bumps time-core.",
+        "url": "https://github.test/pr/8",
+        "author": "app/dependabot",
+        "head_branch": "dependabot/cargo/time-core-0.1.3",
+    });
+    let output = file(
+        &runtime,
+        snapshot(
+            vec![alert(8, "high", "< 1.2.3", "GHSA-time-core")],
+            vec![time_core_pr],
+        ),
+        json!({}),
+    );
+    assert_eq!(output["filed_count"], json!(1));
+    assert_eq!(output["skipped_dependabot_pr"], json!([]));
+
+    // An explicit title for a sibling package takes precedence even if stale
+    // branch metadata happens to name the alerting package.
+    let (_root, conflicting_runtime, _repo) = runtime_with_workspace_layout();
+    let conflicting_branch_pr = json!({
+        "number": 9,
+        "title": "Bump time-core from 0.1.2 to 0.1.3",
+        "body": "Bumps time-core.",
+        "url": "https://github.test/pr/9",
+        "author": "app/dependabot",
+        "head_branch": "dependabot/cargo/time-1.2.3",
+    });
+    let output = file(
+        &conflicting_runtime,
+        snapshot(
+            vec![alert(9, "high", "< 1.2.3", "GHSA-time-branch-conflict")],
+            vec![conflicting_branch_pr],
+        ),
+        json!({}),
+    );
+    assert_eq!(output["filed_count"], json!(1));
+    assert_eq!(output["skipped_dependabot_pr"], json!([]));
+}
+
+#[test]
+fn grouped_pr_branch_does_not_claim_hyphenated_sibling_coverage() {
+    let (_root, runtime, _repo) = runtime_with_workspace_layout();
+    let mut tokio_alert = alert(10, "high", "< 1.2.3", "GHSA-tokio");
+    tokio_alert["package"] = json!("tokio");
+    let grouped_pr = json!({
+        "number": 10,
+        "title": "Bump the cargo group with 2 updates",
+        "body": "Bumps tokio and tokio-util.",
+        "url": "https://github.test/pr/10",
+        "author": "app/dependabot",
+        "head_branch": "dependabot/cargo/tokio-util-1.2.3",
+    });
+    let output = file(
+        &runtime,
+        snapshot(vec![tokio_alert], vec![grouped_pr]),
+        json!({}),
+    );
+    assert_eq!(output["filed_count"], json!(1));
+    assert_eq!(output["skipped_dependabot_pr"], json!([]));
+}
+
+#[test]
 fn open_pr_that_bumps_the_alerting_package_still_suppresses_filing() {
     let (_root, runtime, _repo) = runtime_with_workspace_layout();
     let by_title = json!({
