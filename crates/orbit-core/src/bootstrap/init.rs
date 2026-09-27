@@ -778,38 +778,64 @@ pub fn link_skills(global_root: &Path) -> Result<LinkResult, OrbitError> {
     })
 }
 
-/// Remove skill symlinks beside the selected global root.
-/// Only removes symlinks — regular files and directories are left intact.
+/// Remove shipped core skill symlinks beside the selected global root.
+///
+/// A symlink is removed only when its name is a current core skill id and its
+/// target is the catalog path Orbit writes (`{skills_root}/{id}`, or that
+/// path's canonical form). Plugin links, custom links, dangling links that
+/// point elsewhere, core-named links that point somewhere else, catalog links
+/// under any other name, and ordinary files or directories are left in place.
+///
+/// A discovery directory that is itself a symlink is not traversed. Following
+/// it would delete entries in a directory this root does not own. Removal
+/// counts and empty-directory cleanup include only links removed from a real
+/// discovery directory.
 pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
     let init_target = resolve_init_target_from_root(global_root);
+    let skills_root = global_skills_dir(&init_target.orbit_root);
+    let canonical_skills_root = skills_root
+        .canonicalize()
+        .unwrap_or_else(|_| skills_root.clone());
+    let core_ids: BTreeSet<&str> = default_skill_ids().into_iter().collect();
     let mut removed_count = 0usize;
     let mut cleaned_dirs = Vec::new();
 
     for skills_links_dir in &init_target.skills_links_roots {
-        if !skills_links_dir.exists() {
+        if !owned_discovery_dir(skills_links_dir)? {
             continue;
         }
 
         let entries = fs::read_dir(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
-
         for entry in entries {
             let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
-            let meta =
-                fs::symlink_metadata(entry.path()).map_err(|e| OrbitError::Io(e.to_string()))?;
-            if meta.file_type().is_symlink() {
-                fs::remove_file(entry.path()).map_err(|e| OrbitError::Io(e.to_string()))?;
-                removed_count += 1;
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+            if !meta.file_type().is_symlink() {
+                continue;
             }
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            if !core_ids.contains(name) {
+                continue;
+            }
+            let resolved = resolve_symlink_target(&path)?;
+            if !is_orbit_skill_link_target(&resolved, &skills_root, &canonical_skills_root, name) {
+                continue;
+            }
+            fs::remove_file(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
+            removed_count += 1;
         }
 
-        // Clean up empty skills dir, then empty parent (.agents/ or .claude/)
-        if skills_links_dir.exists() && dir_is_empty(skills_links_dir)? {
+        // Clean up an empty skills dir, then an empty real parent (.agents/ or .claude/).
+        // Both checks use symlink metadata so a symlinked directory is never removed.
+        if real_empty_dir(skills_links_dir)? {
             fs::remove_dir(skills_links_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
             cleaned_dirs.push(skills_links_dir.clone());
 
             if let Some(parent) = skills_links_dir.parent()
-                && parent.exists()
-                && dir_is_empty(parent)?
+                && real_empty_dir(parent)?
             {
                 fs::remove_dir(parent).map_err(|e| OrbitError::Io(e.to_string()))?;
                 cleaned_dirs.push(parent.to_path_buf());
@@ -821,6 +847,38 @@ pub fn unlink_skills(global_root: &Path) -> Result<UnlinkResult, OrbitError> {
         removed_count,
         cleaned_dirs,
     })
+}
+
+/// Whether `path` is a real directory Orbit may edit.
+///
+/// A symlink, including one that points at a directory, is not owned: callers
+/// must not follow it into another tree. Missing paths are not owned either.
+/// A non-directory, non-symlink entry is an error so unlink still fails when
+/// the discovery path is a regular file, as `read_dir` did before.
+fn owned_discovery_dir(path: &Path) -> Result<bool, OrbitError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(false),
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(true),
+        Ok(_) => Err(OrbitError::Io(format!(
+            "expected '{}' to be a directory for skill links; found non-directory path",
+            path.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OrbitError::Io(error.to_string())),
+    }
+}
+
+/// Whether `path` is a real directory with no entries.
+///
+/// Symlinks are not empty directories: `read_dir` and `remove_dir` must not
+/// follow them into a tree this root does not own.
+fn real_empty_dir(path: &Path) -> Result<bool, OrbitError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => dir_is_empty(path),
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OrbitError::Io(error.to_string())),
+    }
 }
 
 fn dir_is_empty(path: &Path) -> Result<bool, OrbitError> {

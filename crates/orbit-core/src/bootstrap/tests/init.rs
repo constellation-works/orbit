@@ -11,7 +11,7 @@ use tempfile::tempdir;
 
 use crate::OrbitRuntime;
 use crate::application::routines::seed::RoutineSeedIdentity;
-use crate::application::skill::seed_default_skills;
+use crate::application::skill::{default_skill_ids, seed_default_skills};
 
 use super::super::init::{
     InitOptions, ensure_orbit_root_initialized, ensure_skill_links, global_skills_dir, init_global,
@@ -873,6 +873,211 @@ fn ensure_skill_links_leaves_live_custom_and_non_orbit_entries() {
         real_dir.join("SKILL.md").exists(),
         "operator-owned skill directory must be left untouched"
     );
+}
+
+#[test]
+fn unlink_skills_removes_only_core_orbit_owned_links() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("isolated");
+    let global_root = root.join(".orbit");
+    let skills_root = global_root.join("skills");
+
+    let core_ids = default_skill_ids();
+    assert!(
+        core_ids.len() >= 3,
+        "fixture needs a live core id, a dangling core id, and a core name pointed elsewhere"
+    );
+    let live_id = core_ids[0];
+    let dangling_id = core_ids[1];
+    let foreign_core_name = core_ids[2];
+
+    let live_target = skills_root.join(live_id);
+    write_skill_dir(&live_target);
+    let catalog_custom = skills_root.join("my-notes");
+    write_skill_dir(&catalog_custom);
+    let plugin_target = temp.path().join("plugins/demo/1.0.0/skills/graph");
+    write_skill_dir(&plugin_target);
+    let custom_target = temp.path().join("other-catalog/my-skill");
+    write_skill_dir(&custom_target);
+    let dangling_plugin_target = temp.path().join("plugins/demo/1.0.0/skills/retired");
+    let unrelated_dangling_target = temp.path().join("does-not-exist");
+
+    let live_body = fs::read_to_string(live_target.join("SKILL.md")).expect("read live skill");
+    let plugin_body =
+        fs::read_to_string(plugin_target.join("SKILL.md")).expect("read plugin skill");
+    let custom_body =
+        fs::read_to_string(custom_target.join("SKILL.md")).expect("read custom skill");
+    let catalog_custom_body =
+        fs::read_to_string(catalog_custom.join("SKILL.md")).expect("read catalog custom skill");
+
+    for provider in [".agents", ".claude"] {
+        let links = root.join(provider).join("skills");
+        fs::create_dir_all(&links).expect("create discovery dir");
+        create_dir_symlink(&live_target, &links.join(live_id)).expect("link live core skill");
+        create_dir_symlink(&skills_root.join(dangling_id), &links.join(dangling_id))
+            .expect("link dangling core skill");
+        create_dir_symlink(&custom_target, &links.join(foreign_core_name))
+            .expect("link core name at a foreign target");
+        create_dir_symlink(&plugin_target, &links.join("demo-graph")).expect("link plugin skill");
+        create_dir_symlink(&custom_target, &links.join("my-skill")).expect("link custom skill");
+        create_dir_symlink(&unrelated_dangling_target, &links.join("gone"))
+            .expect("link dangling unrelated skill");
+        create_dir_symlink(&dangling_plugin_target, &links.join("demo-retired"))
+            .expect("link dangling plugin skill");
+        create_dir_symlink(&catalog_custom, &links.join("my-notes"))
+            .expect("link non-core catalog skill");
+        fs::write(links.join("notes.txt"), "keep-me").expect("write regular file");
+        write_skill_dir(&links.join("operator-dir"));
+    }
+
+    let result = unlink_skills(&global_root).expect("unlink skills");
+    assert_eq!(
+        result.removed_count, 4,
+        "only the live and dangling core links in both discovery directories"
+    );
+    assert!(
+        result.cleaned_dirs.is_empty(),
+        "directories that still hold unrelated entries must stay: {:?}",
+        result.cleaned_dirs
+    );
+
+    assert_eq!(
+        fs::read_to_string(live_target.join("SKILL.md")).expect("live target survives"),
+        live_body
+    );
+    assert_eq!(
+        fs::read_to_string(plugin_target.join("SKILL.md")).expect("plugin target survives"),
+        plugin_body
+    );
+    assert_eq!(
+        fs::read_to_string(custom_target.join("SKILL.md")).expect("custom target survives"),
+        custom_body
+    );
+    assert_eq!(
+        fs::read_to_string(catalog_custom.join("SKILL.md")).expect("catalog custom survives"),
+        catalog_custom_body
+    );
+
+    for provider in [".agents", ".claude"] {
+        let links = root.join(provider).join("skills");
+        assert!(
+            fs::symlink_metadata(links.join(live_id)).is_err(),
+            "live core link removed from {provider}"
+        );
+        assert!(
+            fs::symlink_metadata(links.join(dangling_id)).is_err(),
+            "dangling core link removed from {provider}"
+        );
+        assert_eq!(
+            fs::read_link(links.join(foreign_core_name)).expect("foreign core name"),
+            custom_target
+        );
+        assert_eq!(
+            fs::read_link(links.join("demo-graph")).expect("plugin link"),
+            plugin_target
+        );
+        assert_eq!(
+            fs::read_link(links.join("my-skill")).expect("custom link"),
+            custom_target
+        );
+        assert_eq!(
+            fs::read_link(links.join("gone")).expect("dangling unrelated link"),
+            unrelated_dangling_target
+        );
+        assert_eq!(
+            fs::read_link(links.join("demo-retired")).expect("dangling plugin link"),
+            dangling_plugin_target
+        );
+        assert_eq!(
+            fs::read_link(links.join("my-notes")).expect("non-core catalog link"),
+            catalog_custom
+        );
+        assert_eq!(
+            fs::read_to_string(links.join("notes.txt")).expect("regular file"),
+            "keep-me"
+        );
+        assert_eq!(
+            fs::read_to_string(links.join("operator-dir").join("SKILL.md")).expect("regular dir"),
+            "# skill\n"
+        );
+    }
+}
+
+#[test]
+fn unlink_skills_does_not_follow_a_symlinked_discovery_directory() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("isolated");
+    let global_root = root.join(".orbit");
+    let skills_root = global_root.join("skills");
+    let live_id = default_skill_ids()
+        .into_iter()
+        .next()
+        .expect("at least one core skill id");
+    let live_target = skills_root.join(live_id);
+    write_skill_dir(&live_target);
+    let live_body = fs::read_to_string(live_target.join("SKILL.md")).expect("read live skill");
+
+    let claude_skills = root.join(".claude").join("skills");
+    fs::create_dir_all(&claude_skills).expect("create real discovery dir");
+    create_dir_symlink(&live_target, &claude_skills.join(live_id)).expect("link core skill");
+
+    let foreign = temp.path().join("foreign-skills");
+    fs::create_dir_all(&foreign).expect("create foreign discovery target");
+    let foreign_custom = temp.path().join("foreign-custom");
+    write_skill_dir(&foreign_custom);
+    let foreign_body =
+        fs::read_to_string(foreign_custom.join("SKILL.md")).expect("read foreign skill");
+    create_dir_symlink(&foreign_custom, &foreign.join("my-skill")).expect("foreign custom link");
+    create_dir_symlink(&temp.path().join("nowhere"), &foreign.join("gone"))
+        .expect("foreign dangling link");
+    create_dir_symlink(&live_target, &foreign.join(live_id)).expect("foreign core-shaped link");
+    fs::write(foreign.join("notes.txt"), "keep-foreign").expect("foreign regular file");
+    write_skill_dir(&foreign.join("operator-dir"));
+
+    fs::create_dir_all(root.join(".agents")).expect("create agents parent");
+    create_dir_symlink(&foreign, &root.join(".agents").join("skills"))
+        .expect("redirect discovery dir");
+
+    let result = unlink_skills(&global_root).expect("unlink skills");
+    assert_eq!(result.removed_count, 1);
+    let mut cleaned = result.cleaned_dirs.clone();
+    cleaned.sort();
+    let mut expected = vec![root.join(".claude"), claude_skills.clone()];
+    expected.sort();
+    assert_eq!(cleaned, expected);
+    assert!(!claude_skills.exists());
+    assert!(!root.join(".claude").exists());
+
+    assert_eq!(
+        fs::read_to_string(live_target.join("SKILL.md")).expect("core target survives"),
+        live_body
+    );
+    assert_eq!(
+        fs::read_link(foreign.join("my-skill")).expect("foreign custom link"),
+        foreign_custom
+    );
+    assert_eq!(
+        fs::read_to_string(foreign_custom.join("SKILL.md")).expect("foreign target survives"),
+        foreign_body
+    );
+    assert_eq!(
+        fs::read_link(foreign.join("gone")).expect("foreign dangling link"),
+        temp.path().join("nowhere")
+    );
+    assert_eq!(
+        fs::read_link(foreign.join(live_id)).expect("core-shaped link in foreign dir"),
+        live_target
+    );
+    assert_eq!(
+        fs::read_to_string(foreign.join("notes.txt")).expect("foreign file"),
+        "keep-foreign"
+    );
+    assert!(foreign.join("operator-dir").join("SKILL.md").exists());
+    assert_eq!(
+        fs::read_link(root.join(".agents").join("skills")).expect("discovery symlink remains"),
+        foreign
+    );
+    assert!(root.join(".agents").is_dir());
 }
 
 fn assert_skill_link_exists(path: PathBuf) {
