@@ -18,7 +18,8 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
-use crate::layering::reject_workspace_machine_table;
+use crate::ConfigRoots;
+use crate::layering::{reject_workspace_machine_table, validate_staged_workspace_document};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     PLUGIN_ENABLEMENT_TABLE, reject_global_plugin_enablement, workspace_config_sets_policy,
@@ -396,6 +397,23 @@ impl ConfigStore {
     pub fn validate(&self) -> Result<(), OrbitError> {
         self.reject_workspace_machine_table()?;
         self.snapshot().map(|_| ())
+    }
+
+    /// Validate a staged workspace document with the current global config
+    /// layered beneath it. Workspace plugin toggles use this before saving so
+    /// a pool may refer to a crew defined only in the global file. Generic
+    /// `orbit config set` retains its existing single-document validation.
+    pub fn validate_workspace_with_global(&self, global_root: &Path) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Workspace {
+            return Err(OrbitError::InvalidInput(
+                "layered workspace validation requires a workspace config store".to_string(),
+            ));
+        }
+        let workspace_root = self.path.parent().ok_or_else(|| {
+            OrbitError::InvalidInput("workspace config path has no parent directory".to_string())
+        })?;
+        let roots = ConfigRoots::new(global_root, workspace_root);
+        validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())
     }
 
     /// A workspace file may not carry `[machine]` at all, and the global file

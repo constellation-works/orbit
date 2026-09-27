@@ -243,6 +243,64 @@ fn a_workspace_enable_turns_the_plugin_back_on_there() {
 }
 
 #[test]
+fn workspace_toggles_admit_a_pool_member_defined_only_on_the_host() {
+    let ws = TwoWorkspaces::new();
+    std::fs::write(
+        ws.fixture.global_root.join("config.toml"),
+        "[workflow]\ndefault_crew = \"host-only\"\n[crews.host-only]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\n",
+    )
+    .expect("write host crew");
+    let config_path = ws.fixture.workspace_root.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "# keep this comment\n[workflow]\nlow_complexity_crews = [\"host-only:100\"]\n",
+    )
+    .expect("write workspace pool");
+
+    disable_plugin_in_workspace(&ws.runtime_a(), "graph").expect("disable with host-only crew");
+    assert_eq!(workspace_toggle(&ws.fixture.workspace_root), Some(false));
+
+    enable_plugin_in_workspace(&ws.runtime_a(), "graph", false)
+        .expect("enable with host-only crew");
+    assert_eq!(workspace_toggle(&ws.fixture.workspace_root), Some(true));
+    let saved = std::fs::read_to_string(&config_path).expect("read workspace config");
+    assert!(saved.contains("# keep this comment"), "{saved}");
+    let effective = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        &ws.fixture.global_root,
+        &ws.fixture.workspace_root,
+    ))
+    .expect("saved config remains valid when layered");
+    assert_eq!(effective.plugin_enablement.get("graph"), Some(&true));
+}
+
+#[test]
+fn workspace_toggles_reject_a_pool_member_missing_from_both_layers_without_writing() {
+    let ws = TwoWorkspaces::new();
+    let config_path = ws.fixture.workspace_root.join("config.toml");
+    let original = "[workflow]\nlow_complexity_crews = [\"missing-crew:100\"]\n";
+    std::fs::write(&config_path, original).expect("write invalid workspace pool");
+
+    // Use the fixture's already-open runtime: reopening must reject the
+    // invalid config before the toggle writer can be reached.
+    for result in [
+        disable_plugin_in_workspace(&ws.fixture.runtime, "graph").map(|_| ()),
+        enable_plugin_in_workspace(&ws.fixture.runtime, "graph", false).map(|_| ()),
+    ] {
+        let error = result.expect_err("missing crew must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("crew 'missing-crew' is not defined in [crews.*]"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read unchanged config"),
+            original
+        );
+    }
+}
+
+#[test]
 fn a_toggle_change_marks_the_cached_runtime_stale() {
     let ws = TwoWorkspaces::new();
     let a = ws.runtime_a();

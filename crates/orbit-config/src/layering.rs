@@ -259,12 +259,39 @@ pub(crate) struct LoadedResolvedConfig {
 pub(crate) fn load_layered_resolved(
     roots: &ConfigRoots,
 ) -> Result<LoadedResolvedConfig, OrbitError> {
+    load_layered_resolved_with_workspace(roots, None)
+}
+
+/// Admit an in-memory workspace edit against the current global layer before
+/// the edited document is written. This uses the same merge and per-layer
+/// checks as a normal load, including validation of plugin toggles.
+pub(crate) fn validate_staged_workspace_document(
+    roots: &ConfigRoots,
+    workspace_path: &Path,
+    raw: &str,
+) -> Result<(), OrbitError> {
+    if !roots.has_workspace_layer() {
+        return Err(OrbitError::InvalidInput(
+            "workspace validation requires a distinct workspace root".to_string(),
+        ));
+    }
+    load_layered_resolved_with_workspace(roots, Some((workspace_path, raw))).map(|_| ())
+}
+
+fn load_layered_resolved_with_workspace(
+    roots: &ConfigRoots,
+    staged_workspace: Option<(&Path, &str)>,
+) -> Result<LoadedResolvedConfig, OrbitError> {
     let global = read_config_document(&roots.global().join("config.toml"))?;
     if let Some(global_document) = &global {
         reject_global_plugin_enablement(&global_document.value, &global_document.path)?;
     }
     let mut workspace = if roots.has_workspace_layer() {
-        read_config_document(&roots.workspace().join("config.toml"))?
+        if let Some((path, raw)) = staged_workspace {
+            Some(parse_config_document(path, raw)?)
+        } else {
+            read_config_document(&roots.workspace().join("config.toml"))?
+        }
     } else {
         None
     };
@@ -394,16 +421,20 @@ fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>, OrbitErro
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    let value = toml::from_str(&raw).map_err(|err| {
+    parse_config_document(path, &raw).map(Some)
+}
+
+fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, OrbitError> {
+    let value = toml::from_str(raw).map_err(|err| {
         OrbitError::InvalidInput(format!(
             "invalid runtime config '{}': {err}",
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    Ok(Some(ConfigDocument {
+    Ok(ConfigDocument {
         path: path.to_path_buf(),
         value,
-    }))
+    })
 }
 
 fn empty_document() -> toml::Value {
