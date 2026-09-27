@@ -93,7 +93,7 @@ fn server_value_builders_bind_the_registered_workspace() {
         ("claude", json_args(&claude_mcp_server_value(BOUND_LAUNCH))),
         ("gemini", json_args(&simple_mcp_server_value(BOUND_LAUNCH))),
         ("codex", toml_args(&mcp_server_table(BOUND_LAUNCH))),
-        ("grok", toml_args(&mcp_server_table(BOUND_LAUNCH))),
+        ("grok", json_args(&claude_mcp_server_value(BOUND_LAUNCH))),
     ] {
         assert_eq!(args, expected, "{provider} must launch bound");
     }

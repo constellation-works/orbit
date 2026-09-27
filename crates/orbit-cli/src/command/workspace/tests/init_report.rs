@@ -292,6 +292,14 @@ fn requested_mcp_records_configured_providers() {
             "missing {expected} in {providers:?}"
         );
     }
+    let files = doc["checkout_files"].as_array().expect("checkout files");
+    assert_eq!(files.iter().filter(|file| *file == ".mcp.json").count(), 1);
+    assert!(files.iter().any(|file| file == ".gemini/settings.json"));
+    assert!(
+        files
+            .iter()
+            .all(|file| !file.as_str().is_some_and(|path| path.starts_with(".grok/")))
+    );
     assert!(
         text.contains("mcp:       ") && text.contains("operator-authorized"),
         "{text}"

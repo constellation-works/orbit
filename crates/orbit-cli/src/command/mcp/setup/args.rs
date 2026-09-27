@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, ValueEnum};
@@ -10,9 +11,9 @@ use crate::command::{CommandOut, CommandOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScopeArg {
-    /// Write to user-level config (~/.claude, ~/.codex, ~/.gemini, ~/.grok, Antigravity mcp_config).
+    /// Write to user-level MCP config (including shared ~/.claude.json for Grok).
     Home,
-    /// Write to repo-local config (.mcp.json, .codex/, .gemini/, .grok/). Default.
+    /// Write to repo-local MCP config (including shared .mcp.json for Grok). Default.
     #[default]
     Workspace,
 }
@@ -288,7 +289,8 @@ pub(crate) fn init_auto_for_workspace(
     // bound to it directly rather than re-derived from the checkout.
     let home_dir = env_home_dir();
     let providers = auto_detected_providers(repo_root, home_dir.as_deref());
-    let mut files = Vec::new();
+    let mut files = BTreeSet::new();
+    let mut legacy_before = Vec::new();
     for provider in &providers {
         let target = ConfigTarget::resolve(
             ScopeArg::Workspace,
@@ -296,12 +298,18 @@ pub(crate) fn init_auto_for_workspace(
             repo_root,
             home_dir.as_deref(),
         )?;
-        files.push(target.mcp_path);
+        files.insert(target.mcp_path);
         if let Some(settings_path) = target.settings_path {
-            files.push(settings_path);
+            files.insert(settings_path);
         }
         if let Some(legacy_path) = target.legacy_mcp_path.filter(|path| path.exists()) {
-            files.push(legacy_path);
+            let before = std::fs::read(&legacy_path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "failed to read '{}': {error}",
+                    legacy_path.display()
+                ))
+            })?;
+            legacy_before.push((legacy_path, before));
         }
     }
     let configured = run_action(
@@ -312,11 +320,23 @@ pub(crate) fn init_auto_for_workspace(
         home_dir,
         ScopeArg::Workspace,
     )?;
+    // Legacy paths are reported only when reconciliation actually changed a
+    // surviving file. A deleted Orbit-only file is no longer a checkout file.
+    for (path, before) in legacy_before {
+        if path.exists() {
+            let after = std::fs::read(&path).map_err(|error| {
+                OrbitError::Io(format!("failed to read '{}': {error}", path.display()))
+            })?;
+            if after != before {
+                files.insert(path);
+            }
+        }
+    }
     Ok((
         configured
             .into_iter()
             .map(|provider| provider.label().to_string())
             .collect(),
-        files,
+        files.into_iter().collect(),
     ))
 }
