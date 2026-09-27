@@ -575,7 +575,7 @@ fn config_store_path_error(message: &str, path: &Path) -> OrbitError {
 /// reconstructed path. A missing parent is treated as a missing file
 /// (empty document), matching prior `read_optional` behavior. A present
 /// leaf that is a symlink or non-file is refused.
-fn validated_config_store_path(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
+pub(crate) fn validated_config_store_path(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let Some(file_name) = path.file_name() else {
         return Err(config_store_path_error(
             "config path has no file name",
