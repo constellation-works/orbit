@@ -316,11 +316,27 @@ fn an_agent_read_exclusion_is_unreadable_to_a_brokered_backend_even_when_granted
     let caller = fixture.caller(&["**", "!secret.txt", "!private/**", "!**/.env"], &[]);
     let wt = fixture.worktree.display();
 
-    let output = fixture.run(&fixture.brokered(&caller), READ_PROBE);
+    let brokered = fixture.brokered(&caller);
+    #[cfg(target_os = "macos")]
+    let sbpl = {
+        let mut text =
+            orbit_exec::compile_macos_sandbox_profile(&brokered.macos_fs_rules(), "plugin")
+                .expect("compile brokered SBPL for diagnostics");
+        orbit_exec::append_macos_read_boundary(
+            &mut text,
+            &brokered.read_denies,
+            &brokered.readable_denied_trees(),
+            &brokered.readable_denied_files(),
+        );
+        text
+    };
+    #[cfg(not(target_os = "macos"))]
+    let sbpl = String::new();
+    let output = fixture.run(&brokered, READ_PROBE);
     assert_eq!(
         output,
         format!("read {wt}/public.txt\nlisted"),
-        "only what the agent may read is readable, and the checkout stays listable"
+        "only what the agent may read is readable, and the checkout stays listable; rendered SBPL:\n{sbpl}"
     );
 
     let plain = fixture
