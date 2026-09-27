@@ -18,6 +18,9 @@ fn read_allocator_next_number(conn: &Connection) -> Result<u32, OrbitError> {
         .map_err(|e| OrbitError::Store(e.to_string()))?
         .query_row([], |row| row.get(0))
         .map_err(|e| OrbitError::Store(e.to_string()))?;
+    if next > i64::from(ORB_TASK_ID_MAX) {
+        return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
+    }
     u32::try_from(next).map_err(|e| OrbitError::Store(e.to_string()))
 }
 
@@ -360,6 +363,34 @@ impl TaskRegistryStore {
         let previous = read_allocator_next_number(&tx)?;
         if target > previous {
             set_allocator_next_number(&tx, target)?;
+        }
+        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+    }
+
+    /// Advance past a local on-disk task ID. SQLite's integer counter can hold
+    /// `u32::MAX + 1`, which marks exhaustion after the final valid ID.
+    pub(crate) fn bump_allocator_past_task_number(&self, number: u32) -> Result<(), OrbitError> {
+        let target = i64::from(number) + 1;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let previous: i64 = tx
+            .query_row(
+                "SELECT next_number FROM allocator_state WHERE authority = 'local'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        if target > previous {
+            tx.execute(
+                "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
+                params![target, now_string()],
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
