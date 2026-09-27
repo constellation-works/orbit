@@ -1,15 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::executor::automation::vcs::git::git_command;
+use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
 use super::super::dispatcher::DispatchError;
 
@@ -143,8 +141,7 @@ fn git_fingerprint_with_head(
 ) -> Result<GitWorktreeFingerprint, DispatchError> {
     let branch_output = git_output_raw(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
     let branch = branch_output
-        .status
-        .success()
+        .success
         .then(|| {
             String::from_utf8_lossy(&branch_output.stdout)
                 .trim()
@@ -602,7 +599,7 @@ fn untracked_regular_file_identity(
 ) -> Result<Option<String>, DispatchError> {
     let args = ["hash-object", "--no-filters", "--", path];
     let output = git_output_raw(root, &args)?;
-    if output.status.success() {
+    if output.success {
         return Ok(Some(git_blob_label(&output.stdout)));
     }
 
@@ -630,7 +627,7 @@ fn untracked_symlink_identity(root: &Path, path: &str) -> Result<Option<String>,
 fn git_blob_identity(root: &Path, bytes: &[u8]) -> Result<String, DispatchError> {
     let args = ["hash-object", "--stdin"];
     let output = git_output_with_stdin(root, &args, bytes)?;
-    if output.status.success() {
+    if output.success {
         return Ok(git_blob_label(&output.stdout));
     }
     Err(git_command_error(root, &args, &output))
@@ -682,7 +679,7 @@ fn untracked_content_identities(
         let stdin = remaining.join("\n");
         let stdin = format!("{stdin}\n");
         let output = git_output_with_stdin(root, &args, stdin.as_bytes())?;
-        if output.status.success() {
+        if output.success {
             let hashes = String::from_utf8_lossy(&output.stdout)
                 .lines()
                 .map(str::trim)
@@ -750,54 +747,56 @@ pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, DispatchE
 
 pub(crate) fn git_stdout_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, DispatchError> {
     let output = git_output_raw(root, args)?;
-    if output.status.success() {
+    if output.success {
         return Ok(output.stdout);
     }
     Err(git_command_error(root, args, &output))
 }
 
-pub(crate) fn git_output_raw(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    git_command(root, args).output().map_err(|error| {
-        DispatchError::CliInvocationPermanent(format!(
-            "snapshot Git state in '{}': {error}",
-            root.display()
-        ))
-    })
+pub(crate) fn git_output_raw(root: &Path, args: &[&str]) -> Result<GitBytesOutcome, DispatchError> {
+    git_output_with_optional_stdin(root, args, None)
 }
 
 fn git_output_with_stdin(
     root: &Path,
     args: &[&str],
     stdin_bytes: &[u8],
-) -> Result<Output, DispatchError> {
-    let io_error = |error: std::io::Error| {
+) -> Result<GitBytesOutcome, DispatchError> {
+    git_output_with_optional_stdin(root, args, Some(stdin_bytes))
+}
+
+fn git_output_with_optional_stdin(
+    root: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+) -> Result<GitBytesOutcome, DispatchError> {
+    let output = git_run_bytes(root, args, stdin).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "snapshot Git state in '{}': {error}",
             root.display()
         ))
-    };
-    // Feed stdin from a file, not a pipe we still own: `hash-object --stdin-paths`
-    // waits for EOF, and `Child::wait_with_output` waits for the child, so a
-    // parent-written pipe deadlocks.
-    let mut temp = tempfile::Builder::new()
-        .prefix("orbit-git-stdin-")
-        .tempfile()
-        .map_err(io_error)?;
-    temp.write_all(stdin_bytes).map_err(io_error)?;
-    temp.flush().map_err(io_error)?;
-    let stdin = fs::File::open(temp.path()).map_err(io_error)?;
-    let mut command = git_command(root, args);
-    command.stdin(stdin);
-    command.output().map_err(io_error)
+    })?;
+    if output.timed_out {
+        return Err(DispatchError::GitTimeout {
+            operation: args.join(" "),
+            root: root.to_path_buf(),
+            timeout_ms: output.timeout_ms,
+            diagnostic: output.stderr.trim().to_string(),
+        });
+    }
+    Ok(output)
 }
 
-pub(crate) fn git_command_error(root: &Path, args: &[&str], output: &Output) -> DispatchError {
-    let stderr = String::from_utf8_lossy(&output.stderr);
+pub(crate) fn git_command_error(
+    root: &Path,
+    args: &[&str],
+    output: &GitBytesOutcome,
+) -> DispatchError {
     DispatchError::CliInvocationPermanent(format!(
-        "snapshot Git state in '{}' with `git {}` failed (status {}): {}",
+        "snapshot Git state in '{}' with `git {}` failed (exit code {:?}): {}",
         root.display(),
         args.join(" "),
-        output.status,
-        stderr.trim()
+        output.exit_code,
+        output.stderr.trim()
     ))
 }

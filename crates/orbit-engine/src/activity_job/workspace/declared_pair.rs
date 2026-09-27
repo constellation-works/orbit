@@ -257,7 +257,7 @@ pub(super) fn task_id(input: &Value, task_ctx: Option<&Value>) -> String {
 
 pub(super) fn git_top_level(path: &Path) -> Result<Option<PathBuf>, DispatchError> {
     let output = git_output_raw(path, &["rev-parse", "--show-toplevel"])?;
-    if !output.status.success() {
+    if !output.success {
         return Ok(None);
     }
     let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -272,7 +272,7 @@ pub(super) fn git_common_dir(path: &Path) -> Result<Option<PathBuf>, DispatchErr
         path,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     )?;
-    if !output.status.success() {
+    if !output.success {
         return Ok(None);
     }
     let common = String::from_utf8_lossy(&output.stdout).trim().to_string();

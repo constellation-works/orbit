@@ -12,8 +12,11 @@ use tempfile::{TempDir, tempdir};
 
 use super::super::audit_writer::V2AuditWriter;
 use super::super::dispatcher::DispatchError;
-use super::super::workspace::fingerprint::{git_fingerprint, untracked_file_identity};
+use super::super::workspace::fingerprint::{
+    git_fingerprint, git_output_raw, untracked_file_identity,
+};
 use super::super::workspace::*;
+use crate::executor::automation::vcs::git::git_run_bytes;
 
 /// Names the isolated child that owns the Git shim, so a future second user of
 /// the fixture cannot mistake another test's child process for its own.
@@ -182,6 +185,32 @@ fn vanished_untracked_staging_file_is_not_a_snapshot_failure() {
             .expect("vanished staging file is benign"),
         None
     );
+}
+
+#[test]
+fn snapshot_git_keeps_non_utf8_stdout_and_hash_object_stdin_bytes() {
+    let fixture = linked_worktree_fixture();
+    let bytes = b"raw\0\xff\xfe\n";
+    fs::write(fixture.assigned.join("raw.bin"), bytes).expect("write binary file");
+    git_ok(&fixture.assigned, &["add", "raw.bin"]);
+    git_ok(&fixture.assigned, &["commit", "-qm", "add binary file"]);
+
+    let shown = git_output_raw(&fixture.assigned, &["show", "HEAD:raw.bin"])
+        .expect("bounded raw Git output");
+    assert!(shown.success);
+    assert_eq!(shown.stdout, bytes);
+
+    let hashed = git_run_bytes(&fixture.assigned, &["hash-object", "--stdin"], Some(bytes))
+        .expect("bounded Git stdin");
+    assert!(hashed.success);
+    assert_eq!(
+        hashed.stdout,
+        git_bytes(
+            &fixture.assigned,
+            &["hash-object", "--no-filters", "--", "raw.bin"]
+        )
+    );
+    git_fingerprint(&fixture.assigned).expect("binary checkout remains fingerprintable");
 }
 
 #[test]

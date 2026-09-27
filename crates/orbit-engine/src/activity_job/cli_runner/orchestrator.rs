@@ -23,6 +23,7 @@ use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind};
 use serde_json::Value;
 
 use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
+use crate::executor::automation::vcs::git::{GitTimeoutBudget, GitTimeoutBudgetGuard};
 
 use super::super::audit_writer::V2AuditWriter;
 use super::super::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
@@ -162,6 +163,9 @@ pub fn run_cli_backend(
     input: &Value,
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
+    let budget = GitTimeoutBudget::from_input(input)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
     let provider = spec.provider.as_str().to_string();
     // [ORB-11354] Trusted host execution needs both halves: the built-in
     // activity declares the mode, and the operator's canonical submission

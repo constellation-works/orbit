@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::context::{RuntimeHost, StepRecoveryAdmission};
-use crate::executor::automation::vcs::git::git_command;
+use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
 use super::fingerprint::{
     GitWorktreeFingerprint, changed_paths, git_command_error, git_fingerprint, git_output_raw,
@@ -167,8 +166,7 @@ impl WorktreeBoundaryGuard {
                     "HEAD",
                 ],
             )?
-            .status
-            .success())
+            .success)
     }
 
     pub(super) fn complete_rebase_recovery(
@@ -228,7 +226,7 @@ impl WorktreeBoundaryGuard {
         let mut diff_check_args = vec!["diff", "--check", "--"];
         diff_check_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
         let diff_check = git_output_raw(&self.assigned_root, &diff_check_args)?;
-        if !diff_check.status.success() {
+        if !diff_check.success {
             return Err(invalid(
                 "a repaired file still contains conflict markers or whitespace errors",
             ));
@@ -261,11 +259,9 @@ impl WorktreeBoundaryGuard {
             &self.assigned_root,
             &["-c", "core.editor=true", "rebase", "--continue"],
         )?;
-        if !continued.status.success() {
+        if !continued.success {
             let additional = unmerged_paths(&self.assigned_root)?;
-            let diagnostic = String::from_utf8_lossy(&continued.stderr)
-                .trim()
-                .to_string();
+            let diagnostic = continued.stderr.trim().to_string();
             return Err(invalid(&format!(
                 "rebase --continue failed; additional_conflicting_paths={additional:?}; diagnostic={diagnostic}"
             )));
@@ -310,9 +306,7 @@ impl WorktreeBoundaryGuard {
         completed: &GitWorktreeFingerprint,
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<(), DispatchError> {
-        if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?
-            .status
-            .success()
+        if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?.success
             || completed.untracked_content != self.assigned_before.untracked_content
         {
             return Err(invalid(
@@ -345,13 +339,12 @@ impl WorktreeBoundaryGuard {
                 &self.assigned_root,
                 &["merge-base", "--is-ancestor", pinned, &live],
             )?
-            .status
-            .success()
+            .success
         {
             return Ok(pinned.to_string());
         }
         let followed = git_mutation_output(&self.assigned_root, &["rebase", &live])?;
-        if !followed.status.success() {
+        if !followed.success {
             let additional = unmerged_paths(&self.assigned_root)?;
             git_mutation(&self.assigned_root, &["rebase", "--abort"])?;
             let restored = git_fingerprint(&self.assigned_root)?;
@@ -378,8 +371,7 @@ impl WorktreeBoundaryGuard {
                 &self.assigned_root,
                 &["merge-base", "--is-ancestor", &live, "HEAD"],
             )?
-            .status
-            .success()
+            .success
         {
             return Err(invalid(
                 "rebasing onto the advanced base did not leave the checkpointed branch on that base with a candidate commit",
@@ -607,19 +599,28 @@ fn unmerged_paths(root: &Path) -> Result<Vec<String>, DispatchError> {
 
 fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchError> {
     let output = git_mutation_output(root, args)?;
-    if output.status.success() {
+    if output.success {
         Ok(())
     } else {
         Err(git_command_error(root, args, &output))
     }
 }
 
-fn git_mutation_output(root: &Path, args: &[&str]) -> Result<Output, DispatchError> {
-    git_command(root, args).output().map_err(|error| {
+fn git_mutation_output(root: &Path, args: &[&str]) -> Result<GitBytesOutcome, DispatchError> {
+    let output = git_run_bytes(root, args, None).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "mutate Git state in '{}' with `git {}`: {error}",
             root.display(),
             args.join(" ")
         ))
-    })
+    })?;
+    if output.timed_out {
+        return Err(DispatchError::GitTimeout {
+            operation: args.join(" "),
+            root: root.to_path_buf(),
+            timeout_ms: output.timeout_ms,
+            diagnostic: output.stderr.trim().to_string(),
+        });
+    }
+    Ok(output)
 }
