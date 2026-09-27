@@ -2,7 +2,7 @@
 type: runbook
 summary: Post-v0.18.0 release survey and breaking-change handoff.
 tags: [operations, release, survey]
-last_validated: 2026-09-06
+last_validated: 2026-09-27
 ---
 
 # Post-v0.18.0 release survey
