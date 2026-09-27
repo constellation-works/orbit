@@ -776,6 +776,12 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   cross-plugin targets are a load error.
 - Plugin jobs may reference shipped activities and their own; a reference to another plugin's
   activity refuses the job's plugin at load.
+- A job that creates a task-scoped worktree with `worktree_setup` and completes
+  delivery declares `spec.owns_task_worktree: true`. The same declaration is on
+  the shipped task PR and local pipelines. It opts the job into delivery-time
+  collection after a successful run; the shared collector still requires a
+  terminal run, settled task, registered worktree, and clean tree. Jobs omit
+  the property by default. Coordinators that only dispatch child jobs omit it.
 - Activity and job names are unique across active plugins. Loading is deterministic: the first
   valid plugin keeps the name, a later one is refused with a diagnostic naming both.
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action

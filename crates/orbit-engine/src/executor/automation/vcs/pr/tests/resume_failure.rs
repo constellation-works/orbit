@@ -431,6 +431,7 @@ pub(super) fn deterministic_step(
 fn resumed_pr_job() -> JobV2 {
     JobV2 {
         state: JobScheduleState::Enabled,
+        owns_task_worktree: false,
         default_input: None,
         recovery_activity: None,
         resolved_recovery_activity: None,
@@ -454,6 +455,7 @@ fn resumed_pr_job() -> JobV2 {
 pub(super) fn resumed_pr_delivery_job() -> JobV2 {
     JobV2 {
         state: JobScheduleState::Enabled,
+        owns_task_worktree: false,
         default_input: None,
         recovery_activity: None,
         resolved_recovery_activity: None,

@@ -1496,6 +1496,7 @@ fn recovery_job(
 ) -> JobV2 {
     JobV2 {
         state: JobScheduleState::Enabled,
+        owns_task_worktree: false,
         default_input: None,
         recovery_activity: recovery_name.map(str::to_string),
         resolved_recovery_activity: recovery_name

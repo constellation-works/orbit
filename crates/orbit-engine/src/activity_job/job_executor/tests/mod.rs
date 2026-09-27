@@ -428,6 +428,7 @@ pub(super) fn target_step_with_retry(id: &str, action: &str, max_attempts: u32) 
 pub(super) fn job_with_steps(steps: Vec<JobV2Step>) -> JobV2 {
     JobV2 {
         state: JobScheduleState::Enabled,
+        owns_task_worktree: false,
         default_input: None,
         recovery_activity: None,
         resolved_recovery_activity: None,

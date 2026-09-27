@@ -1,6 +1,11 @@
 //! The §4.5 definition rules and the `plugin:<ns>` catalog layer.
 
 use orbit_types::plugin::PluginStatus;
+use orbit_types::task::{TaskStatus, TaskType};
+use orbit_types::workflow::JobRunState;
+use serde_json::json;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::super::{
     PluginAddOptions, PluginEnableOptions, install_plugin, show_plugin, validate_plugin_dir,
@@ -8,6 +13,266 @@ use super::super::{
 use super::definition_fixture::DefinitionPlugin;
 use super::fixture::PluginFixture;
 use crate::OrbitRuntime;
+use crate::application::job::seed_default_jobs;
+use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::bootstrap::activity::seed_default_activities;
+
+fn git(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .expect("run git in fixture");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn plugin_delivery_fixture(case: &str) -> (PluginFixture, OrbitRuntime, String) {
+    let fixture = PluginFixture::new();
+    git(&fixture.repo_root, &["init"]);
+    git(&fixture.repo_root, &["config", "user.name", "Orbit Test"]);
+    git(
+        &fixture.repo_root,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+    std::fs::write(fixture.repo_root.join(".gitignore"), ".orbit/\n").expect("ignore state");
+    std::fs::write(fixture.repo_root.join("README.md"), "fixture\n").expect("write context");
+    git(&fixture.repo_root, &["add", ".gitignore", "README.md"]);
+    git(&fixture.repo_root, &["commit", "-m", "fixture base"]);
+    git(&fixture.repo_root, &["checkout", "-b", "agent-main"]);
+    seed_default_activities(&fixture.global_root.join("resources/activities"), true)
+        .expect("seed shipped activities");
+    seed_default_jobs(&fixture.global_root.join("resources/jobs"), true)
+        .expect("seed shipped jobs");
+
+    let plugin = DefinitionPlugin::new("delivery");
+    let source = plugin.write(&fixture);
+    let tail = match case {
+        "success" => {
+            "    - id: review\n      target: activity:update_task\n      default_input:\n        task_id: \"{{ input.task_id }}\"\n        status: review\n    - id: complete\n      target: activity:task_complete\n      default_input:\n        job_run_id: \"{{ steps.worktree.output.job_run_id }}\"\n        task_id: \"{{ input.task_id }}\"\n"
+        }
+        "dirty" => {
+            "    - id: review\n      target: activity:update_task\n      default_input:\n        task_id: \"{{ input.task_id }}\"\n        status: review\n"
+        }
+        "failed" => {
+            "    - id: fail\n      target: activity:update_task\n      default_input:\n        task_id: \"{{ input.task_id }}\"\n        status: not-a-status\n"
+        }
+        other => panic!("unknown case {other}"),
+    };
+    let job_path = source.join("definitions/jobs/pipeline.yaml");
+    std::fs::write(
+        &job_path,
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {}\nspec:\n  state: enabled\n  owns_task_worktree: true\n  steps:\n    - id: worktree\n      target: activity:worktree_setup\n      default_input:\n        task_ids: \"{{{{ input.task_ids }}}}\"\n        base: agent-main\n        base_sync: local\n{tail}",
+            plugin.job
+        ),
+    )
+    .expect("write plugin delivery job");
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 plugin source"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install delivery plugin");
+    let runtime = fixture.reopen();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: format!("Plugin delivery {case}"),
+            description: "Fixture delivery".to_string(),
+            acceptance_criteria: vec!["The fixture delivers".to_string()],
+            plan: "Run the fixture".to_string(),
+            context_files: vec!["README.md".to_string()],
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add task");
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                execution_summary: Some("Fixture work completed".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("record fixture summary");
+    (fixture, runtime, task.id)
+}
+
+fn run_plugin_delivery_cases() {
+    let (fixture, runtime, task_id) = plugin_delivery_fixture("success");
+    let job = runtime
+        .show_job_catalog_entry("delivery_refresh_pipeline")
+        .expect("plugin job resolves from catalog");
+    assert_eq!(
+        layer_of(
+            &runtime,
+            "delivery_refresh_pipeline",
+            "job:delivery_refresh_pipeline"
+        )
+        .0,
+        "plugin:delivery"
+    );
+    let input = json!({"task_id": task_id, "task_ids": [task_id], "completion": "done"});
+    let result = runtime
+        .run_job_v2_from_yaml(&job.path, input)
+        .expect("plugin delivery succeeds");
+    let worktree = PathBuf::from(
+        result.pipeline["worktree"]["workspace_path"]
+            .as_str()
+            .expect("worktree output path"),
+    );
+    assert!(
+        !worktree.exists(),
+        "successful plugin delivery reaps its worktree"
+    );
+    assert_eq!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Done
+    );
+    let state = runtime
+        .read_run_state(&result.run_id)
+        .expect("run state")
+        .expect("persisted run state");
+    assert_eq!(
+        state.pipeline["worktree_cleanup"]["reports"][0]["action"],
+        "removed"
+    );
+    // The fixture holds a scoped HOME guard; release it before making the
+    // next independent fixture in this child process.
+    drop(runtime);
+    drop(fixture);
+
+    let (fixture, runtime, task_id) = plugin_delivery_fixture("failed");
+    let failure = runtime
+        .run_job_v2_from_yaml(
+            &runtime
+                .show_job_catalog_entry("delivery_refresh_pipeline")
+                .expect("plugin job")
+                .path,
+            json!({"task_id": task_id, "task_ids": [task_id]}),
+        )
+        .expect_err("invalid task status fails the plugin job");
+    assert!(failure.to_string().contains("not-a-status"));
+    let run_id = runtime
+        .get_task(&task_id)
+        .expect("task after failure")
+        .job_run_id
+        .expect("worktree step admitted task");
+    assert_eq!(
+        runtime.show_job_run(&run_id).expect("failed run").state,
+        JobRunState::Failed
+    );
+    let listed = Command::new("git")
+        .current_dir(&fixture.repo_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .expect("list registered worktrees");
+    assert!(listed.status.success());
+    assert!(
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .map(Path::new)
+            .any(|path| path != fixture.repo_root.as_path() && path.exists()),
+        "failed plugin run retains its registered worktree"
+    );
+    drop(runtime);
+    drop(fixture);
+
+    let (fixture, runtime, task_id) = plugin_delivery_fixture("dirty");
+    let result = runtime
+        .run_job_v2_from_yaml(
+            &runtime
+                .show_job_catalog_entry("delivery_refresh_pipeline")
+                .expect("plugin job")
+                .path,
+            json!({"task_id": task_id, "task_ids": [task_id]}),
+        )
+        .expect("plugin review succeeds");
+    let worktree = PathBuf::from(
+        result.pipeline["worktree"]["workspace_path"]
+            .as_str()
+            .expect("worktree output path"),
+    );
+    assert!(
+        worktree.exists(),
+        "review-only delivery retains its worktree"
+    );
+    runtime
+        .update_task(
+            &task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("settle reviewed task after run stops");
+    std::fs::write(worktree.join("untracked.txt"), "rescue me\n")
+        .expect("dirty the plugin worktree");
+    let report = runtime
+        .cleanup_delivered_worktree(&result.run_id)
+        .expect("collector runs")
+        .expect("plugin opts in");
+    assert_eq!(report.reports[0].action, "skipped:dirty_rescue_candidate");
+    assert!(worktree.exists(), "dirty worktree remains for rescue");
+
+    for coordinator in ["task_gate_pipeline", "workspace_auto_pipeline"] {
+        let run = runtime
+            .stores()
+            .jobs()
+            .insert_job_run(
+                coordinator,
+                1,
+                chrono::Utc::now(),
+                Some(json!({"task_ids": [task_id]})),
+                None,
+            )
+            .expect("record coordinator run");
+        assert!(
+            runtime
+                .cleanup_delivered_worktree(&run.run_id)
+                .expect("coordinator lookup")
+                .is_none()
+        );
+    }
+    assert!(
+        worktree.exists(),
+        "coordinators do not reap the plugin worktree"
+    );
+    assert!(fixture.repo_root.exists());
+}
+
+#[test]
+fn plugin_delivery_collects_only_safe_worktrees() {
+    if std::env::var_os("ORBIT_PLUGIN_DELIVERY_CHILD").is_some() {
+        run_plugin_delivery_cases();
+        return;
+    }
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    let output = child
+        .arg("plugin_delivery_collects_only_safe_worktrees")
+        .arg("--nocapture")
+        .env_remove("ORBIT_WORKTREE_ROOT")
+        .env("ORBIT_PLUGIN_DELIVERY_CHILD", "1")
+        .output()
+        .expect("run isolated plugin fixture");
+    assert!(
+        output.status.success(),
+        "isolated fixture failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 fn install(fixture: &PluginFixture, plugin: &DefinitionPlugin<'_>) {
     let source = plugin.write(fixture);
