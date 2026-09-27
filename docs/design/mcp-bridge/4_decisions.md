@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Decisions
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-27
+last_validated: 2026-09-27
 status: Draft
 feature: mcp-bridge
 doc_role: decisions
@@ -39,9 +39,9 @@ already provides SSH.
 parse frames or retry calls.
 
 **Consequences.** The remote path needs no port-forward tunnel, shared broker, or
-third-machine relay. SSH owns transport security and shell access, while the
-destination's callers policy and Core enforce Orbit's session authority after
-the accepting process receives the bytes.
+third-machine relay. SSH owns transport security and shell access. The
+accepting server derives session authority from its startup argv, and Core
+enforces the resulting capabilities after server-side workspace resolution.
 
 ## A socket deployment gets its own command, not a mode of `serve`
 
@@ -80,9 +80,10 @@ Core dependency on MCP or the registry crate.
 
 ## Caller metadata and destination policy
 
-**Context.** The proxy can supply a machine label and the SSH server exposes a
-source IP. A forwarded label is self-asserted, while a destination can also
-receive a forced-command identity tied to the key sshd authenticated.
+**Context.** The proxy supplies a machine label and the SSH server exposes a
+source IP. The forwarded label and observed IP are audit observations, not
+authenticated identity; session authority comes from the accepting server's
+startup argv.
 
 **Decision.** Record the forwarded caller label, best-effort SSH caller IP,
 accepting process identity, transport, and a fresh trace ID. Use `host/local`
@@ -120,8 +121,8 @@ three are removed — see
 **Context.** A broad remote feature layer accumulated unrelated registry, protocol,
 routing, and UI concerns.
 
-**Decision.** Keep MCP protocol, direct SSH support, destination caller policy,
-and federated routing in `orbit-mcp`; host and workspace state in
+**Decision.** Keep MCP protocol, direct SSH support, server identity and session
+authority, and federated routing in `orbit-mcp`; host and workspace state in
 `orbit-registry`; domain execution, capability enforcement, and audit in
 `orbit-core`; canonical builtin definitions in `orbit-tools`; and HTTP UI
 behavior in `orbit-web`.

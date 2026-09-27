@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Policy & Sandboxing"
 tags: ["policy-sandbox"]
-last_validated: 2026-09-07
+last_validated: 2026-09-27
 ---
 
 # Glossary: Policy & Sandboxing
@@ -20,6 +20,6 @@ This glossary covers Orbit-specific policy and sandboxing terms only. Generic OS
 | **Implicit `unrestricted` profile** | The fallback `FsProfile { read: ["./**"], modify: ["./**"] }` synthesized when an activity omits `fsProfile:` and the policy does not define a profile named `unrestricted`. Global denies still apply. See [../2_design.md §2](../2_design.md#2-profile-resolution). |
 | **Process-group leader** | A spawned child whose PGID equals its PID, set via `command.process_group(0)` on Unix, so `killpg` can reap orphan subprocesses through the same group. See [../2_design.md §7](../2_design.md#7-sandbox--exec-primitives). |
 | **Resolved profile** | `ResolvedFsProfile { name, read, modify }` — the post-resolution shape that the evaluator walks. Different from the raw `FsProfile` because deny rules are already injected as negated entries. See [../2_design.md §2](../2_design.md#2-profile-resolution). |
-| **Sandbox trait** | The `Sandbox::validate(req)` seam in `orbit-exec` where a future OS-level isolation impl would attach. The default `NoSandbox` always returns `Ok`. See [../2_design.md §7](../2_design.md#7-sandbox--exec-primitives). |
+| **Sandbox trait** | The `Sandbox::validate` and `Sandbox::spawn` strategy seam for generic `orbit-exec::run_process` callers; the default `NoSandbox` adds no Orbit-specific validation or containment. The CLI agent path applies platform sandbox wrappers in `orbit-engine` instead of implementing this trait. See [../2_design.md §7](../2_design.md#7-sandbox--exec-primitives). |
 | **Termination escalation** | The SIGTERM → 5-second grace → SIGKILL sequence applied to a child process group on timeout or parent-signal interruption. See [../2_design.md §8](../2_design.md#8-process-supervision). |
 | **Tool-layer enforcement** | Retired seam: every in-process fs builtin used to call `enforce_fs_policy` before the underlying read or modify. The family was removed in [ORB-10828] / [ORB-10833]. Live filesystem confinement is CLI harness delegation plus the OS sandbox. See [../2_design.md §5](../2_design.md#5-tool-layer-enforcement-retired). |
