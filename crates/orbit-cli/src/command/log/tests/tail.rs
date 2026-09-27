@@ -402,31 +402,105 @@ fn follow_mode_with_json_flag_emits_appended_line_as_raw_jsonl() {
     follower.finish();
 }
 
+#[test]
+fn follow_completes_initial_partial_record_once_with_zero_history_and_filter() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    let old = json!({"target": "orbit.test", "fields": {"message": "old"}});
+    let partial = r#"{"target":"orbit.test","fields":{"message":"hello"#;
+    std::fs::write(&path, format!("{old}\n{partial}")).expect("write partial fixture");
+
+    let mut args = make_args(path.clone());
+    args.lines = 0;
+    args.follow = true;
+    args.json = true;
+    args.target = Some("orbit.test".to_string());
+    let mut follower = spawn_follower_with_args(args, Duration::ZERO, None);
+    follower.wait_until_ready();
+
+    let completed = format!("{partial}\"}}}}");
+    let ignored = json!({"target": "orbit.other", "fields": {"message": "ignored"}});
+    let sentinel = json!({"target": "orbit.test", "fields": {"message": "sentinel"}});
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("append fixture");
+    writeln!(file, "\"}}}}\n{ignored}\n{sentinel}").expect("complete and append records");
+
+    let output = follower.collect_through("sentinel");
+    follower.finish();
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        [completed, sentinel.to_string()]
+    );
+}
+
+#[test]
+fn append_during_initial_history_read_is_emitted_once_at_handoff() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("orbit.jsonl");
+    let first = json!({"target": "orbit.test", "fields": {"message": "first"}}).to_string();
+    write_fixture(&path, std::slice::from_ref(&first));
+
+    let (reached_tx, reached_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let mut args = make_args(path.clone());
+    args.lines = 2;
+    args.follow = true;
+    args.json = true;
+    args.target = Some("orbit.test".to_string());
+    let mut follower =
+        spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
+    reached_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("initial reader paused after first line");
+
+    let during = json!({"target": "orbit.test", "fields": {"message": "during"}}).to_string();
+    let ignored = json!({"target": "orbit.other", "fields": {"message": "ignored"}});
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("append fixture");
+    writeln!(file, "{during}\n{ignored}").expect("append during initial read");
+    resume_tx.send(()).expect("resume initial reader");
+    follower.wait_until_ready();
+
+    let sentinel = json!({"target": "orbit.test", "fields": {"message": "sentinel"}}).to_string();
+    writeln!(file, "{sentinel}").expect("append after handoff");
+    let output = follower.collect_through("sentinel");
+    follower.finish();
+    assert_eq!(
+        output.lines().collect::<Vec<_>>(),
+        [first, during, sentinel]
+    );
+}
+
 fn spawn_follower(path: PathBuf, json: bool, startup_delay: Duration) -> FollowWorker {
+    let mut args = make_args(path);
+    args.lines = 0;
+    args.follow = true;
+    args.json = json;
+    spawn_follower_with_args(args, startup_delay, None)
+}
+
+fn spawn_follower_with_args(
+    args: TailArgs,
+    startup_delay: Duration,
+    initial_read_pause: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+) -> FollowWorker {
     let (output_tx, output_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
         thread::sleep(startup_delay);
         let mut buf = TeeWriter::new(output_tx);
-        let args = TailArgs {
-            lines: 0,
-            follow: true,
-            target: None,
-            level: None,
-            since: None,
-            json,
-            path: Some(path.clone()),
-        };
+        let path = args.path.as_ref().expect("fixture path");
         let filters = build_filters(&args).expect("filters");
-        run_tail_with_test_control(
-            &path,
-            &args,
-            &filters,
-            false,
-            &mut buf,
-            FollowTestControl::new(ready_tx, stop_rx),
-        )
+        let mut control = FollowTestControl::new(ready_tx, stop_rx);
+        if let Some((reached, resume)) = initial_read_pause {
+            control = control.pause_during_initial_read(reached, resume);
+        }
+        run_tail_with_test_control(path, &args, &filters, false, &mut buf, control)
     });
     FollowWorker {
         output_rx,
@@ -452,6 +526,20 @@ impl FollowWorker {
 
     fn recv_timeout(&self, timeout: Duration) -> Result<String, mpsc::RecvTimeoutError> {
         self.output_rx.recv_timeout(timeout)
+    }
+
+    fn collect_through(&self, needle: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut output = String::new();
+        while Instant::now() < deadline {
+            if let Ok(chunk) = self.recv_timeout(Duration::from_millis(50)) {
+                output.push_str(&chunk);
+                if output.lines().any(|line| line.contains(needle)) {
+                    return output;
+                }
+            }
+        }
+        panic!("follow output did not contain {needle}: {output}");
     }
 
     fn finish(&mut self) {
