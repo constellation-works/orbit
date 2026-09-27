@@ -41,7 +41,12 @@ impl EchoDispatch {
 }
 
 impl BrokerDispatch for EchoDispatch {
-    fn call(&self, request: BrokerRequest, peer_pid: u32) -> Result<Value, OrbitError> {
+    fn call(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        _cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Value, OrbitError> {
         let tool = request.tool.clone();
         self.calls.lock().expect("calls").push((request, peer_pid));
         if tool == REFUSED_TOOL {

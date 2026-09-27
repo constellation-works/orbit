@@ -60,6 +60,7 @@ pub struct McpBackend {
     spec: Arc<PluginBackendSpec>,
     expected: Vec<McpExpectedTool>,
     state: Mutex<McpState>,
+    startups: Mutex<BTreeMap<SessionKey, Arc<Mutex<()>>>>,
 }
 
 enum McpState {
@@ -109,6 +110,8 @@ struct McpSession {
     /// Host-issued callback identity for this child. Dropped when the
     /// session ends so ancestry no longer treats the pid as a plugin.
     callback: Option<PluginCallbackSession>,
+    cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ended: bool,
 }
 
 impl McpBackend {
@@ -116,10 +119,15 @@ impl McpBackend {
         Self {
             spec,
             expected,
+            startups: Mutex::new(BTreeMap::new()),
             state: Mutex::new(McpState::Ready {
                 sessions: BTreeMap::new(),
             }),
         }
+    }
+
+    pub(crate) fn for_broker(&self) -> Self {
+        Self::new(Arc::clone(&self.spec), self.expected.clone())
     }
 
     pub fn spec(&self) -> &Arc<PluginBackendSpec> {
@@ -180,6 +188,7 @@ impl McpBackend {
         input: Value,
     ) -> Result<Value, OrbitError> {
         let timeout = Duration::from_millis(self.spec.timeout_ms());
+        let deadline = Instant::now() + timeout;
         let key = self.session_key(ctx, tool_name)?;
         // A shared child cannot be told in its environment which caller the
         // call is for, so the context an `exec` backend reads from its stdin
@@ -193,20 +202,21 @@ impl McpBackend {
         // that caller's broken wire is not this one's error.
         let mut retried = false;
         loop {
-            let handle = self.ensure_running(&key, ctx, tool_name, timeout)?;
+            let handle = self.ensure_running(&key, ctx, tool_name, deadline)?;
             let outcome = {
-                let mut session = handle
-                    .session
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                if !matches!(session.child.try_wait(), Ok(None)) && !retried {
+                let mut session = lock_for_call(&handle.session, ctx, deadline)?;
+                session.cancelled = ctx
+                    .broker_call
+                    .as_ref()
+                    .map(|call| Arc::clone(&call.cancelled));
+                if !session.is_live() && !retried {
                     retried = true;
                     drop(session);
                     self.retire(&key, &handle);
                     continue;
                 }
                 secrets.record_delivery();
-                session.request("tools/call", params.clone(), Instant::now() + timeout)
+                session.request("tools/call", params.clone(), deadline)
             };
             return match outcome {
                 Ok(response) => {
@@ -246,14 +256,23 @@ impl McpBackend {
         key: &SessionKey,
         ctx: &ToolContext,
         tool_name: &str,
-        timeout: Duration,
+        deadline: Instant,
     ) -> Result<Arc<McpSessionHandle>, OrbitError> {
+        if let Some(handle) = self.live_session(key)? {
+            return Ok(handle);
+        }
+        // Serialize startup only for this key. Concurrent first calls must
+        // not spawn duplicate children (and duplicate startup side effects).
+        let startup = {
+            let mut startups = self.startups.lock().unwrap_or_else(PoisonError::into_inner);
+            Arc::clone(startups.entry(key.clone()).or_default())
+        };
+        let _startup = lock_for_call(&startup, ctx, deadline)?;
         if let Some(handle) = self.live_session(key)? {
             return Ok(handle);
         }
         let mut session = self.spawn(ctx, &key.cwd)?;
         let pid = session.child.id();
-        let deadline = Instant::now() + timeout;
         if let Err(error) = session.handshake(deadline) {
             return Err(OrbitError::Execution(format!(
                 "plugin tool '{tool_name}': the plugin's mcp server {error}"
@@ -284,13 +303,6 @@ impl McpBackend {
             }
             McpState::Ready { sessions } => sessions,
         };
-        // Another caller with the same key may have won the race while this
-        // one was handshaking. Theirs is already published, so this child is
-        // dropped — and killed — rather than replacing a session other calls
-        // already hold.
-        if let Some(live) = sessions.get(key).filter(|live| live.is_live()) {
-            return Ok(Arc::clone(live));
-        }
         let handle = Arc::new(McpSessionHandle {
             pid,
             session: Mutex::new(session),
@@ -366,19 +378,23 @@ impl McpBackend {
             environment_mode: EnvironmentMode::ClearAndSet(environment),
             debug: false,
         };
-        let sandbox = self
-            .spec
-            .sandbox_profile(ctx.workspace_root.as_deref())?
-            .with_callback_session(&callback);
+        let profile = match &ctx.brokered_caller {
+            Some(caller) => self.spec.brokered_sandbox_profile(caller)?,
+            None => self.spec.sandbox_profile(ctx.workspace_root.as_deref())?,
+        };
+        let sandbox = profile.with_callback_session(&callback);
         sandbox.validate(&request)?;
         let mut child = sandbox.spawn(&request)?;
         if let Err(error) = callback.bind_pid(child.id()) {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group(&mut child);
             return Err(error);
         }
         let mut session = McpSession::start(child)?;
         session.callback = Some(callback);
+        session.cancelled = ctx
+            .broker_call
+            .as_ref()
+            .map(|call| Arc::clone(&call.cancelled));
         Ok(session)
     }
 }
@@ -390,11 +406,9 @@ impl McpSessionHandle {
     /// every lookup behind the slowest call again.
     fn is_live(&self) -> bool {
         match self.session.try_lock() {
-            Ok(mut session) => matches!(session.child.try_wait(), Ok(None)),
+            Ok(mut session) => session.is_live(),
             Err(TryLockError::WouldBlock) => true,
-            Err(TryLockError::Poisoned(poisoned)) => {
-                matches!(poisoned.into_inner().child.try_wait(), Ok(None))
-            }
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().is_live(),
         }
     }
 }
@@ -516,14 +530,29 @@ pub(crate) fn tool_result(tool_name: &str, response: &Value) -> Result<Value, Or
 
 impl McpSession {
     fn start(mut child: Child) -> Result<Self, OrbitError> {
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| OrbitError::Execution("mcp server has no stdin".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| OrbitError::Execution("mcp server has no stdout".to_string()))?;
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            kill_group(&mut child);
+            return Err(OrbitError::Execution(
+                "mcp server has no stdio pipes".to_string(),
+            ));
+        };
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: stdin owns this live descriptor. Nonblocking writes let
+            // cancellation and deadlines interrupt a server that stops reading.
+            let flags = unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_GETFL) };
+            if flags < 0
+                || unsafe {
+                    libc::fcntl(stdin.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK)
+                } < 0
+            {
+                kill_group(&mut child);
+                return Err(OrbitError::Execution(
+                    "cannot make MCP stdin nonblocking".to_string(),
+                ));
+            }
+        }
         // The reader thread is what makes the deadline real: a blocking read
         // on a wedged server cannot otherwise be abandoned, and the thread
         // ends when the killed child closes the pipe.
@@ -557,6 +586,8 @@ impl McpSession {
             lines,
             next_id: 0,
             callback: None,
+            cancelled: None,
+            ended: false,
         })
     }
 
@@ -573,7 +604,10 @@ impl McpSession {
         if response["result"].get("protocolVersion").is_none() {
             return Err("answered initialize without a protocolVersion".to_string());
         }
-        self.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        self.send(
+            &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            deadline,
+        )
     }
 
     fn list_tools(&mut self, deadline: Instant) -> Result<Vec<Value>, String> {
@@ -587,13 +621,19 @@ impl McpSession {
     fn request(&mut self, method: &str, params: Value, deadline: Instant) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
+        self.send(
+            &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+            deadline,
+        )?;
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
+            self.check_deadline(deadline)?;
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(50));
             let line = match self.lines.recv_timeout(remaining) {
                 Ok(line) => line,
                 Err(RecvTimeoutError::Timeout) => {
-                    return Err(format!("did not answer '{method}' within the timeout"));
+                    continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(format!("exited before answering '{method}'"));
@@ -613,7 +653,7 @@ impl McpSession {
                 if let Some(method) = message.get("method").and_then(Value::as_str)
                     && let Some(server_id) = message_id.cloned()
                 {
-                    self.answer(&server_id, method)?;
+                    self.answer(&server_id, method, deadline)?;
                 }
                 continue;
             }
@@ -639,7 +679,7 @@ impl McpSession {
     /// killed as unresponsive [ORB-12820]. Orbit declares no capabilities in
     /// `initialize`, so `ping` — which every MCP client owes — is the one
     /// method it serves and the rest are method-not-found.
-    fn answer(&mut self, id: &Value, method: &str) -> Result<(), String> {
+    fn answer(&mut self, id: &Value, method: &str, deadline: Instant) -> Result<(), String> {
         let response = match method {
             "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
             _ => json!({
@@ -651,26 +691,65 @@ impl McpSession {
                 },
             }),
         };
-        self.send(&response)
+        self.send(&response, deadline)
     }
 
-    fn send(&mut self, message: &Value) -> Result<(), String> {
+    fn send(&mut self, message: &Value, deadline: Instant) -> Result<(), String> {
         let mut line = serde_json::to_string(message)
             .map_err(|error| format!("could not be sent a request: {error}"))?;
         line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|()| self.stdin.flush())
-            .map_err(|error| format!("closed its stdin: {error}"))
+        let mut bytes = line.as_bytes();
+        while !bytes.is_empty() {
+            self.check_deadline(deadline)?;
+            match self.stdin.write(bytes) {
+                Ok(0) => return Err("closed its stdin".to_string()),
+                Ok(written) => bytes = &bytes[written..],
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(format!("closed its stdin: {error}")),
+            }
+        }
+        Ok(())
     }
 
-    /// End this session: drop the host-issued callback record so ancestry no
-    /// longer treats the pid as a plugin, then kill and reap the child.
-    /// Idempotent, because [`Drop`] runs it again.
+    fn check_deadline(&self, deadline: Instant) -> Result<(), String> {
+        if self
+            .cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Err("call was cancelled".to_string());
+        }
+        if Instant::now() >= deadline {
+            return Err("did not answer within the timeout".to_string());
+        }
+        Ok(())
+    }
+
+    /// Reap a dead session and reclaim its descendants on the first observation.
+    fn is_live(&mut self) -> bool {
+        if self.ended {
+            return false;
+        }
+        if matches!(self.child.try_wait(), Ok(None)) {
+            return true;
+        }
+        // Reclaim descendants immediately, even if another waiter retains
+        // this handle. Drop must never signal this reaped PID a second time.
+        self.end();
+        false
+    }
+
+    /// End the callback identity, kill the process group and reap the child.
+    /// Idempotent, because Drop runs it again.
     fn end(&mut self) {
-        self.callback.take();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if !self.ended {
+            self.ended = true;
+            self.callback.take();
+            kill_group(&mut self.child);
+        }
     }
 }
 
@@ -680,5 +759,44 @@ impl McpSession {
 impl Drop for McpSession {
     fn drop(&mut self) {
         self.end();
+    }
+}
+
+/// All sandbox spawn paths create a process group with the child's PID.
+fn kill_group(child: &mut Child) {
+    #[cfg(unix)]
+    // SAFETY: this session owns the child group created by the sandbox.
+    unsafe {
+        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn lock_for_call<'a, T>(
+    mutex: &'a Mutex<T>,
+    ctx: &ToolContext,
+    deadline: Instant,
+) -> Result<std::sync::MutexGuard<'a, T>, OrbitError> {
+    loop {
+        if ctx
+            .broker_call
+            .as_ref()
+            .is_some_and(|call| call.cancelled.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Err(OrbitError::Execution(
+                "plugin call cancelled while waiting for its session".to_string(),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(OrbitError::Execution(
+                "plugin session remained busy until the call timeout".to_string(),
+            ));
+        }
+        match mutex.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(error)) => return Ok(error.into_inner()),
+            Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(10)),
+        }
     }
 }

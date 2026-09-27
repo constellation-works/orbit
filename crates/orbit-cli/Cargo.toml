@@ -40,6 +40,10 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+# Real sandbox broker integration against the built CLI and MCP transport.
+orbit-engine = { path = "../orbit-engine" }
+orbit-exec = { path = "../orbit-exec" }
+orbit-tools = { path = "../orbit-tools" }
 # Substitute pipeline worker for tests that submit runs [ORB-12902].
 orbit-core = { path = "../orbit-core", features = ["test-support"] }
 assert_cmd.workspace = true

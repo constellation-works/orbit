@@ -229,7 +229,8 @@ the reason. Nothing reveals whether the socket belongs to a live run.
   `sandbox-exec` process. If the sandbox cannot be identified, the broker refuses every
   connection for the rest of the run.
 - The broker is dropped as soon as the provider exits, times out or fails to start, which
-  stops the listener and removes the socket and its `<token>` directory. A worker killed by
+  stops the listener, cancels admitted calls, joins its workers and reclaims its MCP sessions,
+  then removes the socket and its `<token>` directory. A worker killed by
   cancellation never runs that teardown, so each run directory carries an `owner` file (the
   host PID and its start time). Cancelling a run, and starting any broker, removes directories
   whose owner is gone.
@@ -297,7 +298,11 @@ service side regardless.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
   bound to the run's task and job run. An exec backend is confined by the §5 intersection.
-  An `mcp` backend is refused until the broker keeps one per run.
+  An `mcp` backend uses the same profile intersection and a broker-owned session pool.
+  Each dispatched agent invocation gets its own pool, so even identical workspace/tool
+  contexts in two invocations cannot share a child. Within a pool, the existing workspace
+  and allowed-tools session keys still separate callers, and CLI and MCP calls reuse the
+  matching child.
 - One audit row per call, with `brokered: true`, `peer_pid`, the request's `cwd` as the
   working directory, the role derived from the run's agent, and the run's task, job run and
   activity. None of it is read from the request, the tool input or the host's environment.
@@ -307,7 +312,21 @@ service side regardless.
   and `detail`. Host refusals map to `plugin_broker_refused`, schema failures to
   `plugin_broker_invalid_input`, and any other failure to `plugin_broker_call_failed`, all
   non-retryable.
-- Not yet: the client-disconnect kill, and `mcp` backend reuse.
+- The worker watches the connection while dispatch runs. A disconnect or broker shutdown
+  cancels that call. Exec supervision kills the process group from its wait loop; MCP
+  checks cancellation during handshake, reply reads and nonblocking writes, retires the
+  session and kills its process group. A caller waiting for another call's session lock
+  can cancel without interrupting that other call. The next call can start a fresh session.
+- Teardown joins the workers before releasing the invocation's pool. Idle MCP sessions
+  are killed and reaped when the pool drops; no reference is retained in the host runtime's
+  ordinary MCP backend. A response already received still applies its secret rotation
+  before the broker tries to deliver it to the client.
+- `crates/orbit-cli/tests/plugin_broker_sandbox.rs` exercises both `orbit tool run` and
+  MCP `tools/call` from a real Bubblewrap PID namespace against exec and MCP fixture
+  backends. It checks the host-worker parent PID, shared session and host-owned task/run
+  identity despite spoofed environment variables, then verifies teardown. It reports a
+  skip where Bubblewrap cannot create a namespace. The existing engine sandbox harness
+  separately covers provider exit, timeout and broker-start failure.
 
 ## 5. Confinement of a brokered backend
 
@@ -470,12 +489,13 @@ The mask ships last, only once every call it would break has a broker to go to:
    `orbit mcp serve` forward plugin calls when `ORBIT_PLUGIN_BROKER` is set. The broker runs
    them through the audited dispatch with the authoritative run context and the §5 profile.
    This slice also adds `brokered` audit fields and the §7 error codes, and updates
-   1_scope.md §4.2 "Call identity". Blocked by 1 and 2. [ORB-13238] Split into:
+   1_scope.md §4.2 "Call identity". [ORB-13238] Implemented in three slices:
    - 3a. Broker-side execution: the audited dispatch, run-record authority, the `brokered`
      audit fields and the broker's error codes. Landed; see §4.4 "As implemented".
    - 3b. The nested client forwarding, implemented for CLI and MCP plugin calls.
-   - 3c. `mcp` backend reuse per run, the client-disconnect kill, and an end-to-end test
-     under a real agent sandbox.
+   - 3c. Implemented: MCP sessions owned by each dispatched invocation, process-group
+     cleanup on disconnect and teardown, and CLI/MCP end-to-end coverage under real
+     Bubblewrap. See §4.4 "As implemented". Merge-commit CI is checked by delivery.
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent
    whether or not its broker bound, plus the §6.3 nested behaviour: the sentinel, no in-process fallback, the secret
    store refusing a masked directory, and operator commands degrading. This slice also updates

@@ -87,11 +87,12 @@ impl AnchorSlot {
 }
 
 /// A running listener. Dropping it stops accepting and closes the listener;
-/// requests already admitted run to completion on their worker.
+/// admitted calls are cancelled and workers joined before teardown returns.
 pub(crate) struct BrokerServer {
     stop: Arc<AtomicBool>,
     wake: UnixStream,
     accept: Option<JoinHandle<()>>,
+    workers: Vec<JoinHandle<()>>,
 }
 
 impl BrokerServer {
@@ -108,6 +109,7 @@ impl BrokerServer {
         let (queue, pending) = mpsc::sync_channel::<Admitted>(IN_FLIGHT + QUEUED);
         let pending = Arc::new(Mutex::new(pending));
 
+        let mut workers = Vec::new();
         for _ in 0..IN_FLIGHT {
             let worker = Worker {
                 pending: Arc::clone(&pending),
@@ -116,9 +118,11 @@ impl BrokerServer {
                 dispatch: Arc::clone(&dispatch),
                 run_id: run_id.to_string(),
             };
-            thread::Builder::new()
-                .name("orbit-plugin-broker-worker".to_string())
-                .spawn(move || worker.run())?;
+            workers.push(
+                thread::Builder::new()
+                    .name("orbit-plugin-broker-worker".to_string())
+                    .spawn(move || worker.run())?,
+            );
         }
 
         let acceptor = Acceptor {
@@ -137,6 +141,7 @@ impl BrokerServer {
             stop,
             wake,
             accept: Some(accept),
+            workers,
         })
     }
 }
@@ -147,6 +152,9 @@ impl Drop for BrokerServer {
         let _ = (&self.wake).write_all(&[1]);
         if let Some(accept) = self.accept.take() {
             let _ = accept.join();
+        }
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
         }
     }
 }
@@ -174,7 +182,7 @@ impl Acceptor {
             if !self.wait_readable() {
                 break;
             }
-            loop {
+            while !self.stop.load(Ordering::SeqCst) {
                 match self.listener.accept() {
                     Ok((stream, _)) => self.admit(stream),
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -335,13 +343,57 @@ impl Worker {
             return;
         }
         let response = match parse_request(&body) {
-            Ok(request) => match self.dispatch.call(request, peer.pid) {
+            Ok(request) => match self.call(&stream, request, peer.pid) {
                 Ok(output) => output_response(output),
                 Err(error) => call_error_response(&error),
             },
             Err(message) => error_response(INVALID_REQUEST, &message, false),
         };
         respond(stream, &response);
+    }
+
+    fn call(
+        &self,
+        stream: &UnixStream,
+        request: super::BrokerRequest,
+        peer_pid: u32,
+    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let finished = AtomicBool::new(false);
+        thread::scope(|scope| {
+            // One request per connection. EOF, a socket error, or extra input
+            // ends that call. No signal is sent here: the backend owner kills
+            // its process group before reaping, so a stale PID is never retained.
+            scope.spawn(|| {
+                let mut fd = libc::pollfd {
+                    fd: stream.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                while !finished.load(Ordering::SeqCst) {
+                    // SAFETY: fd is initialized and remains open for this scope.
+                    let ready = unsafe { libc::poll(&mut fd, 1, 50) };
+                    if self.stop.load(Ordering::SeqCst) || ready > 0 {
+                        cancelled.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    if ready < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted
+                    {
+                        cancelled.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            });
+            struct Finish<'a>(&'a AtomicBool);
+            impl Drop for Finish<'_> {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            let _finish = Finish(&finished);
+            self.dispatch
+                .call(request, peer_pid, Arc::clone(&cancelled))
+        })
     }
 }
 

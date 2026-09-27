@@ -82,6 +82,6 @@ pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
     EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,
-    run_process_streaming_stdout, supervise_child,
+    run_process_streaming_stdout, supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};

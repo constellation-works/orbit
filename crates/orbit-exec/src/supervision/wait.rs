@@ -47,11 +47,38 @@ pub(crate) fn wait_with_optional_timeout(
 }
 
 pub(super) fn wait_with_timeout_and_output_limit(
+    child: Child,
+    timeout_ms: Option<u64>,
+    debug: bool,
+    stdin_payload: Option<Vec<u8>>,
+    output_limit: usize,
+) -> Result<WaitResult, OrbitError> {
+    wait_cancellable(child, timeout_ms, debug, stdin_payload, output_limit, None)
+}
+
+pub(crate) fn wait_with_cancellation(
+    child: Child,
+    timeout_ms: Option<u64>,
+    stdin_payload: Option<Vec<u8>>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<WaitResult, OrbitError> {
+    wait_cancellable(
+        child,
+        timeout_ms,
+        false,
+        stdin_payload,
+        output_capture_limit(),
+        cancelled,
+    )
+}
+
+fn wait_cancellable(
     mut child: Child,
     timeout_ms: Option<u64>,
     debug: bool,
     stdin_payload: Option<Vec<u8>>,
     output_limit: usize,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<WaitResult, OrbitError> {
     // Drain stdout/stderr in background threads so the child never blocks on a
     // full pipe buffer (which would prevent it from exiting).
@@ -79,6 +106,12 @@ pub(super) fn wait_with_timeout_and_output_limit(
     let mut stdin_write_error = None;
     let mut capture_limited: Option<&'static str> = None;
     let (timed_out, interrupted_signal, exit_success, exit_code) = loop {
+        if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
+            kill_process_group(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            break (false, None, false, None);
+        }
         if let Ok(stream) = output_limit_rx.try_recv() {
             terminate_process_group(&mut child, termination_signal(), WAIT_POLL_INTERVAL)?;
             capture_limited = Some(stream);

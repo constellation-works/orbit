@@ -34,7 +34,11 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-core` | internal | automation, common, config, engine, policy, search, store, tools, types (dev: exec) |
 | `orbit-cmd` | internal | common, config, core, engine, mcp, registry, store, tools, types |
 | `orbit-web` | internal | cmd, common, core, registry, types |
-| `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web |
+| `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
+
+The CLI has dev-only edges to Engine, Exec and Tools for the real sandbox
+broker integration test, which pairs the host runtime with the built CLI and
+MCP transport.
 
 The `orbit-core` → `orbit-exec` edge is dev-only for Linux sandbox regression
 tests; production Core does not depend on Exec. The dependency-direction guard

@@ -40,7 +40,12 @@ use socket::RunSocketDir;
 pub(crate) trait BrokerDispatch: Send + Sync {
     /// Run the call. `Ok` carries the backend's `output` only; an error is
     /// rendered as the §4.3 error response.
-    fn call(&self, request: BrokerRequest, peer_pid: u32) -> Result<Value, OrbitError>;
+    fn call(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Value, OrbitError>;
 }
 
 /// One run's broker. Dropping it stops the listener and removes the socket

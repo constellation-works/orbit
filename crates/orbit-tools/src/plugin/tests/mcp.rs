@@ -811,3 +811,96 @@ unsafe fn libc_kill(pid: u32) {
         .args(["-9", &pid.to_string()])
         .status();
 }
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn broker_invocations_reuse_only_their_own_sessions_and_reclaim_them() {
+    require_sandbox();
+    require_python3();
+    let fixture = Fixture::new(&[], 5_000);
+    let context = |pool| {
+        let mut ctx = fixture.context(&[]);
+        ctx.brokered_caller = Some(super::super::BrokeredCaller {
+            worktree: fixture.root.clone(),
+            fs_profile: orbit_types::policy::ResolvedFsProfile {
+                name: "broker-fixture".to_string(),
+                read: vec!["/**".to_string()],
+                modify: Vec::new(),
+            },
+            proc_allowed_programs: Vec::new(),
+            proc_disallowed_programs: None,
+        });
+        ctx.broker_call = Some(super::super::BrokerCall {
+            sessions: pool,
+            cancelled: Default::default(),
+        });
+        ctx
+    };
+    let first = context(Arc::new(super::super::BrokerSessions::default()));
+    let second = context(Arc::new(super::super::BrokerSessions::default()));
+    let tool = fixture.tool("echo", None);
+    let a = tool.execute(&first, json!({})).expect("first invocation");
+    let again = tool.execute(&first, json!({})).expect("reuse");
+    let b = tool.execute(&second, json!({})).expect("second invocation");
+    assert_eq!(a["pid"], again["pid"]);
+    assert_ne!(a["pid"], b["pid"]);
+    assert!(
+        !fixture.backend.is_running(),
+        "broker children are not owned by the host runtime backend"
+    );
+    let pid = a["pid"].as_u64().expect("pid") as i32;
+    drop(first);
+    // SAFETY: signal zero only checks existence; the pool reaps its child.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "dropping one invocation reclaims its child"
+    );
+    assert_eq!(
+        tool.execute(&second, json!({}))
+            .expect("surviving invocation")["pid"],
+        b["pid"]
+    );
+    let pid = b["pid"].as_u64().expect("pid") as i32;
+    drop(second);
+    // SAFETY: signal zero checks existence only.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn cancelling_a_broker_call_retires_its_mcp_session_promptly() {
+    require_sandbox();
+    require_python3();
+    let fixture = Fixture::new(&[], 30_000);
+    let mut ctx = fixture.context(&[]);
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    ctx.broker_call = Some(super::super::BrokerCall {
+        sessions: Default::default(),
+        cancelled: Arc::clone(&cancelled),
+    });
+    fixture
+        .tool("echo", None)
+        .execute(&ctx, json!({}))
+        .expect("start");
+    let pid = fixture.backend.child_pid(&ctx).expect("pid");
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        assert!(
+            fixture
+                .tool("slow", None)
+                .execute(&ctx, json!({"seconds": 20}))
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    });
+    assert!(!fixture.backend.is_running());
+    // SAFETY: signal zero checks existence only.
+    assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+}
