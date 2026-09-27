@@ -1405,3 +1405,41 @@ fn a_pull_requires_agent_capability_on_the_session() {
             .is_empty()
     );
 }
+
+/// The owner's `workflow.distributed_completion` is what its probe reports and
+/// what admission pins: `done` names the owner policy as the authorization
+/// reference, and a follower still carrying a `review` contract re-probes
+/// before a new request is admitted.
+#[test]
+fn the_owner_completion_policy_reaches_the_probe_and_admission() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let stale = pull_input(&runtime, "stale-review");
+    assert_eq!(stale["ship"]["completion"], "review");
+    assert!(stale["ship"]["authorization_reference"].is_null());
+
+    std::fs::write(
+        repo_root.join(".orbit/config.toml"),
+        "[workflow]\ndistributed_completion = \"done\"\n",
+    )
+    .expect("owner config");
+    let runtime = OrbitRuntime::from_roots(&runtime.global_root(), &repo_root.join(".orbit"))
+        .expect("reopen with owner policy");
+    create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
+
+    let probe =
+        run_as(&runtime, follower_session(), "orbit.drain.probe", json!({})).expect("probe");
+    assert_eq!(probe["ship"]["completion"], "done");
+    assert_eq!(
+        probe["ship"]["authorization_reference"],
+        crate::application::distributed::OWNER_COMPLETION_POLICY
+    );
+
+    let refused = run_as(&runtime, follower_session(), "orbit.task.pull", stale)
+        .expect_err("a review contract no longer matches this owner");
+    assert!(
+        refused.to_string().contains("ship_contract_mismatch"),
+        "{refused}"
+    );
+    let (response, _claim_id) = pulled_claim(&runtime, "fresh-done");
+    assert_eq!(response["receipt"]["request"]["ship"]["completion"], "done");
+}

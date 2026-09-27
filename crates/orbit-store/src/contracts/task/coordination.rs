@@ -479,6 +479,11 @@ pub(crate) struct ClaimCommitEffects {
 pub struct HandoffObservation {
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
     pub required_commands: Vec<String>,
+    /// The completion authority the owner's configuration grants claimed
+    /// handoffs at the moment of this decision, read by trusted owner code
+    /// from its own settings. `None` means every handoff waits for an
+    /// operator's approval.
+    pub owner_completion_authority: Option<String>,
 }
 
 impl ClaimInvocation {

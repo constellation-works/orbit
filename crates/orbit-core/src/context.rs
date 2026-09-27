@@ -376,6 +376,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// its exact candidate before the delivery handoff is accepted
     /// (`[workflow] required_validation_commands`, default empty).
     workflow_required_validation_commands: Vec<String>,
+    /// How far this owner takes an accepted distributed handoff: `review` or
+    /// `done` (`[workflow] distributed_completion`, default `review`).
+    workflow_distributed_completion: String,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
@@ -400,6 +403,7 @@ impl OrbitRuntimeSettings {
         workflow_base_branch: String,
         workflow_auto_ship: bool,
         workflow_required_validation_commands: Vec<String>,
+        workflow_distributed_completion: String,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
@@ -417,6 +421,7 @@ impl OrbitRuntimeSettings {
             workflow_base_branch,
             workflow_auto_ship,
             workflow_required_validation_commands,
+            workflow_distributed_completion,
             crews,
             default_crew,
             complexity_crews,
@@ -453,6 +458,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_required_validation_commands(&self) -> &[String] {
         &self.workflow_required_validation_commands
+    }
+
+    pub(crate) fn workflow_distributed_completion(&self) -> &str {
+        &self.workflow_distributed_completion
     }
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {

@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::test_support::{create_context_task, test_runtime};
+use crate::application::distributed::OWNER_COMPLETION_POLICY;
 use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::worker_command_override;
 use crate::application::landing::LANDING_JOB;
@@ -33,7 +34,7 @@ struct Owner {
 /// An owner holding one accepted handoff for a task in review. `completion`
 /// decides whether the ship contract carried completion authority, which is
 /// what tells accepted-and-authorized work apart from review-only work.
-fn owner(completion: &str, grant: Option<&str>) -> Owner {
+fn owner(completion: &str, authorization_reference: Option<&str>) -> Owner {
     worker_command_override::set(["sh", "-c", "true"]);
     let (root, runtime, repo) = test_runtime();
     // The landing job has to be resolvable by name, so seed the managed
@@ -57,7 +58,7 @@ fn owner(completion: &str, grant: Option<&str>) -> Owner {
         landing_branch: "agent-main".into(),
         review_policy: "none".into(),
         completion: completion.into(),
-        authorization_reference: grant.map(ToOwned::to_owned),
+        authorization_reference: authorization_reference.map(ToOwned::to_owned),
     };
     let admission = boundary
         .admit_task(
@@ -183,6 +184,7 @@ fn owner(completion: &str, grant: Option<&str>) -> Owner {
         observation: HandoffObservation {
             candidate,
             required_commands: vec!["make ci".into()],
+            owner_completion_authority: None,
         },
         worker,
     }
@@ -296,25 +298,37 @@ fn an_approved_handoff_dispatches_exactly_one_owner_landing_job() {
     );
 }
 
-/// Managed completion was bound to an operation-mode grant; with grants
-/// removed a `done` contract has no authority and the handoff is refused, so
-/// nothing is dispatched for it.
+/// A claim admitted under the owner's completion policy is authorized when
+/// its handoff is accepted, and that acceptance dispatches the landing job —
+/// no operator approval, drain or sweep in between.
 #[test]
-fn a_done_completion_contract_is_refused_and_dispatches_nothing() {
-    let owner = owner("done", Some("grant"));
-    let error = owner
-        .runtime
-        .accept_task_handoff(
-            &owner.worker,
-            "handoff",
-            owner.handoff.clone(),
-            owner.observation.clone(),
-        )
-        .expect_err("no grant can authorize completion");
-    assert!(
-        error.to_string().contains("managed completion unsupported"),
-        "{error}"
+fn an_owner_policy_handoff_dispatches_its_landing_job_on_acceptance() {
+    let mut owner = owner("done", Some(OWNER_COMPLETION_POLICY));
+    owner.observation.owner_completion_authority = Some(OWNER_COMPLETION_POLICY.to_string());
+    worker_command_override::set(["sh", "-c", "sleep 30"]);
+    owner.accept();
+
+    let requests = owner.runtime.landing_start_requests().expect("outbox");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].handoff_id, owner.handoff_id());
+    let runs = owner.landing_runs();
+    assert_eq!(runs.len(), 1, "acceptance dispatched the landing job");
+    let attempt = owner.attempt().expect("attempt");
+    assert_eq!(attempt.job_run_id.as_deref(), Some(runs[0].as_str()));
+    // Landing, not acceptance, completes the task.
+    assert_eq!(
+        owner.runtime.get_task(&owner.task_id).expect("task").status,
+        TaskStatus::Review
     );
+}
+
+/// The ship contract alone authorizes nothing: when the owner no longer
+/// grants the policy the claim was admitted under, the handoff is accepted
+/// into review and waits for an operator.
+#[test]
+fn a_done_contract_the_owner_no_longer_grants_dispatches_nothing() {
+    let owner = owner("done", Some(OWNER_COMPLETION_POLICY));
+    owner.accept();
     assert!(
         owner
             .runtime
@@ -323,6 +337,10 @@ fn a_done_completion_contract_is_refused_and_dispatches_nothing() {
             .is_empty()
     );
     assert!(owner.landing_runs().is_empty());
+    assert_eq!(
+        owner.runtime.get_task(&owner.task_id).expect("task").status,
+        TaskStatus::Review
+    );
 }
 
 #[test]

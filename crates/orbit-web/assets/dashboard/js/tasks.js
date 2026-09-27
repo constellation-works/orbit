@@ -4,7 +4,7 @@
 import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
-import { buildDistributedBlock, buildExecutionProvenance, invalidateDistributedConsole } from './distributed.js';
+import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1946,7 +1946,8 @@ function buildActionsRow(task, detail, context) {
     const btn = el("button", { class: "action approve", text: "approve" });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      runAction(task, "approve", detail, null, btn, context);
+      if (task.status === "review") approveReviewTask(task, detail, btn, context);
+      else runAction(task, "approve", detail, null, btn, context);
     });
     actions.appendChild(btn);
   }
@@ -2438,6 +2439,32 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     const errEl = el("div", { class: "action-error", text: String(err.message || err) });
     detail.prepend(errEl);
   }
+}
+
+/// Approve a review task. A task delivered by a distributed claim is approved
+/// through its handoff, which records completion authority for the exact
+/// candidate and starts the owner's landing job; a plain status write would
+/// be refused while the claim protects the task.
+async function approveReviewTask(task, detail, btnNode, context) {
+  let claimed = null;
+  try {
+    claimed = await claimedReviewApproval(task.id);
+  } catch (_) {
+    claimed = null; // No readable claim state: the ordinary path reports the owner's answer.
+  }
+  if (!claimed) return runAction(task, "approve", detail, null, btnNode, context);
+  if (claimed.refusal) {
+    const prior = detail.querySelector(".action-error");
+    if (prior) prior.remove();
+    detail.prepend(el("div", { class: "action-error", text: `approve: ${claimed.refusal}` }));
+    return undefined;
+  }
+  const request = handoffApprovalRequest(claimed.claim);
+  invalidateDistributedConsole();
+  return runAction(task, "approve", detail, request.body, btnNode, context, {
+    path: request.path,
+    successNotice: `${task.id}: handoff approved; the owner landing job completes it`,
+  });
 }
 
 function takeTaskActionNotice() {

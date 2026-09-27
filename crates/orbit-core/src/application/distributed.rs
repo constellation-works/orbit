@@ -68,6 +68,12 @@ pub use serve::TaskPullResponse;
 /// again is one deliberate source change.
 pub const DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED: bool = true;
 
+/// The authorization reference an owner-policy completion carries: the config
+/// key that grants it. A claim admitted under `completion: done` pins this
+/// value, and a handoff is authorized from it only while the owner's current
+/// configuration still names it.
+pub const OWNER_COMPLETION_POLICY: &str = "workspace-config:workflow.distributed_completion";
+
 /// Refuse a mutating distributed entry point while the feature is closed.
 pub fn ensure_distributed_mutation_available(entry_point: &str) -> Result<(), OrbitError> {
     if DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED {
@@ -327,9 +333,21 @@ impl crate::OrbitRuntime {
             landing_branch: base_branch.clone(),
             base_branch,
             review_policy: review_policy_label(self.operation_policy().review_policy.value),
-            completion: "review".to_string(),
-            authorization_reference: None,
+            completion: self.workflow_distributed_completion().to_string(),
+            authorization_reference: self.owner_completion_authority(),
         }
+    }
+
+    /// The standing completion authority this owner grants claimed handoffs
+    /// right now, or `None` when each one waits for an operator's approval.
+    ///
+    /// It names the owner's own configuration, never anything a follower
+    /// sent. Admission pins it into the claim's ship contract, acceptance
+    /// records it as the handoff's authorization, and landing rechecks it, so
+    /// withdrawing the key stops every handoff that has not landed yet.
+    pub(crate) fn owner_completion_authority(&self) -> Option<String> {
+        (self.workflow_distributed_completion() == "done")
+            .then(|| OWNER_COMPLETION_POLICY.to_string())
     }
 
     /// Evaluate the declared caller contract against the shared admission

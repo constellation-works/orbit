@@ -275,14 +275,26 @@ impl TaskCommitBoundary {
             required_commands: observation.required_commands.clone(),
             accepted_at: Utc::now(),
         };
-        // Managed completion was authorized by an operation-mode grant; with
-        // grants removed [ORB-12772] nothing can authorize a `done` contract,
-        // so it is refused before the handoff row exists rather than being
-        // silently downgraded to a review handoff the worker did not request.
-        if ship.completion == "done" {
-            return Err(invalid("managed completion unsupported"));
-        }
         params.rows.push(row(HANDOFF, &auth.claim_id, &accepted)?);
+        // A `done` contract names the owner policy it was admitted under. The
+        // handoff is authorized only while the owner's own configuration,
+        // observed for this decision, still grants that same policy. When the
+        // owner has since withdrawn it, the valid delivery is still accepted
+        // and waits in review for an operator, rather than discarding
+        // validated work over a setting that changed after admission.
+        if ship.completion == "done"
+            && let Some(reference) = ship.authorization_reference.as_deref()
+            && observation.owner_completion_authority.as_deref() == Some(reference)
+        {
+            self.add_handoff_authorization(
+                &accepted,
+                reference,
+                HandoffAuthorizationSource::OwnerPolicy {
+                    reference: reference.to_string(),
+                },
+                params,
+            )?;
+        }
         Ok(())
     }
 
@@ -465,10 +477,23 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("completion authorization scope mismatch"));
         }
-        // A grant-sourced authorization persisted before operation mode was
-        // removed can no longer be rechecked, so it fails closed.
-        if let HandoffAuthorizationSource::Grant { .. } = authorization.source {
-            return Err(invalid("managed completion unsupported"));
+        match &authorization.source {
+            HandoffAuthorizationSource::Operator => {}
+            // A policy authorization lands only while the owner still grants
+            // that policy; withdrawing the key stops every unlanded handoff.
+            HandoffAuthorizationSource::OwnerPolicy { reference } => {
+                if observation.owner_completion_authority.as_deref() != Some(reference.as_str()) {
+                    return Err(invalid(
+                        "owner completion policy withdrawn; restore `workflow.distributed_completion = \"done\"` \
+                         or revoke this handoff",
+                    ));
+                }
+            }
+            // A grant-sourced authorization persisted before operation mode
+            // was removed can no longer be rechecked, so it fails closed.
+            HandoffAuthorizationSource::Grant { .. } => {
+                return Err(invalid("managed completion unsupported"));
+            }
         }
         Ok(())
     }

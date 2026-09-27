@@ -549,6 +549,11 @@ impl OrbitRuntime {
             .workflow_required_validation_commands()
     }
 
+    /// `[workflow] distributed_completion`: `review` or `done`.
+    pub fn workflow_distributed_completion(&self) -> &str {
+        self.context.settings().workflow_distributed_completion()
+    }
+
     /// The branch this workspace integrates into: the registered workspace
     /// base branch when a registry binding exists, else `[workflow]
     /// base_branch`. Delivery automation defaults are seeded against it.

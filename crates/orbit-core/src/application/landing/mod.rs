@@ -346,6 +346,7 @@ impl OrbitRuntime {
         Ok(HandoffObservation {
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
+            owner_completion_authority: self.owner_completion_authority(),
         })
     }
 

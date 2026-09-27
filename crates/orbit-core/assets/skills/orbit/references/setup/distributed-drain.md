@@ -110,9 +110,14 @@ returns.
 
 - Each claim runs locally as `task_claimed_pr_pipeline` and ends at a pull
   request handed to the owner, which moves the task to `review`. The owner
-  approves before anything lands; the follower never merges.
+  approves before anything lands; the follower never merges. With
+  `workflow.distributed_completion = "done"` on the owner, acceptance
+  authorizes the handoff and the owner's landing job merges and completes it,
+  as `--complete` does for owner tasks.
 - The drain keeps settling claims after `--for` expires, until none is left.
   `orbit run auto --stop` closes the window early; live leaves keep running.
+  Do not cancel the drain run: settlements it has not delivered wait for the
+  next drain.
 - An unreachable or refusing owner is reported in each iteration's output and
   retried. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.

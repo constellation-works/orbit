@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-09-19
+last_updated: 2026-09-27
 last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
@@ -453,8 +453,62 @@ ACL: an owner operator retains cross-attempt receipt inspection and deliberate r
   Orbit destination already has, and a second one here would have bought protection Orbit does not
   actually provide.
 
+## An owner completion policy lands accepted handoffs without per-task approval
+
+**Recorded:** 2026-09-27 · [ORB-13637], after the first live follower drain [ORB-13625].
+**Code anchors:** `crates/orbit-store/src/repository/task/coordination/handoff.rs::accept_typed_handoff`,
+`crates/orbit-core/src/application/distributed.rs::owner_completion_authority`,
+`crates/orbit-config/src/registry/settings.rs` (`workflow.distributed_completion`)
+
+### Context
+
+The owner always resolved `completion: review`. After operation grants were removed a `done`
+contract had nothing to authorize it and failed closed at handoff. So every follower delivery
+waited for a per-task **Approve handoff**, while the owner's own `orbit run auto --complete` drain
+landed its tasks unattended. With a follower running several leaves, the operator merged follower
+pull requests by hand instead. That skipped the owner's validation gate: one was merged while its
+leaf was still running `make ci-fast`. The dashboard's task-level approve was refused outright for
+claimed tasks, because a claim only accepts claim-scoped mutations.
+
+### Decision
+
+One owner key, `workflow.distributed_completion = "review" | "done"`, default `review`. With `done`:
+
+- The probe and admission pin a `done` ship contract whose `authorization_reference` names the
+  policy (`workspace-config:workflow.distributed_completion`). A follower re-probes when it changes.
+- Accepting the handoff records a `HandoffAuthorizationSource::OwnerPolicy` authorization and the
+  landing-start request in the same transaction that moves the task to `review`. It then
+  dispatches `task_landing_pipeline`, the same consumer an operator approval starts.
+- Authority comes only from the owner's own configuration, read by trusted owner code into the
+  handoff observation for that decision. The ship contract alone authorizes nothing: a `done`
+  contract accepted after the owner withdrew the policy is still accepted, and waits in review for
+  an operator.
+- Landing rechecks the owner's current configuration before merge intent and completion.
+  Withdrawing the key stops every handoff that has not landed. Revocation works as it does for an
+  operator approval.
+
+This is not operation mode again. There is no grant table, scope, expiry or preset. It is one owner
+setting with the same meaning as `--complete`, recorded per handoff so the audit trail names what
+authorized each landing.
+
+The dashboard's task-level approve on a review task with a handed-off claim now sends the
+claim-scoped handoff approval instead of the refused status write.
+
+### Consequences
+
+- Follower deliveries land with the owner's checks, pinned candidate and verified merge. No human
+  merges on the provider.
+- The per-candidate operator approval remains the path whenever the key is `review`, and for any
+  handoff accepted without the policy.
+- Cost: an owner with `done` merges every validated follower delivery without a human seeing it
+  first. The only gate is the owner's required validation commands. A handoff authorized by the
+  policy and then fenced by withdrawing it cannot be re-approved by an operator (one
+  authorization per handoff); restore the key, or revoke and recover the claim.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
+- [ORB-13625] — opened follower pull: owner mutation tools, routed peer, `orbit run auto --pull`.
+- [ORB-13637] — added the owner completion policy ([An owner completion policy lands accepted handoffs without per-task approval](#an-owner-completion-policy-lands-accepted-handoffs-without-per-task-approval)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
