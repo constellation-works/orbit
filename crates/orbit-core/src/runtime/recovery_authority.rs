@@ -84,6 +84,7 @@ impl RecoveryAuthority {
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(|error| authority_error("enable WAL on recovery authority", error))?;
+        persist_wal_sidecars(&connection)?;
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(|error| authority_error("harden recovery authority durability", error))?;
@@ -358,13 +359,43 @@ fn create_authority_root_under(trusted: &Path) -> Result<PathBuf, OrbitError> {
 /// A symlinked database file would let the certificate be read from, and
 /// written to, a file outside the protected root while every directory on the
 /// way there still looks correct. A missing sidecar is ordinary: SQLite creates
-/// and removes them around each connection.
+/// them on first open, and a database written before sidecars were kept may
+/// have none.
 fn refuse_symlinked_authority_files(root: &Path) -> Result<(), OrbitError> {
     for name in authority_file_names() {
         let file = root.join(name);
         if unfollowed_metadata(&file)?.is_some_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(refuse_symlinked(&file));
         }
+    }
+    Ok(())
+}
+
+/// Keep the `-wal` and `-shm` sidecars when the last connection closes.
+///
+/// Workers read this database read-only from inside their sandbox, which may
+/// read the authority root but never write it. SQLite opens a read-only WAL
+/// database without write access only when the shared-memory sidecar already
+/// exists, and by default the last closing connection deletes both sidecars.
+/// When no host connection was open, a worker's binding lookup then failed
+/// with "unable to open database file". Persistent sidecars make the lookup
+/// independent of whether the host happens to hold the database open.
+fn persist_wal_sidecars(connection: &Connection) -> Result<(), OrbitError> {
+    let mut enabled: std::ffi::c_int = 1;
+    // SAFETY: the handle is live for the borrow of `connection`, and
+    // SQLITE_FCNTL_PERSIST_WAL reads and writes exactly one `int`.
+    let code = unsafe {
+        rusqlite::ffi::sqlite3_file_control(
+            connection.handle(),
+            c"main".as_ptr(),
+            rusqlite::ffi::SQLITE_FCNTL_PERSIST_WAL,
+            (&raw mut enabled).cast(),
+        )
+    };
+    if code != rusqlite::ffi::SQLITE_OK {
+        return Err(OrbitError::Execution(format!(
+            "keep recovery authority WAL sidecars: sqlite result code {code}"
+        )));
     }
     Ok(())
 }

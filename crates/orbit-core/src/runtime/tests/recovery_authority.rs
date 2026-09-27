@@ -797,3 +797,41 @@ fn synthetic_proc_root() -> TempDir {
     .expect("boot id");
     root
 }
+
+/// A sandboxed worker may read the authority root but never write it, so it
+/// cannot create the `-shm` sidecar SQLite needs to read a WAL database. The
+/// host keeps the sidecars after its last connection closes, and a worker
+/// lookup then succeeds with no host connection open.
+#[cfg(unix)]
+#[test]
+fn a_worker_without_write_access_reads_the_authority_after_the_host_closed_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let global = TempDir::new().expect("global root");
+    drop(RecoveryAuthority::open(global.path()).expect("host opens authority"));
+    let root = global.path().join(super::AUTHORITY_DIR);
+    for name in super::authority_file_names() {
+        assert!(
+            root.join(&name).exists(),
+            "`{name}` must survive the host's last close"
+        );
+    }
+
+    let set_mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    };
+    for name in super::authority_file_names() {
+        set_mode(&root.join(name), 0o400);
+    }
+    set_mode(&root, 0o500);
+    let lookup = super::current_worker_binding(global.path());
+    set_mode(&root, 0o700);
+    for name in super::authority_file_names() {
+        set_mode(&root.join(name), 0o600);
+    }
+
+    assert!(
+        lookup.expect("read-only worker lookup").is_none(),
+        "this process has no binding"
+    );
+}
