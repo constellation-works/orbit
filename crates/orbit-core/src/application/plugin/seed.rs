@@ -12,10 +12,10 @@
 //! directory.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, write_text_with_parent};
+use orbit_common::fs::io::atomic_write_text;
 use orbit_common::security::release::sha256_hex;
 use orbit_tools::plugin::LoadedPlugin;
 use orbit_types::workflow::{AUTO_TASK_SCHEMA_VERSION, ROUTINE_SCHEMA_VERSION};
@@ -136,10 +136,11 @@ pub fn seed_plugin_definitions(
         ));
     }
 
-    // Check both definition directories before writing either one. A plugin
-    // can otherwise seed its routines successfully and only then discover
-    // that one of its auto-task filenames is already owned by another
-    // plugin, leaving a partially applied enable behind.
+    // Check every destination before writing either catalog. This includes
+    // dangling links (which Path::exists misses), manifest paths, and parent
+    // directories, so a refused auto-task cannot leave a seeded routine.
+    refuse_redirected_destinations(routines_dir, &routines)?;
+    refuse_redirected_destinations(auto_tasks_dir, &auto_tasks)?;
     refuse_cross_plugin_ownership("routine", routines_dir, &routines, &namespace)?;
     refuse_cross_plugin_ownership("auto_task", auto_tasks_dir, &auto_tasks, &namespace)?;
 
@@ -161,6 +162,69 @@ pub fn seed_plugin_definitions(
     )?);
 
     Ok(outcomes)
+}
+
+fn refuse_redirected_destinations(
+    dir: &Path,
+    files: &[(String, String)],
+) -> Result<(), OrbitError> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    check_destination_components(dir, true)?;
+    check_destination_components(&dir.join(PLUGIN_ASSET_MANIFEST_FILE), false)?;
+    for (name, _) in files {
+        check_destination_components(&dir.join(format!("{name}.yaml")), false)?;
+    }
+    Ok(())
+}
+
+fn check_destination_components(path: &Path, directory: bool) -> Result<(), OrbitError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin seed destination '{}' contains a parent traversal",
+            path.display()
+        )));
+    }
+    for component in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        if component.as_os_str().is_empty() {
+            continue;
+        }
+        match std::fs::symlink_metadata(component) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "plugin seed destination '{}' is redirected by symlink '{}'",
+                    path.display(),
+                    component.display()
+                )));
+            }
+            Ok(metadata) if component == path && metadata.is_dir() != directory => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "plugin seed destination '{}' has the wrong file type",
+                    path.display()
+                )));
+            }
+            Ok(metadata) if component != path && !metadata.is_dir() => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "plugin seed destination '{}' has a non-directory parent '{}'",
+                    path.display(),
+                    component.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect plugin seed destination '{}': {error}",
+                    component.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn refuse_cross_plugin_ownership(
@@ -209,7 +273,7 @@ fn write_seeded_files(
         refuse_recorded_owner(kind, &path, recorded.as_ref(), namespace)?;
 
         let action = if !path.exists() {
-            write_text_with_parent(&path, rendered)?;
+            atomic_write_text(&path, rendered)?;
             PluginSeedAction::Created
         } else {
             let existing = std::fs::read_to_string(&path).map_err(|error| {
@@ -222,7 +286,7 @@ fn write_seeded_files(
             if existing_digest == rendered_digest {
                 PluginSeedAction::Unchanged
             } else if orbit_written || force {
-                write_text_with_parent(&path, rendered)?;
+                atomic_write_text(&path, rendered)?;
                 PluginSeedAction::Refreshed
             } else {
                 PluginSeedAction::Customised

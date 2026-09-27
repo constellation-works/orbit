@@ -387,6 +387,10 @@ kept separate from the shipped catalog's `.orbit-managed-assets.json` so plugin 
 retire a shipped default. An upgrade re-seeds only files whose digest still matches the
 previously shipped version; a customised file gets a warning and a `--force` path. Activities
 and jobs are not copied: they form a catalog layer (§4.5).
+Before seeding either schedule catalog, Orbit checks both destination directories, manifest
+paths and definition paths. Symlinks in any existing destination component, including dangling
+links, refuse the enable without writing schedule files or plugin provenance in either catalog;
+`--force` does not bypass this confinement check.
 
 ## 4. Contracts Orbit enforces
 
