@@ -29,6 +29,21 @@ pub(super) fn write_archive(
     manifest_json: &[u8],
     bundle_dirs: &[(String, PathBuf)],
 ) -> Result<(), OrbitError> {
+    // Fail before opening or truncating the destination when an interrupted
+    // writer left recovery evidence behind. Recheck while packing below to
+    // cover a writer that starts after this preflight.
+    for (task_id, dir) in bundle_dirs {
+        with_shared_file_lock(&bundle_lock_target(dir), "task migration export", || {
+            if !dir.is_dir() {
+                return Err(OrbitError::Store(format!(
+                    "canonical bundle for '{task_id}' disappeared while exporting at {}",
+                    dir.display()
+                )));
+            }
+            reject_pending_write(task_id, dir)
+        })?;
+    }
+
     if let Some(parent) = out_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -65,6 +80,7 @@ pub(super) fn write_archive(
                     dir.display()
                 )));
             }
+            reject_pending_write(task_id, dir)?;
             append_bundle_tree(&mut builder, &arcname, dir)
         })?;
     }
@@ -74,10 +90,10 @@ pub(super) fn write_archive(
     Ok(())
 }
 
-/// Append one canonical bundle while its shared lock is held. The pending-write
-/// record is recovery machinery, not bundle content; all other dotfiles remain
-/// eligible payloads and must round-trip unchanged.
-fn append_bundle_tree<W: std::io::Write>(
+/// Append one canonical bundle while its shared lock is held. Pending-write
+/// recovery records are rejected before packing and excluded here as defense in
+/// depth; all other dotfiles remain eligible payloads and round-trip unchanged.
+pub(super) fn append_bundle_tree<W: std::io::Write>(
     builder: &mut tar::Builder<W>,
     archive_dir: &str,
     source_dir: &Path,
@@ -113,6 +129,20 @@ fn append_bundle_tree<W: std::io::Write>(
         }
     }
 
+    Ok(())
+}
+
+fn reject_pending_write(task_id: &str, bundle_dir: &Path) -> Result<(), OrbitError> {
+    let pending_path = bundle_dir.join(PENDING_WRITE_FILE_NAME);
+    if pending_path
+        .try_exists()
+        .map_err(map_io("inspect pending-write record"))?
+    {
+        return Err(OrbitError::Store(format!(
+            "cannot export task '{task_id}' while pending-write recovery is required at {}; recover or reindex the task first",
+            pending_path.display()
+        )));
+    }
     Ok(())
 }
 
