@@ -10,6 +10,7 @@ use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 use super::super::complete::pr_complete;
+use super::super::delivery::{PrMergeState, classify_pr_state};
 use super::test_support::{
     PR_MERGE_OPERATION, PR_STATUS_OPERATION, PrOpenTestHost, PrWorkspace, git, pr_workspace,
     rebase_conflict_pr_workspace, review_batch_task,
@@ -21,6 +22,74 @@ use super::test_support::{
 const PUBLISHED_HEAD_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const FOREIGN_HEAD_SHA: &str = "cccccccccccccccccccccccccccccccccccccccc";
 const LANDED_COMMIT_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+fn blocked_state(checks: Value, review_decision: Value) -> Value {
+    json!({
+        "state": "OPEN",
+        "mergeStateStatus": "BLOCKED",
+        "reviewDecision": review_decision,
+        "statusCheckRollup": checks,
+    })
+}
+
+#[test]
+fn blocked_pr_with_running_checks_and_no_required_review_is_pending() {
+    let status = blocked_state(
+        json!([
+            {"__typename": "CheckRun", "name": "linux", "status": "IN_PROGRESS", "conclusion": null},
+            {"__typename": "CheckRun", "name": "macos", "status": "QUEUED", "conclusion": null},
+            {"__typename": "StatusContext", "context": "lint", "state": "PENDING"},
+            {"__typename": "StatusContext", "context": "security", "state": "EXPECTED"},
+            {"__typename": "StatusContext", "context": "format", "state": "SUCCESS"}
+        ]),
+        Value::Null,
+    );
+    assert!(matches!(classify_pr_state(&status), PrMergeState::Pending));
+}
+
+#[test]
+fn blocked_pr_names_a_failed_check_even_when_another_check_is_running() {
+    let status = blocked_state(
+        json!([
+            {"__typename": "CheckRun", "name": "linux", "status": "IN_PROGRESS", "conclusion": null},
+            {"__typename": "CheckRun", "name": "macos", "status": "COMPLETED", "conclusion": "FAILURE"}
+        ]),
+        Value::Null,
+    );
+    let PrMergeState::Blocked(reason) = classify_pr_state(&status) else {
+        panic!("a failed check must refuse completion");
+    };
+    assert!(reason.contains("macos"), "{reason}");
+}
+
+#[test]
+fn blocked_pr_with_required_review_refuses_even_while_checks_run() {
+    for decision in ["REVIEW_REQUIRED", "CHANGES_REQUESTED"] {
+        let status = blocked_state(
+            json!([{"name": "linux", "status": "IN_PROGRESS", "conclusion": null}]),
+            json!(decision),
+        );
+        let PrMergeState::Blocked(reason) = classify_pr_state(&status) else {
+            panic!("{decision} must refuse completion");
+        };
+        assert!(reason.contains(decision), "{reason}");
+    }
+}
+
+#[test]
+fn blocked_pr_with_unreadable_rollup_refuses_completion() {
+    for checks in [
+        Value::Null,
+        json!({"unexpected": "shape"}),
+        json!([{"name": "linux"}]),
+    ] {
+        let status = blocked_state(checks, Value::Null);
+        let PrMergeState::Blocked(reason) = classify_pr_state(&status) else {
+            panic!("an unreadable rollup must refuse completion");
+        };
+        assert!(reason.contains("rollup"), "{reason}");
+    }
+}
 
 /// [AC1] The recorded incident shape: the provider still reports the pull
 /// request as open while carrying a merge timestamp. Completion refuses the

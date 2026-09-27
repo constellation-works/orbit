@@ -14,8 +14,9 @@
 //!
 //! Branch protection is respected by construction. The merge request is an
 //! ordinary provider merge (ungated runs may use `--auto`); no administrative
-//! bypass is reachable, so a PR that GitHub reports as `BLOCKED` fails the
-//! run rather than being forced through.
+//! bypass is reachable. A `BLOCKED` PR with checks still running and no
+//! outstanding review is polled within the wait budget; failed checks,
+//! required reviews, and unreadable check results refuse completion.
 //!
 //! A `DIRTY` PR is narrower than those policy refusals. With the pipeline's
 //! retained `completion: done`, published-head, branch, and base checkpoints,

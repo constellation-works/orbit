@@ -49,6 +49,61 @@ fn pending_checks_with_auto_merge_disabled_wait_for_an_ordinary_merge() {
 }
 
 #[test]
+fn blocked_running_checks_are_repolled_and_merge_when_clean() {
+    let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+    let mut blocked = state("BLOCKED");
+    blocked["reviewDecision"] = Value::Null;
+    blocked["statusCheckRollup"] = json!([
+        {"__typename": "CheckRun", "name": "linux", "status": "IN_PROGRESS", "conclusion": null}
+    ]);
+    host.queue_pr_status([blocked, state("CLEAN"), merged_state()]);
+    host.queue_merge_capabilities_with_auto_merge(true, true, true, true, false);
+
+    let mut input = complete_input(root.path(), &["T1"]);
+    input["max_wait_seconds"] = json!(10);
+    let output = pr_complete(&host, &input).expect("complete after BLOCKED checks settle");
+
+    assert_eq!(output["merge"]["merged"], true);
+    assert_eq!(output["merge"]["auto_merge_requested"], false);
+    assert_eq!(output["merge"]["waited_seconds"], 5);
+    assert_eq!(
+        status_reads(&host),
+        3,
+        "BLOCKED must be polled again before merging"
+    );
+    assert_eq!(merge_calls(&host).len(), 1);
+    assert_eq!(host.task_status("T1"), TaskStatus::Done);
+}
+
+#[test]
+fn blocked_failed_check_and_required_review_never_request_a_merge() {
+    for (check, review, expected) in [
+        (
+            json!({"name": "macos", "status": "COMPLETED", "conclusion": "FAILURE"}),
+            Value::Null,
+            "macos",
+        ),
+        (
+            json!({"name": "linux", "status": "IN_PROGRESS", "conclusion": null}),
+            json!("REVIEW_REQUIRED"),
+            "REVIEW_REQUIRED",
+        ),
+    ] {
+        let (root, host) = host(vec![review_batch_task("T1", None, None)]);
+        let mut blocked = state("BLOCKED");
+        blocked["reviewDecision"] = review;
+        blocked["statusCheckRollup"] = json!([check]);
+        host.queue_pr_status([blocked]);
+
+        let error = pr_complete(&host, &complete_input(root.path(), &["T1"]))
+            .expect_err("a failed check or required review must refuse completion");
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(merge_calls(&host).is_empty());
+        assert_eq!(host.task_status("T1"), TaskStatus::Review);
+    }
+}
+
+#[test]
 fn pending_checks_with_auto_merge_disabled_time_out_in_review() {
     let (root, host) = host(vec![review_batch_task("T1", None, None)]);
     host.queue_pr_status([state("PENDING")]);
@@ -147,6 +202,13 @@ fn merge_calls(host: &PrOpenTestHost) -> Vec<Value> {
         .filter(|call| call.operation == PR_MERGE_OPERATION)
         .map(|call| call.input)
         .collect()
+}
+
+fn status_reads(host: &PrOpenTestHost) -> usize {
+    host.vcs_calls()
+        .into_iter()
+        .filter(|call| call.operation == PR_STATUS_OPERATION)
+        .count()
 }
 
 /// A PR that is already merged needs no merge request at all — completion just
