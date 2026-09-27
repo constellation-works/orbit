@@ -14,6 +14,64 @@ use super::*;
 use crate::process::InheritedFd;
 use crate::runner::{EnvironmentMode, ExecRequest, StdinMode};
 
+#[test]
+fn requested_rights_have_independent_abi_requirements() {
+    let read_only = RulesetScope::default();
+    assert!(read_only.require_abi(2).is_ok(), "ABI 2 can confine reads");
+
+    let writes = RulesetScope {
+        confine_writes: true,
+        deny_tcp: false,
+    };
+    let error = writes
+        .require_abi(2)
+        .expect_err("ABI 2 cannot confine truncate");
+    assert!(error.to_string().contains("truncate"), "{error}");
+    assert!(error.to_string().contains("ABI 3"), "{error}");
+    assert!(writes.require_abi(3).is_ok(), "ABI 3 can confine writes");
+
+    let network = RulesetScope {
+        confine_writes: false,
+        deny_tcp: true,
+    };
+    let error = network.require_abi(3).expect_err("ABI 3 cannot deny TCP");
+    assert!(error.to_string().contains("TCP"), "{error}");
+    assert!(error.to_string().contains("ABI 4"), "{error}");
+    assert!(network.require_abi(4).is_ok(), "ABI 4 can deny TCP");
+
+    let both = RulesetScope {
+        confine_writes: true,
+        deny_tcp: true,
+    };
+    let error = both.require_abi(3).expect_err("ABI 3 cannot deny TCP");
+    assert!(error.to_string().contains("ABI 4"), "{error}");
+    assert!(both.require_abi(4).is_ok());
+}
+
+#[test]
+fn plugin_boundary_rejects_abi_two_before_compiling_grants() {
+    let probe = super::super::LandlockProbeOutcome {
+        available: true,
+        abi: 2,
+        detail: "Landlock ABI 2".to_string(),
+    };
+    let boundary = super::super::LandlockBoundary::default();
+    let error = super::super::plugin_scope(&probe, &boundary)
+        .expect_err("a plugin boundary must refuse missing truncate confinement");
+    assert!(error.to_string().contains("truncate"), "{error}");
+    assert!(error.to_string().contains("ABI 3"), "{error}");
+}
+
+#[test]
+fn ruleset_creation_rechecks_write_capability_before_the_syscall() {
+    let scope = RulesetScope {
+        confine_writes: true,
+        deny_tcp: false,
+    };
+    let result = Ruleset::create(scope, 2);
+    assert!(matches!(result, Err(OrbitError::PolicyDenied(_))));
+}
+
 /// Read-only everywhere: enough for `/bin/sh` to start, and nothing else, so
 /// a ruleset that stopped being applied shows up as a write that succeeds.
 fn readable_root_ruleset() -> Ruleset {
