@@ -124,6 +124,7 @@ spec:
                     task_ids: "{{ item.task_ids }}"
                     mode: "{{ steps.resolve_ship_input.output.mode }}"
                     base_branch: "{{ steps.resolve_ship_input.output.base_branch }}"
+                    base_sync: "{{ steps.resolve_ship_input.output.base_sync }}"
                     completion: "{{ input.completion }}"
                     allowed_crews: "{{ input.allowed_crews }}"
             fan_in:
