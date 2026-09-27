@@ -188,6 +188,15 @@ impl Fixture {
         std::fs::write(&path, archive).expect("write tampered archive");
     }
 
+    /// Path of a published mirror input, including the latest-version marker.
+    pub fn mirror_input(&self, version: &str, asset: &str) -> PathBuf {
+        if asset == MIRROR_LATEST_FILE {
+            self.mirror.join(asset)
+        } else {
+            self.mirror.join(format!("v{version}")).join(asset)
+        }
+    }
+
     /// Build the update environment for this fixture.
     pub fn environment(&self) -> UpdateEnvironment {
         self.environment_with_workspace(Some(self.workspace.clone()))

@@ -17,15 +17,11 @@ use orbit_common::security::release::{
     checksum_for_asset, sha256_hex, verify_checksum_signature, verify_sha256_digest,
 };
 
-use super::source::ReleaseSource;
+use super::source::{MAX_ARCHIVE_BYTES, ReleaseSource};
 
 /// Name of the archive member every Orbit release archive must contain, and
 /// nothing else.
 const ARCHIVE_MEMBER: &str = "orbit";
-
-/// Largest release archive we will buffer. A published `orbit` archive is a
-/// few tens of megabytes; anything past this is a redirect to the wrong thing.
-const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A verified replacement executable staged beside its destination.
 #[derive(Debug)]
