@@ -5,13 +5,11 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{
-    atomic_write_text, is_readonly_or_access_error, write_text_with_parent,
-};
+use orbit_common::fs::io::{atomic_write_text, is_readonly_or_access_error};
 use orbit_common::security::release::sha256_hex;
 use serde::{Deserialize, Serialize};
 
@@ -133,7 +131,9 @@ pub(crate) struct RoutineMaterializationBinding {
 /// their content survives without keeping a removed subsystem active. A
 /// legacy directory without a manifest is migrated conservatively: exact
 /// current defaults gain provenance, while every other YAML file stays in
-/// place and produces an actionable warning.
+/// place and produces an actionable warning. Every asset path is resolved
+/// through [`resolve_confined_asset_path`] first: one that crosses a link or a
+/// wrongly typed component is reported and left untouched in both modes.
 // ADR-0346: content provenance, rather than filenames, authorizes retirement.
 pub(crate) fn reconcile_managed_assets<'a>(
     dir: &Path,
@@ -183,14 +183,36 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         })
         .unwrap_or_default();
     let mut result = ManagedAssetReconciliation::default();
+    let mut next_assets = BTreeMap::new();
 
     if let Some(previous) = &previous {
         for (name, managed_digest) in &previous.assets {
             if current_names.contains(name.as_str()) {
                 continue;
             }
-            let path = dir.join(layout.relative_path(name));
-            if !path.exists() {
+            let relative = layout.relative_path(name);
+            let path = dir.join(&relative);
+            let resolved = resolve_confined_asset_path(dir, &relative)?;
+            if let ConfinedAssetPath::Unsafe(component) = resolved {
+                // Retirement would read, delete, or move through a link to a
+                // target outside this catalog. Keep the provenance so a later
+                // pass retires the asset once the operator repairs the path.
+                next_assets.insert(name.clone(), managed_digest.clone());
+                let warning = format!(
+                    "retired managed {asset_kind} `{name}` was left in place because '{}' is linked or is not the expected file or directory type; Orbit did not read, remove, or preserve anything through it. Replace it with a regular file inside '{}' or remove the link, then rerun `orbit workspace sync`",
+                    component.display(),
+                    dir.display()
+                );
+                result.warnings.push(warning.clone());
+                result.actions.push(ManagedAssetAction {
+                    name: name.clone(),
+                    path,
+                    outcome: ManagedAssetOutcome::Preserved,
+                    detail: Some(warning),
+                });
+                continue;
+            }
+            if resolved == ConfinedAssetPath::Missing {
                 result.actions.push(ManagedAssetAction {
                     name: name.clone(),
                     path,
@@ -218,6 +240,23 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                     })?;
                 }
             } else {
+                if let Some(component) =
+                    unsafe_preservation_component(dir, asset_kind, layout, name)?
+                {
+                    next_assets.insert(name.clone(), managed_digest.clone());
+                    let warning = format!(
+                        "retired managed {asset_kind} `{name}` was locally modified, but its preservation destination '{}' is linked or is not a directory; Orbit left the file in the active catalog. Repair that path, then rerun `orbit workspace sync`",
+                        component.display()
+                    );
+                    result.warnings.push(warning.clone());
+                    result.actions.push(ManagedAssetAction {
+                        name: name.clone(),
+                        path,
+                        outcome: ManagedAssetOutcome::Preserved,
+                        detail: Some(warning),
+                    });
+                    continue;
+                }
                 let preserved = if mode == ManagedAssetReconcileMode::Apply {
                     preserve_modified_retired_asset(dir, asset_kind, layout, name, &path)?
                 } else {
@@ -250,9 +289,9 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         }
     }
 
-    let mut next_assets = BTreeMap::new();
     for (name, embedded) in files {
-        let path = dir.join(layout.relative_path(name));
+        let relative = layout.relative_path(name);
+        let path = dir.join(&relative);
         if opted_out.contains(*name) {
             result.actions.push(ManagedAssetAction {
                 name: (*name).to_string(),
@@ -266,11 +305,35 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         }
         let rendered = render(name, embedded)?;
         let rendered_digest = sha256_hex(rendered.as_bytes());
+        let previous_digest = previous
+            .as_ref()
+            .and_then(|manifest| manifest.assets.get(*name));
 
-        if path.exists() {
-            let previous_digest = previous
-                .as_ref()
-                .and_then(|manifest| manifest.assets.get(*name));
+        let resolved = resolve_confined_asset_path(dir, &relative)?;
+        if let ConfinedAssetPath::Unsafe(component) = &resolved {
+            // Writing here would create or overwrite a file outside this
+            // catalog. Leave the path alone and carry forward only the
+            // provenance already recorded: nothing new was written.
+            if let Some(previous_digest) = previous_digest {
+                next_assets.insert((*name).to_string(), previous_digest.clone());
+            }
+            let warning = format!(
+                "managed {asset_kind} `{name}` was not written because '{}' is linked or is not the expected file or directory type; Orbit left it and any link target untouched. Replace it with a regular file inside '{}' or remove the link, then rerun `orbit workspace sync`",
+                component.display(),
+                dir.display()
+            );
+            result.warnings.push(warning.clone());
+            result.actions.push(ManagedAssetAction {
+                name: (*name).to_string(),
+                path,
+                outcome: ManagedAssetOutcome::Preserved,
+                detail: Some(warning),
+            });
+            continue;
+        }
+
+        let exists = matches!(resolved, ConfinedAssetPath::File(_));
+        if exists {
             if previous_digest.is_none() {
                 let existing = fs::read_to_string(&path).map_err(|error| {
                     OrbitError::Io(format!(
@@ -325,7 +388,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                     && previous_digest != &rendered_digest
                 {
                     if mode == ManagedAssetReconcileMode::Apply {
-                        write_text_with_parent(&path, &rendered)?;
+                        write_confined_asset(&path, &rendered, true, asset_kind)?;
                     }
                     next_assets.insert((*name).to_string(), rendered_digest);
                     result.refreshed += 1;
@@ -375,7 +438,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
         }
 
         if mode == ManagedAssetReconcileMode::Apply {
-            write_text_with_parent(&path, &rendered)?;
+            write_confined_asset(&path, &rendered, exists, asset_kind)?;
         }
         next_assets.insert((*name).to_string(), rendered_digest);
         result.refreshed += 1;
@@ -496,12 +559,8 @@ pub(crate) fn retired_preservation_path(
     layout: ManagedAssetLayout,
     name: &str,
 ) -> PathBuf {
-    active_dir
-        .parent()
-        .unwrap_or(active_dir)
-        .join(".retired-managed")
-        .join(managed_asset_kind_directory(asset_kind))
-        .join(layout.relative_path(name))
+    let (base, backup_relative) = retired_preservation_root(active_dir, asset_kind);
+    base.join(backup_relative).join(layout.relative_path(name))
 }
 
 /// Persist one managed-asset manifest. Callers compare against the previous
@@ -667,6 +726,146 @@ fn validate_managed_asset_name(
     Ok(())
 }
 
+/// Where one managed path resolves beneath its catalog directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfinedAssetPath {
+    /// Every intermediate component is a real directory and the final one a
+    /// regular file.
+    File(PathBuf),
+    /// A component does not exist; every component before it is a real
+    /// directory, so creating the rest stays inside the catalog.
+    Missing,
+    /// The first component that is a symlink (dangling or not) or is not the
+    /// expected directory or regular-file type.
+    Unsafe(PathBuf),
+}
+
+/// Resolve `relative` beneath `dir` without following links, so reading,
+/// writing, or removing the result cannot act on a target outside `dir`.
+///
+/// `dir` itself is the trusted catalog root. The relative path is re-checked
+/// even when it came from a validated manifest key. Every managed-asset read,
+/// write, retirement, and doctor repair goes through this one boundary.
+pub(crate) fn resolve_confined_asset_path(
+    dir: &Path,
+    relative: &Path,
+) -> Result<ConfinedAssetPath, OrbitError> {
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "managed artifact path '{}' must remain relative to '{}'",
+            relative.display(),
+            dir.display()
+        )));
+    }
+    let mut target = dir.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        target.push(component);
+        let metadata = match fs::symlink_metadata(&target) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(ConfinedAssetPath::Missing);
+            }
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect managed artifact '{}': {error}",
+                    target.display()
+                )));
+            }
+        };
+        let expected_type = if components.peek().is_some() {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        };
+        if metadata.file_type().is_symlink() || !expected_type {
+            return Ok(ConfinedAssetPath::Unsafe(target));
+        }
+    }
+    Ok(ConfinedAssetPath::File(target))
+}
+
+/// Write one managed asset whose path [`resolve_confined_asset_path`] proved
+/// confined. An existing file is replaced by rename, which swaps the directory
+/// entry instead of writing through whatever it names; a new file is created
+/// exclusively, so a link appearing at the final component fails the write
+/// rather than redirecting it.
+fn write_confined_asset(
+    path: &Path,
+    content: &str,
+    replace_existing: bool,
+    asset_kind: &str,
+) -> Result<(), OrbitError> {
+    let written = if replace_existing {
+        atomic_write_text(path, content)
+    } else {
+        create_new_text(path, content)
+    };
+    written.map_err(|error| {
+        OrbitError::Io(format!(
+            "write managed {asset_kind} '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
+fn create_new_text(path: &Path, content: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(content.as_bytes())
+}
+
+fn retired_preservation_root(active_dir: &Path, asset_kind: &str) -> (PathBuf, PathBuf) {
+    (
+        active_dir.parent().unwrap_or(active_dir).to_path_buf(),
+        Path::new(".retired-managed").join(managed_asset_kind_directory(asset_kind)),
+    )
+}
+
+/// The first existing directory component of a retired asset's preservation
+/// destination that is a link or not a directory, if any. Components below
+/// the catalog's parent are inspected without following links, so moving a
+/// modified asset aside can never place it outside that tree.
+pub(super) fn unsafe_preservation_component(
+    active_dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    name: &str,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let (base, backup_relative) = retired_preservation_root(active_dir, asset_kind);
+    let relative = backup_relative.join(layout.relative_path(name));
+    let Some(parent) = relative.parent() else {
+        return Ok(None);
+    };
+    let mut target = base;
+    for component in parent.components() {
+        target.push(component);
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Ok(Some(target));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect retired managed asset backup '{}': {error}",
+                    target.display()
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn preserve_modified_retired_asset(
     active_dir: &Path,
     asset_kind: &str,
@@ -674,11 +873,14 @@ pub(super) fn preserve_modified_retired_asset(
     name: &str,
     source: &Path,
 ) -> Result<PathBuf, OrbitError> {
-    let backup_root = active_dir
-        .parent()
-        .unwrap_or(active_dir)
-        .join(".retired-managed")
-        .join(managed_asset_kind_directory(asset_kind));
+    if let Some(component) = unsafe_preservation_component(active_dir, asset_kind, layout, name)? {
+        return Err(OrbitError::InvalidInput(format!(
+            "refusing to preserve retired managed {asset_kind} `{name}` through '{}': it is linked or is not a directory",
+            component.display()
+        )));
+    }
+    let (base, backup_relative) = retired_preservation_root(active_dir, asset_kind);
+    let backup_root = base.join(backup_relative);
     let relative = layout.relative_path(name);
 
     let mut suffix = 0usize;
@@ -705,7 +907,8 @@ pub(super) fn preserve_modified_retired_asset(
                 .join(&relative)
                 .with_file_name(format!("{stem}.{suffix}{extension}"))
         };
-        if destination.exists() {
+        // `symlink_metadata` so a dangling link also counts as occupied.
+        if fs::symlink_metadata(&destination).is_ok() {
             suffix += 1;
             continue;
         }

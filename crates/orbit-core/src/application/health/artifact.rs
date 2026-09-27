@@ -59,8 +59,8 @@ use crate::application::auto_tasks::auto_tasks_dir;
 use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
 use crate::application::job::catalog::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{
-    MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, load_managed_asset_manifest,
-    preserve_modified_retired_asset,
+    ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout,
+    load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::DEFAULT_ROUTINE_FILES;
 use crate::application::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
@@ -409,14 +409,14 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
             continue;
         }
         let relative = kind.layout().relative_path(name);
-        let path = match resolve_removable_artifact(&catalog.dir, &relative)? {
-            RemovableArtifact::File(path) => path,
-            RemovableArtifact::Missing => {
+        let path = match resolve_confined_asset_path(&catalog.dir, &relative)? {
+            ConfinedAssetPath::File(path) => path,
+            ConfinedAssetPath::Missing => {
                 // Already gone: drop the manifest entry so the next pass is clean.
                 settled.push(name.clone());
                 continue;
             }
-            RemovableArtifact::Unsafe(path) => {
+            ConfinedAssetPath::Unsafe(path) => {
                 tracing::warn!(
                     target: "orbit.core.artifact_health",
                     artifact_kind = kind.singular(),
@@ -476,60 +476,4 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
         crate::application::managed_assets::write_managed_asset_manifest(&manifest_path, &next)?;
     }
     Ok(retired)
-}
-
-/// Resolve a managed artifact for removal, refusing anything that could act
-/// outside `dir`.
-///
-/// The relative path is re-validated even though it came from a manifest that
-/// validated it on load. Each component beneath the managed directory is
-/// inspected without following links before the artifact is read or changed.
-pub(super) enum RemovableArtifact {
-    File(PathBuf),
-    Missing,
-    Unsafe(PathBuf),
-}
-
-pub(super) fn resolve_removable_artifact(
-    dir: &Path,
-    relative: &Path,
-) -> Result<RemovableArtifact, OrbitError> {
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "managed artifact path '{}' must remain relative to '{}'",
-            relative.display(),
-            dir.display()
-        )));
-    }
-    let mut target = dir.to_path_buf();
-    let mut components = relative.components().peekable();
-    while let Some(component) = components.next() {
-        target.push(component);
-        let metadata = match std::fs::symlink_metadata(&target) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(RemovableArtifact::Missing);
-            }
-            Err(error) => {
-                return Err(OrbitError::Io(format!(
-                    "inspect managed artifact {}: {error}",
-                    target.display()
-                )));
-            }
-        };
-        let expected_type = if components.peek().is_some() {
-            metadata.is_dir()
-        } else {
-            metadata.is_file()
-        };
-        if metadata.file_type().is_symlink() || !expected_type {
-            return Ok(RemovableArtifact::Unsafe(target));
-        }
-    }
-    Ok(RemovableArtifact::File(target))
 }
