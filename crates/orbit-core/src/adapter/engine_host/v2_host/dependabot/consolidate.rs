@@ -189,10 +189,14 @@ fn plan(sources: Vec<SourceTask>) -> (Vec<Consolidation>, Vec<Value>) {
                 ));
                 continue;
             }
+            let dependencies = union_of(members.iter().map(|source| &source.dependencies))
+                .into_iter()
+                .filter(|dependency| !source_ids.contains(dependency))
+                .collect();
             consolidations.push(Consolidation {
                 repository: repository.clone(),
                 source_ids: source_ids.into_iter().collect(),
-                dependencies: union_of(members.iter().map(|source| &source.dependencies)),
+                dependencies,
                 context_files: union_of(members.iter().map(|source| &source.context_files)),
                 group,
             });
