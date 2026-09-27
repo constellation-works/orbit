@@ -785,3 +785,56 @@ fn an_agent_activity_without_the_program_is_still_refused_the_plugin_tool() {
         "{output}"
     );
 }
+
+/// A plugin program granted at enable time reaches an agent in a shipped
+/// disallow-mode activity. The fake executable keeps this independent of the
+/// runner's installed development tools.
+#[cfg(unix)]
+#[test]
+fn shipped_agent_activity_admits_granted_uv_plugin_program() {
+    use orbit_engine::RuntimeHost;
+    use orbit_engine::activity_job::load_activity_asset;
+    use orbit_types::workflow::ActivityV2Spec;
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = PluginFixture::new();
+    let uv = fixture.sources.join("uv");
+    std::fs::write(&uv, "#!/bin/sh\necho uv 1.0\n").expect("fake uv");
+    std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).expect("executable uv");
+    let uv_name = uv.to_str().expect("utf8 uv path");
+    install(
+        &fixture,
+        &DefinitionPlugin::new("graph").with_program(uv_name),
+    );
+    let runtime = fixture.reopen();
+
+    let asset = load_activity_asset(include_str!(
+        "../../../../assets/activities/agent_invoke.yaml"
+    ))
+    .expect("shipped activity loads");
+    let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+        panic!("agent_invoke is an agent activity")
+    };
+    let mut context = <OrbitRuntime as RuntimeHost>::tool_context_for_activity(
+        &runtime,
+        Some("jrun-agent"),
+        None,
+        None,
+        spec.proc_allowed_programs.as_deref(),
+    );
+    context.proc_disallowed_programs = spec.proc_disallowed_programs;
+    let output = runtime
+        .run_deterministic(
+            "plugin.tool_call",
+            &json!({ "tool": "graph.hello", "input": {} }),
+            &json!({}),
+            context,
+        )
+        .expect("granted uv passes shipped agent program policy");
+    assert!(
+        output["program_output"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("uv 1.0")),
+        "{output}"
+    );
+}

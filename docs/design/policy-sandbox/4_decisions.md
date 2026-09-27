@@ -403,6 +403,18 @@ Keep `.orbit/config.yaml` beneath the default `.orbit/**` agent-write deny. The 
 - Exact registered checkouts have a bounded recovery command; corrupt bytes remain available as local evidence.
 - Workspace identity changes remain an operator-owned initializer action rather than ordinary repository editing.
 
+## Admit ordinary development programs in shipped agent activities
+
+**Recorded:** 2026-09-27 · [ORB-13317]
+
+Shipped agent activities use `proc_disallowed_programs` for a short set of
+host elevation, remote transfer, service control, namespace, and container
+entry points. A granted plugin program such as `uv` may run unless listed.
+Custom and workspace override activities retain their existing
+`proc_allowed_programs` behavior. The complete program-policy marker is
+forwarded to nested Codex MCP sessions; a missing marker continues to select
+the legacy allowlist. The OS sandbox remains the containment boundary.
+
 ## Task References
 
 - [T20260328-221810] — subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.

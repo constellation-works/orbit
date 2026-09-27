@@ -128,10 +128,10 @@ pub(super) fn tool_context_for_activity(
         .unwrap_or_else(|_| runtime.paths().repo_root.clone());
 
     // Every context built here belongs to a v2 activity, so `proc.spawn` is
-    // always activity-scoped: a missing `proc_allowed_programs` denies every
-    // program instead of degrading to allow-all. Asset load already refuses
-    // an activity that grants `proc.spawn` without the key ([ORB-10959]);
-    // this keeps the enforcement point fail-closed on its own.
+    // always activity-scoped: a missing program policy denies every program
+    // instead of degrading to allow-all. The caller sets deny mode on this
+    // context when the activity declares `proc_disallowed_programs`; asset
+    // load refuses a `proc.spawn` grant without either policy ([ORB-10959]).
     let proc_spawn_activity_scoped = true;
     let proc_allowed_programs = proc_allowed_programs
         .map(|programs| programs.to_vec())

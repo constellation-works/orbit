@@ -38,7 +38,7 @@ pub enum ToolAllowlistError {
     #[error("wildcard allowlist entry `{entry}` did not match any registered tools")]
     WildcardRootMatchesNoTools { entry: String },
     #[error(
-        "allowlist entry `{entry}` grants `proc.spawn` but the activity omits `proc_allowed_programs`; declare the permitted programs (write `proc_allowed_programs: []` to deny every program)"
+        "allowlist entry `{entry}` grants `proc.spawn` but the activity omits a program policy; declare `proc_allowed_programs` (write `proc_allowed_programs: []` to deny every program) or `proc_disallowed_programs`"
     )]
     ProcSpawnWithoutProgramAllowlist { entry: String },
     #[error(
@@ -48,9 +48,11 @@ pub enum ToolAllowlistError {
     #[error("`tool_disallow_list` invalid: {source}")]
     DisallowList { source: Box<ToolAllowlistError> },
     #[error(
-        "`tool_disallow_list` leaves `proc.spawn` callable but the activity omits `proc_allowed_programs`; declare the permitted programs (write `proc_allowed_programs: []` to deny every program) or disallow `proc.spawn`"
+        "`tool_disallow_list` leaves `proc.spawn` callable but the activity omits a program policy; declare `proc_allowed_programs` (write `proc_allowed_programs: []` to deny every program), `proc_disallowed_programs`, or disallow `proc.spawn`"
     )]
     ProcSpawnNotDisallowedWithoutProgramAllowlist,
+    #[error("`proc_allowed_programs` and `proc_disallowed_programs` are mutually exclusive")]
+    BothProgramListsSet,
 }
 
 /// How an `agent_loop` activity bounds the Orbit tools its agent may call.
@@ -250,15 +252,18 @@ fn disallow_list_error(source: ToolAllowlistError) -> ToolAllowlistError {
     }
 }
 
-/// An activity that grants `proc.spawn` must also declare
-/// `proc_allowed_programs`. Omitting the key once meant "unconstrained", which
+/// An activity that grants `proc.spawn` must declare one program policy.
+/// Omitting the key once meant "unconstrained", which
 /// made the safer-looking asset the more permissive one: an explicit `[]`
 /// denied every program while the absent key allowed all of them. Requiring
 /// the pairing at load time keeps the control fail-closed — deny-all is
 /// something an author opts into by writing `[]`, not something they lose by
 /// forgetting a key. [ORB-10959]
 fn validate_proc_spawn_program_allowlist(spec: &AgentLoopSpec) -> Result<(), ToolAllowlistError> {
-    if spec.proc_allowed_programs.is_some() {
+    if spec.proc_allowed_programs.is_some() && spec.proc_disallowed_programs.is_some() {
+        return Err(ToolAllowlistError::BothProgramListsSet);
+    }
+    if spec.proc_allowed_programs.is_some() || spec.proc_disallowed_programs.is_some() {
         return Ok(());
     }
     if let Some(disallow_list) = &spec.tool_disallow_list {

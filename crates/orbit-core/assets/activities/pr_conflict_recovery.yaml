@@ -190,11 +190,29 @@ spec:
     - orbit.workflow.run.resume
     - orbit.workflow.run.workers
     - orbit.workflow.ship
-  proc_allowed_programs:
-    - cargo
-    - git
-    - make
-    - orbit
-    - rg
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
   on_denial: terminate
   wall_clock_timeout_seconds: 3600

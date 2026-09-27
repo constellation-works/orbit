@@ -346,8 +346,29 @@ spec:
     - orbit.friction.add
     - orbit.friction.update
     - orbit.friction.rehome
-  proc_allowed_programs:
-    - git
-    - rg
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
   on_denial: terminate
   wall_clock_timeout_seconds: 1800

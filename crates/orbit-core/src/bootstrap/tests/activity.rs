@@ -222,7 +222,8 @@ fn agent_implement_seeds_a_deny_policy_with_proc_spawn() {
     };
     assert!(policy.denies("orbit.agent.invoke"));
     assert!(!policy.denies("proc.spawn"));
-    assert!(spec.proc_allowed_programs.is_some());
+    assert!(spec.proc_disallowed_programs.is_some());
+    assert!(spec.proc_allowed_programs.is_none());
 }
 
 #[test]
@@ -549,22 +550,8 @@ fn task_pilot_is_read_only_bounded_and_uses_advisory_output() {
                     "fs.write" | "fs.patch" | "orbit.pipeline.invoke"
                 )
             }));
-            assert!(
-                spec.proc_allowed_programs
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .all(|program| matches!(program.as_str(), "git" | "rg"))
-            );
-            assert!(
-                !spec
-                    .proc_allowed_programs
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|program| program == "orbit"),
-                "proc.spawn must not bypass the scoped Orbit tool allowlist"
-            );
+            assert!(spec.proc_allowed_programs.is_none());
+            assert!(spec.proc_disallowed_programs.is_some());
         }
         _ => panic!("expected agent_loop task_pilot activity"),
     }
@@ -752,13 +739,15 @@ fn seeded_activities_include_step_failure_recovery() {
     );
     match asset.spec.spec {
         ActivityV2Spec::AgentLoop(spec) => {
-            assert!(!yaml.contains("\n  role:"));
-            assert!(!yaml.contains("\n  backend:"));
-            assert!(!yaml.contains("\n  provider:"));
-            assert_eq!(
-                spec.tools,
-                ["orbit.task.*", "orbit.friction.*", "proc.spawn"]
-            );
+            assert!(spec.tools.is_empty());
+            let policy = orbit_types::workflow::ActivityToolDenyPolicy {
+                activity: asset.name,
+                disallow_list: spec.tool_disallow_list.expect("shipped tool policy"),
+            };
+            assert!(policy.denies("orbit.workflow.ship"));
+            assert!(!policy.denies("proc.spawn"));
+            assert!(spec.proc_allowed_programs.is_none());
+            assert!(spec.proc_disallowed_programs.is_some());
             assert_eq!(spec.on_denial, orbit_types::workflow::OnDenial::Terminate);
             assert!(!spec.instruction.is_empty());
         }
@@ -792,16 +781,17 @@ fn step_failure_recovery_cannot_write_persistent_git_configuration() {
             "[ORB-12103] recovery contract must state `{stated}`"
         );
     }
-    let programs = spec.proc_allowed_programs.clone().unwrap_or_default();
+    let programs = spec.proc_disallowed_programs.clone().unwrap_or_default();
     assert!(
-        programs.iter().any(|program| program == "git"),
-        "recovery still inspects and delivers with git, so the refusal below is the boundary"
+        !programs.iter().any(|program| program == "git"),
+        "recovery still inspects and delivers with git"
     );
 
     let repo = tempdir().expect("create tempdir");
     let repo_path = repo.path().to_string_lossy().into_owned();
     run_git(repo.path(), &["init"]).expect("git init");
-    let ctx = recovery_tool_context(repo.path(), programs);
+    let mut ctx = recovery_tool_context(repo.path(), Vec::new());
+    ctx.proc_disallowed_programs = Some(programs);
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
 

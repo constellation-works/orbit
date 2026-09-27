@@ -122,7 +122,7 @@ fn spawn_request(
 /// Filesystem confinement for activity-scoped `proc.spawn`.
 ///
 /// This type is the `proc.spawn` sandbox, not a generic activity subprocess
-/// wrapper. Registered external tools share the program allowlist but stay on
+/// wrapper. Registered external tools share the program policy but stay on
 /// the unconfined `NoSandbox` path; see `crates/orbit-tools/src/external.rs`.
 ///
 /// Two layers, doing two different jobs. Explicit path arguments (including
@@ -134,7 +134,7 @@ fn spawn_request(
 /// boundary is therefore the ruleset applied to the child itself at spawn.
 ///
 /// Outside an activity-scoped context there is no resolved profile to enforce,
-/// and `proc.spawn` keeps its unconfined behavior with the program allowlist as
+/// and `proc.spawn` keeps its unconfined behavior with the program policy as
 /// the only gate.
 pub(crate) struct ActivityFsSandbox<'a> {
     scope: Option<ActivityScope<'a>>,
@@ -277,6 +277,54 @@ pub(crate) fn enforce_program_allowlist(
     tool_name: &str,
     program: &str,
 ) -> Result<(), OrbitError> {
+    if let Some(disallowed) = &ctx.proc_disallowed_programs {
+        // Check the requested basename and the physical target. This also
+        // catches an absolute-path spelling or symlink to a listed program.
+        let requested = Path::new(program);
+        let basename = requested.file_name().and_then(|name| name.to_str());
+        let resolved = if requested.components().count() > 1 {
+            std::fs::canonicalize(requested).ok()
+        } else {
+            let child_path = ctx.proc_spawn_environment.as_deref().and_then(|pairs| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| name == "PATH")
+                    .map(|(_, value)| value.as_str())
+            });
+            let path = child_path
+                .map(std::ffi::OsString::from)
+                .or_else(|| std::env::var_os("PATH"));
+            path.and_then(|path| {
+                std::env::split_paths(&path)
+                    .find_map(|dir| std::fs::canonicalize(dir.join(requested)).ok())
+            })
+        };
+        let resolved_basename = resolved
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str());
+        if disallowed.iter().any(|entry| {
+            entry == program
+                || Some(entry.as_str()) == basename
+                || resolved.as_deref() == Some(Path::new(entry))
+                || resolved.as_deref() == std::fs::canonicalize(entry).ok().as_deref()
+                || Some(entry.as_str()) == resolved_basename
+        }) {
+            tracing::warn!(
+                target: "orbit.policy.deny",
+                tool = tool_name,
+                path = program,
+                profile = "proc.disallowed_programs",
+                matched_rule = disallowed.join(", ").as_str(),
+            );
+            return Err(OrbitError::PolicyDenied(format!(
+                "program '{}' is in the activity disallow list: [{}]",
+                program,
+                disallowed.join(", ")
+            )));
+        }
+        return Ok(());
+    }
     // Enforce program allowlist when the call sits inside an activity-scoped
     // tool context, or when a legacy unrestricted context still has a
     // non-empty list. An activity-scoped call with an empty list denies every

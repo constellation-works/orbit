@@ -6,10 +6,12 @@ use std::path::Path;
 use super::runtime::test_runtime;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_engine::activity_job::load_activity_asset;
+use orbit_tools::{ToolContext, ToolRegistry};
 use orbit_types::workflow::{
     ActivityToolDenyPolicy, ActivityToolPolicyMode, ActivityV2Spec, tool_allowed,
     tools_allowed_by_disallow_list,
 };
+use serde_json::json;
 
 const AGENT_ACTIVITIES: [&str; 6] = [
     "agent_implement",
@@ -262,9 +264,10 @@ fn shipped_agent_activities_deny_control_tools_and_keep_prompt_tools_callable() 
         }
         assert!(!policy.denies("proc.spawn"), "{name} still uses proc.spawn");
         assert!(
-            spec.proc_allowed_programs.is_some(),
+            spec.proc_disallowed_programs.is_some(),
             "{name} must bound proc.spawn"
         );
+        assert!(spec.proc_allowed_programs.is_none(), "{name}");
 
         // Parse the instruction as tool-name tokens, then check each named
         // registered tool against the same policy used for dispatch. This
@@ -345,6 +348,8 @@ const LEGACY_AGENT_ACTIVITIES: [(&str, &str, &[&str]); 6] = [
 fn pre_migration_shipped_and_custom_allowlists_keep_their_effective_policy() {
     let (_root, runtime, _global_root, _workspace_root) = test_runtime();
     let registered = runtime.allowlist_known_tool_names();
+    let mut tool_registry = ToolRegistry::new();
+    tool_registry.register_builtins();
     let custom = r#"schemaVersion: 2
 kind: Activity
 metadata:
@@ -385,6 +390,36 @@ spec:
             "{name} must preserve its pre-migration allowlist"
         );
         assert!(spec.proc_allowed_programs.is_some(), "{name}");
+        assert!(spec.proc_disallowed_programs.is_none(), "{name}");
+        let document: serde_yaml::Value = serde_yaml::from_str(yaml).expect("legacy fixture yaml");
+        let old_programs = document["spec"]["proc_allowed_programs"]
+            .as_sequence()
+            .expect("legacy program list")
+            .iter()
+            .map(|entry| entry.as_str().expect("program name").to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            spec.proc_allowed_programs.as_ref(),
+            Some(&old_programs),
+            "{name}"
+        );
+        let context = ToolContext {
+            proc_allowed_programs: spec.proc_allowed_programs.clone().unwrap_or_default(),
+            proc_spawn_activity_scoped: true,
+            ..Default::default()
+        };
+        for program in ["git", "uv", "sudo"] {
+            let outcome =
+                tool_registry.execute("proc.spawn", &context, json!({"program": program}));
+            let refused_by_allowlist = outcome
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("not in the allowed list"));
+            assert_eq!(
+                refused_by_allowlist,
+                !old_programs.iter().any(|entry| entry == program),
+                "{name}: legacy program enforcement changed for {program}: {outcome:?}"
+            );
+        }
         let effective = registered
             .iter()
             .filter(|tool| tool_allowed(tool, &spec.tools))

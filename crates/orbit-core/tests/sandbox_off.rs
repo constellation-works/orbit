@@ -171,6 +171,7 @@ fn dispatch_codex(
         require_response_envelope: true,
         require_completion_envelope: true,
         proc_allowed_programs: None,
+        proc_disallowed_programs: None,
         trusted_host_execution: false,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {

@@ -130,13 +130,16 @@ pub struct AgentLoopSpec {
     /// Program allowlist enforced before `proc.spawn` executes a request.
     /// An empty `Some(vec![])` denies every program (fail-closed).
     ///
-    /// `None` is only legal for an activity that does not grant `proc.spawn`:
-    /// asset load rejects the pairing of a `proc.spawn` grant with a missing
-    /// allowlist, so an author opts into deny-all by writing `[]` rather than
-    /// getting allow-all by forgetting the key. The v2 activity tool context
-    /// treats `None` as deny-all too. [ORB-10959]
+    /// `None` is legal when `proc_disallowed_programs` is declared or the
+    /// activity does not grant `proc.spawn`. Asset load rejects a spawn grant
+    /// without either program policy. The v2 tool context treats a missing
+    /// policy as deny-all. [ORB-10959]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proc_allowed_programs: Option<Vec<String>>,
+    /// Programs refused before spawning; declaring this selects program deny
+    /// mode. Absent in legacy activity assets and persisted snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proc_disallowed_programs: Option<Vec<String>>,
     /// Run this activity's provider subprocess directly on the host, outside
     /// the executor's filesystem sandbox [ORB-11354].
     ///

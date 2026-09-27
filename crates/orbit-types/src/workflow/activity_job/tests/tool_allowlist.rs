@@ -184,6 +184,7 @@ fn agent_loop_activity(
             require_response_envelope: false,
             require_completion_envelope: true,
             proc_allowed_programs,
+            proc_disallowed_programs: None,
             trusted_host_execution: false,
             tool_disallow_list: None,
         }),

@@ -66,6 +66,59 @@ use crate::context::RuntimeHost;
 /// `ORBIT_ACTIVITY_TOOLS` as unrestricted.
 const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
 
+/// Last pre-migration shipped program lists. An older MCP server understands
+/// only `ORBIT_PROC_ALLOWED_PROGRAMS`, so these preserve the old bound while
+/// a new orchestrator and an old server coexist. Custom deny-mode activities
+/// have no old behavior to preserve and fail closed in that window.
+fn legacy_program_allowlist_for_mcp(activity: &str, disallowed: &[String]) -> Option<&'static str> {
+    const SHIPPED_DISALLOWED: &[&str] = &[
+        "sudo",
+        "su",
+        "doas",
+        "pkexec",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "nc",
+        "ncat",
+        "netcat",
+        "socat",
+        "systemctl",
+        "loginctl",
+        "shutdown",
+        "reboot",
+        "mount",
+        "umount",
+        "chroot",
+        "nsenter",
+        "unshare",
+        "docker",
+        "podman",
+    ];
+    if !disallowed
+        .iter()
+        .map(String::as_str)
+        .eq(SHIPPED_DISALLOWED.iter().copied())
+    {
+        return None;
+    }
+    match activity {
+        "agent_implement" | "agent_review_repair" => Some(concat!(
+            "git,make,rg,orbit,bash,sh,cat,ls,find,sed,awk,grep,jq,",
+            "cargo,rustc,rustfmt,node,npm,npx,pnpm,yarn,bun,deno,",
+            "python,python3,uv,poetry,pytest,ruff,mypy,go,gofmt,",
+            "java,javac,mvn,gradle,dotnet,cc,c++,clang,clang++,gcc,g++,",
+            "cmake,ctest,ninja,swift,ruby,bundle,rake"
+        )),
+        "agent_invoke" => Some("awk,bash,cargo,cat,find,git,grep,jq,ls,make,ps,python3,rg,sed,sh"),
+        "pr_conflict_recovery" => Some("cargo,git,make,orbit,rg"),
+        "step_failure_recovery" => Some("git,gh,orbit,rg"),
+        "task_pilot" => Some("git,rg"),
+        _ => None,
+    }
+}
+
 /// The activity tool policy envelope for one managed agent.
 ///
 /// Allowlist mode stamps only `ORBIT_ACTIVITY_TOOLS`, byte-for-byte what it
@@ -192,6 +245,7 @@ pub fn run_cli_backend(
         None,
         spec.proc_allowed_programs.as_deref(),
     );
+    tool_ctx.proc_disallowed_programs = spec.proc_disallowed_programs.clone();
     tool_ctx.agent_name = Some(provider.clone());
     tool_ctx.model_name = spec.model.as_deref().map(str::to_string);
     // A shipment pipeline renders the assigned checkout twice: once as the
@@ -441,6 +495,22 @@ pub fn run_cli_backend(
     if let Some(programs) = spec.proc_allowed_programs.as_deref() {
         dispatch_env.push((
             "ORBIT_PROC_ALLOWED_PROGRAMS".to_string(),
+            programs.join(","),
+        ));
+    }
+    if let Some(programs) = spec.proc_disallowed_programs.as_deref() {
+        // An older nested MCP server ignores the deny marker and still reads
+        // only this allowlist. Preserve each shipped activity's last legacy
+        // bound during a mixed-version deploy; a new server uses deny mode.
+        dispatch_env.push((
+            "ORBIT_PROC_ALLOWED_PROGRAMS".to_string(),
+            legacy_program_allowlist_for_mcp(activity_name, programs)
+                .unwrap_or_default()
+                .to_string(),
+        ));
+        dispatch_env.push(("ORBIT_PROC_PROGRAM_POLICY".to_string(), "deny".to_string()));
+        dispatch_env.push((
+            "ORBIT_PROC_DISALLOWED_PROGRAMS".to_string(),
             programs.join(","),
         ));
     }

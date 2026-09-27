@@ -30,7 +30,7 @@ use super::audit::{
 use super::callback::{
     enforce_plugin_callback_allowlist, enforce_plugin_callback_allowlist_from_root,
     read_activity_tool_policy_from_env, read_proc_allowed_programs_from_env,
-    take_callback_plugin_provenance,
+    read_proc_disallowed_programs_from_env, take_callback_plugin_provenance,
 };
 
 /// Where a tool invocation arrived from. Captured in the audit row so a single
@@ -316,6 +316,11 @@ impl OrbitRuntime {
                 } else {
                     Vec::new()
                 };
+                let proc_disallowed_programs = if trusted_env {
+                    read_proc_disallowed_programs_from_env()
+                } else {
+                    None
+                };
                 let proc_spawn_activity_scoped = managed_run_context();
                 let proc_spawn_environment =
                     Some(self.execution_env_policy().agent_subprocess_env(&[]));
@@ -331,6 +336,7 @@ impl OrbitRuntime {
                     model_name,
                     workspace_root: None,
                     proc_allowed_programs,
+                    proc_disallowed_programs,
                     proc_spawn_environment,
                     proc_spawn_activity_scoped,
                     reservation_owner: reservation_owner_from_env(),
