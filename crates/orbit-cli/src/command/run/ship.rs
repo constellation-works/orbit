@@ -129,9 +129,9 @@ impl Execute for ShipCommand {
 /// Resolve the effective ship mode for a `ship` invocation.
 ///
 /// An explicit `--mode` wins. Otherwise the mode is resolved from the current
-/// workspace's registry entry (matched by `orbit_dir`): explicit `ship_mode`,
-/// else the `pr` default. If the current workspace isn't found in the registry,
-/// fall back to `pr` so omitted configuration still uses reviewable delivery.
+/// workspace binding. Standalone runtimes without a binding may use a single
+/// unambiguous registry checkout for their data root. If no workspace can be
+/// identified, fall back to `pr` so omitted configuration uses reviewable delivery.
 pub(crate) fn resolve_ship_mode(
     args: &ShipCommand,
     runtime: &OrbitRuntime,
@@ -139,14 +139,19 @@ pub(crate) fn resolve_ship_mode(
     if let Some(mode) = args.mode {
         return Ok(mode.to_core());
     }
+    if let Some(binding) = runtime.workspace_runtime_binding() {
+        return Ok(binding.ship_mode);
+    }
     let registry_path =
         orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
     let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
     let orbit_dir = runtime.shared_root();
-    let mode = registry
+    let mut checkouts = registry
         .checkouts
         .iter()
-        .find(|checkout| checkout.orbit_dir == orbit_dir)
+        .filter(|checkout| checkout.orbit_dir == orbit_dir);
+    let checkout = checkouts.next().filter(|_| checkouts.next().is_none());
+    let mode = checkout
         .and_then(|checkout| {
             registry
                 .workspaces
