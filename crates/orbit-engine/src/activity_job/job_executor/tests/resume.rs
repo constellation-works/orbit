@@ -5,17 +5,21 @@
 //! `execute_job_with_resume` skips checkpointed steps while feeding their
 //! recorded outputs into the pipeline for later steps.
 
+use std::collections::BTreeMap;
 use std::sync::Mutex as StdMutex;
 
 use orbit_types::workflow::{JobRunState, PipelineState};
 
 use super::*;
 
+/// One `checkpoint_step` call: step index, step id, output, compound outputs.
+type Checkpoint = (u32, String, Value, BTreeMap<String, Value>);
+
 /// Host wrapper that records `checkpoint_step` calls (and can inject
 /// checkpoint failures) while delegating dispatch to a `ScriptedHost`.
 struct CheckpointHost {
     inner: ScriptedHost,
-    checkpoints: StdMutex<Vec<(u32, String, Value)>>,
+    checkpoints: StdMutex<Vec<Checkpoint>>,
     inputs: StdMutex<Vec<(String, Value)>>,
     fail_checkpoints: bool,
 }
@@ -37,8 +41,30 @@ impl CheckpointHost {
         }
     }
 
-    fn checkpoints(&self) -> Vec<(u32, String, Value)> {
+    fn checkpoints(&self) -> Vec<Checkpoint> {
         self.checkpoints.lock().expect("checkpoints").clone()
+    }
+
+    /// The run state a resume of this host's run starts from: `source` (the
+    /// state this run was itself seeded with, if any) plus every checkpoint
+    /// this run wrote, recorded the way orbit-core's host records them.
+    fn resume_state(&self, source: Option<&PipelineState>) -> PipelineState {
+        let mut state = source.cloned().unwrap_or_else(|| {
+            PipelineState::new(
+                "jrun-source".to_string(),
+                "qa_resume".to_string(),
+                Value::Object(Default::default()),
+            )
+        });
+        for (index, step_id, output, compound) in self.checkpoints() {
+            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+            state.record_compound_outputs(index, compound.clone());
+            for (key, value) in compound {
+                state.record_pipeline_output(&key, value);
+            }
+            state.record_pipeline_output(&step_id, output);
+        }
+        state
     }
 
     fn inputs_for(&self, action: &str) -> Vec<Value> {
@@ -93,6 +119,7 @@ impl RuntimeHost for CheckpointHost {
         step_index: u32,
         step_id: &str,
         output: &Value,
+        compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
         if self.fail_checkpoints {
             return Err(DispatchError::JobExecution(
@@ -103,6 +130,7 @@ impl RuntimeHost for CheckpointHost {
             step_index,
             step_id.to_string(),
             output.clone(),
+            compound_outputs.clone(),
         ));
         Ok(())
     }
@@ -436,11 +464,7 @@ fn resume_starts_at_the_failed_push_and_reuses_checkpoints_idempotently() {
 
     // The resumed run's own checkpoints resume again without re-pushing —
     // what a worker restart (or a second resume) does.
-    let mut second = resume.clone();
-    for (index, step_id, output) in host.checkpoints() {
-        second.record_step(index, JobRunState::Success, Some(output.clone()), None);
-        second.record_pipeline_output(&step_id, output);
-    }
+    let second = host.resume_state(Some(&resume));
     let replay_host = CheckpointHost::new(scripted());
     let replayed = execute_job_with_resume(
         &delivery_job(),
@@ -549,5 +573,289 @@ fn resume_ignores_non_success_step_states() {
         host.inner.call_count("a0"),
         1,
         "failed step must re-execute on resume"
+    );
+}
+
+/// A target step whose input renders `refs` (name → template).
+fn reading_step(id: &str, action: &str, refs: &[(&str, &str)]) -> JobV2Step {
+    let mut step = target_step(id, action);
+    let JobV2StepBody::Target(target) = &mut step.body else {
+        panic!("target step");
+    };
+    target.default_input = Some(Value::Object(
+        refs.iter()
+            .map(|(name, template)| ((*name).to_string(), json!(template)))
+            .collect(),
+    ));
+    step
+}
+
+/// What a reading step was handed, without the per-run `run_id` injection.
+fn rendered_refs(host: &CheckpointHost, action: &str) -> Vec<Value> {
+    host.inputs_for(action)
+        .into_iter()
+        .map(|mut input| {
+            if let Value::Object(map) = &mut input {
+                map.remove("run_id");
+                map.remove("step_id");
+            }
+            input
+        })
+        .collect()
+}
+
+fn transient(action: &str) -> Action {
+    Action::Err(DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message: "transient".to_string(),
+    })
+}
+
+/// Run `job` three times: `consume` fails in the first run, `finish` fails
+/// in the first resume, and the second resume completes. `scripted` builds
+/// each attempt's host from the `consume` and `finish` outcomes. Returns the
+/// three hosts so a test can compare what each attempt rendered and re-ran.
+fn run_through_two_resumes(
+    job: &JobV2,
+    input: Value,
+    scripted: impl Fn(Action, Action) -> ScriptedHost,
+) -> [CheckpointHost; 3] {
+    let host_for = |consume, finish| CheckpointHost::new(scripted(consume, finish));
+
+    let first = host_for(transient("consume"), Action::Ok(json!({"unreached": true})));
+    let failed = execute_job_with_resume(
+        job,
+        input.clone(),
+        "jrun-compound-0",
+        std::sync::Arc::new(test_writer("jrun-compound-0")),
+        &first,
+        None,
+    );
+    assert!(failed.is_err(), "the downstream step fails the first run");
+
+    let first_state = first.resume_state(None);
+    let second = host_for(Action::Ok(json!({"consumed": true})), transient("finish"));
+    let failed = execute_job_with_resume(
+        job,
+        input.clone(),
+        "jrun-compound-1",
+        std::sync::Arc::new(test_writer("jrun-compound-1")),
+        &second,
+        Some(&first_state),
+    );
+    assert!(failed.is_err(), "the last step fails the first resume");
+
+    let second_state = second.resume_state(Some(&first_state));
+    let third = host_for(
+        Action::Ok(json!({"unreached": true})),
+        Action::Ok(json!({"finished": true})),
+    );
+    let outcome = execute_job_with_resume(
+        job,
+        input,
+        "jrun-compound-2",
+        std::sync::Arc::new(test_writer("jrun-compound-2")),
+        &third,
+        Some(&second_state),
+    )
+    .expect("the second resume completes");
+    assert!(outcome.success);
+    [first, second, third]
+}
+
+/// [ORB-13420] A fan-out's `collect` alias survives a failed downstream step
+/// and two resumes with its typed value — including an empty collection —
+/// and the completed workers never run again.
+#[test]
+fn resume_restores_fan_in_alias_without_rerunning_workers() {
+    let refs = [("results", "{{ steps.results.output }}")];
+    let job = job_with_steps(vec![
+        fanout_step(
+            "workers",
+            "{{ input.items }}",
+            2,
+            target_step("worker", "w"),
+            JoinMode::All,
+            Some("results"),
+        ),
+        reading_step("consume", "consume", &refs),
+        reading_step("finish", "finish", &refs),
+    ]);
+
+    for (items, expected) in [
+        (json!([1, 2]), json!([{"n": 1}, {"n": 2}])),
+        (json!([]), json!([])),
+    ] {
+        let hosts = run_through_two_resumes(&job, json!({"items": items}), |consume, finish| {
+            ScriptedHost::new([
+                (
+                    "w",
+                    vec![Action::Ok(json!({"n": 1})), Action::Ok(json!({"n": 2}))],
+                ),
+                ("consume", vec![consume]),
+                ("finish", vec![finish]),
+            ])
+        });
+        let [first, second, third] = &hosts;
+
+        let uninterrupted = rendered_refs(first, "consume");
+        assert_eq!(uninterrupted, vec![json!({"results": expected})]);
+        assert_eq!(
+            rendered_refs(second, "consume"),
+            uninterrupted,
+            "the first resume renders the alias exactly as the source run did",
+        );
+        assert_eq!(
+            rendered_refs(third, "finish"),
+            uninterrupted,
+            "a second resume still restores the alias",
+        );
+        assert_eq!(second.inner.call_count("w"), 0, "workers are not rerun");
+        assert_eq!(third.inner.call_count("w"), 0, "workers are not rerun");
+        assert_eq!(third.inner.call_count("consume"), 0);
+        assert!(
+            first.checkpoints()[0].3.is_empty(),
+            "a top-level alias is derived from the checkpointed output, not stored twice",
+        );
+    }
+}
+
+/// [ORB-13420] Parallel-branch and loop-body outputs a downstream step reads
+/// render identically in the uninterrupted run and after each resume, and
+/// neither container re-executes once it completed.
+#[test]
+fn resume_restores_parallel_child_and_loop_body_outputs() {
+    let refs = [
+        ("left", "{{ steps.left.output }}"),
+        ("right", "{{ steps.right.output.side }}"),
+        ("body", "{{ steps.body.output }}"),
+        ("branches", "{{ steps.par.output }}"),
+        ("iterations", "{{ steps.lp.output.iterations }}"),
+    ];
+    let job = job_with_steps(vec![
+        parallel_step(
+            "par",
+            JoinMode::All,
+            vec![target_step("left", "l"), target_step("right", "r")],
+        ),
+        loop_step("lp", None, 2, None, vec![target_step("body", "b")]),
+        reading_step("consume", "consume", &refs),
+        reading_step("finish", "finish", &refs),
+    ]);
+
+    let hosts = run_through_two_resumes(&job, Value::Null, |consume, finish| {
+        ScriptedHost::new([
+            ("l", vec![Action::Ok(json!({"side": "left"}))]),
+            ("r", vec![Action::Ok(json!({"side": "right"}))]),
+            (
+                "b",
+                vec![Action::Ok(json!({"i": 0})), Action::Ok(json!({"i": 1}))],
+            ),
+            ("consume", vec![consume]),
+            ("finish", vec![finish]),
+        ])
+    });
+    let [first, second, third] = &hosts;
+
+    let uninterrupted = rendered_refs(first, "consume");
+    assert_eq!(uninterrupted.len(), 1);
+    assert_eq!(uninterrupted[0]["left"], json!({"side": "left"}));
+    assert_eq!(uninterrupted[0]["right"], json!("right"));
+    assert_eq!(
+        uninterrupted[0]["body"],
+        json!({"i": 1}),
+        "the last iteration's body output is what later steps read",
+    );
+    assert_eq!(rendered_refs(second, "consume"), uninterrupted);
+    assert_eq!(rendered_refs(third, "finish"), uninterrupted);
+    for action in ["l", "r", "b"] {
+        assert_eq!(second.inner.call_count(action), 0, "`{action}` reran");
+        assert_eq!(third.inner.call_count(action), 0, "`{action}` reran");
+    }
+}
+
+/// [ORB-13420] A compound step that fails is never checkpointed, so nothing
+/// it wrote before failing can be restored.
+#[test]
+fn failed_compound_step_checkpoints_nothing() {
+    let host = CheckpointHost::new(ScriptedHost::new([
+        ("l", vec![Action::Ok(json!({"side": "left"}))]),
+        ("r", vec![transient("r")]),
+    ]));
+    let job = job_with_steps(vec![parallel_step(
+        "par",
+        JoinMode::All,
+        vec![target_step("left", "l"), target_step("right", "r")],
+    )]);
+
+    let result = execute_job_with_resume(
+        &job,
+        Value::Null,
+        "jrun-compound-failed",
+        std::sync::Arc::new(test_writer("jrun-compound-failed")),
+        &host,
+        None,
+    );
+
+    assert!(result.is_err(), "an `all` join with a failed branch fails");
+    assert!(host.checkpoints().is_empty());
+}
+
+/// [ORB-13420] Compound outputs recorded against a step that did not
+/// complete — failed, or with no recorded state at all — seed nothing.
+#[test]
+fn resume_seed_ignores_compound_outputs_of_incomplete_steps() {
+    let job = job_with_steps(vec![
+        parallel_step("failed", JoinMode::All, vec![target_step("a", "a")]),
+        loop_step("pending", None, 1, None, vec![target_step("b", "b")]),
+    ]);
+    let mut resume = PipelineState::new(
+        "jrun-source".to_string(),
+        "qa_resume".to_string(),
+        Value::Object(Default::default()),
+    );
+    resume.record_step(0, JobRunState::Failed, Some(json!([])), None);
+    resume.record_compound_outputs(0, BTreeMap::from([("a".to_string(), json!("stale"))]));
+    resume.record_compound_outputs(1, BTreeMap::from([("b".to_string(), json!("stale"))]));
+
+    assert!(seed_pipeline_from_resume(&job, Some(&resume)).is_empty());
+}
+
+/// [ORB-13420] A checkpoint written before `compound_outputs` existed still
+/// resumes: the step's own output is restored, a top-level fan-in alias is
+/// derived from it, and nested outputs it never recorded stay absent.
+#[test]
+fn legacy_compound_checkpoint_restores_output_and_fan_in_alias() {
+    let job = job_with_steps(vec![
+        fanout_step(
+            "workers",
+            "{{ input.items }}",
+            1,
+            target_step("worker", "w"),
+            JoinMode::All,
+            Some("results"),
+        ),
+        parallel_step("par", JoinMode::All, vec![target_step("left", "l")]),
+    ]);
+    let resume = resume_state_with_completed_steps(&[
+        (0, "workers", json!([])),
+        (
+            1,
+            "par",
+            json!([{"branch_id": "left", "outcome": "success"}]),
+        ),
+    ]);
+    assert!(resume.compound_outputs.is_empty());
+
+    assert_eq!(
+        seed_pipeline_from_resume(&job, Some(&resume)),
+        HashMap::from([
+            ("workers".to_string(), json!([])),
+            ("results".to_string(), json!([])),
+            (
+                "par".to_string(),
+                json!([{"branch_id": "left", "outcome": "success"}])
+            ),
+        ]),
     );
 }

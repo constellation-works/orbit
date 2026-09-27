@@ -19,7 +19,7 @@ use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState, PipelineState};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -825,22 +825,29 @@ pub trait RuntimeHost: Send + Sync {
     }
 
     /// Persist a durable checkpoint after a completed top-level job step
-    /// (ORB-10002). `output` is the completing step's own raw output — the
-    /// whole payload; the host accumulates outputs by `step_id`, so the
-    /// bytes handed over per checkpoint never grow with the run.
+    /// (ORB-10002). `output` is the completing step's own raw output;
+    /// `compound_outputs` holds the other pipeline entries a compound step
+    /// (`parallel:`, `fan_out:`, `loop:`) exposed — nested step outputs and
+    /// nested fan-in aliases — and is empty for a target step. The host
+    /// accumulates by step, so the bytes handed over per checkpoint never
+    /// grow with the run.
     ///
     /// Hosts with run persistence (orbit-core) record this into the run's
-    /// `PipelineState` (`step_outputs[step_index]`, `pipeline[step_id]`) so
-    /// an interrupted run can be resumed without re-executing completed
-    /// steps. The default is a no-op for hosts without run storage (tests,
-    /// smoke examples). Checkpoint failures are non-fatal to the run: the
-    /// executor logs and continues.
+    /// `PipelineState` (`step_outputs[step_index]`,
+    /// `compound_outputs[step_index]`, and `pipeline` by key) so an
+    /// interrupted run can be resumed without re-executing completed steps.
+    /// Both halves belong to one write: a step recorded as completed without
+    /// its compound outputs would resume with those entries missing. The
+    /// default is a no-op for hosts without run storage (tests, smoke
+    /// examples). Checkpoint failures are non-fatal to the run: the executor
+    /// logs and continues.
     fn checkpoint_step(
         &self,
         _run_id: &str,
         _step_index: u32,
         _step_id: &str,
         _output: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
         Ok(())
     }

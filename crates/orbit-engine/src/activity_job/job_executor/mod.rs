@@ -18,7 +18,7 @@
 // Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
 #![allow(clippy::expect_used)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -123,7 +123,9 @@ pub fn resolve_job_catalog_refs_for_execution(
 /// event is emitted) and their recorded outputs are pre-seeded into the
 /// pipeline map so later steps see them through `{{ steps.<id>.output.* }}`
 /// templates. Checkpoint granularity is the top-level step: `parallel:` /
-/// `fan_out:` / `loop:` blocks re-run as a whole if they did not complete.
+/// `fan_out:` / `loop:` blocks re-run as a whole if they did not complete,
+/// and a completed one restores every pipeline entry it exposed (nested
+/// step outputs and fan-in aliases), not only its own output.
 /// In-memory agent sessions are not restorable across processes, so resumed
 /// steps that share a session start it fresh.
 pub fn execute_job_with_resume(
@@ -197,6 +199,9 @@ pub fn execute_job_with_resume(
             );
             continue;
         }
+        // Compound steps write nested entries into the shared pipeline; the
+        // pre-step map is what tells them apart from earlier steps' entries.
+        let pipeline_before = step_is_compound(step).then(|| ctx.pipeline_snapshot());
         let mut outcome = match run_step(step, &ctx) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -223,7 +228,16 @@ pub fn execute_job_with_resume(
             refresh.annotate_output(&mut outcome.output)?;
             record_pipeline(&ctx, &step.id, outcome.output.clone());
         }
-        checkpoint_completed_step(&ctx, step_index, &step.id, &outcome.output);
+        let compound_outputs = pipeline_before
+            .map(|before| compound_outputs_since(&ctx, step, &before))
+            .unwrap_or_default();
+        checkpoint_completed_step(
+            &ctx,
+            step_index,
+            &step.id,
+            &outcome.output,
+            &compound_outputs,
+        );
     }
 
     Ok(JobOutcome {
@@ -239,6 +253,12 @@ pub fn execute_job_with_resume(
 
 /// [ORB-10002] Seed the executor pipeline map from successful checkpoints so
 /// skipped steps' outputs stay visible without exposing failed/timed-out data.
+///
+/// Per completed step, in step order (so a later step's write wins, as it
+/// did in the source run): its own output, a top-level fan-in `collect`
+/// alias (always the same value as that output, so it is derived rather
+/// than stored), then the nested entries in `compound_outputs`. Checkpoints
+/// recorded before `compound_outputs` existed restore the first two only.
 fn seed_pipeline_from_resume(
     job: &JobV2,
     resume: Option<&PipelineState>,
@@ -247,20 +267,66 @@ fn seed_pipeline_from_resume(
         return HashMap::new();
     };
 
-    job.steps
+    let mut seeded = HashMap::new();
+    for (index, step) in job.steps.iter().enumerate() {
+        let step_index = index as u32;
+        if state.step_states.get(&step_index) != Some(&JobRunState::Success) {
+            continue;
+        }
+        let Some(output) = state.step_outputs.get(&step_index) else {
+            continue;
+        };
+        if let Some(alias) = fan_in_alias(step) {
+            seeded.insert(alias.to_string(), output.clone());
+        }
+        seeded.insert(step.id.clone(), output.clone());
+        if let Some(nested) = state.compound_outputs.get(&step_index) {
+            seeded.extend(
+                nested
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+    }
+    seeded
+}
+
+fn step_is_compound(step: &JobV2Step) -> bool {
+    matches!(
+        step.body,
+        JobV2StepBody::Parallel { .. } | JobV2StepBody::FanOut { .. } | JobV2StepBody::Loop { .. }
+    )
+}
+
+/// The `collect` alias a fan-out step records next to its own id.
+fn fan_in_alias(step: &JobV2Step) -> Option<&str> {
+    match &step.body {
+        JobV2StepBody::FanOut { fan_in, .. } => fan_in.collect.as_deref(),
+        _ => None,
+    }
+}
+
+/// Pipeline entries a completed compound step wrote besides its own output:
+/// every key whose value differs from the pre-step map. The step's own id
+/// and a top-level fan-in alias are excluded — the checkpoint output already
+/// carries both. A rewrite with an unchanged value is omitted, which resumes
+/// identically because the earlier writer's checkpoint restores that value.
+///
+/// A failed branch tolerated by a successful `any` / `quorum` parallel join
+/// keeps whatever it recorded, exactly as the uninterrupted run exposed it:
+/// the resumed pipeline mirrors what downstream steps saw, not a filtered
+/// view. (Fan-out workers write into their own map and never reach this one.)
+fn compound_outputs_since(
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    before: &PipelineSteps,
+) -> BTreeMap<String, Value> {
+    let alias = fan_in_alias(step);
+    ctx.pipeline_snapshot()
         .iter()
-        .enumerate()
-        .filter_map(|(index, step)| {
-            let step_index = index as u32;
-            if state.step_states.get(&step_index) != Some(&JobRunState::Success) {
-                return None;
-            }
-            state
-                .step_outputs
-                .get(&step_index)
-                .cloned()
-                .map(|output| (step.id.clone(), output))
-        })
+        .filter(|(key, _)| key.as_str() != step.id && Some(key.as_str()) != alias)
+        .filter(|(key, value)| before.get(key.as_str()) != Some(*value))
+        .map(|(key, value)| (key.clone(), unwrap_step_output(value)))
         .collect()
 }
 
@@ -271,14 +337,20 @@ fn step_completed_in_resume(resume: Option<&PipelineState>, step_index: u32) -> 
 }
 
 /// [ORB-10002] Persist a checkpoint for a completed top-level step through
-/// the host. The payload is this step's output alone; the host accumulates
-/// outputs by step id, so persisted bytes per checkpoint stay O(step output).
-/// Non-fatal: a checkpoint write failure degrades resumability but must
-/// never fail an otherwise-successful run.
-fn checkpoint_completed_step(ctx: &ExecCtx<'_>, step_index: u32, step_id: &str, output: &Value) {
-    if let Err(error) = ctx
-        .host
-        .checkpoint_step(&ctx.run_id, step_index, step_id, output)
+/// the host. The payload is what this step exposed — its output plus any
+/// compound entries; the host accumulates by step, so persisted bytes per
+/// checkpoint stay O(step output). Non-fatal: a checkpoint write failure
+/// degrades resumability but must never fail an otherwise-successful run.
+fn checkpoint_completed_step(
+    ctx: &ExecCtx<'_>,
+    step_index: u32,
+    step_id: &str,
+    output: &Value,
+    compound_outputs: &BTreeMap<String, Value>,
+) {
+    if let Err(error) =
+        ctx.host
+            .checkpoint_step(&ctx.run_id, step_index, step_id, output, compound_outputs)
     {
         tracing::warn!(
             target: "orbit.engine.job_executor",

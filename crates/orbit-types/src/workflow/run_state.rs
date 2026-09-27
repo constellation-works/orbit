@@ -81,6 +81,15 @@ pub struct PipelineState {
     /// These are used to rebuild `steps.*` template context during recovery.
     #[serde(default)]
     pub step_outputs: BTreeMap<u32, Value>,
+    /// Pipeline entries a completed compound step (`parallel:`, `fan_out:`,
+    /// `loop:`) exposed besides its own output — nested step outputs and
+    /// nested fan-in `collect` aliases — keyed by global step index, then by
+    /// pipeline key. Resume restores them alongside `step_outputs` so later
+    /// steps see the same `steps.*` entries as an uninterrupted run. Absent
+    /// in checkpoints recorded before this field existed; those restore only
+    /// the step's own output (and a top-level fan-in alias, which equals it).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub compound_outputs: BTreeMap<u32, BTreeMap<String, Value>>,
     /// Per-step pipeline patches keyed by global step index.
     /// Successful steps merge these patches into `pipeline`.
     #[serde(default)]
@@ -159,6 +168,7 @@ impl PipelineState {
             pipeline: initial_input.clone(),
             initial_input,
             step_outputs: BTreeMap::new(),
+            compound_outputs: BTreeMap::new(),
             pipeline_patches: BTreeMap::new(),
             step_states: BTreeMap::new(),
             next_step_index: 0,
@@ -282,6 +292,18 @@ impl PipelineState {
             self.previous_step_state = Some(step_state);
         }
         self.next_step_index = step_index.saturating_add(1);
+        self.updated_at = Utc::now();
+    }
+
+    /// Replace the nested pipeline entries recorded for `step_index`; an
+    /// empty map clears them so a re-checkpointed step never keeps entries
+    /// from an earlier attempt.
+    pub fn record_compound_outputs(&mut self, step_index: u32, outputs: BTreeMap<String, Value>) {
+        if outputs.is_empty() {
+            self.compound_outputs.remove(&step_index);
+        } else {
+            self.compound_outputs.insert(step_index, outputs);
+        }
         self.updated_at = Utc::now();
     }
 

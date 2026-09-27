@@ -86,7 +86,7 @@ pub(super) fn wrap_step_output(raw: Value) -> Value {
 }
 
 /// Inverse of [`wrap_step_output`]: the raw output a step recorded.
-fn unwrap_step_output(wrapped: &Value) -> Value {
+pub(super) fn unwrap_step_output(wrapped: &Value) -> Value {
     wrapped.get("output").cloned().unwrap_or(Value::Null)
 }
 
