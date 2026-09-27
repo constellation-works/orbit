@@ -558,6 +558,31 @@ fn tar_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
     builder.into_inner().expect("finish tar")
 }
 
+fn append_sparse(builder: &mut tar::Builder<Vec<u8>>, name: &str, logical_size: u64) {
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::GNUSparse);
+    header.set_size(0);
+    header.set_mode(0o644);
+    header.set_path(name).expect("set sparse path");
+    let gnu = header.as_gnu_mut().expect("gnu header");
+    gnu.set_real_size(logical_size);
+    // A zero-length data block at the end describes one hole spanning the
+    // whole file. No fixture payload or filesystem hole detection is needed.
+    gnu.sparse[0].set_offset(logical_size);
+    gnu.sparse[0].set_length(0);
+    header.set_cksum();
+    builder
+        .append(&header, &[] as &[u8])
+        .expect("append sparse entry");
+}
+
+fn sparse_tar(logical_size: u64) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    append_regular(&mut builder, MANIFEST_FILE_NAME, MANIFEST.as_bytes());
+    append_sparse(&mut builder, "sparse", logical_size);
+    builder.into_inner().expect("finish sparse tar")
+}
+
 #[test]
 fn a_tar_member_that_traverses_out_of_the_root_is_refused() {
     // `tar`'s own `unpack_in` silently *skips* such a member and reports
@@ -619,6 +644,83 @@ fn a_tar_that_unpacks_past_the_size_bound_is_refused() {
     assert!(
         error.contains("more than 512 bytes"),
         "the refusal must name the bound: {error}"
+    );
+}
+
+#[test]
+fn a_sparse_tar_member_past_the_size_bound_is_refused_before_file_creation() {
+    let archive = sparse_tar(8192);
+    assert!(archive.len() < 4096, "the tar stream must fit the bound");
+    let dest = tempfile::tempdir().expect("tempdir");
+    let error = unpack_tar(
+        archive.as_slice(),
+        dest.path(),
+        "sparse.tar",
+        ArchiveLimits {
+            unpacked_bytes: 4096,
+            ..ArchiveLimits::DEFAULT
+        },
+    )
+    .expect_err("sparse output beyond the bound must be refused")
+    .to_string();
+    assert!(error.contains("more than 4096 bytes"), "{error}");
+    assert!(
+        !dest.path().join("sparse").exists(),
+        "the oversized sparse member must be refused before it is created"
+    );
+}
+
+#[test]
+fn a_sparse_tar_member_within_the_size_bound_is_extracted() {
+    let archive = sparse_tar(2048);
+    let dest = unpack_tar_bytes(
+        &archive,
+        ArchiveLimits {
+            unpacked_bytes: 4096,
+            ..ArchiveLimits::DEFAULT
+        },
+    )
+    .expect("bounded sparse tar extracts");
+    assert_eq!(
+        std::fs::metadata(dest.path().join("sparse"))
+            .expect("sparse file metadata")
+            .len(),
+        2048
+    );
+}
+
+#[test]
+fn ordinary_archive_formats_extract_files_within_the_size_bound() {
+    let limits = ArchiveLimits {
+        unpacked_bytes: 4096,
+        ..ArchiveLimits::DEFAULT
+    };
+    let tar = tar_with(&[("small", b"bounded")]);
+    let plain = unpack_tar_bytes(&tar, limits).expect("bounded tar extracts");
+    assert_eq!(
+        std::fs::read(plain.path().join("small")).expect("read tar member"),
+        b"bounded"
+    );
+
+    let compressed = gzip(&tar);
+    let tgz = tempfile::tempdir().expect("tempdir");
+    unpack_tar(
+        flate2::read::GzDecoder::new(compressed.as_slice()),
+        tgz.path(),
+        "fixture.tgz",
+        limits,
+    )
+    .expect("bounded tgz extracts");
+    assert_eq!(
+        std::fs::read(tgz.path().join("small")).expect("read tgz member"),
+        b"bounded"
+    );
+
+    let zip = zip_with(&[("small", b"bounded", None)]);
+    let zipped = unpack_zip_bytes(&zip, limits).expect("bounded zip extracts");
+    assert_eq!(
+        std::fs::read(zipped.path().join("small")).expect("read zip member"),
+        b"bounded"
     );
 }
 
