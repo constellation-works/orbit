@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::{
+    FileLockGuard, FileLockOptions, acquire_exclusive_file_lock, try_acquire_exclusive_file_lock,
+};
 use orbit_tools::plugin::{
     LoadedPlugin, PluginSourceRequest, PluginValidationPolicy, first_party_source, load_plugin_dir,
     manifest_refusal, plugin_symlink_refusal, refuse_plugin_tree_symlinks, resolve_plugin_source,
@@ -19,7 +22,7 @@ use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::{
-    record_authorization, record_authorized_grants, verify_install_path,
+    plugin_grant_witness_path, record_authorization, record_authorized_grants, verify_install_path,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_install_path, plugin_namespace_dir};
@@ -115,6 +118,9 @@ const FLAG_DIGEST_ORIGIN: &str = "the `--digest` option";
 struct ExpectedPluginIdentity<'a> {
     name: &'a str,
     version: Option<&'a str>,
+    /// An upgrade replaces a recorded install; it must not turn into a fresh
+    /// one because a `remove` landed between its first read and the lock.
+    installed: bool,
 }
 
 /// Install a workspace pin only when its declared identity matches the source
@@ -134,6 +140,7 @@ pub(super) fn install_pinned_plugin(
         Some(ExpectedPluginIdentity {
             name: expected_name,
             version: expected_version,
+            installed: false,
         }),
         &format!("the `.orbit/plugins.yaml` pin for '{expected_name}'"),
     )
@@ -178,6 +185,7 @@ pub fn upgrade_plugin(
         Some(ExpectedPluginIdentity {
             name,
             version: None,
+            installed: true,
         }),
         FLAG_DIGEST_ORIGIN,
     )?;
@@ -216,6 +224,9 @@ fn install_plugin_inner(
 
     let name = plugin.namespace().to_string();
     let version = plugin.manifest.metadata.version.clone();
+    let requires_installed = expected_identity
+        .as_ref()
+        .is_some_and(|expected| expected.installed);
     if let Some(expected) = expected_identity {
         if name != expected.name {
             return Err(OrbitError::InvalidInput(format!(
@@ -244,7 +255,16 @@ fn install_plugin_inner(
         }
     }
     let global_root = runtime.global_root();
+    // Everything from reading the row to the last witness write is one
+    // namespace transition. Declared before `staged`, so a rollback in its
+    // `Drop` also runs under the lock.
+    let _namespace_lock = lock_plugin_namespace(&global_root, &name)?;
     let existing = runtime.stores().plugins().get_plugin(&name)?;
+    if requires_installed && existing.is_none() {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin '{name}' is not installed on this host; run `orbit plugin add <source>` first"
+        )));
+    }
     let manifest_changed = existing
         .as_ref()
         .is_some_and(|installed| installed.manifest_digest != plugin.manifest_digest);
@@ -286,6 +306,7 @@ fn install_plugin_inner(
     }
     let mut staged = StagedInstall::begin(&global_root, &name, &version)?;
     copy_tree(&source_root, staged.staging())?;
+    namespace_step(NamespaceStep::InstallStaged);
     staged.publish()?;
 
     let enabled =
@@ -343,6 +364,7 @@ fn install_plugin_inner(
             },
         ))
     })?;
+    namespace_step(NamespaceStep::InstallRowWritten);
     // The row names the new tree from here on, so the replaced one may go and
     // the staged swap must not roll back. Anything that fails below leaves an
     // install that landed, which is what the row says.
@@ -785,6 +807,87 @@ fn remove_install_scratch(path: &Path) {
     }
 }
 
+/// Hold the one lock that serializes every change to `name`'s install family,
+/// `plugins` row and grant witness: `add`, `upgrade` and `remove`.
+///
+/// Without it, two installs of different versions could each prune the
+/// other's tree, leaving a row that names nothing, and a `remove` could delete
+/// the namespace directory under an install that was still staging into it.
+/// The lock is per namespace, so unrelated plugins still install in parallel;
+/// resolving and fetching a source happens before it is taken.
+///
+/// The lock file sits beside the namespace's witness: outside the namespace
+/// directory, which `remove` deletes whole, and in a tree no plugin backend
+/// can read, so no plugin can open it to hold an install off.
+pub(super) fn lock_plugin_namespace(
+    global_root: &Path,
+    name: &str,
+) -> Result<FileLockGuard, OrbitError> {
+    const LABEL: &str = "plugin namespace";
+    let path = plugin_namespace_lock_path(global_root, name);
+    let lock_error =
+        |error: std::io::Error| OrbitError::Io(format!("lock {}: {error}", path.display()));
+    namespace_step(NamespaceStep::Locking);
+    if let Some(guard) = try_acquire_exclusive_file_lock(&path, LABEL).map_err(lock_error)? {
+        return Ok(guard);
+    }
+    tracing::info!(
+        target: "orbit.core.plugin",
+        plugin = %name,
+        "waiting for another add, upgrade or remove of this plugin to finish",
+    );
+    namespace_step(NamespaceStep::Contended);
+    acquire_exclusive_file_lock(&path, LABEL, FileLockOptions::default()).map_err(lock_error)
+}
+
+/// Where [`lock_plugin_namespace`] locks. An invalid name maps to the
+/// witness's reserved leaf, so it never becomes a path component.
+fn plugin_namespace_lock_path(global_root: &Path, name: &str) -> PathBuf {
+    plugin_grant_witness_path(global_root, name).with_extension("lock")
+}
+
+/// Points inside a namespace transition where a concurrency test can park the
+/// operation on its own thread; production does nothing at them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NamespaceStep {
+    /// About to take the namespace lock.
+    Locking,
+    /// Found the namespace lock held by another operation; about to wait.
+    Contended,
+    /// An install copied its staging tree and has not published it.
+    InstallStaged,
+    /// An install wrote its row and has not pruned the namespace.
+    InstallRowWritten,
+    /// A removal deleted its row and has not deleted the namespace directory.
+    RemoveRowDeleted,
+}
+
+#[cfg(test)]
+type NamespaceStepHook = Box<dyn Fn(NamespaceStep)>;
+
+#[cfg(test)]
+thread_local! {
+    static NAMESPACE_STEP_HOOK: std::cell::RefCell<Option<NamespaceStepHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `hook` at every [`NamespaceStep`] this thread reaches.
+#[cfg(test)]
+pub(super) fn set_namespace_step_hook(hook: Option<NamespaceStepHook>) {
+    NAMESPACE_STEP_HOOK.with(|cell| *cell.borrow_mut() = hook);
+}
+
+pub(super) fn namespace_step(step: NamespaceStep) {
+    #[cfg(test)]
+    NAMESPACE_STEP_HOOK.with(|cell| {
+        if let Some(hook) = cell.borrow().as_ref() {
+            hook(step);
+        }
+    });
+    #[cfg(not(test))]
+    let _ = step;
+}
+
 /// Delete everything in the namespace install directory except the tree the
 /// `plugins` row now names.
 ///
@@ -796,7 +899,9 @@ fn remove_install_scratch(path: &Path) {
 /// link an earlier Orbit wrote beside them, not scratch a crashed install left.
 ///
 /// Best effort, and only after the row is written: an install that landed is
-/// not reported as a failure because a stale directory would not delete.
+/// not reported as a failure because a stale directory would not delete. The
+/// caller holds [`lock_plugin_namespace`], so nothing here is another
+/// operation's staging, replaced tree or newer version.
 fn prune_namespace(global_root: &Path, name: &str, keep: &Path) {
     let namespace_dir = plugin_namespace_dir(global_root, name);
     let Ok(entries) = std::fs::read_dir(&namespace_dir) else {

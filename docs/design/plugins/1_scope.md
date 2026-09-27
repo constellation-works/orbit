@@ -235,6 +235,12 @@ by an older Orbit.
   replaced version, a stale `current`, crash scratch) is pruned: old trees are readable to
   every backend (§4.3). `remove` deletes the whole namespace directory after the same
   install-path check; `--record-only` leaves every file.
+- `add`, `upgrade` and `remove` of one namespace are serialized by a per-namespace lock file
+  beside its grant witness (`plugins/.grants/<ns>.lock`), held from reading the row until the
+  tree, row and witness all agree. A second operation waits, then reads the row the first one
+  left, so it never prunes another install's tree or staging, and an `upgrade` whose plugin was
+  removed meanwhile refuses instead of installing afresh. Source resolution and fetching run
+  before the lock, and different namespaces never wait on each other.
 
 **Plugin state.** By default, `remove` leaves `{{plugin_state}}` under
 `<global_root>/state/plugins/<ns>/` and prints its path. `--purge-state` deletes only
