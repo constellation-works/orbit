@@ -6,9 +6,11 @@ use std::sync::Mutex;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_policy_resource;
+use orbit_store::compose::global_policy_def_store;
 use orbit_store::contracts::PolicyDefStoreBackend;
 use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation, PolicyDef};
 use orbit_types::resource::ResourceKind;
+use tempfile::tempdir;
 
 use super::super::policy::{DEFAULT_POLICY_FILES, seed_default_policies};
 
@@ -129,4 +131,37 @@ fn seed_default_policies_merges_missing_scratch_exception_without_clobbering_ope
 
     let second = seed_default_policies(&store, false).expect("idempotent merge");
     assert_eq!(second, 0, "a current default policy must not be rewritten");
+}
+
+#[test]
+fn seed_default_policies_preserves_customized_yml_and_updates_it_in_place() {
+    let dir = tempdir().expect("tempdir");
+    let policies_dir = dir.path().join("policies");
+    let store = global_policy_def_store(policies_dir.clone());
+    let mut existing = shipped_default_policy();
+    existing.deny_modify.retain(|rule| rule != "!.orbit/tmp/**");
+    existing.deny_modify.push("secrets/**".to_string());
+    store.upsert_policy_def(&existing).expect("write fixture");
+    std::fs::rename(
+        policies_dir.join("default.yaml"),
+        policies_dir.join("default.yml"),
+    )
+    .expect("rename fixture");
+
+    assert_eq!(
+        seed_default_policies(store.as_ref(), false).expect("merge"),
+        1
+    );
+    let merged = store
+        .get_policy_def(DEFAULT_POLICY_NAME)
+        .expect("load")
+        .expect("default present");
+    assert!(merged.deny_modify.contains(&"secrets/**".to_string()));
+    assert!(merged.deny_modify.contains(&"!.orbit/tmp/**".to_string()));
+    assert!(policies_dir.join("default.yml").exists());
+    assert!(!policies_dir.join("default.yaml").exists());
+    assert_eq!(
+        seed_default_policies(store.as_ref(), false).expect("repeat"),
+        0
+    );
 }

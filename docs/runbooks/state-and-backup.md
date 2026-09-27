@@ -63,6 +63,12 @@ presence. Path fields live on `WorkspacePaths` in
 | `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
 
+Policy definitions under global or workspace `resources/policies/` may use
+`.yaml` or `.yml`. Named lookup, listing, and updates use the same file for a
+given name. If both variants exist, `.yaml` takes precedence; the `.yml` file
+remains untouched. When only `.yml` exists, updates keep that extension, so
+`orbit init` can add shipped default rules without discarding operator rules.
+
 Task bundles are not projected into workspace `.orbit/` directories. During
 the layout-v3 upgrade, Orbit removes only checkout task links that match the
 legacy canonical target shape and leaves ambiguous entries untouched. Stop all
