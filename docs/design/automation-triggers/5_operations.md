@@ -337,8 +337,10 @@ Pending deliveries, unresolved commits, and provider associations are replaced
 only through stable delivery keys and exact commit mapping; inserted commits use
 the normal provider association path. A mapped unresolved-only orphan keeps its
 exact reason on the canonical commit without acquiring a fabricated provider
-association. State and its immutable recovery record
-commit in one generation-fenced transaction. The command also compares the
+association. Retained provider associations keep their PR identity and map
+their shared delivery anchor through the complete proven commit mapping;
+replay refuses an anchor without that proof. State and its immutable recovery
+record commit in one generation-fenced transaction. The command also compares the
 captured branch head immediately before that transaction and refuses a moved
 head. Restore unavailable objects or provider evidence and retry; do not reset
 the consumer or treat missing proof as coverage.
