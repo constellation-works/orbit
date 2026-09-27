@@ -2,6 +2,8 @@
 //! is disabled (design §3, §4.5).
 
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::process::Command;
 
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
@@ -39,6 +41,217 @@ fn managed_manifest_path(fixture: &PluginFixture, directory: &str) -> PathBuf {
         .workspace_root
         .join(directory)
         .join(".orbit-managed-plugin-assets.json")
+}
+
+#[cfg(unix)]
+#[test]
+fn redirected_seed_destinations_are_refused_before_either_catalog_changes() {
+    if std::env::var_os("ORBIT_TEST_REDIRECTED_SEED_CHILD").is_some() {
+        run_redirected_seed_cases();
+        return;
+    }
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    let output = child
+        .arg("redirected_seed_destinations_are_refused_before_either_catalog_changes")
+        .arg("--nocapture")
+        .env("ORBIT_TEST_REDIRECTED_SEED_CHILD", "1")
+        .env_remove("ORBIT_WORKTREE_ROOT")
+        .output()
+        .expect("run isolated plugin seeding fixture");
+    assert!(
+        output.status.success(),
+        "isolated fixture failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn run_redirected_seed_cases() {
+    use std::os::unix::fs::symlink;
+
+    for force in [false, true] {
+        for catalog in ["routines", "auto_tasks"] {
+            for target in [
+                "definition-existing",
+                "definition-dangling",
+                "manifest",
+                "directory",
+            ] {
+                let fixture = PluginFixture::new();
+                install(&fixture, &DefinitionPlugin::new("graph"));
+                let runtime = fixture.reopen();
+                let directory = fixture.workspace_root.join(catalog);
+                let file = if catalog == "routines" {
+                    routine_path(&fixture)
+                } else {
+                    auto_task_path(&fixture)
+                };
+                let external = fixture._root.path().join("external");
+                std::fs::create_dir_all(&external).expect("create external directory");
+                let external_file = external.join("sentinel");
+                let initial = match target {
+                    "definition-dangling" => None,
+                    "manifest" => Some("{\"schemaVersion\":1,\"assets\":{}}"),
+                    _ => Some("external sentinel"),
+                };
+                if let Some(initial) = initial {
+                    std::fs::write(&external_file, initial).expect("write external sentinel");
+                }
+                match target {
+                    "definition-existing" | "definition-dangling" => {
+                        std::fs::create_dir_all(&directory).expect("create catalog directory");
+                        symlink(&external_file, &file).expect("link definition");
+                    }
+                    "manifest" => {
+                        std::fs::create_dir_all(&directory).expect("create catalog directory");
+                        symlink(&external_file, managed_manifest_path(&fixture, catalog))
+                            .expect("link manifest");
+                    }
+                    "directory" => {
+                        if directory.exists() {
+                            std::fs::rename(
+                                &directory,
+                                fixture.workspace_root.join(format!("{catalog}-held")),
+                            )
+                            .expect("move original catalog");
+                        }
+                        symlink(&external, &directory).expect("link catalog directory");
+                    }
+                    _ => unreachable!(),
+                }
+                let other_catalog = if catalog == "routines" {
+                    "auto_tasks"
+                } else {
+                    "routines"
+                };
+                let other_file = if catalog == "routines" {
+                    auto_task_path(&fixture)
+                } else {
+                    routine_path(&fixture)
+                };
+                let other_manifest = managed_manifest_path(&fixture, other_catalog);
+                let target_manifest = managed_manifest_path(&fixture, catalog);
+                let before_file = std::fs::read(&other_file).ok();
+                let before_manifest = std::fs::read(&other_manifest).ok();
+                let before_target_manifest = std::fs::read(&target_manifest).ok();
+                let error = enable_plugin(
+                    &runtime,
+                    "graph",
+                    &PluginEnableOptions {
+                        force,
+                        ..PluginEnableOptions::default()
+                    },
+                )
+                .expect_err("redirected seed destination must be refused");
+                assert!(
+                    error.to_string().contains("symlink"),
+                    "{catalog} {target} force={force}: {error}"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&external_file).ok().as_deref(),
+                    initial,
+                    "external target changed: {catalog} {target} force={force}"
+                );
+                assert_eq!(
+                    std::fs::read(&other_file).ok(),
+                    before_file,
+                    "other catalog was seeded: {catalog} {target} force={force}"
+                );
+                assert_eq!(
+                    std::fs::read(&other_manifest).ok(),
+                    before_manifest,
+                    "other provenance changed: {catalog} {target} force={force}"
+                );
+                assert_eq!(
+                    std::fs::read(&target_manifest).ok(),
+                    before_target_manifest,
+                    "refused catalog provenance changed: {catalog} {target} force={force}"
+                );
+                if target == "directory" {
+                    assert!(
+                        !external
+                            .join(file.file_name().expect("seed file name"))
+                            .exists(),
+                        "external catalog was seeded"
+                    );
+                    assert!(
+                        !external.join(".orbit-managed-plugin-assets.json").exists(),
+                        "external provenance was written"
+                    );
+                }
+            }
+        }
+    }
+
+    // A link to bytes Orbit previously recorded must also be refused on an
+    // upgrade, when the ordinary managed-file rule would refresh them.
+    for force in [false, true] {
+        for catalog in ["routines", "auto_tasks"] {
+            let fixture = PluginFixture::new();
+            install(&fixture, &DefinitionPlugin::new("graph"));
+            let runtime = fixture.reopen();
+            enable_plugin(&runtime, "graph", &PluginEnableOptions::default())
+                .expect("seed original version");
+            disable_plugin(&runtime, "graph").expect("disable before upgrade");
+            install(
+                &fixture,
+                &DefinitionPlugin::new("graph").with_version("1.1.0"),
+            );
+            let runtime = fixture.reopen();
+            let file = if catalog == "routines" {
+                routine_path(&fixture)
+            } else {
+                auto_task_path(&fixture)
+            };
+            let external = fixture._root.path().join("old-managed-bytes");
+            let old_bytes = std::fs::read(&file).expect("original managed bytes");
+            std::fs::write(&external, &old_bytes).expect("copy managed bytes outside catalog");
+            std::fs::remove_file(&file).expect("remove contained copy");
+            symlink(&external, &file).expect("redirect managed definition");
+            let routine_manifest = managed_manifest_path(&fixture, "routines");
+            let auto_task_manifest = managed_manifest_path(&fixture, "auto_tasks");
+            let before_routine_manifest =
+                std::fs::read(&routine_manifest).expect("routine provenance");
+            let before_auto_task_manifest =
+                std::fs::read(&auto_task_manifest).expect("auto-task provenance");
+            let other_file = if catalog == "routines" {
+                auto_task_path(&fixture)
+            } else {
+                routine_path(&fixture)
+            };
+            let other_bytes = std::fs::read(&other_file).expect("other managed definition");
+            let error = enable_plugin(
+                &runtime,
+                "graph",
+                &PluginEnableOptions {
+                    force,
+                    ..PluginEnableOptions::default()
+                },
+            )
+            .expect_err("managed bytes through a symlink must be refused");
+            assert!(
+                error.to_string().contains("symlink"),
+                "{catalog} force={force}: {error}"
+            );
+            assert_eq!(std::fs::read(&external).expect("external bytes"), old_bytes);
+            assert_eq!(
+                std::fs::read(&other_file).expect("other bytes"),
+                other_bytes
+            );
+            assert_eq!(
+                std::fs::read(&routine_manifest).expect("routine provenance"),
+                before_routine_manifest
+            );
+            assert_eq!(
+                std::fs::read(&auto_task_manifest).expect("auto-task provenance"),
+                before_auto_task_manifest
+            );
+        }
+    }
 }
 
 #[test]
