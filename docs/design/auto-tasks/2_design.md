@@ -307,7 +307,12 @@ input-order-independent precedence: `qa-sweep`, `security-review`,
 The mint is **unconditional**. It ignores schedule due-math, `dedupe`, and
 `enabled`, and it neither reads nor writes the host-local cursor — an operator
 naming a definition explicitly means it, and a manual mint must not perturb
-scheduler state. Unknown names fail loudly (`InvalidInput` naming the
+scheduler state. Lookup and task creation share that cursor's lock with
+deletion and scheduler admission. The definition is read again under the lock:
+a delete that wins removes the file before a task exists, and a mint that wins
+is an open task by the time a non-force delete checks. The lock is not a
+cursor save, so the cursor bytes stay identical, including when no cursor file
+exists. Unknown names fail loudly (`InvalidInput` naming the
 definition), so the CLI exits non-zero rather than silently no-op'ing. Mint
 loads that definition through the confined show lookup above, so an escaped
 name or a symlinked definition is the same `InvalidInput` and creates no task.

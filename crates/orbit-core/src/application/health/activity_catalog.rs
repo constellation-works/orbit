@@ -21,8 +21,8 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::fs::open_read_only_no_follow;
 use orbit_engine::activity_job::{load_activity_catalog_asset, validate_catalog_activity_tools};
 
-use super::artifact::{RemovableArtifact, resolve_removable_artifact};
 use crate::OrbitRuntime;
+use crate::application::managed_assets::{ConfinedAssetPath, resolve_confined_asset_path};
 
 /// The single opt-in repair command named by retired-backend findings.
 pub const FIX_RETIRED_ACTIVITY_BACKENDS_CMD: &str = "orbit doctor --fix-retired-activity-backends";
@@ -473,14 +473,14 @@ fn write_confined(root: &Path, path: &Path, content: &str) -> Result<Option<Stri
             root.display()
         ))
     })?;
-    match resolve_removable_artifact(root, relative)? {
-        RemovableArtifact::File(_) => {}
-        RemovableArtifact::Missing => {
+    match resolve_confined_asset_path(root, relative)? {
+        ConfinedAssetPath::File(_) => {}
+        ConfinedAssetPath::Missing => {
             return Ok(Some(
                 "file disappeared before the repair could write it".to_string(),
             ));
         }
-        RemovableArtifact::Unsafe(component) => {
+        ConfinedAssetPath::Unsafe(component) => {
             return Ok(Some(format!(
                 "`{}` became a link or non-regular entry before the repair could write it; left untouched",
                 component.display()

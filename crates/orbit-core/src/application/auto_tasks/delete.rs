@@ -97,8 +97,10 @@ impl OrbitRuntime {
 
         #[cfg(test)]
         wait_before_delete_lock();
-        // Scheduler admission, including delivery evaluation, holds this lock.
-        // Check refusals here so a task minted by a preceding pass is visible.
+        // Scheduler admission, including delivery evaluation, and manual mint
+        // hold this lock across their definition check and task creation.
+        // Check refusals here so a task minted by a preceding pass or an
+        // overlapping manual mint is visible.
         let (definition, open_tasks, original, cursor_removed) = with_cursor_lock(
             &cursor_state_path(&self.paths().state_dir),
             |session| {

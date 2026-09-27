@@ -18,8 +18,11 @@
 
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(test)]
+use std::sync::{Arc, Barrier};
+
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_types::task::{Task, normalize_required_tools};
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
@@ -31,6 +34,7 @@ use crate::OrbitRuntime;
 use super::loader::{AutoTaskCollection, auto_tasks_dir, collect_auto_tasks, definition_path};
 use super::schedule::validate_schedule;
 use super::scheduler::mint_task;
+use super::state::cursor_state_path;
 
 /// Parameters for creating a definition.
 #[derive(Debug, Clone)]
@@ -241,8 +245,13 @@ impl OrbitRuntime {
     /// `enabled` are all ignored, and the host-local cursor at
     /// `<orbit_dir>/state/auto-tasks.json` is neither read nor written — an
     /// operator naming a definition explicitly means it, and a manual mint must
-    /// not perturb scheduler state. Because it reuses the scheduler's
-    /// [`mint_task`], the result is field-for-field identical to a fired
+    /// not perturb scheduler state. Lookup and task creation do share that
+    /// cursor's lock with deletion and scheduler admission. The definition is
+    /// loaded again under the lock, so a delete that wins admission removes
+    /// the file before a task exists, and a mint that wins admission is an
+    /// open task by the time a non-force delete checks. Admission does not load
+    /// or save the cursor, so its bytes stay identical. Because it reuses the
+    /// scheduler's [`mint_task`], the result is field-for-field identical to a fired
     /// instance, provenance tag and `system_created` marker included; that also
     /// means an open manually minted instance is visible to `skip_if_open` dedupe on
     /// the next pass, exactly as a fired one would be.
@@ -251,9 +260,25 @@ impl OrbitRuntime {
     /// Escaped lookups fail the same way, before a task is created: mint loads
     /// the definition only through [`Self::auto_task_show`].
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
-        let definition = self.require_auto_task(name)?;
-        self.validate_required_tools(&definition.template.required_tools)?;
-        mint_task(self, &definition)
+        // Fail closed before admission. This copy is not mint authority: a
+        // concurrent delete can remove the file before the lock is held.
+        let preloaded = self.require_auto_task(name)?;
+        self.validate_required_tools(&preloaded.template.required_tools)?;
+        #[cfg(test)]
+        wait_after_manual_mint_preload();
+
+        // Same sidecar lock as `with_cursor_lock` and `auto_task_delete`.
+        // Do not load or save the cursor: bytes stay unchanged, and a
+        // malformed cursor must not block an explicit mint.
+        let state_path = cursor_state_path(&self.paths().state_dir);
+        with_exclusive_file_lock(&state_path, "auto-task cursor", || {
+            let definition = self.require_auto_task(name)?;
+            self.validate_required_tools(&definition.template.required_tools)?;
+            let task = mint_task(self, &definition)?;
+            #[cfg(test)]
+            wait_after_manual_mint_admission();
+            Ok(task)
+        })
     }
 
     /// Resolve `<orbit_dir>/auto_tasks/<name>.yaml` without following a lookup
@@ -403,5 +428,49 @@ impl OrbitRuntime {
                 path.display()
             ))
         })
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static MINT_AFTER_PRELOAD: std::cell::RefCell<Option<(Arc<Barrier>, Arc<Barrier>)>> =
+        const { std::cell::RefCell::new(None) };
+    static MINT_AFTER_ADMISSION: std::cell::RefCell<Option<(Arc<Barrier>, Arc<Barrier>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Pause a manual mint after it has loaded the definition and before it takes
+/// the cursor lock. The pair is `(loaded, resume)`.
+#[cfg(test)]
+pub(crate) fn set_manual_mint_after_preload_barriers(
+    barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
+) {
+    MINT_AFTER_PRELOAD.with(|cell| *cell.borrow_mut() = barriers);
+}
+
+/// Pause a manual mint after the task exists and while the cursor lock is
+/// still held. The pair is `(admitted, resume)`.
+#[cfg(test)]
+pub(crate) fn set_manual_mint_after_admission_barriers(
+    barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
+) {
+    MINT_AFTER_ADMISSION.with(|cell| *cell.borrow_mut() = barriers);
+}
+
+#[cfg(test)]
+fn wait_after_manual_mint_preload() {
+    let barriers = MINT_AFTER_PRELOAD.with(|cell| cell.borrow().clone());
+    if let Some((loaded, resume)) = barriers {
+        loaded.wait();
+        resume.wait();
+    }
+}
+
+#[cfg(test)]
+fn wait_after_manual_mint_admission() {
+    let barriers = MINT_AFTER_ADMISSION.with(|cell| cell.borrow().clone());
+    if let Some((admitted, resume)) = barriers {
+        admitted.wait();
+        resume.wait();
     }
 }
