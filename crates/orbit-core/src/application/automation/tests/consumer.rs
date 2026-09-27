@@ -235,6 +235,285 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
 }
 
 #[test]
+fn replay_recovers_provider_attributed_deliveries_with_canonical_shared_anchors() {
+    use orbit_automation::delivery::recovery::{self, HistoryReplayInput, Recovery};
+    use orbit_types::workflow::automation::recovery::{RecoveryPreview, RecoveryRequest};
+
+    for commit_count in [1, 2] {
+        let runtime = runtime();
+        let root = &runtime.paths().repo_root;
+        std::fs::write(root.join(".orbit/stable.toml"), "version = 1\n").unwrap();
+        git(root, &["add", ".orbit/stable.toml"]);
+        git(root, &["commit", "-m", "stable Orbit tree"]);
+        git(
+            root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/constellation-works/orbit.git",
+            ],
+        );
+        let definition = definition(&runtime, "replay", CoverageClass::IntegratedQaV1);
+        let baseline = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+            .unwrap()
+            .state
+            .unwrap();
+        let base = baseline.observed.clone();
+
+        git(root, &["checkout", "-b", "orphan"]);
+        let mut orphans = Vec::new();
+        for index in 0..commit_count {
+            let path = format!("payload-{index}.txt");
+            std::fs::write(root.join(&path), format!("payload {index}\n")).unwrap();
+            git(root, &["add", &path]);
+            git(root, &["commit", "-m", &format!("orphan payload {index}")]);
+            orphans.push(git(root, &["rev-parse", "HEAD"]));
+        }
+        git(root, &["checkout", "agent-main"]);
+        let mut canonical = Vec::new();
+        for index in 0..commit_count {
+            let path = format!("payload-{index}.txt");
+            std::fs::write(root.join(&path), format!("payload {index}\n")).unwrap();
+            git(root, &["add", &path]);
+            git(
+                root,
+                &["commit", "-m", &format!("canonical payload {index}")],
+            );
+            canonical.push(git(root, &["rev-parse", "HEAD"]));
+        }
+        let source = super::super::source::Source::new(root);
+        let old_anchor = orphans.last().unwrap();
+        let new_anchor = canonical.last().unwrap();
+        let landed_at = Utc::now();
+        let key = "pr:constellation-works/orbit:agent-main:1586";
+        let reference = "https://github.com/constellation-works/orbit/pull/1586";
+        let association = DeliveryAssociation {
+            key: key.into(),
+            anchor: old_anchor.clone(),
+            reference: reference.into(),
+            landed_at,
+        };
+        let mut old = baseline.clone();
+        old.generation += 1;
+        old.observed = source.revision(old_anchor).unwrap();
+        old.pending_commits = orphans.clone();
+        old.pending = vec![Delivery {
+            key: key.into(),
+            repository: old.repository.clone(),
+            branch: old.branch.clone(),
+            before: base.clone(),
+            after: old.observed.clone(),
+            commits: orphans.clone(),
+            task_ids: vec!["task-alpha".into(), "task-beta".into()],
+            evidence_reference: reference.into(),
+            evidence_digest: "previous-provider-proof".into(),
+            landed_at,
+        }];
+        old.associations = orphans
+            .iter()
+            .map(|sha| (sha.clone(), Some(association.clone())))
+            .collect();
+        let store = runtime.automation_store().unwrap();
+        assert!(store.automation_commit(&baseline, &old, None).unwrap());
+
+        // The retained association is sufficient provider proof for every
+        // mapped commit; the lookup must never be called for this replay.
+        let no_lookup = |_: &str, _: &str| panic!("mapped delivery requested provider proof");
+        let (page, record) = source
+            .replay_history_with_lookup("agent-main", &old, &no_lookup, 0)
+            .unwrap();
+        assert_eq!(record.mappings.len(), commit_count);
+        assert_eq!(page.commits, canonical);
+        assert!(page.unresolved.is_empty());
+        assert_eq!(page.deliveries.len(), 1);
+        assert_eq!(page.deliveries[0].key, key);
+        assert_eq!(page.deliveries[0].commits, canonical);
+        for sha in &canonical {
+            let mapped = page.associations[sha].as_ref().unwrap();
+            assert_eq!(mapped.anchor, *new_anchor);
+            assert_eq!(mapped.key, key);
+            assert_eq!(mapped.reference, reference);
+            assert_eq!(mapped.landed_at, landed_at);
+        }
+
+        let request = RecoveryRequest {
+            replay_history: true,
+            reason: "reconcile the proven rebase".into(),
+            ..Default::default()
+        };
+        let operation = Recovery {
+            consumer: &old.consumer,
+            epoch: &old.epoch,
+            trigger: old.trigger.as_ref().unwrap(),
+            repository: &old.repository,
+            host_refusal: None,
+            request: &request,
+            by: "operator",
+            now: Utc::now(),
+            replay: Some(HistoryReplayInput { page, record }),
+        };
+        let preview = recovery::preview(store.as_ref(), &operation).unwrap();
+        assert!(preview.history_replay.unwrap().added_obligations.is_empty());
+        assert_eq!(
+            store.automation_state(&old.consumer).unwrap(),
+            Some(old.clone())
+        );
+        let applied = recovery::apply(store.as_ref(), &operation).unwrap();
+        assert_eq!(applied.applied, vec![RecoveryPreview::REPLAYED_HISTORY]);
+        let after = store.automation_state(&old.consumer).unwrap().unwrap();
+        assert_eq!(after.covered, old.covered);
+        assert_eq!(after.baseline, old.baseline);
+        assert_eq!(after.observed.commit, *new_anchor);
+        assert_eq!(after.pending_commits, canonical);
+        assert!(after.unresolved.is_empty());
+        assert_eq!(after.pending.len(), 1);
+        assert_eq!(after.pending[0].key, key);
+        assert_eq!(after.pending[0].task_ids, old.pending[0].task_ids);
+        assert_eq!(after.pending[0].commits, canonical);
+        assert_eq!(after.pending[0].after.commit, *new_anchor);
+        assert_eq!(after.waived, old.waived);
+        assert_eq!(after.excluded, old.excluded);
+        assert_eq!(after.active, old.active);
+        for sha in &canonical {
+            assert_eq!(
+                after.associations[sha].as_ref().unwrap().anchor,
+                *new_anchor
+            );
+        }
+        assert_eq!(
+            store
+                .automation_recoveries(&old.consumer, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn replay_refuses_unproven_retained_anchor_without_mutating_debt() {
+    use orbit_automation::AutomationError;
+    use orbit_types::workflow::automation::recovery::refusal;
+
+    let runtime = runtime();
+    let root = &runtime.paths().repo_root;
+    std::fs::write(root.join(".orbit/stable.toml"), "version = 1\n").unwrap();
+    git(root, &["add", ".orbit/stable.toml"]);
+    git(root, &["commit", "-m", "stable Orbit tree"]);
+    git(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/constellation-works/orbit.git",
+        ],
+    );
+    let definition = definition(&runtime, "unproven-anchor", CoverageClass::IntegratedQaV1);
+    let baseline = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        .unwrap()
+        .state
+        .unwrap();
+    git(root, &["checkout", "-b", "orphan"]);
+    let orphan = commit(root, "same patch");
+    git(root, &["checkout", "agent-main"]);
+    std::fs::write(root.join("sample.txt"), "same patch").unwrap();
+    git(root, &["add", "sample.txt"]);
+    git(root, &["commit", "-m", "canonical message"]);
+    let source = super::super::source::Source::new(root);
+    let mut old = baseline.clone();
+    old.generation += 1;
+    old.observed = source.revision(&orphan).unwrap();
+    old.pending_commits = vec![orphan.clone()];
+    old.associations.insert(
+        orphan.clone(),
+        Some(DeliveryAssociation {
+            key: "pr:constellation-works/orbit:agent-main:1586".into(),
+            anchor: baseline.observed.commit.clone(),
+            reference: "https://github.com/constellation-works/orbit/pull/1586".into(),
+            landed_at: Utc::now(),
+        }),
+    );
+    let store = runtime.automation_store().unwrap();
+    assert!(store.automation_commit(&baseline, &old, None).unwrap());
+    let error = source
+        .replay_history_with_lookup("agent-main", &old, &|_, _| panic!("unexpected lookup"), 0)
+        .expect_err("an association anchor outside the proven mapping must refuse");
+    assert!(matches!(
+        error,
+        AutomationError::Refused(reason) if reason == refusal::HISTORY_CONTRACT_DRIFT
+    ));
+    assert_eq!(store.automation_state(&old.consumer).unwrap(), Some(old));
+    assert!(
+        store
+            .automation_recoveries(&baseline.consumer, 10)
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut proven_anchor = store.automation_state(&baseline.consumer).unwrap().unwrap();
+    let mut ambiguous = proven_anchor.clone();
+    ambiguous.generation += 1;
+    ambiguous
+        .associations
+        .get_mut(&orphan)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .anchor = orphan.clone();
+    assert!(
+        store
+            .automation_commit(&proven_anchor, &ambiguous, None)
+            .unwrap()
+    );
+    proven_anchor = ambiguous;
+    commit(root, "baseline");
+    commit(root, "same patch");
+    let error = source
+        .replay_history_with_lookup(
+            "agent-main",
+            &proven_anchor,
+            &|_, _| panic!("unexpected lookup"),
+            0,
+        )
+        .expect_err("two canonical commits with the same patch are ambiguous");
+    assert!(matches!(
+        error,
+        AutomationError::Refused(reason) if reason == refusal::HISTORY_MAPPING_AMBIGUOUS
+    ));
+    assert_eq!(
+        store.automation_state(&baseline.consumer).unwrap(),
+        Some(proven_anchor.clone())
+    );
+
+    let mut missing = proven_anchor.clone();
+    missing.observed.commit = "0000000000000000000000000000000000000000".into();
+    let error = source
+        .replay_history_with_lookup(
+            "agent-main",
+            &missing,
+            &|_, _| panic!("unexpected lookup"),
+            0,
+        )
+        .expect_err("a missing orphan object cannot prove a mapping");
+    assert!(matches!(
+        error,
+        AutomationError::Refused(reason) if reason == refusal::HISTORY_OBJECT_MISSING
+    ));
+    assert_eq!(
+        store.automation_state(&baseline.consumer).unwrap(),
+        Some(proven_anchor)
+    );
+    assert!(
+        store
+            .automation_recoveries(&baseline.consumer, 10)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn replay_refuses_ambiguous_mapping_and_bounded_traversal_exhaustion() {
     use orbit_automation::AutomationError;
     use orbit_types::workflow::automation::recovery::refusal;

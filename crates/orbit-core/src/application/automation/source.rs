@@ -477,6 +477,16 @@ impl<'a> Source<'a> {
             });
         }
 
+        let canonical_by_orphan = mappings
+            .iter()
+            .map(|mapping| {
+                (
+                    mapping.orphan.commit.as_str(),
+                    mapping.canonical.commit.as_str(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
         let mut probe = state.clone();
         probe.observed = common_base.clone();
         probe.pending_commits.clear();
@@ -487,9 +497,19 @@ impl<'a> Source<'a> {
         probe.associations.clear();
         for mapping in &mappings {
             if let Some(Some(association)) = state.associations.get(&mapping.orphan.commit) {
+                // A delivery can span several commits, all retaining the same
+                // anchor. Resolve it from the complete proof, not this commit's
+                // mapping, and refuse an anchor the proof cannot account for.
+                let anchor = canonical_by_orphan
+                    .get(association.anchor.as_str())
+                    .ok_or_else(|| {
+                        AutomationError::Refused(refusal::HISTORY_CONTRACT_DRIFT.into())
+                    })?;
+                let mut association = association.clone();
+                association.anchor = (*anchor).to_owned();
                 probe
                     .associations
-                    .insert(mapping.canonical.commit.clone(), Some(association.clone()));
+                    .insert(mapping.canonical.commit.clone(), Some(association));
                 continue;
             }
             if let Some(delivery) = state
