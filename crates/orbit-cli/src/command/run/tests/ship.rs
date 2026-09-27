@@ -110,6 +110,181 @@ fn ship_mode_uses_selected_root_registry_when_home_registry_is_empty() {
     );
 }
 
+/// Run the mutable CLI fixture in a child so no inherited managed-run routing
+/// can redirect its registry or run writes into the caller's workspace.
+#[test]
+fn ship_mode_follows_selected_workspace_through_cli_submission() {
+    const CHILD: &str = "ORBIT_SHIP_MODE_FIXTURE_CHILD";
+    const MARKER: &str = "ORBIT_SHIP_MODE_FIXTURE_MARKER";
+    if std::env::var_os(CHILD).is_some() {
+        shared_root_ship_mode_fixture();
+        let marker = std::env::var_os(MARKER).expect("child marker path");
+        std::fs::write(marker, "complete").expect("write child completion marker");
+        return;
+    }
+
+    let fixture = tempdir().expect("fixture tempdir");
+    let home = fixture.path().join("home");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    let module = module_path!()
+        .split_once("::")
+        .map_or(module_path!(), |(_, module)| module);
+    let test_name =
+        format!("{module}::ship_mode_follows_selected_workspace_through_cli_submission");
+    let marker = fixture.path().join("child-complete");
+    let output = child
+        .args(["--exact", &test_name, "--nocapture"])
+        .env(CHILD, "1")
+        .env(MARKER, &marker)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .current_dir(fixture.path())
+        .output()
+        .expect("isolated CLI fixture");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(marker.exists(), "isolated CLI fixture did not run");
+}
+
+fn shared_root_ship_mode_fixture() {
+    use orbit_core::runtime::workspace_runtime_binding;
+
+    super::substitute_pipeline_worker();
+    let fixture = tempdir().expect("fixture tempdir");
+    let global_root = fixture.path().join("global");
+    let shared_root = fixture.path().join("shared-orbit");
+    let repo_alpha = fixture.path().join("repo-alpha");
+    let repo_beta = fixture.path().join("repo-beta");
+    for directory in [&global_root, &shared_root, &repo_alpha, &repo_beta] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+    let unbound =
+        OrbitRuntime::from_roots(&global_root, &shared_root).expect("initialize shared runtime");
+    write_ship_job_asset(&unbound);
+    drop(unbound);
+
+    let workspaces = [
+        (
+            "ws_alpha",
+            "alpha",
+            &repo_alpha,
+            "local",
+            orbit_core::ShipMode::Local,
+        ),
+        (
+            "ws_beta",
+            "beta",
+            &repo_beta,
+            "pr",
+            orbit_core::ShipMode::Pr,
+        ),
+    ];
+    for order in [[0, 1], [1, 0]] {
+        let mut registry = WorkspaceRegistry::default();
+        for index in order {
+            let (id, name, repo_root, mode, _) = workspaces[index];
+            let workspace = Workspace {
+                id: id.to_string(),
+                name: name.to_string(),
+                owner_machine_id: None,
+                git_remote: None,
+                ship_mode: Some(mode.to_string()),
+                base_branch: "agent-main".to_string(),
+                status: WorkspaceStatus::Active,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            let checkout = WorkspaceCheckout::owner(
+                workspace.id.clone(),
+                repo_root.to_path_buf(),
+                shared_root.clone(),
+            );
+            orbit_registry::workspace_registry::register_workspace(&mut registry, workspace)
+                .expect("register workspace");
+            orbit_registry::workspace_registry::register_checkout(&mut registry, checkout)
+                .expect("register checkout");
+        }
+        save_registry_to(&registry, &registry_path_for(&global_root))
+            .expect("save shared-root registry");
+
+        for (id, _, _, _, expected) in workspaces {
+            let workspace = registry
+                .workspaces
+                .iter()
+                .find(|item| item.id == id)
+                .expect("registered workspace");
+            let checkout = registry
+                .checkouts
+                .iter()
+                .find(|item| item.workspace_id == id)
+                .expect("registered checkout");
+            let binding =
+                workspace_runtime_binding(workspace, checkout).expect("selected checkout binding");
+            let runtime =
+                OrbitRuntime::from_roots_with_binding(&global_root, &shared_root, binding)
+                    .expect("selected workspace runtime");
+            let args = ShipCommand {
+                mode: None,
+                ..ship_args(&[], ShipMode::Pr, None)
+            };
+            assert_submitted_mode(args, &runtime, expected);
+
+            let override_mode = if expected == orbit_core::ShipMode::Pr {
+                ShipMode::Local
+            } else {
+                ShipMode::Pr
+            };
+            assert_submitted_mode(
+                ship_args(&[], override_mode, None),
+                &runtime,
+                override_mode.to_core(),
+            );
+        }
+    }
+
+    let unregistered_root = fixture.path().join("unregistered-orbit");
+    std::fs::create_dir_all(&unregistered_root).expect("unregistered root");
+    let unregistered =
+        OrbitRuntime::from_roots(&global_root, &unregistered_root).expect("unregistered runtime");
+    assert_submitted_mode(
+        ShipCommand {
+            mode: None,
+            ..ship_args(&[], ShipMode::Pr, None)
+        },
+        &unregistered,
+        orbit_core::ShipMode::Pr,
+    );
+}
+
+fn assert_submitted_mode(
+    args: ShipCommand,
+    runtime: &OrbitRuntime,
+    expected: orbit_core::ShipMode,
+) {
+    let output = args.execute(runtime).expect("CLI ship submission");
+    let crate::command::CommandOutput::Payload(payload) = output else {
+        panic!("CLI ship should return a run payload");
+    };
+    let (document, _) = payload.into_view();
+    let run_id = document["run_id"].as_str().expect("submitted run ID");
+    let run = runtime
+        .list_job_runs(Default::default())
+        .expect("list submitted runs")
+        .into_iter()
+        .find(|run| run.run_id == run_id)
+        .expect("persisted CLI run");
+    let input = run.input.expect("persisted ship input");
+    assert_eq!(input["mode"], expected.as_input_value());
+}
+
 /// Build a ship plan from test args, threading the args' explicit mode through
 /// the resolved-mode parameter (production resolves this from the registry).
 fn build_plan(args: &ShipCommand, config_base_branch: &str) -> Result<WorkflowRunPlan, OrbitError> {
