@@ -73,7 +73,7 @@ pub(crate) fn task_to_json_for_runtime(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = runtime.task_status_index()?;
+    let status_by_id = runtime.dependency_status_index([task])?;
     Ok(task_to_json_with_sidecars(runtime, task, &status_by_id)?.doc)
 }
 

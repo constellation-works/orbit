@@ -61,12 +61,14 @@ pub use support::{
 #[cfg(test)]
 pub(crate) use task::walk_dependencies_to_self;
 pub use task::{
-    ExecutionLocation, Task, TaskReferenceIndex, automatic_dispatch_cmp, build_task_status_index,
-    deserialize_required_tools, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags, resolve_task_dependencies, resolve_task_dependencies_with_index,
-    resolve_task_relations, resolve_task_relations_with_index, task_dependencies_ready,
-    task_dependencies_ready_with_index, task_matches_tags, task_reference_is_not_verifiable_here,
-    unmet_task_dependencies, unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
+    ExecutionLocation, Task, TaskReferenceIndex, archived_task_completed_before_archive,
+    automatic_dispatch_cmp, build_task_status_index, deserialize_required_tools,
+    normalize_required_tools, normalize_task_dependencies, normalize_task_tags,
+    resolve_task_dependencies, resolve_task_dependencies_with_index, resolve_task_relations,
+    resolve_task_relations_with_index, satisfy_completed_archived_dependencies,
+    task_dependencies_ready, task_dependencies_ready_with_index, task_matches_tags,
+    task_reference_is_not_verifiable_here, unmet_task_dependencies,
+    unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies,
     validate_task_dependencies_with,
 };

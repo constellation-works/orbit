@@ -214,7 +214,11 @@ pub(crate) fn sweep_active_workspace(
     }
 
     let tasks = runtime.list_tasks()?;
-    let status_by_id = runtime.task_status_index()?;
+    let status_by_id = runtime.dependency_status_index(
+        tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Backlog),
+    )?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let ready_backlog = tasks
         .iter()

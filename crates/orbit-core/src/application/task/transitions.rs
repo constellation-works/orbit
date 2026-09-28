@@ -410,7 +410,7 @@ impl OrbitRuntime {
                 resolved_crew_override.as_deref(),
                 task.crew.as_deref(),
             )?;
-            let dependency_status_index = self.task_status_index()?;
+            let dependency_status_index = self.dependency_status_index([&task])?;
             let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
             let effective_plan = start_edits.plan.as_deref().unwrap_or(task.plan.as_str());
             if in_progress_transition_requires_plan(task.status) {

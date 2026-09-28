@@ -124,7 +124,9 @@ fn task_reference_status_index(
         )
         .filter(|id| is_valid_orb_task_id(id))
         .collect::<BTreeSet<_>>();
-    runtime.task_status_index_for(&referenced_ids)
+    let mut status_by_id = runtime.task_status_index_for(&referenced_ids)?;
+    runtime.satisfy_completed_archived_dependencies(&mut status_by_id, [task]);
+    Ok(status_by_id)
 }
 
 /// Enrich a task projection with its resolved crew, when this host can resolve

@@ -229,11 +229,49 @@ impl TaskV2Store {
             return match self.get_task(id)? {
                 Some(task) => Ok(RegisteredTaskResolution::Resolved(Box::new(task))),
                 None => {
-                    self.registered_bundle_absent(&binding, &self.bundle_store.bundle_path(id)?)
+                    self.ensure_registered_bundle_absent(
+                        &binding,
+                        &self.bundle_store.bundle_path(id)?,
+                    )?;
+                    Ok(RegisteredTaskResolution::Missing)
                 }
             };
         }
+        Ok(match self.read_registered_owner_bundle(&binding)? {
+            Some(bundle) => {
+                RegisteredTaskResolution::Resolved(Box::new(self.task_from_bundle(bundle)?))
+            }
+            None => RegisteredTaskResolution::Missing,
+        })
+    }
 
+    /// Read `id`'s status history through its registered owner, with the
+    /// authority and fail-closed reads of [`Self::registered_task`]. `None`
+    /// when no local workspace holds the task.
+    pub(crate) fn registered_task_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let Some(binding) = self.registry.find_task_binding(id)? else {
+            return Ok(None);
+        };
+        if binding.partition_id == self.workspace_id {
+            return self.get_task_history(id);
+        }
+        Ok(self
+            .read_registered_owner_bundle(&binding)?
+            .map(|bundle| super::sidecars::task_history_from_events(bundle.events)))
+    }
+
+    /// Read the bundle another workspace partition registered for a task,
+    /// without settling that partition's commit boundary. `None` when the
+    /// bundle is gone.
+    fn read_registered_owner_bundle(
+        &self,
+        binding: &crate::contracts::TaskBundleBinding,
+    ) -> Result<Option<TaskBundleV2>, OrbitError> {
+        let id = binding.task_id.as_str();
         let owner = TaskBundleStoreV2::new(self.registry.clone(), binding.partition_id.clone());
         let canonical = owner.bundle_path(id)?;
         if canonical != binding.canonical_path {
@@ -245,13 +283,14 @@ impl TaskV2Store {
             )));
         }
         match owner.read_bundle(id) {
-            Ok(bundle) => self
-                .task_from_bundle(bundle)
-                .map(|task| RegisteredTaskResolution::Resolved(Box::new(task))),
+            Ok(bundle) => Ok(Some(bundle)),
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,
                 ..
-            }) => self.registered_bundle_absent(&binding, &canonical),
+            }) => {
+                self.ensure_registered_bundle_absent(binding, &canonical)?;
+                Ok(None)
+            }
             Err(err) => Err(err),
         }
     }
@@ -263,11 +302,11 @@ impl TaskV2Store {
     /// directory that is still there is therefore unreadable rather than
     /// gone — a distinction a caller has to act on differently, so it is an
     /// error naming the owner instead of a prerequisite declared missing.
-    fn registered_bundle_absent(
+    fn ensure_registered_bundle_absent(
         &self,
         binding: &crate::contracts::TaskBundleBinding,
         bundle_dir: &Path,
-    ) -> Result<RegisteredTaskResolution, OrbitError> {
+    ) -> Result<(), OrbitError> {
         if bundle_dir.try_exists().unwrap_or(false) {
             return Err(OrbitError::Store(format!(
                 "task '{}' is registered to workspace '{}' but its bundle at '{}' could not be read; check that workspace's permissions or reindex it",
@@ -276,7 +315,7 @@ impl TaskV2Store {
                 bundle_dir.display()
             )));
         }
-        Ok(RegisteredTaskResolution::Missing)
+        Ok(())
     }
 
     pub(crate) fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {

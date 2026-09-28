@@ -60,7 +60,8 @@ where
 {
     let rendered = tokio::task::spawn_blocking(move || {
         let task = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
-        let status_by_id = dashboard_status_index(&runtime).map_err(TaskMutationFailure::Render)?;
+        let status_by_id =
+            dashboard_status_index(&runtime, &task).map_err(TaskMutationFailure::Render)?;
         task_to_json_with_sidecars(&runtime, &task, &status_by_id)
             .map_err(TaskMutationFailure::Render)
     })
@@ -446,10 +447,13 @@ pub(super) async fn list_task_locks(Ws(runtime): Ws) -> Response {
 /// task resolves that dependency's real status instead of `[missing]`
 /// (ORB-10291). Task *listing* stays workspace-scoped: this index is only
 /// consulted to label dependencies, never to add tasks to the response body.
+/// `task`'s archived dependencies that reached `done` first label as `done`
+/// ([`OrbitRuntime::dependency_status_index`]).
 fn dashboard_status_index(
     runtime: &OrbitRuntime,
+    task: &Task,
 ) -> Result<std::collections::BTreeMap<String, TaskStatus>, orbit_core::OrbitError> {
-    runtime.task_status_index()
+    runtime.dependency_status_index([task])
 }
 
 pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
@@ -460,7 +464,7 @@ pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Respons
     let id = id.to_string();
     match blocking("task detail", move || {
         let row = runtime.get_task_row(&id)?;
-        Ok(dashboard_status_index(&runtime)
+        Ok(dashboard_status_index(&runtime, &row.task)
             .and_then(|statuses| task_row_to_json(&runtime, &row, &statuses)))
     })
     .await

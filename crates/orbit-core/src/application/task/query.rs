@@ -129,6 +129,58 @@ impl OrbitRuntime {
         self.stores().tasks().task_status_index()
     }
 
+    /// The status projection dependency satisfaction reads for `tasks`: the
+    /// global index ([`Self::task_status_index`]) with each archived
+    /// `blocked_by` target that reached `done` before it was archived
+    /// projected as `done` ([`Self::satisfy_completed_archived_dependencies`]).
+    pub fn dependency_status_index<'a>(
+        &self,
+        tasks: impl IntoIterator<Item = &'a Task>,
+    ) -> Result<BTreeMap<String, orbit_types::task::TaskStatus>, OrbitError> {
+        let mut status_by_id = self.task_status_index()?;
+        self.satisfy_completed_archived_dependencies(&mut status_by_id, tasks);
+        Ok(status_by_id)
+    }
+
+    /// Apply the shared archived-dependency rule
+    /// ([`orbit_types::task::satisfy_completed_archived_dependencies`]) to an
+    /// existing status projection for `tasks`' dependency edges. Each archived
+    /// target's history is read through its registered owner; an unreadable
+    /// one keeps its dead end rather than failing the caller.
+    pub fn satisfy_completed_archived_dependencies<'a>(
+        &self,
+        status_by_id: &mut BTreeMap<String, orbit_types::task::TaskStatus>,
+        tasks: impl IntoIterator<Item = &'a Task>,
+    ) {
+        let Ok(()) =
+            orbit_types::task::satisfy_completed_archived_dependencies::<std::convert::Infallible>(
+                status_by_id,
+                tasks.into_iter().flat_map(Task::dependencies),
+                |id| {
+                    Ok(self.dependency_history(id).unwrap_or_else(|error| {
+                        orbit_common::tracing::warn!(
+                            task_id = id,
+                            %error,
+                            "archived dependency history unreadable; keeping it a dead end"
+                        );
+                        None
+                    }))
+                },
+            );
+    }
+
+    /// Status history of a dependency target, read through its registered
+    /// owner like [`Self::resolve_dependency_task`].
+    pub fn dependency_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner(id, "dependency_history");
+        }
+        self.stores().tasks().registered_task_history(id)
+    }
+
     /// Status distribution per complexity bucket from the generated task index.
     pub fn task_completion_by_complexity(
         &self,

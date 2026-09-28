@@ -168,6 +168,19 @@ pub trait TaskStoreBackend: Send + Sync {
             None => RegisteredTaskResolution::Missing,
         })
     }
+    /// Status history of a dependency target, read through its registered
+    /// owner with the same authority as [`Self::registered_task`].
+    ///
+    /// Dependency satisfaction consults it only for archived targets, to tell
+    /// a task archived after it reached `done` from abandoned work. `None`
+    /// means no readable history, which keeps the archived edge a dead end;
+    /// that is the default for a backend without task history.
+    fn registered_task_history(
+        &self,
+        _id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        Ok(None)
+    }
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError>;
     fn search_tasks_filtered(&self, query: &str, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());

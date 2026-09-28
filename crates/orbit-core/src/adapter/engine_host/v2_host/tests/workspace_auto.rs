@@ -303,6 +303,68 @@ fn readiness_explains_dependencies_locks_children_claims_and_capacity() {
     );
 }
 
+/// Promotion and readiness share dispatch's archived-dependency rule: a
+/// dependency archived after `done` releases its dependent, one archived
+/// without reaching `done` keeps it an unmet dependency.
+#[test]
+fn readiness_releases_only_dependents_of_work_archived_after_done() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let seed_dependency = |title: &str| {
+        seed_list_backlog_task(
+            &runtime,
+            title,
+            TaskStatus::Backlog,
+            TaskPriority::Medium,
+            TaskType::Chore,
+            None,
+            vec![],
+        )
+        .id
+    };
+    let seed_dependent = |title: &str, dependency: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                description: "fixture".to_string(),
+                acceptance_criteria: vec!["fixture".to_string()],
+                plan: "fixture".to_string(),
+                dependencies: vec![dependency.to_string()],
+                complexity: TaskComplexity::Medium,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .expect("seed dependent")
+            .id
+    };
+    let finished = seed_dependency("Finished then archived");
+    let abandoned = seed_dependency("Abandoned then archived");
+    runtime
+        .update_task(
+            &finished,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("finish dependency");
+    runtime.archive_task(&finished).expect("archive finished");
+    runtime.archive_task(&abandoned).expect("archive abandoned");
+    let released = seed_dependent("Depends on finished work", &finished);
+    let stranded = seed_dependent("Depends on abandoned work", &abandoned);
+
+    let output = readiness(&runtime, &[released.clone(), stranded.clone()], Some(2));
+
+    assert_eq!(readiness_task(&output, &released)["reason"], "ready");
+    assert_eq!(
+        readiness_task(&output, &stranded)["reason"],
+        "unmet_dependency"
+    );
+    assert_eq!(
+        readiness_task(&output, &stranded)["dependencies"],
+        json!([{ "task_id": abandoned, "status": "archived" }])
+    );
+}
+
 #[test]
 fn readiness_matches_dispatch_and_does_not_mutate_the_snapshot() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();

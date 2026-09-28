@@ -7,10 +7,11 @@
 #
 # Behavioral contract
 # - `reserve_locks` refuses admission outright — before the first poll —
-#   when a bundled task's `blocked_by` target is archived, rejected, or
-#   dangling. Those edges can never reach `done`, so polling them to the
-#   iteration ceiling only delays a failure by the full wait budget. The
-#   loop is for edges that can still close.
+#   when a bundled task's `blocked_by` target is rejected, dangling, or
+#   archived without having reached `done` first (a target archived after
+#   `done` is satisfied). Those edges can never reach `done`, so polling
+#   them to the iteration ceiling only delays a failure by the full wait
+#   budget. The loop is for edges that can still close.
 # - `wait_for_window` polls by calling `reserve_locks` each iteration. The
 #   reserve step is always executed (never skipped) so its output can be
 #   referenced from `break_when` and from the post-loop starvation guard

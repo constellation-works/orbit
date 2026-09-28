@@ -240,6 +240,74 @@ fn same_host_cross_workspace_dependency_prepares_and_invalidates_on_status_chang
     );
 }
 
+fn set_owner_status(fixture: &TwoWorkspaces, id: &str, status: TaskStatus) {
+    fixture
+        .owner
+        .apply_task_automation_update(
+            id,
+            TaskAutomationUpdate {
+                status: Some(status),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("move {id} to {status}: {error}"));
+}
+
+/// Task-pilot evidence and readiness apply the archived-dependency rule
+/// through the prerequisite's registered owner: archived after `done`, it
+/// prepares exactly as the `done` prerequisite did; reopened and then
+/// archived, it is unmet again and the preparation goes stale.
+#[test]
+fn cross_workspace_dependency_archived_after_done_stays_satisfied_for_task_pilot() {
+    let fixture = two_workspaces();
+    let prerequisite = create_task(&fixture.owner, "prerequisite", Vec::new());
+    let dependent = create_task(
+        &fixture.dependent,
+        "dependent",
+        vec![prerequisite.id.clone()],
+    );
+    let fingerprint = || {
+        preparation::fingerprint(
+            &fixture.dependent,
+            &dependent,
+            &fixture.revision,
+            &dependency_policy(),
+        )
+        .expect("prepare the dependent")
+    };
+
+    set_owner_status(&fixture, &prerequisite.id, TaskStatus::Done);
+    let while_done = fingerprint();
+    set_owner_status(&fixture, &prerequisite.id, TaskStatus::Archived);
+
+    assert_eq!(
+        fingerprint(),
+        while_done,
+        "archiving finished work must not change what task-pilot prepared against"
+    );
+    let statuses = fixture
+        .dependent
+        .dependency_status_index([&dependent])
+        .expect("dependency projection");
+    assert_eq!(statuses.get(&prerequisite.id), Some(&TaskStatus::Done));
+    assert!(task_dependencies_ready(&dependent, &statuses));
+
+    set_owner_status(&fixture, &prerequisite.id, TaskStatus::Backlog);
+    set_owner_status(&fixture, &prerequisite.id, TaskStatus::Archived);
+
+    assert_ne!(
+        fingerprint(),
+        while_done,
+        "a prerequisite reopened before its archive is no longer done"
+    );
+    let statuses = fixture
+        .dependent
+        .dependency_status_index([&dependent])
+        .expect("dependency projection");
+    assert_eq!(statuses.get(&prerequisite.id), Some(&TaskStatus::Archived));
+    assert!(!task_dependencies_ready(&dependent, &statuses));
+}
+
 /// A dependency this machine's registry can never resolve stays explicitly
 /// unverified: preparation records the reference instead of inventing a
 /// status for it, and never reports it as satisfied.

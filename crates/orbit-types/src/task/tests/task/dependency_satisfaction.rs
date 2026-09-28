@@ -1,10 +1,13 @@
 use crate::task::{
-    DependencyDeadEnd, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskReferenceIndex, TaskStatus,
+    DependencyDeadEnd, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskHistoryEntry,
+    TaskReferenceIndex, TaskStatus, archived_task_completed_before_archive,
     resolve_task_dependencies, resolve_task_dependencies_with_index,
-    resolve_task_relations_with_index, task_dependencies_ready, task_dependencies_ready_with_index,
-    unmet_task_dependencies, unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
+    resolve_task_relations_with_index, satisfy_completed_archived_dependencies,
+    task_dependencies_ready, task_dependencies_ready_with_index, unmet_task_dependencies,
+    unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index,
 };
+use chrono::Utc;
 use std::collections::BTreeMap;
 
 /// `Task::dependencies()` reads `blocked_by` *relations*, not the legacy
@@ -345,4 +348,148 @@ fn mixed_edges_report_only_the_dead_ends_as_unsatisfiable() {
         .map(|dependency| dependency.id)
         .collect();
     assert_eq!(unmet, vec!["ORB-1".to_string(), "ORB-2".to_string()]);
+}
+
+/// A history whose status transitions visit `statuses` in order, interleaved
+/// with a non-status event so only transitions drive the rule.
+fn history(statuses: &[TaskStatus]) -> Vec<TaskHistoryEntry> {
+    let mut previous = None;
+    let mut entries = Vec::new();
+    for status in statuses {
+        entries.push(TaskHistoryEntry {
+            at: Utc::now(),
+            by: "fixture".to_string(),
+            event: "status_changed".to_string(),
+            note: None,
+            from_status: previous,
+            to_status: Some(*status),
+        });
+        entries.push(TaskHistoryEntry {
+            at: Utc::now(),
+            by: "fixture".to_string(),
+            event: "comment_added".to_string(),
+            note: None,
+            from_status: None,
+            to_status: None,
+        });
+        previous = Some(*status);
+    }
+    entries
+}
+
+#[test]
+fn archived_after_done_counts_as_completed() {
+    use TaskStatus::*;
+    for path in [
+        vec![Backlog, InProgress, Review, Done, Archived],
+        vec![Proposed, Done, Archived],
+        // Reopened, finished again, then archived.
+        vec![Backlog, Done, InProgress, Done, Archived],
+        // Restored straight back to done and archived again.
+        vec![Backlog, Done, Archived, Done, Archived],
+    ] {
+        assert!(
+            archived_task_completed_before_archive(&history(&path)),
+            "{path:?} reached done before its archive"
+        );
+    }
+}
+
+#[test]
+fn archived_without_a_standing_done_is_not_completed() {
+    use TaskStatus::*;
+    for path in [
+        // Abandoned work archived from any non-done status.
+        vec![Proposed, Archived],
+        vec![Backlog, Archived],
+        vec![Backlog, InProgress, Review, Archived],
+        // Reached done, was reopened, and was archived without finishing.
+        vec![Backlog, Done, InProgress, Archived],
+        vec![Backlog, Done, Backlog, Archived],
+        // Restored from an archive to a non-done status, then archived again.
+        vec![Backlog, Done, Archived, Backlog, Archived],
+        // Declined after completion.
+        vec![Backlog, Done, Rejected, Archived],
+        // History that does not end in the archive disagrees with the
+        // projection; keep the dead end.
+        vec![Backlog, Done],
+        vec![],
+    ] {
+        assert!(
+            !archived_task_completed_before_archive(&history(&path)),
+            "{path:?} must not satisfy a dependency"
+        );
+    }
+}
+
+#[test]
+fn completed_archived_dependency_is_satisfied_and_abandoned_one_stays_a_dead_end() {
+    use TaskStatus::*;
+    let task = task_with_dependencies("ORB-9", &["ORB-1", "ORB-2", "ORB-3", "ORB-4", "ORB-404"]);
+    let mut statuses = status_index(&[
+        ("ORB-1", Archived),
+        ("ORB-2", Archived),
+        ("ORB-3", Rejected),
+        ("ORB-4", Archived),
+    ]);
+    let histories = BTreeMap::from([
+        ("ORB-1", history(&[Backlog, Done, Archived])),
+        ("ORB-2", history(&[Backlog, Review, Archived])),
+        ("ORB-3", history(&[Backlog, Done, Rejected])),
+    ]);
+    let mut looked_up = Vec::new();
+
+    satisfy_completed_archived_dependencies::<()>(&mut statuses, task.dependencies(), |id| {
+        looked_up.push(id.to_string());
+        Ok(histories.get(id).cloned())
+    })
+    .unwrap();
+
+    assert_eq!(
+        looked_up,
+        vec!["ORB-1", "ORB-2", "ORB-4"],
+        "only archived targets are looked up"
+    );
+    assert_eq!(statuses.get("ORB-1"), Some(&Done));
+    assert_eq!(
+        resolve_task_dependencies(&task, &statuses)[0].label(),
+        "ORB-1 [done]"
+    );
+    let dead_ends = unsatisfiable_task_dependencies(&task, &statuses)
+        .into_iter()
+        .map(|dependency| (dependency.dependency_id, dependency.reason))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dead_ends,
+        vec![
+            ("ORB-2".to_string(), DependencyDeadEnd::Archived),
+            ("ORB-3".to_string(), DependencyDeadEnd::Rejected),
+            // No readable history keeps the archived dead end.
+            ("ORB-4".to_string(), DependencyDeadEnd::Archived),
+            ("ORB-404".to_string(), DependencyDeadEnd::Missing),
+        ]
+    );
+    assert_eq!(
+        unmet_task_dependencies(&task, &statuses)
+            .into_iter()
+            .map(|dependency| dependency.id)
+            .collect::<Vec<_>>(),
+        vec!["ORB-2", "ORB-3", "ORB-4", "ORB-404"]
+    );
+}
+
+#[test]
+fn only_completed_archived_dependencies_make_a_task_ready() {
+    use TaskStatus::*;
+    let task = task_with_dependencies("ORB-9", &["ORB-1"]);
+    let mut statuses = status_index(&[("ORB-1", Archived)]);
+    assert!(!task_dependencies_ready(&task, &statuses));
+
+    satisfy_completed_archived_dependencies::<()>(&mut statuses, task.dependencies(), |_| {
+        Ok(Some(history(&[Backlog, Done, Archived])))
+    })
+    .unwrap();
+
+    assert!(task_dependencies_ready(&task, &statuses));
+    assert!(unsatisfiable_task_dependencies(&task, &statuses).is_empty());
 }

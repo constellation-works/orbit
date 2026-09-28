@@ -122,6 +122,13 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| TaskV2Store::registered_task(self, id))
     }
 
+    fn registered_task_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::registered_task_history(self, id))
+    }
+
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         self.in_boundary(|| self.list_tasks_by_tags(tags))
     }

@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::{DependencyNotDelivered, OrbitError};
+use orbit_types::task::{TaskStatus, archived_task_completed_before_archive};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -112,7 +113,14 @@ pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
                 Err(OrbitError::NotFound { .. }) => continue,
                 Err(error) => return Err(error),
             };
-            if !dependency.status.satisfies_dependency() {
+            // An archived dependency counts as completed when it reached
+            // `done` before the archive, exactly as admission counts it.
+            let completed = dependency.status.satisfies_dependency()
+                || (dependency.status == TaskStatus::Archived
+                    && archived_task_completed_before_archive(
+                        &host.get_task_history(&dependency_id)?,
+                    ));
+            if !completed {
                 continue;
             }
             if let Some(commits) = undelivered_commits(repo_root, &dependency_id, base_sha)? {
