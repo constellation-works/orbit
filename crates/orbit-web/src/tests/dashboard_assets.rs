@@ -3818,3 +3818,82 @@ assert.doesNotMatch(detailOf(1).textContent, /metrics-arrived/);
 "#,
     ));
 }
+
+/// A live run's Gantt must reach the current time after a completed step so
+/// the running step's bar grows on each render; a finished run keeps its
+/// recorded bounds regardless of the clock.
+#[test]
+fn dashboard_gantt_extends_live_runs_to_now_and_keeps_finished_bounds() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        r#"
+import assert from "node:assert/strict";
+
+const { setActiveRunDetail, renderRunGantt } = await import("./js/run-detail.js");
+
+const base = Date.parse("2026-09-27T12:00:00Z");
+const at = (seconds) => new Date(base + seconds * 1000).toISOString();
+let clock = base + 20_000;
+Date.now = () => clock;
+
+const panel = document.getElementById("run-gantt-panel");
+const svg = () => panel.children.find((node) => node.tagName === "SVG");
+const bars = () => svg().children.filter((node) => node.getAttribute("class") === "gantt-bar");
+const widths = () => bars().map((bar) => Number(bar.getAttribute("width")));
+const axisEnd = () => svg().children
+  .filter((node) => node.getAttribute("class") === "gantt-axis-label")
+  .find((node) => node.getAttribute("text-anchor") === "end").textContent;
+const clockLabel = (ms) => {
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
+const live = {
+  run: { run_id: "jrun-live", state: "running", started_at: at(0) },
+  steps: [
+    { step_index: 0, target_id: "plan", state: "success", started_at: at(0), finished_at: at(10) },
+    { step_index: 1, target_id: "impl", state: "running", started_at: at(10) },
+  ],
+};
+setActiveRunDetail(live);
+renderRunGantt();
+assert.equal(axisEnd(), clockLabel(clock), "a live timeline must end at the current time");
+const [doneAt20, runningAt20] = widths();
+assert.ok(runningAt20 > 2, `the running step must span elapsed time, got width ${runningAt20}`);
+assert.ok(Math.abs(doneAt20 - runningAt20) < 1e-6, "10s done and 10s running must draw equal bars");
+
+clock = base + 40_000;
+renderRunGantt();
+assert.equal(axisEnd(), clockLabel(clock), "the live timeline must follow the clock");
+const [doneAt40, runningAt40] = widths();
+assert.ok(runningAt40 > runningAt20, "the running step bar must grow as time advances");
+assert.ok(Math.abs(runningAt40 - 3 * doneAt40) < 1e-6, "30s running must be three times the 10s done bar");
+
+const finished = {
+  run: { run_id: "jrun-done", state: "success", started_at: at(0), finished_at: at(25) },
+  steps: [
+    { step_index: 0, target_id: "plan", state: "success", started_at: at(0), finished_at: at(10) },
+    { step_index: 1, target_id: "impl", state: "success", started_at: at(10), finished_at: at(25) },
+  ],
+};
+setActiveRunDetail(finished);
+renderRunGantt();
+const finishedWidths = widths();
+assert.equal(axisEnd(), clockLabel(base + 25_000), "a finished run must end at its finish time");
+clock = base + 90_000;
+renderRunGantt();
+assert.deepEqual(widths(), finishedWidths, "a finished run's bars must not move with the clock");
+assert.equal(axisEnd(), clockLabel(base + 25_000));
+
+// A terminal run missing its own finish keeps the last step's finish.
+setActiveRunDetail({
+  run: { run_id: "jrun-partial", state: "failed", started_at: at(0) },
+  steps: [{ step_index: 0, target_id: "plan", state: "failed", started_at: at(0), finished_at: at(10) }],
+});
+renderRunGantt();
+assert.equal(axisEnd(), clockLabel(base + 10_000), "a terminal run must not stretch to now");
+"#,
+    ));
+}

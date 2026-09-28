@@ -21,6 +21,7 @@ import { buildExecutionProvenance } from './distributed.js';
 const $ = (id) => document.getElementById(id);
 
 const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app orchestrators
+const LIVE_RUN_STATES = new Set(["pending", "running", "retrying"]);
 
 // Run detail module-scoped state (was in app.js)
 let activeRunId = null;
@@ -453,8 +454,11 @@ export function renderRunGantt() {
       if (derivedEnd == null || t > derivedEnd) derivedEnd = t;
     }
   }
-  // Run still in flight or missing finish: extend to now.
-  if (derivedEnd == null) derivedEnd = Date.now();
+  // A live run's timeline runs to now even after a step has finished, so the
+  // active step's bar keeps growing. Terminal runs keep their recorded bounds
+  // and fall back to now only when no finish timestamp exists at all.
+  const now = Date.now();
+  if (derivedEnd == null || (LIVE_RUN_STATES.has(run.state) && derivedEnd < now)) derivedEnd = now;
   if (derivedStart == null) derivedStart = derivedEnd - 1000;
   if (derivedEnd <= derivedStart) derivedEnd = derivedStart + 1000;
 
