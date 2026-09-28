@@ -13,6 +13,7 @@ use serde::Deserialize;
 use tempfile::TempDir;
 
 use super::super::git::set_publication_git_deadline;
+use super::super::inspect::load_validated_publication;
 use super::super::publish::{clear_before_push_hook, set_before_push_hook};
 use super::*;
 use orbit_common::OrbitError;
@@ -843,7 +844,7 @@ fn publication_preserves_crlf_bytes_and_skips_configured_filters() {
         None,
     )
     .expect("publish crlf attachments");
-    let inspection = inspect_publication(PublicationInspectRequest {
+    let snapshot = load_validated_publication(PublicationInspectRequest {
         workspace_id: fixture.workspace_id.clone(),
         source_repository_fingerprint: FINGERPRINT.to_string(),
         publication_id: PUBLICATION_ID.to_string(),
@@ -855,6 +856,7 @@ fn publication_preserves_crlf_bytes_and_skips_configured_filters() {
     })
     .expect("inspect published crlf snapshot");
     drop(env);
+    let inspection = &snapshot.inspection;
 
     assert_eq!(outcome.status, PublicationPublishStatus::Initialized);
     assert_eq!(inspection.label.commit_id, outcome.commit_id);
@@ -891,12 +893,9 @@ fn publication_preserves_crlf_bytes_and_skips_configured_filters() {
         expected_sha,
         format!("{:x}", sha2::Sha256::digest(CRLF_PAYLOAD))
     );
-    let inspected = fixture
-        .root
-        .path()
-        .join("inspect-cache")
-        .join(PUBLICATION_ID)
-        .join("tree/tasks/ORB-00001/artifacts/files/payload.txt");
+    let inspected = snapshot.bundles[0]
+        .source_dir
+        .join("artifacts/files/payload.txt");
     assert_eq!(fs::read(inspected).unwrap(), CRLF_PAYLOAD);
 }
 

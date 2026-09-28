@@ -88,7 +88,9 @@ fn restore_publication_inner(
     // The inspector owns repository fetch, branch/commit lineage, envelope
     // pairing, schema support, bundle validation, JSONL validation, omission
     // validation, and attachment checksum verification. Recovery consumes that
-    // exact result rather than recreating a second validation path.
+    // exact result rather than recreating a second validation path. The
+    // snapshot owns the private checkout its `source_dir`s point into, so it
+    // stays alive until staging below has copied every artifact from it.
     let validated = load_validated_publication(request.publication.clone())?;
     let envelope = &validated.inspection.envelope;
     let task_workspace_id = request.task_workspace_id.clone();
