@@ -170,7 +170,7 @@ or debugging (`orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It 
 single-step run with no worktree, no task ownership, and no delivery tail, so most of
 this runbook's task-recovery steps do not apply to one.
 
-Three differences matter when triaging one:
+Four differences matter when triaging one:
 
 - **It is unsandboxed by design.** The provider subprocess runs on the host as the same
   operating-system user as Orbit, admitted per invocation by an operator. A sandbox
@@ -187,6 +187,10 @@ Three differences matter when triaging one:
   reuse it without a new authorization. Submit a fresh invocation instead. `orbit job
   replay` is likewise not a workaround: the replayed input carries no admission, so the
   activity fails closed.
+- **A retry key resolves the original run.** Reusing `--idempotency-key` returns that
+  run's persisted admission, timeout, provider sandbox, and sandbox warning, even if
+  the retry names different settings or the workspace default has changed. Use a new
+  key to request a new invocation.
 
 Read the outcome with `orbit run show <run_id>` — its `Invocation:` line distinguishes a
 completed answer from a mid-turn stop, a timeout, and a cancellation — and

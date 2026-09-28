@@ -38,7 +38,7 @@ use orbit_types::workflow::Provider;
 use orbit_types::workflow::activity_job::{
     DEFAULT_PROVIDER_SANDBOX, TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission,
     admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
-    least_restrictive_provider_sandbox_warning,
+    least_restrictive_provider_sandbox_warning, parse_provider_sandbox_label,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -207,21 +207,49 @@ impl OrbitRuntime {
         let (invoke, deduplicated) =
             self.submit_trusted_host_pipeline_run(input, &actor, request.idempotency_key)?;
 
+        // The keyed insert may have resolved a prior run, including one admitted
+        // by another process. Its input is the authority for the response; the
+        // settings calculated above belong only to this attempted submission.
+        let (admission, timeout_seconds, provider_sandbox) = if deduplicated {
+            let run = self
+                .stores()
+                .jobs()
+                .get_job_run(&invoke.run_id)?
+                .ok_or_else(|| {
+                    OrbitError::Execution(format!(
+                        "deduplicated agent invocation '{}' is missing its run record",
+                        invoke.run_id
+                    ))
+                })?;
+            persisted_invocation_settings(&run)?
+        } else {
+            (admission, timeout_seconds, provider_sandbox.label)
+        };
+        let (provider, mode) =
+            parse_provider_sandbox_label(&provider_sandbox).ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "agent invocation '{}' has an invalid persisted provider sandbox",
+                    invoke.run_id
+                ))
+            })?;
+        let warning = is_least_restrictive_provider_sandbox(provider, mode)
+            .then(|| least_restrictive_provider_sandbox_warning(&provider_sandbox));
+
         tracing::warn!(
             target: "orbit.trusted_host",
             run_id = %invoke.run_id,
             authorized_by = %admission.authorized_by,
             authorizer_provenance = %admission.authorizer_provenance,
             cwd = %admission.cwd,
-            provider_sandbox = %provider_sandbox.label,
+            provider_sandbox = %provider_sandbox,
             deduplicated,
             "admitted an operator agent invocation outside the executor sandbox"
         );
-        if let Some(warning) = provider_sandbox.warning.as_deref() {
+        if let Some(warning) = warning.as_deref() {
             tracing::warn!(
                 target: "orbit.trusted_host",
                 run_id = %invoke.run_id,
-                provider_sandbox = %provider_sandbox.label,
+                provider_sandbox = %provider_sandbox,
                 "{warning}"
             );
         }
@@ -234,8 +262,8 @@ impl OrbitRuntime {
             deduplicated,
             admission,
             timeout_seconds,
-            provider_sandbox: provider_sandbox.label,
-            warnings: provider_sandbox.warning.into_iter().collect(),
+            provider_sandbox,
+            warnings: warning.into_iter().collect(),
         })
     }
 
@@ -271,15 +299,48 @@ impl OrbitRuntime {
             None => default_mode,
         };
         let label = format_provider_sandbox(provider, &mode);
-        let warning = is_least_restrictive_provider_sandbox(provider, &mode)
-            .then(|| least_restrictive_provider_sandbox_warning(&label));
-        Ok(ResolvedProviderSandbox { label, warning })
+        Ok(ResolvedProviderSandbox { label })
     }
 }
 
 struct ResolvedProviderSandbox {
     label: String,
-    warning: Option<String>,
+}
+
+fn persisted_invocation_settings(
+    run: &JobRun,
+) -> Result<(TrustedHostAdmission, u64, String), OrbitError> {
+    let input = run.input.as_ref().ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "deduplicated agent invocation '{}' has no persisted input",
+            run.run_id
+        ))
+    })?;
+    let admission = TrustedHostAdmission::from_run_input(input).ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "deduplicated agent invocation '{}' has no valid persisted admission",
+            run.run_id
+        ))
+    })?;
+    let timeout_seconds = input
+        .get("timeout_seconds")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "deduplicated agent invocation '{}' has no persisted timeout",
+                run.run_id
+            ))
+        })?;
+    let provider_sandbox = input
+        .get("provider_sandbox")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "deduplicated agent invocation '{}' has no persisted provider sandbox",
+                run.run_id
+            ))
+        })?;
+    Ok((admission, timeout_seconds, provider_sandbox.to_string()))
 }
 
 /// Read a finished or in-flight invocation for an operator [ORB-11354].

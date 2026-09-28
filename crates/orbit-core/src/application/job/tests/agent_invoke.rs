@@ -721,12 +721,99 @@ fn a_retry_after_a_lost_response_returns_the_original_run() {
     assert!(!first.deduplicated);
     assert!(retry.deduplicated, "the retry must resolve, not admit");
     assert_eq!(retry.run_id, first.run_id);
+    assert_eq!(retry.submitted_at, first.submitted_at);
+    assert_eq!(retry.admission, first.admission);
+    assert_eq!(retry.timeout_seconds, first.timeout_seconds);
+    assert_eq!(retry.provider_sandbox, first.provider_sandbox);
+    assert_eq!(retry.warnings, first.warnings);
     assert!(!other.deduplicated, "a different key is independent");
     assert_ne!(other.run_id, first.run_id);
     let mut expected = vec![first.run_id, other.run_id];
     expected.sort();
     assert_eq!(agent_invoke_run_ids(&runtime), expected);
     assert_eq!(spawns.settled(), expected, "one worker per admitted run");
+}
+
+#[test]
+fn a_changed_keyed_retry_reports_the_original_security_settings() {
+    let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let spawns = SpawnLog::install(root.path());
+    let local = operator_session();
+    let remote = remote_operator_session();
+    let cwd = repo_root.display().to_string();
+    let first = runtime
+        .submit_agent_invoke_run(AgentInvokeRequest {
+            idempotency_key: Some("incident-settings"),
+            provider_sandbox: Some("danger-full-access"),
+            timeout_seconds: Some(1800),
+            actor: Some("original-operator"),
+            ..request(&cwd, &local)
+        })
+        .expect("first submission");
+    let retry = runtime
+        .submit_agent_invoke_run(AgentInvokeRequest {
+            idempotency_key: Some("incident-settings"),
+            provider_sandbox: Some("read-only"),
+            timeout_seconds: Some(10),
+            actor: Some("retrying-operator"),
+            ..request(&cwd, &remote)
+        })
+        .expect("changed retry resolves the original run");
+
+    assert!(retry.deduplicated);
+    assert_eq!(retry.run_id, first.run_id);
+    assert_eq!(retry.submitted_at, first.submitted_at);
+    assert_eq!(retry.admission, first.admission);
+    assert_eq!(retry.admission.authorized_by, "original-operator");
+    assert_eq!(retry.timeout_seconds, 1800);
+    assert_eq!(retry.provider_sandbox, "codex:danger-full-access");
+    assert_eq!(retry.warnings, first.warnings);
+    assert_eq!(
+        retry.warnings.len(),
+        1,
+        "the original sandbox warning survives"
+    );
+    assert_eq!(agent_invoke_run_ids(&runtime), vec![first.run_id.clone()]);
+    assert_eq!(spawns.settled(), vec![first.run_id]);
+}
+
+#[test]
+fn a_retry_after_the_default_sandbox_changes_reports_the_persisted_mode() {
+    let (root, runtime, repo_root) = test_runtime_with_codex_crew("danger-full-access");
+    let spawns = SpawnLog::install(root.path());
+    let session = operator_session();
+    let cwd = repo_root.display().to_string();
+    let keyed = AgentInvokeRequest {
+        idempotency_key: Some("incident-default-change"),
+        ..request(&cwd, &session)
+    };
+    let first = runtime
+        .submit_agent_invoke_run(keyed.clone())
+        .expect("admit under original default");
+
+    let config_path = repo_root.join(".orbit/config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("read crew config");
+    std::fs::write(
+        &config_path,
+        config.replace(
+            "sandbox = \"danger-full-access\"",
+            "sandbox = \"read-only\"",
+        ),
+    )
+    .expect("change default sandbox");
+    let retry_runtime =
+        OrbitRuntime::from_roots(&root.path().join("global"), &repo_root.join(".orbit"))
+            .expect("reload runtime after default changes");
+    let retry = retry_runtime
+        .submit_agent_invoke_run(keyed)
+        .expect("retry resolves original run");
+
+    assert!(retry.deduplicated);
+    assert_eq!(retry.run_id, first.run_id);
+    assert_eq!(retry.admission, first.admission);
+    assert_eq!(retry.provider_sandbox, "codex:danger-full-access");
+    assert_eq!(retry.warnings, first.warnings);
+    assert_eq!(spawns.settled(), vec![first.run_id]);
 }
 
 /// [ORB-13560] Concurrent submissions of one key from independent runtimes —
