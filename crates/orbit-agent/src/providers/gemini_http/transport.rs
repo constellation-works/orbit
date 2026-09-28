@@ -15,6 +15,8 @@ use crate::loop_engine::transport::{
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 
+use crate::providers::http_body::{body_diagnostic, read_error_body, read_response_body};
+
 use super::wire::{
     Content, CreateCachedContentRequest, CreateCachedContentResponse, FunctionCall,
     FunctionDeclaration, FunctionResponse, GenerateContentRequest, GenerateContentResponse,
@@ -133,20 +135,15 @@ impl GeminiHttpTransport {
             .map_err(network_request_error)?;
 
         let http_status = response.status().as_u16();
-        let response_bytes = response
-            .bytes()
-            .map_err(|e| network_error_with_context("read body", e))?
-            .to_vec();
-
         if !(200..300).contains(&http_status) {
-            let body = String::from_utf8_lossy(&response_bytes).to_string();
             // Failing to cache is an error that should bubble up to ensure
             // the transport behaves predictably.
             return Err(TransportError::BadStatus {
                 status: http_status,
-                body,
+                body: read_error_body(response)?,
             });
         }
+        let response_bytes = read_response_body(response)?;
 
         let parsed: CreateCachedContentResponse = serde_json::from_slice(&response_bytes)
             .map_err(|e| TransportError::Decode(format!("parse cache response: {e}")))?;
@@ -236,13 +233,8 @@ impl LoopTransport for GeminiHttpTransport {
             .map_err(network_request_error)?;
 
         let http_status = response.status().as_u16();
-        let response_bytes = response
-            .bytes()
-            .map_err(|e| network_error_with_context("read body", e))?
-            .to_vec();
-
         if !(200..300).contains(&http_status) {
-            let body = String::from_utf8_lossy(&response_bytes).to_string();
+            let body = read_error_body(response)?;
             if matches!(http_status, 401 | 403) {
                 return Err(TransportError::Auth(body));
             }
@@ -251,12 +243,13 @@ impl LoopTransport for GeminiHttpTransport {
                 body,
             });
         }
+        let response_bytes = read_response_body(response)?;
 
         let parsed: GenerateContentResponse =
             serde_json::from_slice(&response_bytes).map_err(|e| {
                 TransportError::Decode(format!(
                     "parse response: {e}\nbody={}",
-                    String::from_utf8_lossy(&response_bytes)
+                    body_diagnostic(&response_bytes)
                 ))
             })?;
 
@@ -399,15 +392,7 @@ fn network_request_error(_: reqwest::Error) -> TransportError {
 // error translation because request-bound errors may contain sensitive data.
 #[cfg(test)]
 pub(super) fn network_error(error: reqwest::Error) -> TransportError {
-    TransportError::Network(reqwest_error_message(error))
-}
-
-fn network_error_with_context(context: &str, error: reqwest::Error) -> TransportError {
-    TransportError::Network(format!("{context}: {}", reqwest_error_message(error)))
-}
-
-fn reqwest_error_message(error: reqwest::Error) -> String {
-    error.without_url().to_string()
+    TransportError::Network(error.without_url().to_string())
 }
 
 fn normalize_base_url(base_url: String) -> String {

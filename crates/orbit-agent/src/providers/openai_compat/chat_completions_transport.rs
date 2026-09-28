@@ -15,6 +15,8 @@ use crate::loop_engine::transport::{
     TurnRequest, TurnResponse, TurnUsage,
 };
 
+use crate::providers::http_body::{read_error_body, read_response_body};
+
 use super::wire::{
     ChatCompletionsRequest, ChatCompletionsResponse, FunctionDefinition, IncomingMessage,
     IncomingToolCall, IncomingUsage, OutgoingFunctionCall, OutgoingToolCall, RequestMessage,
@@ -123,13 +125,8 @@ impl LoopTransport for OpenAiCompatTransport {
             .map_err(|e| TransportError::Network(e.to_string()))?;
 
         let http_status = response.status().as_u16();
-        let response_bytes = response
-            .bytes()
-            .map_err(|e| TransportError::Network(format!("read body: {e}")))?
-            .to_vec();
-
         if !(200..300).contains(&http_status) {
-            let body = String::from_utf8_lossy(&response_bytes).to_string();
+            let body = read_error_body(response)?;
             if matches!(http_status, 401 | 403) {
                 return Err(TransportError::Auth(body));
             }
@@ -138,6 +135,7 @@ impl LoopTransport for OpenAiCompatTransport {
                 body,
             });
         }
+        let response_bytes = read_response_body(response)?;
 
         let parsed: ChatCompletionsResponse = serde_json::from_slice(&response_bytes)
             .map_err(|e| TransportError::Decode(format!("parse response: {e}")))?;
