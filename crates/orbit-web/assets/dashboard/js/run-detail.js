@@ -15,7 +15,7 @@
 // No behavior change: identical rendering, expand/collapse, tooltips, routing, subtab
 // activation, and scroll-to-step.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -94,8 +94,59 @@ function buildReplayRunButton(run, host) {
 
 // --- public state accessors (re-exported by app.js routerContext + runDetailContext) ---
 
+// One generation per fetch channel. Navigation and a newer fetch of the same
+// channel both move it, so a response is applied only when the run, workspace,
+// revision, and generation it captured are still the ones on screen. A return
+// to the same run (A → B → A) and a workspace change that keeps the run id
+// both miss that check.
+const runDetailFetchGeneration = { detail: 0, events: 0, logs: 0 };
+
+function bumpRunDetailFetches() {
+  runDetailFetchGeneration.detail += 1;
+  runDetailFetchGeneration.events += 1;
+  runDetailFetchGeneration.logs += 1;
+}
+
+export function beginRunDetailFetch(channel) {
+  return {
+    runId: activeRunId,
+    workspace: getWorkspace(),
+    revision: getWorkspaceRevision(),
+    generation: ++runDetailFetchGeneration[channel],
+  };
+}
+
+export function runDetailFetchCurrent(channel, token) {
+  return !!token
+    && runDetailFetchGeneration[channel] === token.generation
+    && activeRunId === token.runId
+    && getWorkspace() === token.workspace
+    && getWorkspaceRevision() === token.revision;
+}
+
+// Drop the previous run's data and action buttons before the next paint.
+// Waiting for the in-flight response would leave its cancel/replay targets
+// mounted under the new run or workspace.
+function retireRunDetailView() {
+  bumpRunDetailFetches();
+  activeRunDetail = null;
+  activeRunEvents = [];
+  activeRunEventsError = null;
+  activeRunLogs = [];
+  expandedStepIndices = new Set();
+  if (typeof document !== "undefined" && document.getElementById("run-detail-meta")) {
+    renderRunDetailEmpty(activeRunId ? "Loading run…" : "No run selected.");
+  }
+}
+
 export function getActiveRunId() { return activeRunId; }
-export function setActiveRunId(v) { activeRunId = v; }
+export function setActiveRunId(v) {
+  if (v === activeRunId) return;
+  activeRunId = v;
+  retireRunDetailView();
+}
+
+onWorkspaceChange(retireRunDetailView);
 
 export function getActiveRunDetail() { return activeRunDetail; }
 export function setActiveRunDetail(v) { activeRunDetail = v; }
@@ -143,10 +194,14 @@ export function renderRunDetailEmpty(message) {
     el("div", { class: "icon", text: "✧" }),
     el("div", { class: "text", text: message }),
   ])]);
-  $("run-detail-title").textContent = "Run Detail";
-  $("run-detail-count").textContent = "-";
-  $("run-steps-body").innerHTML = "";
-  $("run-events-body").innerHTML = "";
+  const title = $("run-detail-title");
+  if (title) title.textContent = "Run Detail";
+  const count = $("run-detail-count");
+  if (count) count.textContent = "-";
+  const steps = $("run-steps-body");
+  if (steps) steps.innerHTML = "";
+  const events = $("run-events-body");
+  if (events) events.innerHTML = "";
   const knowledge = $("run-knowledge-panel");
   const gantt = $("run-gantt-panel");
   if (knowledge) knowledge.style.display = "none";
