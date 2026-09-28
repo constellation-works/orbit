@@ -96,7 +96,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 |---|---|
 | `orbit run cancel <run_id> --confirm` | Cancel a pending or running job run and release its task reservations. |
 | `orbit run concurrency <run_id> --set N` | Retune how many tasks a live drain keeps in flight. `--reason`, `--if-revision`. |
-| `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. `--run <ID>` restricts to one run, `--older-than-hours <N>` to runs finished at least that long ago. Dry-run skips the recursive byte estimate unless `--estimate-bytes`. |
+| `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. `--run <ID>` restricts to one run, `--older-than-hours <N>` to runs finished at least that long ago. Dry-run skips the recursive byte estimate unless `--estimate-bytes`. `--target-only` reclaims only each worktree's `target/` build output, for any terminal run with no live worker, and keeps the checkout. On a replica, task status comes from the owner machine; an unreachable owner is reported `skipped:owner_unreachable`. |
 
 ### Jobs and tools
 

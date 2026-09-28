@@ -269,7 +269,10 @@ orbit gc worktrees --run "$CHILD_RUN_ID" --confirm     # one job run only
 
 `orbit gc worktrees` only collects worktrees whose task has settled to `done`,
 `rejected`, or `archived`, and it reports without removing unless you pass
-`--confirm`.
+`--confirm`. On a replica it reads task status from the owner machine. To free
+the disk a failed run's build output holds while keeping its checkout for
+rescue, run `orbit gc worktrees --target-only --confirm`: it deletes only
+`<worktree>/target` for terminal runs with no live worker.
 
 ## 8. Keep the task record durable
 

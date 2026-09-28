@@ -36,6 +36,17 @@ fn gc_worktrees_accepts_estimate_bytes() {
 }
 
 #[test]
+fn gc_worktrees_target_only_stays_a_dry_run_until_confirmed() {
+    let cli = Cli::parse_from(["orbit", "gc", "worktrees", "--target-only"]);
+    let Commands::Gc(command) = cli.command else {
+        panic!("expected gc");
+    };
+    let GcTarget::Worktrees(args) = command.target;
+    assert!(args.target_only);
+    assert!(!args.confirm);
+}
+
+#[test]
 fn gc_help_exposes_positional_worktree_class() {
     let help = Cli::command().render_long_help().to_string();
     assert!(help.contains("gc          Inspect and explicitly reap"));

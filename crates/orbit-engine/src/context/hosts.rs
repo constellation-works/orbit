@@ -247,6 +247,21 @@ pub trait PluginBrokerHandle: Send {
     fn bind_sandbox(&self, sandbox_pid: u32) -> Result<(), OrbitError>;
 }
 
+/// What worktree GC learned about one task from the store that owns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorktreeGcTaskLookup {
+    /// The owning store answered with the task's current state.
+    Found {
+        status: TaskStatus,
+        pr_status: Option<String>,
+    },
+    /// The owning store answered but did not produce the task.
+    Unresolved,
+    /// This checkout is a replica and its owner could not be asked. The
+    /// string is the transport's reason, for logs.
+    OwnerUnreachable(String),
+}
+
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
@@ -596,6 +611,18 @@ pub trait RuntimeHost: Send + Sync {
         Err(OrbitError::Execution(
             "worktree GC is not implemented for this runtime host".to_string(),
         ))
+    }
+    /// A task's settlement state for worktree GC, read from the store that
+    /// owns the workspace's tasks. The default reads this host's own store;
+    /// a replica host overrides it to ask its owner.
+    fn lookup_task_for_worktree_gc(&self, task_id: &str) -> WorktreeGcTaskLookup {
+        match self.get_task(task_id) {
+            Ok(task) => WorktreeGcTaskLookup::Found {
+                status: task.status,
+                pr_status: task.pr_status,
+            },
+            Err(_) => WorktreeGcTaskLookup::Unresolved,
+        }
     }
     fn data_root(&self) -> &Path {
         Path::new("")

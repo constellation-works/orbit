@@ -57,6 +57,12 @@ pub struct WorktreeGcArgs {
     #[arg(long)]
     pub estimate_bytes: bool,
 
+    /// Reclaim only each worktree's `target/` build output and keep the
+    /// checkout. Applies to every terminal run with no live worker, whatever
+    /// its task's status; combine with `--confirm` to delete.
+    #[arg(long)]
+    pub target_only: bool,
+
     /// Emit the complete report as JSON
     #[arg(long)]
     pub json: bool,
@@ -69,6 +75,7 @@ impl Execute for WorktreeGcArgs {
             self.run,
             self.older_than_hours,
             self.estimate_bytes,
+            self.target_only,
         )?;
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize worktree GC report: {error}"))

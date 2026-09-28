@@ -477,6 +477,10 @@ impl RuntimeHost for OrbitRuntime {
         self.list_job_runs_for_worktree_gc()
     }
 
+    fn lookup_task_for_worktree_gc(&self, task_id: &str) -> orbit_engine::WorktreeGcTaskLookup {
+        self.worktree_gc_task_lookup(task_id)
+    }
+
     fn data_root(&self) -> &std::path::Path {
         self.context.data_root()
     }

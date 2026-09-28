@@ -1,21 +1,27 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
 use super::super::git::{git_command_success, git_output, git_success};
 use super::cleanup::remove_worktree;
 use super::{
     WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
 };
+
+/// The Cargo build directory a worktree accumulates — the only path
+/// target-only collection touches.
+const BUILD_OUTPUT_DIR: &str = "target";
 
 /// Task statuses that settle the work as done — the only statuses that
 /// license discarding a run's worktree and branch. Every other status
@@ -36,6 +42,10 @@ pub struct WorktreeGcOptions {
     /// Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips
     /// the walk unless this is set; deletion always measures before removal.
     pub estimate_bytes: bool,
+    /// Reclaim only each eligible worktree's `target/` build output and keep
+    /// the checkout. Eligibility needs a terminal run with no live worker,
+    /// not a settled task, so failed and blocked runs stay rescuable.
+    pub target_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -71,6 +81,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     }
 
     let registered = registered_worktree_paths(repo_root)?;
+    let lookups = SweepTaskLookups::new(task_host);
 
     let mut reports = Vec::new();
     for (path, matching_runs) in &known_paths {
@@ -109,7 +120,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         // must not abort the sweep before it reaches every other worktree.
         // Report it and move on; the pass as a whole still succeeds with a
         // partial summary.
-        let report = classify_known(repo_root, path, run, task_host, options, &registered)
+        let report = classify_known(repo_root, path, run, &lookups, options, &registered)
             .unwrap_or_else(|error| {
                 tracing::warn!(
                     path = %path.display(),
@@ -162,20 +173,70 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
     })
 }
 
+/// One sweep's task lookups. Runs that retry a task, and bundles that share
+/// one, ask about each task once. Once a replica's owner proves unreachable,
+/// every later lookup in the sweep reports that without waiting on the
+/// transport again: the next sweep asks afresh.
+struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
+    host: &'a H,
+    answers: RefCell<BTreeMap<String, WorktreeGcTaskLookup>>,
+    owner_unreachable: RefCell<Option<String>>,
+}
+
+impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
+    fn new(host: &'a H) -> Self {
+        Self {
+            host,
+            answers: RefCell::new(BTreeMap::new()),
+            owner_unreachable: RefCell::new(None),
+        }
+    }
+
+    fn lookup(&self, task_id: &str) -> WorktreeGcTaskLookup {
+        if let Some(answer) = self.answers.borrow().get(task_id) {
+            return answer.clone();
+        }
+        if let Some(reason) = self.owner_unreachable.borrow().as_ref() {
+            return WorktreeGcTaskLookup::OwnerUnreachable(reason.clone());
+        }
+        let answer = self.host.lookup_task_for_worktree_gc(task_id);
+        match &answer {
+            WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
+                *self.owner_unreachable.borrow_mut() = Some(reason.clone());
+            }
+            _ => {
+                self.answers
+                    .borrow_mut()
+                    .insert(task_id.to_string(), answer.clone());
+            }
+        }
+        answer
+    }
+}
+
 fn classify_known<H: RuntimeHost + ?Sized>(
     repo_root: &Path,
     path: &Path,
     run: &JobRun,
-    task_host: &H,
+    lookups: &SweepTaskLookups<'_, H>,
     options: &WorktreeGcOptions,
     registered: &BTreeSet<PathBuf>,
 ) -> Result<WorktreeGcReport, OrbitError> {
     let task_ids = attributed_task_ids(run);
-    let resolved = task_ids
-        .iter()
-        .map(|task_id| (task_id.clone(), task_host.get_task(task_id).ok()))
-        .collect::<Vec<(String, Option<Task>)>>();
-    let first_task = resolved.first().and_then(|(_, task)| task.as_ref());
+    // Target-only collection never consults task state, so it never pays a
+    // store or owner round trip per task.
+    let resolved = if options.target_only {
+        Vec::new()
+    } else {
+        task_ids
+            .iter()
+            .map(|task_id| (task_id.clone(), lookups.lookup(task_id)))
+            .collect::<Vec<(String, WorktreeGcTaskLookup)>>()
+    };
+    let first_task = resolved.first().and_then(|(_, lookup)| match lookup {
+        WorktreeGcTaskLookup::Found { status, pr_status } => Some((*status, pr_status.clone())),
+        _ => None,
+    });
 
     let mut report = WorktreeGcReport {
         path: path.to_path_buf(),
@@ -184,8 +245,8 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         // A bundle worktree serves several tasks; name all of them until a
         // single one is identified as the reason it is retained.
         task_id: (!task_ids.is_empty()).then(|| task_ids.join(",")),
-        task_status: first_task.map(|task| task.status),
-        pr_status: first_task.and_then(|task| task.pr_status.clone()),
+        task_status: first_task.as_ref().map(|(status, _)| *status),
+        pr_status: first_task.and_then(|(_, pr_status)| pr_status),
         action: String::new(),
         bytes_reclaimed: 0,
     };
@@ -217,6 +278,9 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = "skipped:not_registered_worktree".to_string();
         return Ok(report);
     }
+    if options.target_only {
+        return collect_build_output(path, run, options, report);
+    }
 
     // Primary gate: only a task settled to rejected, archived, or done
     // licenses deletion. A run's process finishing says nothing about
@@ -232,21 +296,33 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = "skipped:unattributed".to_string();
         return Ok(report);
     }
-    for (task_id, task) in &resolved {
-        let Some(task) = task else {
-            report.task_id = Some(task_id.clone());
-            report.task_status = None;
-            report.pr_status = None;
-            report.action = "skipped:task_unresolved".to_string();
-            return Ok(report);
+    for (task_id, lookup) in resolved {
+        let (task_status, pr_status, action) = match lookup {
+            WorktreeGcTaskLookup::Found { status, pr_status } => {
+                if task_status_permits_deletion(status) {
+                    continue;
+                }
+                (Some(status), pr_status, "skipped:task_status_ineligible")
+            }
+            WorktreeGcTaskLookup::Unresolved => (None, None, "skipped:task_unresolved"),
+            // A replica's task state lives on its owner. Not reaching the
+            // owner is not evidence the task is unknown, so say which it was.
+            WorktreeGcTaskLookup::OwnerUnreachable(reason) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    run_id = %run.run_id,
+                    %task_id,
+                    %reason,
+                    "worktree GC could not reach the workspace owner to resolve a task; retaining the worktree"
+                );
+                (None, None, "skipped:owner_unreachable")
+            }
         };
-        if !task_status_permits_deletion(task.status) {
-            report.task_id = Some(task_id.clone());
-            report.task_status = Some(task.status);
-            report.pr_status = task.pr_status.clone();
-            report.action = "skipped:task_status_ineligible".to_string();
-            return Ok(report);
-        }
+        report.task_id = Some(task_id);
+        report.task_status = task_status;
+        report.pr_status = pr_status;
+        report.action = action.to_string();
+        return Ok(report);
     }
 
     // Reported safety net, not a deletion gate: a task can be settled with
@@ -295,6 +371,87 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     } else {
         "removed".to_string()
     };
+    Ok(report)
+}
+
+/// Target-only collection: reclaim `<worktree>/target` and nothing else.
+///
+/// The checkout — committed, uncommitted and untracked work alike — stays, so
+/// a failed or blocked run can still be rescued. That is why the task gate
+/// does not apply here: the caller has already required a terminal run, and
+/// the build output is reproducible from the checkout it sits in.
+fn collect_build_output(
+    worktree: &Path,
+    run: &JobRun,
+    options: &WorktreeGcOptions,
+    mut report: WorktreeGcReport,
+) -> Result<WorktreeGcReport, OrbitError> {
+    // A terminal run record can precede its worker's actual exit (a cancelled
+    // agent still finishing a build). A recorded worker that is alive, or
+    // whose liveness cannot be decided, keeps its build output.
+    if run.pid.is_some_and(|pid| {
+        probe_process_liveness(pid, run.pid_start_time.as_deref()) != ProcessLiveness::Exited
+    }) {
+        report.action = "skipped:worker_alive".to_string();
+        return Ok(report);
+    }
+    let target = worktree.join(BUILD_OUTPUT_DIR);
+    let metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            report.action = "skipped:no_target".to_string();
+            return Ok(report);
+        }
+        Err(error) => {
+            return Err(OrbitError::Execution(format!(
+                "failed to inspect build output '{}': {error}",
+                target.display()
+            )));
+        }
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        report.action = "skipped:target_not_a_real_directory".to_string();
+        return Ok(report);
+    }
+    // Only ignored content is build output. A tracked file, or an untracked
+    // one Git does not ignore, under `target/` is somebody's work.
+    if !git_output(
+        worktree,
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            BUILD_OUTPUT_DIR,
+        ],
+    )?
+    .trim()
+    .is_empty()
+    {
+        report.action = "skipped:target_not_ignored".to_string();
+        return Ok(report);
+    }
+
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(&target)?
+    } else {
+        0
+    };
+    report.bytes_reclaimed = estimated_bytes;
+    if !options.delete {
+        report.action = "would_remove_target".to_string();
+        return Ok(report);
+    }
+    // `remove_dir_all` unlinks symlinks inside the tree rather than following
+    // them, so nothing outside `target/` is reachable from here.
+    fs::remove_dir_all(&target).map_err(|error| {
+        OrbitError::Execution(format!(
+            "failed to remove build output '{}': {error}",
+            target.display()
+        ))
+    })?;
+    report.action = "removed_target".to_string();
     Ok(report)
 }
 
