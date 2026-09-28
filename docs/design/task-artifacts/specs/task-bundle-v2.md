@@ -399,12 +399,15 @@ cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture
 The fixture root must be new and temporary. Omitting it from the store test
 automatically removes the generated corpus after the measurement. To compare
 actual HTTP implementations, archive the baseline commit into a temporary
-directory and add only `api/tests/task_response_bench.rs` and its test-module
-registration. Run that identical harness on the same retained corpus, setting
-the mode label to `baseline`. Build both binaries first, then run benchmarks
-serially without compilation overlap. HTTP measurements include response
-serialization and an unrelated workspace request under four concurrent lists
-on one Tokio worker.
+directory and add only `api/tests/task_response_bench.rs`, its test-module
+registration and the isolated child launcher it calls from
+`api/tests/test_support.rs`. Run that identical harness on the same retained
+corpus, setting the mode label to `baseline`. The harness measures in a child
+of the test binary with inherited Orbit authority cleared, and the parent
+re-emits the child's JSON report lines. Build both binaries first, then run
+benchmarks serially without compilation overlap. HTTP measurements include
+response serialization and an unrelated workspace request under four
+concurrent lists on one Tokio worker.
 
 Both harnesses warm each operation before eleven timed samples, reporting the
 median and nearest-rank p95 (the maximum with eleven samples). Linux `VmHWM`

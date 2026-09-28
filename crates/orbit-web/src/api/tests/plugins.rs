@@ -2,7 +2,9 @@
 //!
 //! The fixture installs a real plugin through the ordinary lifecycle and
 //! then reopens the runtime, so the listing and the panel read answer from
-//! the same load pass the tool surface was built from.
+//! the same load pass the tool surface was built from. Each test runs in an
+//! isolated child of this test binary, so a managed run's inherited worker
+//! binding, tool allowlist or plugin broker never decides the outcome.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,7 +20,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use super::super::router;
-use super::test_support::body_json;
+use super::test_support::{assert_isolated_child, body_json, enter_isolated_child};
 use crate::state::{DashboardState, WsEntry};
 
 struct PluginFixture {
@@ -29,6 +31,7 @@ struct PluginFixture {
 
 impl PluginFixture {
     fn new() -> Self {
+        assert_isolated_child();
         let temp = tempfile::tempdir().expect("tempdir");
         let global_root = temp.path().join("global");
         let workspace_root = temp.path().join("repo/.orbit");
@@ -121,18 +124,6 @@ spec:
     .expect("write manifest");
 }
 
-/// A panel read goes through the same tool dispatch an activity's calls do,
-/// so an inherited managed-run allowlist would decide the outcome. Pin the
-/// two variables that carry one, the way the config tests pin the caller's.
-#[allow(clippy::await_holding_lock)]
-async fn without_inherited_activity_scope<T>(fut: impl std::future::Future<Output = T>) -> T {
-    let _env = orbit_common::test_env::scoped([
-        ("ORBIT_TASK_ACTOR_KIND", None),
-        ("ORBIT_ACTIVITY_TOOLS", None),
-    ]);
-    fut.await
-}
-
 async fn get(state: DashboardState, uri: &str) -> axum::response::Response {
     router()
         .with_state(state)
@@ -194,6 +185,12 @@ fn state(runtime: OrbitRuntime) -> DashboardState {
 #[cfg(unix)]
 #[tokio::test]
 async fn operator_can_toggle_both_scopes_and_each_write_is_audited() {
+    if !enter_isolated_child(
+        module_path!(),
+        "operator_can_toggle_both_scopes_and_each_write_is_audited",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     write_plugin(&fixture.source());
     let runtime = fixture.runtime();
@@ -252,6 +249,12 @@ async fn operator_can_toggle_both_scopes_and_each_write_is_audited() {
 #[cfg(unix)]
 #[tokio::test]
 async fn non_operator_is_refused_and_audited_before_any_plugin_change() {
+    if !enter_isolated_child(
+        module_path!(),
+        "non_operator_is_refused_and_audited_before_any_plugin_change",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     write_plugin(&fixture.source());
     let runtime = fixture.runtime();
@@ -283,6 +286,12 @@ async fn non_operator_is_refused_and_audited_before_any_plugin_change() {
 #[cfg(unix)]
 #[tokio::test]
 async fn host_enable_requires_recorded_matching_grants_and_program_paths() {
+    if !enter_isolated_child(
+        module_path!(),
+        "host_enable_requires_recorded_matching_grants_and_program_paths",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     write_plugin(&fixture.source());
     let manifest = fixture.source().join("plugin.yaml");
@@ -374,6 +383,12 @@ async fn host_enable_requires_recorded_matching_grants_and_program_paths() {
 #[cfg(unix)]
 #[tokio::test]
 async fn workspace_enable_under_host_off_and_unknown_plugin_have_structured_responses() {
+    if !enter_isolated_child(
+        module_path!(),
+        "workspace_enable_under_host_off_and_unknown_plugin_have_structured_responses",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     write_plugin(&fixture.source());
     let runtime = fixture.runtime();
@@ -395,6 +410,12 @@ async fn workspace_enable_under_host_off_and_unknown_plugin_have_structured_resp
 #[cfg(unix)]
 #[tokio::test]
 async fn pinned_but_missing_install_has_a_structured_enable_refusal() {
+    if !enter_isolated_child(
+        module_path!(),
+        "pinned_but_missing_install_has_a_structured_enable_refusal",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     std::fs::write(
         fixture.workspace_root.join("plugins.yaml"),
@@ -418,6 +439,12 @@ async fn pinned_but_missing_install_has_a_structured_enable_refusal() {
 #[cfg(unix)]
 #[tokio::test]
 async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool() {
+    if !enter_isolated_child(
+        module_path!(),
+        "plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.source();
     write_plugin(&source);
@@ -465,8 +492,7 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
     assert_eq!(plugin["links"][0]["url"], "http://127.0.0.1:7890/");
     assert_eq!(plugin["tools"][0]["execution_kind"], "read_only");
 
-    let response =
-        without_inherited_activity_scope(get(state, "/plugins/panels/panels/status")).await;
+    let response = get(state, "/plugins/panels/panels/status").await;
     let status = response.status();
     let payload = body_json(response).await;
     assert_eq!(status, StatusCode::OK, "{payload}");
@@ -483,6 +509,9 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
 #[cfg(unix)]
 #[tokio::test]
 async fn plugins_list_never_carries_a_secret_value() {
+    if !enter_isolated_child(module_path!(), "plugins_list_never_carries_a_secret_value") {
+        return;
+    }
     const SECRET: &str = "orbit-web-secret-4d8e2a";
     let fixture = PluginFixture::new();
     let source = fixture.source();
@@ -523,6 +552,12 @@ async fn plugins_list_never_carries_a_secret_value() {
 #[cfg(unix)]
 #[tokio::test]
 async fn concurrent_panel_reads_write_one_audit_row_per_ttl_window() {
+    if !enter_isolated_child(
+        module_path!(),
+        "concurrent_panel_reads_write_one_audit_row_per_ttl_window",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.source();
     write_plugin(&source);
@@ -538,13 +573,10 @@ async fn concurrent_panel_reads_write_one_audit_row_per_ttl_window() {
         .expect("enable plugin");
     let state = fixture.dashboard_state();
 
-    let (first, second) = without_inherited_activity_scope(async {
-        tokio::join!(
-            get(state.clone(), "/plugins/panels/panels/status"),
-            get(state.clone(), "/plugins/panels/panels/status"),
-        )
-    })
-    .await;
+    let (first, second) = tokio::join!(
+        get(state.clone(), "/plugins/panels/panels/status"),
+        get(state.clone(), "/plugins/panels/panels/status"),
+    );
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(second.status(), StatusCode::OK);
     assert_eq!(
@@ -557,7 +589,7 @@ async fn concurrent_panel_reads_write_one_audit_row_per_ttl_window() {
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
-    let third = without_inherited_activity_scope(get(state, "/plugins/panels/panels/status")).await;
+    let third = get(state, "/plugins/panels/panels/status").await;
     assert_eq!(third.status(), StatusCode::OK);
     assert_eq!(
         runtime
@@ -572,6 +604,12 @@ async fn concurrent_panel_reads_write_one_audit_row_per_ttl_window() {
 #[cfg(unix)]
 #[tokio::test]
 async fn oversized_panel_output_is_replaced_by_a_bounded_diagnostic_payload() {
+    if !enter_isolated_child(
+        module_path!(),
+        "oversized_panel_output_is_replaced_by_a_bounded_diagnostic_payload",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.source();
     write_plugin(&source);
@@ -591,11 +629,7 @@ async fn oversized_panel_output_is_replaced_by_a_bounded_diagnostic_payload() {
         .enable_plugin("panels", &PluginEnableOptions::default())
         .expect("enable plugin");
 
-    let response = without_inherited_activity_scope(get(
-        fixture.dashboard_state(),
-        "/plugins/panels/panels/status",
-    ))
-    .await;
+    let response = get(fixture.dashboard_state(), "/plugins/panels/panels/status").await;
     assert_eq!(response.status(), StatusCode::OK);
     let payload = body_json(response).await;
     assert_eq!(payload["truncated"], true);
@@ -616,6 +650,9 @@ async fn oversized_panel_output_is_replaced_by_a_bounded_diagnostic_payload() {
 #[cfg(unix)]
 #[tokio::test]
 async fn an_undeclared_panel_is_not_found() {
+    if !enter_isolated_child(module_path!(), "an_undeclared_panel_is_not_found") {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.source();
     write_plugin(&source);
@@ -641,6 +678,12 @@ async fn an_undeclared_panel_is_not_found() {
 
 #[tokio::test]
 async fn a_path_segment_that_is_not_an_identifier_is_refused() {
+    if !enter_isolated_child(
+        module_path!(),
+        "a_path_segment_that_is_not_an_identifier_is_refused",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let response = get(state(fixture.runtime()), "/plugins/..%2Fx/panels/status").await;
     assert!(

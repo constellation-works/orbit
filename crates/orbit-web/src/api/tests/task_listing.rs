@@ -1,6 +1,6 @@
 //! Bounded listing and blocking-I/O regression coverage (ORB-11205).
 use super::tasks::{find_artifact_blob, request_shared, seed_task_with_artifact};
-use super::test_support::body_json;
+use super::test_support::{body_json, enter_isolated_child};
 
 #[tokio::test(flavor = "current_thread")]
 async fn cold_workspace_resolution_leaves_unrelated_requests_runnable() {
@@ -11,6 +11,12 @@ async fn cold_workspace_resolution_leaves_unrelated_requests_runnable() {
         atomic::{AtomicBool, Ordering},
     };
     use tower::ServiceExt;
+    if !enter_isolated_child(
+        module_path!(),
+        "cold_workspace_resolution_leaves_unrelated_requests_runnable",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let global = temp.path().join("global");
     std::fs::create_dir_all(&global).unwrap();
@@ -76,6 +82,12 @@ async fn aggregate_selects_global_newest_rows_before_reading_off_page_workspace_
     use super::workspaces::{seed_workspace, workspace_entry};
     use crate::state::DashboardState;
     use tower::ServiceExt;
+    if !enter_isolated_child(
+        module_path!(),
+        "aggregate_selects_global_newest_rows_before_reading_off_page_workspace_bodies",
+    ) {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let global = temp.path().join("global");
     std::fs::create_dir_all(&global).unwrap();
