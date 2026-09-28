@@ -681,6 +681,53 @@ fn shipped_default_config_has_no_workspace_specific_identifiers() {
     }
 }
 
+/// The seeded config documents `[workflow.task_pilot_freshness]` only as a
+/// comment: uncommenting its keys must reproduce the built-in defaults, and a
+/// fresh seed must leave both keys at those defaults with the seeded crew keys
+/// still inside `[workflow]`.
+#[test]
+fn seeded_task_pilot_freshness_comment_matches_built_in_defaults() {
+    let shipped = crate::seed::DEFAULT_CONFIG_TEMPLATE;
+    let keys = ["material_fields", "source_sensitivity"];
+    let uncommented = shipped
+        .lines()
+        .filter_map(|line| line.strip_prefix("# "))
+        .filter(|line| keys.iter().any(|key| line.starts_with(&format!("{key} "))))
+        .collect::<Vec<_>>();
+    assert_eq!(uncommented.len(), keys.len(), "{uncommented:?}");
+    let documented = load_config(&format!(
+        "[workflow.task_pilot_freshness]\n{}\n",
+        uncommented.join("\n")
+    ))
+    .expect("the documented freshness block must load");
+    let built_in = load_config("").expect("an empty config loads");
+    assert_eq!(
+        documented.snapshot.task_pilot_freshness(),
+        built_in.snapshot.task_pilot_freshness(),
+        "the commented freshness block in default-config.toml drifted from settings.rs"
+    );
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    let seed = crate::ConfigSeed::from_families(["claude"]);
+    assert!(crate::seed_default_config(&path, Some(&seed)).expect("seed"));
+    let effective = crate::load_effective_config(&crate::ConfigRoots::global_only(dir.path()))
+        .expect("seeded config loads");
+    for key in keys {
+        let key = format!("workflow.task_pilot_freshness.{key}");
+        let entry = effective
+            .values()
+            .iter()
+            .find(|entry| entry.key == key)
+            .unwrap_or_else(|| panic!("{key} is reported"));
+        assert_eq!(entry.state(), crate::ConfigValueState::Default, "{key}");
+    }
+    assert_eq!(
+        effective.value_for("workflow.default_crew"),
+        Some(serde_json::json!("opus"))
+    );
+}
+
 #[test]
 fn runtime_log_rotation_rejects_invalid_values() {
     // [ORB-00415] Malformed rotation knobs must fail at config load with a
