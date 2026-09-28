@@ -8,6 +8,12 @@ on:
   schedule:
     - cron: "0 6 * * 1"
 
+# A newer push or PR update supersedes any analysis still pending for the same
+# ref, so the queue stays at one run per ref instead of trailing every merge.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   security-events: write
   contents: read
