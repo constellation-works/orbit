@@ -1,10 +1,20 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use orbit_types::task::{ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME};
 use tempfile::TempDir;
 
 use super::*;
+use crate::workflow::task::inspect::{
+    SnapshotCheckpoint, load_validated_publication, set_snapshot_checkpoint_hook,
+};
+
+/// Upper bound for one side of a deterministic interleaving to reach or leave
+/// its checkpoint; only a hung or deadlocked read gets near it.
+const CHECKPOINT_WAIT: Duration = Duration::from_secs(60);
 
 fn metadata(
     workspace_id: &str,
@@ -491,11 +501,12 @@ fn inspect_preserves_crlf_bytes_and_skips_configured_filters() {
 
     let cache = root.path().join("consumer-cache");
     let (env, sentinel) = poison_publication_git_filters(root.path());
-    let inspection = inspect_publication(request(workspace_id, &remote, &cache, None)).unwrap();
+    let snapshot =
+        load_validated_publication(request(workspace_id, &remote, &cache, None)).unwrap();
     drop(env);
 
     assert_label(
-        &inspection,
+        &snapshot.inspection,
         workspace_id,
         1,
         &commit,
@@ -506,10 +517,260 @@ fn inspect_preserves_crlf_bytes_and_skips_configured_filters() {
         !sentinel.exists(),
         "inspection executed an external Git filter"
     );
-    let tree = cache.join("pub_orbit_primary").join("tree");
+    let bundle_dir = &snapshot.bundles[0].source_dir;
     assert_eq!(
-        fs::read(tree.join("tasks/ORB-00001/artifacts/files/payload.txt")).unwrap(),
+        fs::read(bundle_dir.join("artifacts/files/payload.txt")).unwrap(),
         CRLF_PAYLOAD
     );
-    read_bundle_at(&tree.join("tasks/ORB-00001")).expect("inspected bundle validates");
+    read_bundle_at(bundle_dir).expect("inspected bundle validates");
+}
+
+/// Two generations whose single task differs in title and attachment bytes, so
+/// content read from the wrong commit is observable.
+struct DivergingRepo {
+    root: TempDir,
+    remote: PathBuf,
+    cache: PathBuf,
+    workspace_id: String,
+    gen1: String,
+    gen2: String,
+}
+
+const GEN1_TITLE: &str = "generation one";
+const GEN2_TITLE: &str = "generation two";
+const GEN1_BYTES: &[u8] = b"generation one bytes";
+const GEN2_BYTES: &[u8] = b"generation two bytes";
+
+fn diverging_repo(workspace_id: &str) -> DivergingRepo {
+    let root = TempDir::new().unwrap();
+    let remote = root.path().join("publication.git");
+    init_repo(&remote);
+    let mut commits = Vec::new();
+    for (generation, title, bytes) in [(1, GEN1_TITLE, GEN1_BYTES), (2, GEN2_TITLE, GEN2_BYTES)] {
+        let source = root.path().join(format!("source-{generation}"));
+        let registry = open_registry(&source);
+        let binding = bind(&registry, &source, workspace_id);
+        let store = bundle_store(&registry, &binding);
+        seed(
+            &store,
+            &registry,
+            workspace_id,
+            &make_bundle("ORB-00001", title, Vec::new()),
+        );
+        let entry = seed_artifact_blob(&store, "ORB-00001", "notes.txt", bytes, "codex");
+        store
+            .rewrite_artifact_manifest(
+                "ORB-00001",
+                &ArtifactManifestV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    files: vec![entry],
+                },
+            )
+            .unwrap();
+        let snapshot = root.path().join(format!("snap-{generation}"));
+        build_publication_snapshot(
+            &registry,
+            &snapshot,
+            metadata(workspace_id, generation, commits.last().map(String::as_str)),
+            &policy(AttachmentPolicyKind::Include),
+            None,
+        )
+        .unwrap();
+        commits.push(commit_snapshot(
+            &remote,
+            &snapshot,
+            &format!("generation {generation}"),
+        ));
+    }
+    let gen2 = commits.pop().unwrap();
+    let gen1 = commits.pop().unwrap();
+    DivergingRepo {
+        cache: root.path().join("consumer-cache"),
+        remote,
+        workspace_id: workspace_id.to_string(),
+        gen1,
+        gen2,
+        root,
+    }
+}
+
+/// A publication read running on its own thread, parked at one checkpoint
+/// until the test has run the interleaved read to completion.
+struct PausedRead<T> {
+    paused: mpsc::Receiver<()>,
+    resume: mpsc::Sender<()>,
+    handle: JoinHandle<T>,
+}
+
+impl<T: Send + 'static> PausedRead<T> {
+    fn start(at: SnapshotCheckpoint, read: impl FnOnce() -> T + Send + 'static) -> Self {
+        let (paused_tx, paused) = mpsc::channel();
+        let (resume, resume_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            set_snapshot_checkpoint_hook(Some(Box::new(move |reached| {
+                if reached == at {
+                    paused_tx.send(()).unwrap();
+                    resume_rx
+                        .recv_timeout(CHECKPOINT_WAIT)
+                        .expect("the interleaved read must not wait on the paused one");
+                }
+            })));
+            let result = read();
+            set_snapshot_checkpoint_hook(None);
+            result
+        });
+        let read = Self {
+            paused,
+            resume,
+            handle,
+        };
+        read.paused
+            .recv_timeout(CHECKPOINT_WAIT)
+            .expect("paused read reaches its checkpoint");
+        read
+    }
+
+    fn finish(self) -> T {
+        self.resume.send(()).unwrap();
+        self.handle.join().unwrap()
+    }
+}
+
+fn private_trees_left(repo: &DivergingRepo) -> usize {
+    fs::read_dir(repo.cache.join("pub_orbit_primary").join("trees"))
+        .unwrap()
+        .count()
+}
+
+#[test]
+fn concurrent_inspections_of_two_commits_keep_their_own_snapshot() {
+    let repo = diverging_repo("ws_inspect_concurrent");
+    let generations = [
+        (
+            repo.gen1.clone(),
+            1,
+            GEN1_TITLE,
+            PublicationFreshness::Stale,
+        ),
+        (
+            repo.gen2.clone(),
+            2,
+            GEN2_TITLE,
+            PublicationFreshness::Current,
+        ),
+    ];
+    for (paused_index, interleaved_index) in [(0, 1), (1, 0)] {
+        let (paused_commit, paused_generation, paused_title, paused_freshness) =
+            &generations[paused_index];
+        let (other_commit, other_generation, other_title, other_freshness) =
+            &generations[interleaved_index];
+        let paused_request = request(
+            &repo.workspace_id,
+            &repo.remote,
+            &repo.cache,
+            Some(paused_commit),
+        );
+        let paused = PausedRead::start(SnapshotCheckpoint::EnvelopeValidated, move || {
+            inspect_publication(paused_request)
+        });
+        // The paused read holds its envelope but has not read bundles yet; the
+        // other commit is fetched and checked out through the same cache now.
+        let other = inspect_publication(request(
+            &repo.workspace_id,
+            &repo.remote,
+            &repo.cache,
+            Some(other_commit),
+        ))
+        .unwrap();
+        let paused = paused.finish().unwrap();
+
+        assert_label(
+            &paused,
+            &repo.workspace_id,
+            *paused_generation,
+            paused_commit,
+            *paused_freshness,
+            false,
+        );
+        assert_eq!(paused.tasks[0].task.title, *paused_title);
+        assert_label(
+            &other,
+            &repo.workspace_id,
+            *other_generation,
+            other_commit,
+            *other_freshness,
+            false,
+        );
+        assert_eq!(other.tasks[0].task.title, *other_title);
+    }
+    assert_eq!(
+        private_trees_left(&repo),
+        0,
+        "each private checkout is removed with its inspection"
+    );
+}
+
+#[test]
+fn concurrent_inspection_cannot_replace_restore_source_bytes() {
+    let repo = diverging_repo("ws_inspect_restore_race");
+    let destination = repo.root.path().join("destination");
+    let registry = open_registry(&destination);
+    let orbit_dir = destination
+        .join("repos")
+        .join(&repo.workspace_id)
+        .join(".orbit");
+    fs::create_dir_all(&orbit_dir).unwrap();
+    registry
+        .bind_workspace(BindWorkspaceParams {
+            partition_id: Some(repo.workspace_id.clone()),
+            slug: "restore".to_string(),
+            repo_root: orbit_dir.parent().unwrap().to_path_buf(),
+            workspace_path: orbit_dir.parent().unwrap().to_path_buf(),
+            orbit_dir,
+            repo_fingerprint: Some("git@github.com:example/orbit-source.git".to_string()),
+        })
+        .unwrap();
+
+    let restore_request = PublicationRestoreRequest {
+        task_workspace_id: repo.workspace_id.clone(),
+        publication: request(
+            &repo.workspace_id,
+            &repo.remote,
+            &repo.cache,
+            Some(&repo.gen1),
+        ),
+        mode: PublicationRestoreMode::EmptyDestination,
+    };
+    let restore_registry = registry.clone();
+    let paused = PausedRead::start(SnapshotCheckpoint::BundlesValidated, move || {
+        restore_publication(&restore_registry, restore_request)
+    });
+    // Restore has validated generation 1 and not yet staged its artifacts; an
+    // inspection of generation 2 runs through the same cache in between.
+    let other = inspect_publication(request(
+        &repo.workspace_id,
+        &repo.remote,
+        &repo.cache,
+        Some(&repo.gen2),
+    ))
+    .unwrap();
+    assert_eq!(other.tasks[0].task.title, GEN2_TITLE);
+    let outcome = paused.finish().unwrap();
+
+    assert_eq!(outcome.generation, 1);
+    assert_eq!(outcome.restored_task_ids, ["ORB-00001"]);
+    let canonical = registry
+        .canonical_task_bundle_path(&repo.workspace_id, "ORB-00001")
+        .unwrap();
+    let restored = read_bundle_at(&canonical).expect("restored bundle validates");
+    assert_eq!(restored.envelope.title, GEN1_TITLE);
+    assert_eq!(
+        fs::read(canonical.join("artifacts/files/notes.txt")).unwrap(),
+        GEN1_BYTES
+    );
+    assert_eq!(
+        private_trees_left(&repo),
+        0,
+        "restore releases its private checkout once staged"
+    );
 }
