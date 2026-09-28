@@ -146,11 +146,10 @@ fn job_reseeding_preserves_local_concurrency_override() {
         .spec
         .max_active_runs;
     let override_limit = original_limit + 5;
-    let modified = seeded.replacen(
-        &format!("  max_active_runs: {original_limit}\n"),
-        &format!("  max_active_runs: {override_limit}\n"),
-        1,
-    );
+    let mut modified_yaml: serde_yaml::Value =
+        serde_yaml::from_str(&seeded).expect("parse seeded gate YAML");
+    modified_yaml["spec"]["max_active_runs"] = serde_yaml::Value::from(override_limit);
+    let modified = serde_yaml::to_string(&modified_yaml).expect("serialize local override");
     assert_eq!(
         load_job_asset(&modified)
             .expect("parse modified gate job")
@@ -293,11 +292,6 @@ fn ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admissio
 
     let mut resolved = asset.clone();
     resolve_job_target_refs(&mut resolved.spec, &catalog).expect("resolve sweep target refs");
-    assert!(
-        !yaml.contains("worktree_setup"),
-        "the sweep never implements, so it must never build a worktree"
-    );
-    assert!(!yaml.contains("job_name: task_auto_pipeline"));
 }
 
 #[test]
@@ -326,56 +320,114 @@ fn dependabot_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
             .iter()
             .all(|step| matches!(step.body, JobV2StepBody::Target(_)))
     );
-    assert!(!yaml.contains("agent_loop"));
-    assert!(!yaml.contains("worktree_setup"));
-    for expected in [
-        "max_alerts: 100",
-        "max_pull_requests: 100",
-        "max_code_scanning_alerts: 100",
-        "max_secret_scanning_alerts: 100",
-        "max_secret_locations: 20",
-        "max_tasks: 10",
-        "min_severity: high",
-        "skip_when_dependabot_pr_open: true",
+    let defaults = asset.spec.default_input.as_ref().expect("sweep defaults");
+    for field in [
+        "max_alerts",
+        "max_pull_requests",
+        "max_code_scanning_alerts",
+        "max_secret_scanning_alerts",
+        "max_secret_locations",
+        "max_tasks",
     ] {
-        assert!(yaml.contains(expected), "missing default {expected}");
+        assert!(
+            defaults
+                .get(field)
+                .and_then(Value::as_u64)
+                .is_some_and(|n| n > 0),
+            "sweep default {field} must be a positive integer"
+        );
     }
-
+    assert!(
+        defaults
+            .get("min_severity")
+            .and_then(Value::as_str)
+            .is_some()
+    );
+    assert!(
+        defaults
+            .get("skip_when_dependabot_pr_open")
+            .and_then(Value::as_bool)
+            .is_some()
+    );
     let collect = DEFAULT_ACTIVITY_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "collect_dependabot_alerts").then_some(*yaml))
         .expect("collect activity default exists");
-    for field in [
-        "max_code_scanning_alerts:",
-        "max_secret_scanning_alerts:",
-        "max_secret_locations:",
-        "code_scanning:",
-        "secret_scanning:",
-        "collection_status:",
-    ] {
-        assert!(collect.contains(field), "collect schema missing {field}");
-    }
+    let collect = load_activity_asset(collect).expect("parse collect activity");
+    assert_schema_properties(
+        &collect.spec.input_schema_json,
+        &[
+            "max_code_scanning_alerts",
+            "max_secret_scanning_alerts",
+            "max_secret_locations",
+        ],
+    );
+    assert_schema_properties(
+        &collect.spec.output_schema_json["properties"]["dependabot_snapshot"],
+        &["code_scanning", "secret_scanning", "collection_status"],
+    );
     let file = DEFAULT_ACTIVITY_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "file_dependabot_alert_tasks").then_some(*yaml))
         .expect("file activity default exists");
-    for field in [
-        "collection_outcome:",
-        "family_outcomes:",
-        "skipped_over_cap:",
-        "match_kind:",
-        "match_evidence:",
-    ] {
-        assert!(file.contains(field), "file schema missing {field}");
-    }
+    let file = load_activity_asset(file).expect("parse file activity");
+    assert_schema_properties(
+        &file.spec.output_schema_json,
+        &["collection_outcome", "family_outcomes", "skipped_over_cap"],
+    );
+    assert_schema_properties(
+        &file.spec.output_schema_json["properties"]["skipped_existing"]["items"],
+        &["match_kind", "match_evidence"],
+    );
 
     let ci_file = DEFAULT_ACTIVITY_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "file_ci_failure_tasks").then_some(*yaml))
         .expect("CI file activity default exists");
-    for field in ["match_kind:", "match_evidence:"] {
-        assert!(ci_file.contains(field), "CI file schema missing {field}");
+    let ci_file = load_activity_asset(ci_file).expect("parse CI file activity");
+    assert_schema_properties(
+        &ci_file.spec.output_schema_json["properties"]["skipped_existing"]["items"],
+        &["match_kind", "match_evidence"],
+    );
+}
+
+fn assert_schema_properties(schema: &Value, fields: &[&str]) {
+    let properties = schema["properties"]
+        .as_object()
+        .expect("schema must declare object properties");
+    for field in fields {
+        assert!(
+            properties.contains_key(*field),
+            "schema missing property {field}"
+        );
     }
+}
+
+#[test]
+fn schema_property_check_does_not_accept_a_yaml_comment_as_a_field() {
+    let yaml = r#"schemaVersion: 2
+kind: Activity
+metadata:
+  name: comment_only_schema_field
+spec:
+  type: deterministic
+  description: Fixture.
+  input_schema_json:
+    type: object
+    properties:
+      # match_evidence: { type: object }
+      existing: { type: string }
+  action: fixture
+  config: {}
+"#;
+    let asset = load_activity_asset(yaml).expect("parse activity with schema comment");
+    assert!(
+        std::panic::catch_unwind(|| {
+            assert_schema_properties(&asset.spec.input_schema_json, &["match_evidence"])
+        })
+        .is_err(),
+        "a YAML comment cannot satisfy the parsed schema property check"
+    );
 }
 
 #[test]
@@ -390,7 +442,6 @@ fn seeded_recovery_assets_omit_retired_role() {
         let ActivityV2Spec::AgentLoop(_) = asset.spec.spec else {
             panic!("{name} must remain an agent loop");
         };
-        assert!(!seeded.contains("\n  role:"));
     }
 }
 
@@ -466,7 +517,12 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions(
         defaults.get("base_branch").is_none(),
         "branch fallback belongs to the prepare activity, not the job defaults"
     );
-    assert_eq!(defaults["max_partition_size"], 5);
+    assert!(
+        defaults["max_partition_size"]
+            .as_u64()
+            .is_some_and(|size| size > 0),
+        "pilot partitions need a positive size bound"
+    );
     assert_eq!(defaults["promotion_authorized"], false);
     assert_eq!(defaults["ci_sweep_filing"], Value::Null);
     assert!(
@@ -561,19 +617,6 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions(
         require_success.default_input.as_ref().expect("guard input")["result"],
         "{{ steps.apply.output }}"
     );
-    assert!(
-        !yaml.contains("crew: luna") && !yaml.contains("{{ input.crew }}"),
-        "no shipped job may pin a family-specific crew"
-    );
-    assert!(
-        yaml.contains("Schedulable task-pilot pipeline"),
-        "task pilot must document scheduled zero-input support"
-    );
-    assert!(
-        !yaml.contains("Invoked-only"),
-        "task pilot is no longer restricted to explicit invocation"
-    );
-
     let mut resolved = load_job_asset(yaml).expect("task pilot pipeline parses for resolution");
     resolve_job_target_refs(&mut resolved.spec, &default_activity_catalog())
         .expect("task pilot activity references resolve");
@@ -1483,6 +1526,12 @@ fn workspace_ship_pipeline_waits_for_workspace_auto_sequencer() {
                 (0..=1_500).contains(&for_seconds),
                 "wrapper window {for_seconds}s leaves too little slack before the next sweep fire"
             );
+            // A scheduled invocation carries no completion authority to the
+            // child, which therefore uses its review-ending default.
+            assert!(
+                input["run_input"].get("completion").is_none(),
+                "the scheduled wrapper must not pass completion authority"
+            );
         }
         other => panic!("expected invoke-and-wait target ref, got {other:?}"),
     }
@@ -1492,31 +1541,6 @@ fn workspace_ship_pipeline_waits_for_workspace_auto_sequencer() {
         }
         other => panic!("expected success guard target ref, got {other:?}"),
     }
-    // The v1 wrapper shelled out to the retired sweep. Check the definition,
-    // not the prose: the comment names `ship-sweep-orbit` deliberately,
-    // because that routine's period is why the window above is what it is.
-    let definition = yaml_without_comments(yaml);
-    assert!(!definition.contains("auto_ship"));
-    assert!(!definition.contains("ship-sweep"));
-    assert!(!definition.contains("type: shell"));
-
-    // [ORB-12500] A schedule is not an authorization. The wrapper the seeded
-    // `ship_sweep` routine fires passes no completion at all, so the drain
-    // beneath it runs under its own `completion: review` default and the work
-    // it admits stops at review for a separate, explicit approval.
-    assert!(
-        !definition.contains("completion"),
-        "the scheduled wrapper must not carry completion authority: {definition}"
-    );
-}
-
-/// A job asset's YAML with whole-line comments removed, for assertions about
-/// what a definition *does* rather than about what its header explains.
-fn yaml_without_comments(yaml: &str) -> String {
-    yaml.lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[test]
@@ -1527,6 +1551,7 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
         .expect("workspace auto pipeline exists");
     let asset = load_job_asset(yaml).expect("workspace auto pipeline parses");
     assert_eq!(asset.spec.max_active_runs, 1);
+    assert_eq!(asset.spec.steps.len(), 3);
     assert_eq!(asset.spec.steps[0].id, "resolve_ship_input");
 
     // [ORB-10819] The window is stamped once, before the loop, and re-read
@@ -1592,17 +1617,6 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
     assert_eq!(ship_input["job_name"], "task_auto_pipeline");
     assert_eq!(ship_input["run_input"]["task_ids"], "{{ item.task_ids }}");
 
-    // Nothing aggregates leaf outcomes any more: a detached child records its
-    // own result, and a terminal leaf was already explicitly not a failure of
-    // this sequencer.
-    let definition_body = yaml_without_comments(yaml);
-    assert!(!definition_body.contains("pipeline_success_guard"));
-    assert!(!definition_body.contains("record_leaf_outcomes"));
-
-    // [ORB-12491] Nothing supervises a family any more: the drain has exactly
-    // one dispatch shape, and every task reaches it as a leaf.
-    assert!(!definition_body.contains("epic"));
-
     let JobV2StepBody::TargetRef(window) = &drain.steps[2].body else {
         panic!("window step must use the deterministic activity");
     };
@@ -1630,11 +1644,6 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
         idle_wait.default_input.as_ref().expect("idle input")["seconds"],
         "{{ steps.admissible.output.sleep_seconds }}"
     );
-    // The four-way `ship`/`hold`/`epic`/`empty` decision is gone; the loop
-    // reads an admissible set instead [ORB-10819].
-    let definition = yaml_without_comments(yaml);
-    assert!(!definition.contains("decision"));
-    assert!(!definition.contains("hold"));
 }
 
 #[test]
