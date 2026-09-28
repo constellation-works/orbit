@@ -39,7 +39,7 @@ you close it out.
   tasks to that ID. `commit_batch_changes` looks tasks up by run ID alone, not by
   run ID plus the machine that ran them, so both runs failed at commit.
   ORB-13599 (#2871) stops reuse within one store only.
-- **Fix:** open. Look tasks up by run ID plus machine in `commit_batch_changes`,
+- **Fix:** open (ORB-13649). Look tasks up by run ID plus machine in `commit_batch_changes`,
   `commit_finalize_artifact_changes` and the other batch lookups. Alternatively,
   make leaf run IDs unique across machines, or have the owner refuse a claim whose
   run ID is already bound to another active task.
@@ -57,7 +57,7 @@ you close it out.
   per-run `mktemp` directory. It checks whether the folder exists, deletes it,
   then copies, and never cleans the folder up afterwards. Concurrent leaves on one
   host raced on the same path, and the leftover folders stay behind.
-- **Fix:** open. Create the case folders inside `fixture_root` so the existing
+- **Fix:** open (ORB-13650). Create the case folders inside `fixture_root` so the existing
   cleanup removes them.
 - **Tasks:** ORB-13606. Its change had already landed via #2867 before validation
   failed.
