@@ -110,20 +110,74 @@ fn re_issuing_the_effective_ceiling_is_a_no_op_that_keeps_the_revision() {
     let (_root, runtime) = test_runtime();
     let run = running_drain(&runtime, Some(5));
 
-    let unchanged = runtime
+    let first_noop = runtime
         .set_drain_worker_limit(request(&run.run_id, 5))
         .expect("re-issue submitted ceiling");
-    assert_eq!(unchanged.outcome, "unchanged");
-    assert_eq!(unchanged.revision, 0);
+    assert_eq!(first_noop.outcome, "unchanged");
+    assert_eq!(first_noop.previous_max_active_leaf_runs, 5);
+    assert_eq!(first_noop.max_active_leaf_runs, 5);
+    assert_eq!(first_noop.revision, 0);
+    let first_noop_audit = worker_limit_audits(&runtime, &run.run_id)
+        .into_iter()
+        .find(|event| {
+            event["tool_name"] == "pipeline.run.workers.completed"
+                && event["outcome"] == "unchanged"
+                && event["max_active_leaf_runs"] == 5
+        })
+        .expect("first no-op completion is audited");
+    assert_eq!(first_noop_audit["previous_max_active_leaf_runs"], 5);
+    assert_eq!(first_noop_audit["revision"], 0);
+    assert!(
+        runtime
+            .read_run_state(&run.run_id)
+            .expect("read state after first no-op")
+            .expect("state exists")
+            .drain_worker_limit
+            .is_none()
+    );
 
-    runtime
+    let changed = runtime
         .set_drain_worker_limit(request(&run.run_id, 7))
         .expect("raise ceiling");
+    assert_eq!(changed.outcome, "updated");
+    assert_eq!(changed.previous_max_active_leaf_runs, 5);
+    assert_eq!(changed.max_active_leaf_runs, 7);
+    assert_eq!(changed.revision, 1);
+    let metadata_after_change = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state after change")
+        .expect("state exists")
+        .drain_worker_limit
+        .expect("change metadata is stored");
+
     let repeated = runtime
         .set_drain_worker_limit(request(&run.run_id, 7))
         .expect("re-issue current ceiling");
     assert_eq!(repeated.outcome, "unchanged");
+    assert_eq!(repeated.previous_max_active_leaf_runs, 7);
+    assert_eq!(repeated.max_active_leaf_runs, 7);
     assert_eq!(repeated.revision, 1);
+
+    let metadata_after_repeat = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state after repeated request")
+        .expect("state exists")
+        .drain_worker_limit
+        .expect("change metadata remains stored");
+    assert_eq!(metadata_after_repeat, metadata_after_change);
+    assert_eq!(metadata_after_repeat.previous_max_active_leaf_runs, 5);
+
+    let repeated_audit = worker_limit_audits(&runtime, &run.run_id)
+        .into_iter()
+        .find(|event| {
+            event["tool_name"] == "pipeline.run.workers.completed"
+                && event["outcome"] == "unchanged"
+                && event["max_active_leaf_runs"] == 7
+        })
+        .expect("repeated request completion is audited");
+    assert_eq!(repeated_audit["previous_max_active_leaf_runs"], 7);
+    assert_eq!(repeated_audit["max_active_leaf_runs"], 7);
+    assert_eq!(repeated_audit["revision"], 1);
 }
 
 #[test]
@@ -133,6 +187,10 @@ fn a_stale_revision_is_refused_as_a_conflict_and_writes_nothing() {
     runtime
         .set_drain_worker_limit(request(&run.run_id, 7))
         .expect("first operator wins");
+    let state_before_stale_request = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state before stale request")
+        .expect("state exists");
 
     // A second operator that read revision 0 before the first landed.
     let error = runtime
@@ -150,6 +208,7 @@ fn a_stale_revision_is_refused_as_a_conflict_and_writes_nothing() {
         .read_run_state(&run.run_id)
         .expect("read state")
         .expect("state exists");
+    assert_eq!(stored, state_before_stale_request);
     assert_eq!(stored.effective_max_active_leaf_runs(5), 7);
     assert_eq!(stored.drain_worker_limit_revision(), 1);
 }

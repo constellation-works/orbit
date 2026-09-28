@@ -133,6 +133,7 @@ impl OrbitRuntime {
         self.record_worker_limit_request(&run, request_id, request)?;
 
         let mut applied: Option<DrainWorkerLimit> = None;
+        let mut effective_before_request = submitted;
         let mut unchanged = false;
         let update = self.stores().jobs().update_run_state(
             run_id,
@@ -143,6 +144,7 @@ impl OrbitRuntime {
                 if run_state.is_terminal() {
                     return Err(terminal_run_error(run_id, run_state));
                 }
+                effective_before_request = state.effective_max_active_leaf_runs(submitted);
                 let revision = state.drain_worker_limit_revision();
                 if request
                     .expected_revision
@@ -197,9 +199,7 @@ impl OrbitRuntime {
             run_id: run_id.to_string(),
             job_id: run.job_id,
             outcome: if unchanged { "unchanged" } else { "updated" },
-            previous_max_active_leaf_runs: applied
-                .as_ref()
-                .map_or(submitted, |limit| limit.previous_max_active_leaf_runs),
+            previous_max_active_leaf_runs: effective_before_request,
             max_active_leaf_runs: requested,
             revision: applied.as_ref().map_or(0, |limit| limit.revision),
             hard_limit,
