@@ -40,7 +40,7 @@ you close it out.
   settlement (`pull_refill` → `reconcile_pending`). Cancelling the coordinator
   removes the only settlement path. Live leaves keep running, but nothing reports
   their result to the owner.
-- **Fix:** ORB-13663 (PR_PLACEHOLDER). Settlement no longer belongs to the
+- **Fix:** ORB-13663 (#2932). Settlement no longer belongs to the
   admitting coordinator: the admission record is the outbox, each leaf's worker
   records and delivers its own handoff or failure as it terminalizes, and
   `orbit run cancel` / `orbit run auto --stop` (and their dashboard buttons) run
