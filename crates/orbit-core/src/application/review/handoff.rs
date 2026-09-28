@@ -177,6 +177,15 @@ impl OrbitRuntime {
     /// owner-local run and a claim's age are *not* evidence that the attempt
     /// died, and the projection never labels them as revocation.
     pub fn distributed_claim_console(&self) -> Result<serde_json::Value, OrbitError> {
+        self.distributed_claim_console_at(chrono::Utc::now())
+    }
+
+    /// [`Self::distributed_claim_console`] observed at `now`, so a reservation
+    /// expiry can be projected without waiting out its real TTL.
+    pub(crate) fn distributed_claim_console_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<serde_json::Value, OrbitError> {
         if let Err(error) = self.ensure_coordination_task_write_permitted() {
             return Ok(serde_json::json!({
                 "schema_version": HANDOFF_CONSOLE_SCHEMA,
@@ -192,7 +201,6 @@ impl OrbitRuntime {
         let requests = self.stores().tasks().landing_start_requests()?;
         let attempts = self.stores().tasks().landing_attempts()?;
         let local_machine = self.automation_machine_identity().map(str::to_string);
-        let now = chrono::Utc::now();
 
         let mut rows = Vec::with_capacity(claims.len());
         for claim in &claims {

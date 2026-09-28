@@ -250,19 +250,46 @@ fn the_console_reports_machine_qualified_execution_and_a_live_claim() {
 #[test]
 fn an_expired_reservation_is_reported_without_implying_revocation() {
     let console = console(false);
-    let claim = console.claim();
+    let current = console.claim();
+    assert_eq!(current["reservation"]["expired"], false);
+    let expires_at = chrono::DateTime::parse_from_rfc3339(
+        current["reservation"]["expires_at"]
+            .as_str()
+            .expect("expires_at"),
+    )
+    .expect("rfc3339 expiry")
+    .with_timezone(&chrono::Utc);
+
+    // Observe the same live claim just past its reservation window instead of
+    // sleeping out the real TTL.
+    let observed = console
+        .runtime
+        .distributed_claim_console_at(expires_at + chrono::Duration::seconds(1))
+        .expect("console read");
+    let claim = &observed["claims"][0];
+    assert_eq!(claim["claim_id"], console.claim_id.as_str());
     let reservation = &claim["reservation"];
 
-    assert!(reservation["expires_at"].is_string());
-    assert_eq!(reservation["expired"], false);
+    assert_eq!(reservation["expired"], true, "{claim}");
     assert_eq!(claim["phase"], "running");
+    assert_eq!(claim["authorizes_execution"], true);
+    assert_eq!(claim["unsettled"], true);
+    assert_eq!(claim["footprint_protected"], true);
+    assert!(
+        claim["footprint"]
+            .as_array()
+            .expect("footprint")
+            .iter()
+            .any(|path| path == "file:src/a.rs"),
+        "the frozen footprint still names the claimed file: {claim}"
+    );
 
     let note = reservation["note"].as_str().expect("note");
     assert!(!note.contains("revok"), "{note}");
 
     // The projection's own vocabulary: no phase reads as revoked here, and the
     // expiry language never promotes itself into a settlement.
-    let rendered = console.read().to_string();
+    let rendered = observed.to_string();
     assert!(!rendered.contains("\"phase\":\"revoked\""), "{rendered}");
 }
 
