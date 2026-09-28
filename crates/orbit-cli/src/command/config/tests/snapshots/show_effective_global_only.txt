@@ -3,26 +3,28 @@ orbit config — effective
 Layers (later wins)          built-in defaults → global <global-root>/config.toml → workspace <workspace-root>/config.toml (absent)
 
 Machine (machine.*)          who this machine is and how it bounds workers (global config only)
-  id                               –                     unset    Stable generated identity of this machine (hm_...). Written once by `orbit init` and never reused; not settable.
-  name                             –                     unset    Operator-chosen display name for this machine. The one `[machine]` value that may change: `orbit config set --global machine.name <value>`.
-  task_prefix                      –                     unset    Immutable task-id namespace for ids minted on this machine (2-5 uppercase ASCII letters). Chosen once by `orbit init`; not settable.
-  worker_containment               true                  default  Launch each detached pipeline worker in its own transient systemd user scope bounded by the machine.worker_* limits (Linux with a systemd user manager). false, or no reachable user manager, launches workers in the caller's cgroup with a warning.
-  worker_containment_strict        false                 default  Refuse detached worker launches when a systemd user scope is unavailable. Requires machine.worker_containment=true; default false keeps warn-and-launch behavior.
-  worker_memory_high               40%                   default  MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).
-  worker_memory_max                50%                   default  MemoryMax= for each contained worker scope, where the kernel OOM-kills inside the run instead of the host: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 50%).
-  worker_tasks_max                 4096                  default  TasksMax= for each contained worker scope: processes and threads the run may hold at once before fork/clone fails (>= 1, default 4096).
+  id                                –                     unset    Stable generated identity of this machine (hm_...). Written once by `orbit init` and never reused; not settable.
+  name                              –                     unset    Operator-chosen display name for this machine. The one `[machine]` value that may change: `orbit config set --global machine.name <value>`.
+  task_prefix                       –                     unset    Immutable task-id namespace for ids minted on this machine (2-5 uppercase ASCII letters). Chosen once by `orbit init`; not settable.
+  worker_containment                true                  default  Launch each detached pipeline worker in its own transient systemd user scope bounded by the machine.worker_* limits (Linux with a systemd user manager). false, or no reachable user manager, launches workers in the caller's cgroup with a warning.
+  worker_containment_strict         false                 default  Refuse detached worker launches when a systemd user scope is unavailable. Requires machine.worker_containment=true; default false keeps warn-and-launch behavior.
+  worker_memory_high                40%                   default  MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).
+  worker_memory_max                 50%                   default  MemoryMax= for each contained worker scope, where the kernel OOM-kills inside the run instead of the host: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 50%).
+  worker_tasks_max                  4096                  default  TasksMax= for each contained worker scope: processes and threads the run may hold at once before fork/clone fails (>= 1, default 4096).
 
 Delivery (workflow.*)        how tasks are shipped
-  base_branch                      main                  global   Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.
-  default_crew                     sol                   global   Named crew used when a task does not declare `crew` and no CLI override is given.
-  system_crew                      system                default  Named crew used by system activities such as step-failure recovery and the task pilot.
-  auto_ship                        false                 default  Opt-in for unattended ship dispatch via the routine/sweep scheduler.
-  required_validation_commands     []                    default  Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.
-  distributed_completion           review                default  How far this owner takes a distributed execution claim's accepted handoff: `review` (default) waits for an operator's Approve handoff; `done` has the owner authorize and land it through its landing job, as `orbit run auto --complete` does for its own tasks.
-  low_complexity_crews             []                    default  Weighted crew pool for unassigned low-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
-  medium_complexity_crews          []                    default  Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
-  hard_complexity_crews            []                    default  Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
-  xhard_complexity_crews           []                    default  Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  base_branch                       main                  global   Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.
+  default_crew                      sol                   global   Named crew used when a task does not declare `crew` and no CLI override is given.
+  system_crew                       system                default  Named crew used by system activities such as step-failure recovery and the task pilot.
+  auto_ship                         false                 default  Opt-in for unattended ship dispatch via the routine/sweep scheduler.
+  required_validation_commands      []                    default  Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.
+  distributed_completion            review                default  How far this owner takes a distributed execution claim's accepted handoff: `review` (default) waits for an operator's Approve handoff; `done` has the owner authorize and land it through its landing job, as `orbit run auto --complete` does for its own tasks.
+  low_complexity_crews              []                    default  Weighted crew pool for unassigned low-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  medium_complexity_crews           []                    default  Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  hard_complexity_crews             []                    default  Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  xhard_complexity_crews            []                    default  Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  task_pilot_freshness.material_fields  title, description, criteria, plan, selectors  default  Task inputs whose edit makes an accepted task-pilot assessment stale, from title, description, criteria, plan, selectors, tags, crew, tools, type, complexity, relations, dependencies, instructions (default title, description, criteria, plan, selectors). A routine's trigger.state.freshness overrides it.
+  task_pilot_freshness.source_sensitivity  ignore                default  Whether a branch-head move makes an accepted task-pilot assessment stale: ignore (default), context_files (only when the head changed a path the task's selectors name) or any. A routine's trigger.state.freshness overrides it.
 
 Crews (crews.*)              3 defined (1 disabled), from built-in and global
   NAME    ENABLED  FROM      PROVIDER  MODEL      EFFORT  TAGS  DESCRIPTION
@@ -31,22 +33,22 @@ Crews (crews.*)              3 defined (1 disabled), from built-in and global
   system  true     built-in  codex     gpt-6-sol  medium  –  ← workflow.system_crew
 
 Execution (execution.*)      how agent subprocesses run
-  codex.sandbox                    workspace-write       default  Codex sandbox mode: one of read-only, workspace-write, danger-full-access.
-  codex.approval_policy            –                     unset    Codex approval policy: one of untrusted, on-request, never.
-  env.pass                         HOME, PATH, CODEX_HOME, TMPDIR, USER  default  Environment variable names allow-listed for passthrough into agent subprocesses.
-  env.inherit                      false                 derived  Not settable: an agent subprocess environment is always composed from execution.env.pass.
+  codex.sandbox                     workspace-write       default  Codex sandbox mode: one of read-only, workspace-write, danger-full-access.
+  codex.approval_policy             –                     unset    Codex approval policy: one of untrusted, on-request, never.
+  env.pass                          HOME, PATH, CODEX_HOME, TMPDIR, USER  default  Environment variable names allow-listed for passthrough into agent subprocesses.
+  env.inherit                       false                 derived  Not settable: an agent subprocess environment is always composed from execution.env.pass.
 
 Review (operation.*)         automatic review policy — 5 keys unset (pass --all to list them)
 
 Housekeeping                 logs, scoring, ids, plugins, and PR links
-  scoring.enabled                  false                 global   Whether scoreboard metrics are recorded for task runs.
-  automation.stall_window_minutes  60                    default  Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).
-  runtime.log_retention_days       7                     default  Delete JSONL log archives whose mtime is older than this many days (must be >= 1).
-  runtime.log_max_total_mb         500                   default  Total size budget (MiB) across JSONL log archives; oldest are pruned first when exceeded (must be >= 1).
-  runtime.log_max_file_mb          100                   default  Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).
-  tasks.id_start                   –                     unset    Floor for the local task-id allocator on this machine (forward-only; lets machines hold disjoint id ranges).
-  pr.task_url_template             –                     unset    URL template used to link a task ID in PR descriptions.
-  plugin.legacy_callback_identity  false                 default  Deprecated: also accept the environment token and process ancestry as a plugin callback credential. Off by default; identity is the session record the host hands a backend on file descriptor 3. Removed in the next release.
+  scoring.enabled                   false                 global   Whether scoreboard metrics are recorded for task runs.
+  automation.stall_window_minutes   60                    default  Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).
+  runtime.log_retention_days        7                     default  Delete JSONL log archives whose mtime is older than this many days (must be >= 1).
+  runtime.log_max_total_mb          500                   default  Total size budget (MiB) across JSONL log archives; oldest are pruned first when exceeded (must be >= 1).
+  runtime.log_max_file_mb           100                   default  Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).
+  tasks.id_start                    –                     unset    Floor for the local task-id allocator on this machine (forward-only; lets machines hold disjoint id ranges).
+  pr.task_url_template              –                     unset    URL template used to link a task ID in PR descriptions.
+  plugin.legacy_callback_identity   false                 default  Deprecated: also accept the environment token and process ancestry as a plugin callback credential. Off by default; identity is the session record the host hands a backend on file descriptor 3. Removed in the next release.
 
 Paths
   global root                            <global-root>

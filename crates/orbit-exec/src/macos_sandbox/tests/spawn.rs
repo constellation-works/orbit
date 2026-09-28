@@ -448,6 +448,11 @@ fn repeated_failed_spawns_cannot_grow_inactive_profile_retention_without_bound()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
 
+    // A missing working directory makes `Command::spawn` itself fail on every
+    // host. A nonexistent program alone does not: where `sandbox-exec` exists,
+    // it spawns fine and only the confined exec fails later.
+    let missing_cwd = Path::new("/nonexistent/orbit-test-fail-spawn-cwd");
+
     // First failed spawn creates and caches a profile tempfile before failing.
     let first_profile = "(version 1)\n(allow default)\n; orb-13454-failed-spawn-0\n";
     let first_res = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
@@ -455,7 +460,7 @@ fn repeated_failed_spawns_cannot_grow_inactive_profile_retention_without_bound()
         program: "/nonexistent/binary/orbit-test-fail-spawn",
         args: &[],
         env: &[],
-        cwd: None,
+        cwd: Some(missing_cwd),
         stdin: Stdio::null(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
@@ -483,7 +488,7 @@ fn repeated_failed_spawns_cannot_grow_inactive_profile_retention_without_bound()
             program: "/nonexistent/binary/orbit-test-fail-spawn",
             args: &[],
             env: &[],
-            cwd: None,
+            cwd: Some(missing_cwd),
             stdin: Stdio::null(),
             stdout: Stdio::piped(),
             stderr: Stdio::piped(),
