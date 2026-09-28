@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{Duration, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
@@ -12,12 +13,12 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use crate::context::RuntimeHost;
+use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
 
 use super::super::cleanup::{
     recover_timed_out_removal, remove_worktree, remove_worktree_without_force,
 };
-use super::super::gc::{WorktreeGcOptions, collect_worktrees};
+use super::super::gc::{WorktreeGcOptions, WorktreeGcReport, collect_worktrees};
 use super::super::{
     WorktreeIdentity, is_registered_worktree, resolve_shared_worktree_path,
     resolve_worktree_path_from_prefix,
@@ -67,6 +68,59 @@ impl RuntimeHost for FakeTaskHost {
         _has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
         Ok(self.tasks.values().cloned().collect())
+    }
+}
+
+/// A replica checkout: it holds no task records of its own, and every GC
+/// lookup goes to a stubbed owner that either answers from `owner_tasks` or,
+/// when that is `None`, cannot be reached.
+struct ReplicaHost {
+    owner_tasks: Option<BTreeMap<String, TaskStatus>>,
+    owner_calls: AtomicUsize,
+}
+
+impl ReplicaHost {
+    fn owner_answers(tasks: &[(&str, TaskStatus)]) -> Self {
+        Self {
+            owner_tasks: Some(
+                tasks
+                    .iter()
+                    .map(|(id, status)| (id.to_string(), *status))
+                    .collect(),
+            ),
+            owner_calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn owner_unreachable() -> Self {
+        Self {
+            owner_tasks: None,
+            owner_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl RuntimeHost for ReplicaHost {
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        Err(OrbitError::not_found(
+            NotFoundKind::Task,
+            task_id.to_string(),
+        ))
+    }
+
+    fn lookup_task_for_worktree_gc(&self, task_id: &str) -> WorktreeGcTaskLookup {
+        self.owner_calls.fetch_add(1, Ordering::SeqCst);
+        match &self.owner_tasks {
+            None => WorktreeGcTaskLookup::OwnerUnreachable("ssh: connect timed out".to_string()),
+            Some(tasks) => tasks
+                .get(task_id)
+                .map_or(WorktreeGcTaskLookup::Unresolved, |status| {
+                    WorktreeGcTaskLookup::Found {
+                        status: *status,
+                        pr_status: None,
+                    }
+                }),
+        }
     }
 }
 
@@ -1199,6 +1253,262 @@ fn one_failing_worktree_does_not_abort_the_rest_of_the_sweep() {
         .expect("the sweep must still reach the healthy candidate");
     assert_eq!(healthy_report.action, "removed");
     assert!(!healthy_worktree.exists());
+}
+
+/// [ORB-13658] A follower replica has no local task records, so every run
+/// used to be `skipped:task_unresolved` and nothing was ever reaped. The
+/// settled rule is applied to the owner's answer instead.
+#[test]
+fn replica_worktree_is_reaped_when_its_owner_reports_the_task_done() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let settled = pipeline_run("jrun-replica-done", JobRunState::Success, &["ORB-OWNED"]);
+    let settled_worktree = resolved_task_worktree(&repo, &settled);
+    add_worktree(&repo, &settled_worktree, "orbit/replica-done");
+    let live = pipeline_run("jrun-replica-live", JobRunState::Failed, &["ORB-LIVE"]);
+    let live_worktree = resolved_task_worktree(&repo, &live);
+    add_worktree(&repo, &live_worktree, "orbit/replica-live");
+    let host = ReplicaHost::owner_answers(&[
+        ("ORB-OWNED", TaskStatus::Done),
+        ("ORB-LIVE", TaskStatus::InProgress),
+    ]);
+
+    let result = collect_worktrees(
+        &repo,
+        &[settled, live],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let settled_report = report_for(&result.reports, &settled_worktree);
+    assert_eq!(settled_report.action, "removed");
+    assert_eq!(settled_report.task_status, Some(TaskStatus::Done));
+    assert!(!settled_worktree.exists());
+    let live_report = report_for(&result.reports, &live_worktree);
+    assert_eq!(live_report.action, "skipped:task_status_ineligible");
+    assert_eq!(live_report.task_status, Some(TaskStatus::InProgress));
+    assert!(live_worktree.exists());
+}
+
+/// An owner that cannot be reached says nothing about whether the task
+/// exists: the report names the outage rather than `task_unresolved`, and the
+/// sweep stops waiting on the owner after the first failure.
+#[test]
+fn replica_worktree_is_retained_as_owner_unreachable_when_the_owner_cannot_answer() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let first = pipeline_run("jrun-offline-a", JobRunState::Success, &["ORB-OFFLINE-A"]);
+    let first_worktree = resolved_task_worktree(&repo, &first);
+    add_worktree(&repo, &first_worktree, "orbit/offline-a");
+    let second = pipeline_run("jrun-offline-b", JobRunState::Success, &["ORB-OFFLINE-B"]);
+    let second_worktree = resolved_task_worktree(&repo, &second);
+    add_worktree(&repo, &second_worktree, "orbit/offline-b");
+    let host = ReplicaHost::owner_unreachable();
+
+    let result = collect_worktrees(
+        &repo,
+        &[first, second],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    for worktree in [&first_worktree, &second_worktree] {
+        let report = report_for(&result.reports, worktree);
+        assert_eq!(report.action, "skipped:owner_unreachable");
+        assert_eq!(report.task_status, None);
+        assert!(worktree.exists());
+    }
+    assert_eq!(
+        host.owner_calls.load(Ordering::SeqCst),
+        1,
+        "one unreachable answer ends the sweep's owner lookups"
+    );
+}
+
+/// [ORB-13658] Target-only mode reclaims the Cargo build output of a failed
+/// run whose task is still open on an unreachable owner, and keeps the
+/// checkout, its uncommitted work and its branch for rescue.
+#[test]
+fn target_only_reclaims_build_output_and_keeps_the_checkout() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    ignore_build_output(&repo);
+    let run = pipeline_run("jrun-target", JobRunState::Failed, &["ORB-TARGET"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/target");
+    fs::write(worktree.join("uncommitted.txt"), "rescue me").unwrap();
+    write_build_output(&worktree);
+    let host = ReplicaHost::owner_unreachable();
+
+    let dry = collect_worktrees(
+        &repo,
+        std::slice::from_ref(&run),
+        &host,
+        &WorktreeGcOptions {
+            target_only: true,
+            estimate_bytes: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(dry.reports[0].action, "would_remove_target");
+    assert!(dry.dry_run);
+    assert!(dry.reports[0].bytes_reclaimed > 0);
+    assert!(
+        worktree.join("target").exists(),
+        "a dry run removes nothing"
+    );
+
+    let applied = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            target_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let report = &applied.reports[0];
+    assert_eq!(report.action, "removed_target");
+    assert_eq!(report.bytes_reclaimed, dry.reports[0].bytes_reclaimed);
+    assert_eq!(applied.bytes_reclaimed, report.bytes_reclaimed);
+    assert!(!worktree.join("target").exists());
+    assert_eq!(
+        fs::read_to_string(worktree.join("uncommitted.txt")).unwrap(),
+        "rescue me"
+    );
+    assert!(is_registered_worktree(&repo, &worktree).unwrap());
+    assert!(git(&repo, &["branch", "--list", "orbit/target"]).contains("orbit/target"));
+    assert_eq!(
+        host.owner_calls.load(Ordering::SeqCst),
+        0,
+        "target-only collection does not depend on task state"
+    );
+}
+
+/// Safety gate: a running run's build output is in use.
+#[test]
+fn target_only_never_touches_a_running_run() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    ignore_build_output(&repo);
+    let run = pipeline_run("jrun-target-running", JobRunState::Running, &["ORB-RUN"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/target-running");
+    write_build_output(&worktree);
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-RUN", TaskStatus::Done)]);
+
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            target_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.reports[0].action, "skipped:run_not_terminal");
+    assert_eq!(result.reports[0].bytes_reclaimed, 0);
+    assert!(worktree.join("target/artifact-0.o").exists());
+}
+
+/// Safety gate: a terminal run record can precede its worker's exit, so a
+/// recorded worker that is still alive keeps its build output.
+#[test]
+fn target_only_keeps_build_output_while_the_recorded_worker_lives() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    ignore_build_output(&repo);
+    let mut run = pipeline_run("jrun-target-worker", JobRunState::Cancelled, &["ORB-W"]);
+    run.pid = Some(std::process::id());
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/target-worker");
+    write_build_output(&worktree);
+    let host = FakeTaskHost::new(Vec::new());
+
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            target_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.reports[0].action, "skipped:worker_alive");
+    assert!(worktree.join("target/artifact-0.o").exists());
+}
+
+/// Safety gate: content under `target/` that Git tracks, or does not
+/// ignore, is somebody's work rather than build output.
+#[test]
+fn target_only_keeps_a_target_directory_git_does_not_ignore() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = pipeline_run("jrun-target-kept", JobRunState::Success, &["ORB-KEPT"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/target-kept");
+    write_build_output(&worktree);
+    let host = FakeTaskHost::new(Vec::new());
+
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            target_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result.reports[0].action, "skipped:target_not_ignored");
+    assert!(worktree.join("target/artifact-0.o").exists());
+}
+
+fn report_for<'a>(reports: &'a [WorktreeGcReport], worktree: &Path) -> &'a WorktreeGcReport {
+    reports
+        .iter()
+        .find(|report| report.path == worktree)
+        .expect("every known worktree is reported")
+}
+
+/// Commit the `/target` ignore rule Cargo workspaces carry, before any
+/// worktree branches off.
+fn ignore_build_output(repo: &Path) {
+    fs::write(repo.join(".gitignore"), "/target\n").unwrap();
+    git(repo, &["add", ".gitignore"]);
+    git(repo, &["commit", "-m", "ignore build output"]);
+}
+
+fn write_build_output(worktree: &Path) {
+    let build_dir = worktree.join("target/debug");
+    fs::create_dir_all(&build_dir).unwrap();
+    fs::write(worktree.join("target/artifact-0.o"), [7_u8; 64]).unwrap();
+    fs::write(build_dir.join("orbit"), [9_u8; 128]).unwrap();
 }
 
 /// A run record shaped exactly like a real `task_pr_pipeline` run: `task_ids`

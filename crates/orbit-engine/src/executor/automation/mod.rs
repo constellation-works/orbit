@@ -138,6 +138,7 @@ pub(crate) fn execute_engine_action<
                         .map(ToOwned::to_owned),
                     older_than,
                     estimate_bytes: false,
+                    target_only: false,
                 },
             )?;
             serde_json::to_value(result).map_err(|error| {

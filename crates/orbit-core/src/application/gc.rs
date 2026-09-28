@@ -1,7 +1,9 @@
 use chrono::{Duration, Utc};
-use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
+use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees};
 use orbit_store::contracts::JobRunQuery;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRun;
+use serde_json::{Value, json};
 
 use crate::{OrbitError, OrbitRuntime};
 
@@ -41,9 +43,58 @@ impl OrbitRuntime {
                 run_id: Some(run_id.to_string()),
                 older_than: None,
                 estimate_bytes: false,
+                target_only: false,
             },
         )
         .map(Some)
+    }
+
+    /// A task's settlement state for worktree GC [ORB-13658].
+    ///
+    /// An owner checkout reads its own store. A replica holds no task records
+    /// — they live on its owner — so it asks the owner over the same federated
+    /// route its pull drain uses. A transport failure is reported as such, not
+    /// folded into "unresolved": the owner not answering says nothing about
+    /// whether the task exists.
+    pub(crate) fn worktree_gc_task_lookup(&self, task_id: &str) -> WorktreeGcTaskLookup {
+        let Some(owner_machine) = self.coordination_write_owner() else {
+            return match self.get_task(task_id) {
+                Ok(task) => WorktreeGcTaskLookup::Found {
+                    status: task.status,
+                    pr_status: task.pr_status,
+                },
+                Err(_) => WorktreeGcTaskLookup::Unresolved,
+            };
+        };
+        let Some(logical_workspace) = self
+            .workspace_runtime_binding()
+            .map(|binding| binding.logical_workspace_id.as_str())
+        else {
+            return WorktreeGcTaskLookup::OwnerUnreachable(
+                "this replica checkout is not a registered workspace".into(),
+            );
+        };
+        let Some(transport) = self.drain_owner_transport() else {
+            return WorktreeGcTaskLookup::OwnerUnreachable(
+                "this runtime has no federated owner route; add the owner to \
+                 ~/.orbit/mcp-destinations.toml"
+                    .into(),
+            );
+        };
+        let selector = format!("{owner_machine}/{logical_workspace}");
+        let answer = transport.call(
+            &selector,
+            "orbit.task.show",
+            json!({ "id": task_id, "fields": ["status", "pr_status"] }),
+        );
+        match answer {
+            Ok(fields) => owner_task_fields(task_id, &fields),
+            Err(OrbitError::NotFound { .. }) => WorktreeGcTaskLookup::Unresolved,
+            Err(OrbitError::RemoteTool { code, .. }) if code == "not_found" => {
+                WorktreeGcTaskLookup::Unresolved
+            }
+            Err(error) => WorktreeGcTaskLookup::OwnerUnreachable(error.to_string()),
+        }
     }
 
     pub fn gc_worktrees(
@@ -52,6 +103,7 @@ impl OrbitRuntime {
         run_id: Option<String>,
         older_than_hours: Option<u64>,
         estimate_bytes: bool,
+        target_only: bool,
     ) -> Result<WorktreeGcResult, OrbitError> {
         let older_than = older_than_hours
             .map(|hours| {
@@ -76,7 +128,32 @@ impl OrbitRuntime {
                 run_id,
                 older_than,
                 estimate_bytes,
+                target_only,
             },
         )
+    }
+}
+
+/// The owner's `status`/`pr_status` projection. An answer GC cannot read is
+/// an answer, not an outage, so it retains the worktree as unresolved.
+fn owner_task_fields(task_id: &str, fields: &Value) -> WorktreeGcTaskLookup {
+    let status = fields
+        .get("status")
+        .cloned()
+        .and_then(|status| serde_json::from_value::<TaskStatus>(status).ok());
+    let Some(status) = status else {
+        tracing::warn!(
+            %task_id,
+            answer = %fields,
+            "the workspace owner's task answer carried no readable status; retaining the worktree"
+        );
+        return WorktreeGcTaskLookup::Unresolved;
+    };
+    WorktreeGcTaskLookup::Found {
+        status,
+        pr_status: fields
+            .get("pr_status")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
     }
 }

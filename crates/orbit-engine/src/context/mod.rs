@@ -20,7 +20,7 @@ pub use hosts::{
     ClaimExecutionContext, CrewConfig, HandoffLandingContext, HandoffLandingStep,
     HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
     ResolvedActivityTools, ReviewLandingRequest, RuntimeHost, StepRecoveryAdmission,
-    TaskActivityUpdate, TaskAutomationUpdate,
+    TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 pub use outcome::{
     AGENT_INVOCATION_FAILED, AGENT_TIMEOUT, ActivityInvocationResult, WORKFLOW_RUN_FAILED_EVENT,

@@ -16,6 +16,8 @@ orbit gc worktrees --estimate-bytes         # dry-run plus a recursive byte esti
 orbit gc worktrees --confirm                # actually remove
 orbit gc worktrees --older-than-hours 24    # leave recent runs alone
 orbit gc worktrees --run <run_id>           # restrict to one run
+orbit gc worktrees --target-only            # report only each worktree's target/ build output
+orbit gc worktrees --target-only --confirm  # delete target/ and keep the checkout
 ```
 
 Collection is conservative: it reaps only worktrees whose associated task has
@@ -23,6 +25,20 @@ settled to `done`, `rejected`, or `archived`. A worktree belonging to live work
 is never a candidate. Run the report a few times before automating it, then
 enable the `worktree-gc` routine for hourly reclamation —
 [automation.md](automation.md).
+
+On a replica checkout (one that pulls work from an owner on another machine),
+task records live on the owner, so GC asks the owner for each task's status
+over the federated route the pull drain uses. If the owner cannot be reached,
+those worktrees are kept and reported `skipped:owner_unreachable` rather than
+`skipped:task_unresolved`; run GC again once the owner answers.
+
+`--target-only` reclaims per-worktree Cargo `target/` directories, which hold
+most of a worktree's size. It deletes only `<worktree>/target` and keeps the
+checkout, including uncommitted changes, so a failed or blocked run can still
+be rescued. It needs a terminal run with no live recorded worker, not a settled
+task. A running run is never touched, and a `target/` holding anything Git
+tracks or does not ignore is kept (`skipped:target_not_ignored`).
+`bytes_reclaimed` reports the size of the `target/` directory.
 
 ## Diagnose and repair
 
