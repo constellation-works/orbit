@@ -448,6 +448,164 @@ fn owner_local_claim_executes_validates_and_hands_off_without_merging() {
     );
 }
 
+/// The execution summary the claimed implementer returns in its output.
+const AGENT_SUMMARY: &str = "Outcome: success\nChanges:\n- claimed implementation, returned as step output\nAssessment: the owner task store was never reachable from the agent";
+
+/// A stand-in for the claimed implementer, launched through the real agent
+/// step (`agent_implement` on the CLI runner), that has no route to the owner
+/// at all — as under the agent sandbox, which denies the SSH credentials the
+/// owner route needs. It refuses to run unless claimed mode denied it the
+/// owner task tools, makes its change, and returns its summary in its output.
+fn install_claimed_implementer(runtime: &OrbitRuntime, dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let result = json!({
+        "schemaVersion": 1,
+        "status": "success",
+        "result": {
+            "summary": "implemented the claimed change",
+            "execution_summary": AGENT_SUMMARY,
+            "comment": "the owner was never contacted from the agent",
+        },
+        "error": null,
+    })
+    .to_string();
+    assert!(
+        !result.contains('\''),
+        "the envelope is single-quoted below"
+    );
+    let provider = dir.join("grok");
+    std::fs::write(
+        &provider,
+        format!(
+            r#"#!/bin/sh
+payload=$(cat)
+fail() {{
+  printf '%s\n' "{{\"schemaVersion\":1,\"status\":\"failed\",\"error\":{{\"code\":\"$1\",\"message\":\"$1\",\"details\":null}}}}"
+  exit 1
+}}
+printf '%s' "$payload" | grep -F '"claimed":true' >/dev/null || fail not_claimed_mode
+case ",$ORBIT_ACTIVITY_TOOLS_DENY," in *,orbit.task.show,*) ;; *) fail task_show_granted ;; esac
+case ",$ORBIT_ACTIVITY_TOOLS_DENY," in *,orbit.task.update,*) ;; *) fail task_update_granted ;; esac
+case ",$ORBIT_ACTIVITY_TOOLS," in *,orbit.task.show,*|*,orbit.task.update,*) fail owner_task_tool_allowed ;; esac
+printf '// claimed implementation\n' >> src/lib.rs || fail no_worktree
+printf '%s\n' '{result}'
+"#
+        ),
+    )
+    .expect("write claimed implementer");
+    let mut permissions = std::fs::metadata(&provider)
+        .expect("implementer metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&provider, permissions).expect("make implementer executable");
+    let now = chrono::Utc::now();
+    runtime
+        .upsert_executor_def(&orbit_types::workflow::ExecutorDef {
+            name: "grok".to_string(),
+            executor_type: orbit_types::workflow::ExecutorType::DirectAgent,
+            command: Some(provider.display().to_string()),
+            args: Vec::new(),
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: Some(120),
+            env: std::collections::HashMap::new(),
+            // Unsandboxed so the fixture runs on every host; the guard under
+            // test is the tool policy, and the sandbox is unchanged.
+            sandbox: None,
+            allow_fallback: false,
+            created_at: Some(now),
+            updated_at: Some(now),
+        })
+        .expect("seed claimed implementer executor");
+}
+
+/// The failure the follower drain hit on every leaf: the sandboxed
+/// implementer finished its change but could not reach the owner's task
+/// store, and failed the run trying to save its summary there. In claimed
+/// mode the agent writes no owner task state: it is denied the owner task
+/// tools, returns its summary as the step's output, and the pipeline's
+/// handoff carries that summary into the owner's `execution_summary`.
+#[test]
+fn a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_route() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_claimed_leaf_hands_off_the_summary_its_agent_returned_without_an_owner_route",
+    ) {
+        return;
+    }
+    let config = format!(
+        "{}default_crew = \"fixture\"\n[crews.fixture]\nprovider = \"grok\"\nmodel = \"grok-build\"\n",
+        workspace_config()
+    );
+    let (root, runtime, repo_root, global_root) =
+        super::test_runtime_with_workspace_config(&config);
+    seed_default_catalogs(&global_root);
+    init_remoteless_repo(&repo_root);
+    let runtime = runtime.with_automation_machine_identity(Some(MACHINE.to_string()));
+    install_claimed_implementer(&runtime, root.path());
+    let task_id = seed_claimable_task(&runtime);
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "local");
+    let peer = OwnerPullPeer { runtime: &runtime };
+    let launcher = InProcessLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+        runtime: &runtime,
+        repo_root: repo_root.clone(),
+        job_name: "task_claimed_local_pipeline",
+        launched: RefCell::new(Vec::new()),
+        outcome: RefCell::new(None),
+    };
+    let jobs = runtime.stores().jobs();
+    let admitted = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    }
+    .refill(&destination, &template, 1)
+    .expect("the claimed leaf runs to its handoff");
+    assert_eq!(admitted, 1);
+    assert_eq!(
+        launcher.outcome.borrow().clone(),
+        Some(Ok(true)),
+        "an owner the agent cannot reach does not fail the leaf"
+    );
+
+    // The handoff carried the agent's words, and the owner holds them.
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Settled);
+    let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
+        panic!("the leaf settles with a typed handoff: {record:?}");
+    };
+    assert!(
+        handoff.execution_summary.starts_with(AGENT_SUMMARY),
+        "the handoff carries the agent's summary: {}",
+        handoff.execution_summary
+    );
+    assert!(
+        handoff
+            .execution_summary
+            .contains("the owner was never contacted from the agent"),
+        "and its comment: {}",
+        handoff.execution_summary
+    );
+    assert!(
+        handoff.execution_summary.contains(&format!(
+            "Claimed execution delivered candidate {}",
+            handoff.candidate.candidate.commit
+        )),
+        "and names the delivered candidate: {}",
+        handoff.execution_summary
+    );
+    let task = runtime.get_task(&task_id).expect("task");
+    assert_eq!(task.status, TaskStatus::Review);
+    assert_eq!(
+        task.execution_summary, handoff.execution_summary,
+        "the owner's execution_summary is the one the agent returned"
+    );
+}
+
 /// [ORB-12500] The owner observes a published pull request before it accepts
 /// one, so a handoff naming a candidate the provider does not report is
 /// refused — leaving the settlement durable and retryable rather than

@@ -204,6 +204,24 @@ impl OrbitRuntime {
         state: JobRunState,
         diagnostic: Option<(&str, &str)>,
     ) -> Result<(), OrbitError> {
+        // A claimed leaf does not block its own task. The claim's settlement
+        // is the one terminal-failure transition the owner accepts: the drain
+        // that admitted the leaf settles it with the run's failure as evidence,
+        // atomically blocking the task, fencing the claim and releasing its
+        // reservation (distributed-drain design §3, "Settlement"). A generic
+        // blocked update from the worker carries no such evidence and is
+        // refused (`failure settlement requires evidence`).
+        if self
+            .worker_invocation()
+            .is_some_and(|binding| binding.bound_run_id == run_id)
+        {
+            tracing::debug!(
+                run_id,
+                state = %state,
+                "claimed leaf terminalized; its drain settles the claim"
+            );
+            return Ok(());
+        }
         let Some(run) = self.get_job_run_backend(run_id)? else {
             return Ok(());
         };

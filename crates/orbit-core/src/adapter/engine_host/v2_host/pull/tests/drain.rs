@@ -801,3 +801,56 @@ fn pull_one_stuck_settlement_does_not_hold_back_the_others() {
     assert_eq!(records[1].phase, LocalPullPhase::Settled);
     assert_eq!(peer.settlements.get(), 1);
 }
+
+/// The owner cannot read a follower's run, and the failure settlement becomes
+/// the blocked task's `execution_summary`, so it quotes the failed step.
+#[test]
+fn a_terminal_failure_settlement_names_the_failed_step_and_its_error() {
+    let mut run: orbit_types::workflow::JobRun = serde_json::from_value(serde_json::json!({
+        "run_id": "jrun-leaf",
+        "job_id": "task_claimed_pr_pipeline",
+        "attempt": 1,
+        "state": "failed",
+        "scheduled_at": Utc::now(),
+        "created_at": Utc::now(),
+    }))
+    .expect("leaf run");
+    run.steps.push(failed_step(
+        "agent_implement",
+        "cli subprocess reported declared envelope status=\"failed\"",
+    ));
+    let summary = super::super::drain::terminal_failure_summary(&run);
+    assert!(summary.starts_with("Outcome: failed"), "{summary}");
+    assert!(summary.contains("jrun-leaf"), "{summary}");
+    assert!(
+        summary.contains("Failed step: agent_implement (STEP_FAILED)"),
+        "{summary}"
+    );
+    assert!(summary.contains("declared envelope status"), "{summary}");
+
+    run.steps.clear();
+    run.steps
+        .push(failed_step("agent_implement", &"e".repeat(20_000)));
+    let bounded = super::super::drain::terminal_failure_summary(&run);
+    assert!(
+        bounded.contains("[truncated to"),
+        "a runaway error is bounded"
+    );
+    assert!(bounded.len() < 10_000);
+}
+
+fn failed_step(target: &str, message: &str) -> orbit_types::workflow::JobRunStep {
+    orbit_types::workflow::JobRunStep {
+        step_index: 0,
+        target_type: orbit_types::workflow::JobTargetType::Activity,
+        target_id: target.into(),
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        exit_code: Some(1),
+        agent_response_json: None,
+        state: orbit_types::workflow::JobRunState::Failed,
+        error_code: Some("STEP_FAILED".into()),
+        error_message: Some(message.into()),
+    }
+}

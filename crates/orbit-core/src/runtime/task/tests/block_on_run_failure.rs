@@ -833,3 +833,65 @@ fn a_newer_block_of_another_kind_supersedes_the_launcher_block() {
         "an operator's block is not an infra block"
     );
 }
+
+/// Counts every call a bound worker sends toward its owner.
+#[derive(Default)]
+struct CountingOwner {
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+impl orbit_tools::OwnerCoordinator for CountingOwner {
+    fn call(
+        &self,
+        name: &str,
+        _input: serde_json::Value,
+        _session: orbit_types::tool::ToolSessionContext,
+    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
+        self.calls
+            .lock()
+            .expect("owner calls")
+            .push(name.to_string());
+        Err(orbit_common::OrbitError::RemoteTool {
+            code: "invalid_input".into(),
+            message: "failure settlement requires evidence".into(),
+            payload: serde_json::json!({}),
+        })
+    }
+}
+
+/// A claimed leaf's terminal failure belongs to its drain's settlement, which
+/// carries the evidence the owner requires. The worker blocking the task
+/// itself sent an evidence-less update the owner always refused
+/// (`failure settlement requires evidence`), so it sends nothing now.
+#[test]
+fn a_claimed_leaf_leaves_its_terminal_failure_to_the_drain_settlement() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run = insert_running_pipeline_run(&runtime);
+    record_failing_step(&runtime, &run.run_id);
+    let owner = std::sync::Arc::new(CountingOwner::default());
+    let worker = runtime
+        .with_automation_machine_identity(Some("follower-machine".into()))
+        .with_worker_invocation(
+            orbit_types::tool::WorkerInvocation {
+                owner_machine_id: "owner-machine".into(),
+                owner_workspace_id: "ws_owner".into(),
+                owner_destination: "owner-machine/ws_owner".into(),
+                task_id: "ORB-1".into(),
+                claim_id: "claim-1".into(),
+                execution: orbit_types::task::ExecutionLocation {
+                    machine_id: "follower-machine".into(),
+                    machine_name: None,
+                },
+                bound_run_id: run.run_id.clone(),
+            },
+            owner.clone(),
+        )
+        .expect("claimed binding");
+
+    worker.best_effort_block_tasks_for_terminal_run(&run.run_id, JobRunState::Failed, None);
+
+    assert!(
+        owner.calls.lock().expect("owner calls").is_empty(),
+        "the worker sent no generic block to the owner"
+    );
+}

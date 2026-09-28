@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 last_validated: 2026-09-20
 status: Draft
 feature: distributed-drain
@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642]
 ---
 
 # Distributed Drain — Design
@@ -127,6 +127,32 @@ no origin or PR credentials.
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call, so a disconnect leaves one immutable settlement the next refill retries idempotently.
 
+**Claimed-mode implementation** ([ORB-13642]). The implementer writes no owner task state. Both
+claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
+
+- The injected task envelope is the task. The claim is the authority to work on it, and the owner
+  fences stale work when the claim settles (`stale_claim`), so the agent re-reads nothing.
+- The CLI runner denies `orbit.task.show` and `orbit.task.update` on top of the activity's own
+  list (`CLAIMED_MODE_DENIED_TOOLS` in `cli_runner/orchestrator.rs`; an allowlisted activity has
+  them removed instead). The prompt is not the only guard.
+- The agent returns `execution_summary`, plus any `context_files_added` and `comment`, in the step
+  output. The handoff step reads that output (`implementation: "{{ steps.implement_one.output }}"`,
+  one iteration, since a claim binds exactly one task). `claim_handoff` composes the handoff's
+  summary from it: an explicit `execution_summary` input, else the output's `execution_summary`,
+  else its short `summary`, else a generic delivery statement. The implementer's comment and
+  reported selectors are appended (the footprint is frozen, so selectors are recorded, not
+  applied), then a line naming the delivered candidate. Each part is bounded, and a summary whose
+  first line is `Outcome: failed` is refused before it becomes a settlement. Acceptance writes it
+  as the owner's `execution_summary`.
+- `step_failure_recovery` treats the implement step's output as the claimed task's summary of
+  record and has only repair-and-retry: no direct delivery, resume or review transition.
+
+This is what makes a follower leaf work under the agent sandbox, which denies `~/.ssh` and so
+leaves a sandboxed agent no route to a remote owner. The sandbox is not relaxed and the agent is
+given no owner transport. Before this, every such agent finished its change, failed to save its
+summary through `orbit.task.update`, and reported the step failed (`task_store_unreachable`),
+which blocked the task with finished work uncommitted.
+
 **Execution authority** is the trusted worker binding plus the durable admission, never a
 payload: `execute_pipeline_run_worker` admits a claimed leaf only when the binding's task, claim,
 execution machine, bound run and owner match the admission. The supervisor records the binding
@@ -228,7 +254,11 @@ Review-only local work stays an unmerged candidate.
 claimed path settles explicitly on success, launch failure, cancellation and terminal failure.
 Settlement is an idempotent owner mutation scoped to that claim's reservation and never releases
 a newer attempt's. A terminal failure before review atomically records evidence, moves the task to
-`blocked`, invalidates execution authority and releases the reservation. Disconnected, the
+`blocked`, invalidates execution authority and releases the reservation. That evidence names the
+leaf run, its last failed step and the step's error (bounded), since the owner cannot read the
+executor's run. The leaf's own terminal hook (`block_on_run_failure`) leaves a claimed task alone:
+the drain's settlement is the one failure transition the owner accepts for it, and a generic
+blocked update carries no evidence (`failure settlement requires evidence`). Disconnected, the
 settlement is persisted locally and retried; the owner holds the claim until settlement or
 recovery. TTL is not settlement.
 
@@ -587,6 +617,7 @@ Acceptance criteria, not reported as passing.
 | Old worker returns after recovery and reassignment | Cannot bind, mutate evidence, promote, settle, or release the new reservation |
 | Failure/cancellation while owner disconnected | Settlement stays pending locally; later idempotent settlement or explicit recovery |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
+| Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
 | Handoff commits, response lost | Exactly one handoff and review transition |
 | Review-only handoff reaches the landing consumer | No merge without recorded authorization |
@@ -642,5 +673,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-12582] — moved the probe's capability floor into the governed-operation registry.
 - [ORB-12616] — made the owner-local claimed leaf executable.
 - [ORB-12617] — unified capacity accounting and added fault-injection acceptance fixtures.
+- [ORB-13642] — added claimed-mode implementation and evidence-bearing failure settlement.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

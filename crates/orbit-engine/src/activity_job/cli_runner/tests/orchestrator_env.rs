@@ -658,6 +658,101 @@ fn run_cli_backend_stamps_deny_mode_policy_for_the_managed_child() {
     );
 }
 
+/// A claimed leaf's implementer writes no owner task state and re-reads
+/// nothing (distributed-drain design §3): in claimed mode the owner task
+/// tools are denied on top of the activity's own list, so the child can
+/// neither see nor call them, and the harness event records the widened list.
+#[test]
+fn run_cli_backend_denies_owner_task_tools_to_a_claimed_implementer() {
+    let temp = tempdir().expect("tempdir");
+    let script = policy_checking_script(
+        temp.path(),
+        r#"[ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,proc.*,orbit.task.show,orbit.task.update" ] || fail claimed_disallow_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.search,github.run.list" ] || fail owner_task_tools_still_callable"#,
+    );
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-claimed-deny",
+        "grok:grok-build",
+        Arc::new(RecordingSink::default()) as Arc<dyn AuditSink>,
+    ));
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tool_disallow_list = Some(vec![
+        "orbit.workflow.ship".to_string(),
+        "proc.*".to_string(),
+    ]);
+
+    let outcome = run_cli_backend(
+        &policy_test_host(&script, &[]),
+        &spec,
+        "agent_implement",
+        "job-claimed-deny",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi", "task_id": "ORB-13315", "claimed": true}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(
+        outcome.success,
+        "child still had owner task tools: {:?}",
+        outcome.output
+    );
+    let (effective_tools, tool_policy, tool_disallow_list) = delegated_policy(&audit);
+    assert_eq!(effective_tools, ["orbit.search", "github.run.list"]);
+    assert_eq!(tool_policy, Some(ActivityToolPolicyMode::Deny));
+    assert_eq!(
+        tool_disallow_list.as_deref(),
+        Some(
+            [
+                "orbit.workflow.ship".to_string(),
+                "proc.*".to_string(),
+                "orbit.task.show".to_string(),
+                "orbit.task.update".to_string(),
+            ]
+            .as_slice()
+        )
+    );
+}
+
+/// The same guard holds for an allowlisted activity: claimed mode removes the
+/// owner task tools from what the activity would otherwise grant.
+#[test]
+fn run_cli_backend_removes_owner_task_tools_from_a_claimed_allowlist() {
+    let temp = tempdir().expect("tempdir");
+    let script = policy_checking_script(
+        temp.path(),
+        r#"[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.search" ] || fail owner_task_tools_still_allowed"#,
+    );
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-claimed-allow",
+        "grok:grok-build",
+        Arc::new(RecordingSink::default()) as Arc<dyn AuditSink>,
+    ));
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tools = vec![
+        "orbit.task.show".to_string(),
+        "orbit.task.update".to_string(),
+        "orbit.search".to_string(),
+    ];
+
+    let outcome = run_cli_backend(
+        &policy_test_host(&script, &[]),
+        &spec,
+        "agent_implement",
+        "job-claimed-allow",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi", "task_id": "ORB-13315", "claimed": true}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(outcome.success, "{:?}", outcome.output);
+    let (effective_tools, tool_policy, _) = delegated_policy(&audit);
+    assert_eq!(effective_tools, ["orbit.search"]);
+    assert_eq!(tool_policy, Some(ActivityToolPolicyMode::Allow));
+}
+
 #[test]
 fn run_cli_backend_forwards_program_deny_mode_with_legacy_mcp_fallback() {
     let temp = tempdir().expect("tempdir");

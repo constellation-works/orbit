@@ -65,6 +65,10 @@ spec:
               task_id: "{{ item }}"
               workspace_path: "{{ steps.worktree.output.workspace_path }}"
               repo_root: "{{ steps.worktree.output.workspace_path }}"
+              # Claimed mode: the injected envelope is the task, the agent
+              # writes no owner task state, and it returns its execution
+              # summary in its output for the handoff to carry.
+              claimed: true
 
     - id: commit
       recovery_activity: step_failure_recovery
@@ -94,3 +98,6 @@ spec:
         base_sha: "{{ steps.worktree.output.base_sha }}"
         candidate: "{{ steps.validate.output.candidate }}"
         validation: "{{ steps.validate.output.validation }}"
+        # A claim binds exactly one task, so the loop ran once and this is
+        # that task's implementer output; its summary becomes the owner's.
+        implementation: "{{ steps.implement_one.output }}"
