@@ -554,6 +554,13 @@ impl OrbitRuntime {
         self.context.settings().workflow_distributed_completion()
     }
 
+    /// `[workflow.task_pilot_freshness]`, before any routine override.
+    pub(crate) fn task_pilot_freshness(
+        &self,
+    ) -> &orbit_types::workflow::automation::members::PreparationFreshness {
+        self.context.settings().task_pilot_freshness()
+    }
+
     /// The branch this workspace integrates into: the registered workspace
     /// base branch when a registry binding exists, else `[workflow]
     /// base_branch`. Delivery automation defaults are seeded against it.

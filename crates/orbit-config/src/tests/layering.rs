@@ -620,3 +620,50 @@ fn retired_search_configuration_warns_and_stays_out_of_effective_settings() {
             .all(|(key, _)| !key.starts_with("semantic") && *key != "search.model")
     );
 }
+
+/// [ORB-13638] `[workflow.task_pilot_freshness]` defaults to the meaning and
+/// selector fields with the head ignored, layers per key, and refuses an
+/// empty or unknown material set.
+#[test]
+fn task_pilot_freshness_defaults_layers_and_validates() {
+    use orbit_types::workflow::automation::members::{
+        MaterialField, PreparationFreshness, SourceSensitivity,
+    };
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(global.path(), "[scoring]\nenabled = false\n");
+    let loaded = ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("load");
+    assert_eq!(
+        loaded.snapshot.task_pilot_freshness(),
+        PreparationFreshness::default()
+    );
+
+    write_config(
+        global.path(),
+        "[workflow.task_pilot_freshness]\nmaterial_fields = [\"title\", \"crew\"]\n",
+    );
+    write_config(
+        workspace.path(),
+        "[workflow.task_pilot_freshness]\nsource_sensitivity = \"context_files\"\n",
+    );
+    let loaded = ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("load");
+    assert_eq!(
+        loaded.snapshot.task_pilot_freshness(),
+        PreparationFreshness {
+            material_fields: vec![MaterialField::Title, MaterialField::Crew],
+            source_sensitivity: SourceSensitivity::ContextFiles,
+        }
+    );
+
+    for invalid in [
+        "[workflow.task_pilot_freshness]\nmaterial_fields = []\n",
+        "[workflow.task_pilot_freshness]\nmaterial_fields = [\"priority\"]\n",
+        "[workflow.task_pilot_freshness]\nsource_sensitivity = \"sometimes\"\n",
+    ] {
+        write_config(workspace.path(), invalid);
+        assert!(
+            ResolvedConfig::load(&roots(global.path(), workspace.path())).is_err(),
+            "{invalid}"
+        );
+    }
+}

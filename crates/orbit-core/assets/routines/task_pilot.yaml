@@ -14,6 +14,20 @@
 # new work. Nothing fires while the backlog is unchanged. Preparation never
 # promotes or dispatches the assessed task.
 #
+# What is material is `[workflow.task_pilot_freshness]` in config.toml
+# [ORB-13638]: by default only the title, description, acceptance criteria,
+# plan and selectors, with branch-head moves ignored, so retagging or
+# reassigning an assessed task does not pilot it again. An optional
+# `freshness` block under `trigger.state` overrides either key for this
+# routine only, for example:
+#
+#     freshness:
+#       material_fields: [title, description, criteria, plan, selectors, tags]
+#       source_sensitivity: context_files   # ignore | context_files | any
+#
+# Changing the resolved freshness invalidates assessments accepted under the
+# old one.
+#
 # `eligibility` is optional and defaults to the values shown: proposed or
 # backlog tasks not tagged `no-diff-expected` / `no-diff-needed`, of any type,
 # with no required tags. Narrow it here; changing it invalidates assessments

@@ -195,6 +195,18 @@ fn remote_landing_fixture() -> RemoteLandingFixture {
     remote_landing_fixture_for(LANDING)
 }
 
+/// Every material field and every head move opted in, for fixtures that
+/// exercise apply's drift guards on inputs outside the default set
+/// [ORB-13638].
+const FULL_MATERIAL_CONFIG: &str = "[workflow.task_pilot_freshness]
+material_fields = [\"title\", \"description\", \"criteria\", \"plan\", \"selectors\", \"tags\", \"crew\", \"tools\", \"type\", \"complexity\", \"relations\", \"dependencies\", \"instructions\"]
+source_sensitivity = \"any\"
+";
+
+fn full_material_fixture() -> RemoteLandingFixture {
+    remote_landing_fixture_with_workspace_config(LANDING, Some(FULL_MATERIAL_CONFIG))
+}
+
 fn prepare_landing(fixture: &RemoteLandingFixture) -> Result<Value, String> {
     prepare(
         &fixture.runtime,
@@ -825,7 +837,7 @@ fn material_criteria_edit_invalidates_real_pilot_apply() {
 
 #[test]
 fn dependency_status_only_drift_retries_and_applies_against_fresh_fingerprint() {
-    let fixture = remote_landing_fixture();
+    let fixture = full_material_fixture();
     let dependency = seed_task(&fixture.runtime, "prerequisite");
     fixture
         .runtime
@@ -917,7 +929,7 @@ fn own_backlog_to_in_progress_drift_retries_and_reports_status_changed() {
 
 #[test]
 fn second_mismatch_on_status_retry_refuses_without_assessment_write() {
-    let fixture = remote_landing_fixture();
+    let fixture = full_material_fixture();
     let dependency = seed_task(&fixture.runtime, "prerequisite");
     fixture
         .runtime
@@ -977,7 +989,7 @@ fn post_prepare_task_body_edits_still_refuse_apply() {
         "relations",
         "complexity",
     ] {
-        let fixture = remote_landing_fixture();
+        let fixture = full_material_fixture();
         let prepared = prepare_landing(&fixture).expect("prepare task");
         let related = seed_task(&fixture.runtime, "relation target");
         let params = match case {
@@ -1061,7 +1073,7 @@ fn post_prepare_dependency_body_edits_still_refuse_apply() {
     use crate::application::task::TaskUpdateParams;
 
     for case in ["description", "acceptance_criteria", "plan", "relations"] {
-        let fixture = remote_landing_fixture();
+        let fixture = full_material_fixture();
         let dependency = seed_task(&fixture.runtime, "prerequisite");
         let related = seed_task(&fixture.runtime, "relation target");
         fixture
@@ -1135,116 +1147,114 @@ fn post_prepare_dependency_body_edits_still_refuse_apply() {
 
 #[test]
 fn status_retry_guard_hashes_required_tools_dependency_refs_instructions_and_revision() {
-    use orbit_automation::members::preparation::fingerprint_ignoring_status;
-    use orbit_types::workflow::automation::members::PreparationEligibility;
+    use orbit_automation::members::preparation::{MaterialEvidence, fingerprint_ignoring_status};
+    use orbit_types::workflow::automation::members::{
+        MaterialField, PreparationFreshness, PreparationPolicy, SourceSensitivity,
+    };
 
     let fixture = remote_landing_fixture();
     let task = &fixture.task;
-    let dependencies = json!([{
-        "id": "ORB-12000", "status": "backlog", "relations": [],
-        "criteria": ["original"], "description": "original", "plan": "original",
-        "refs": [], "pr_status": null,
-    }]);
-    let eligibility = PreparationEligibility::default();
-    let baseline = fingerprint_ignoring_status(
-        task,
-        "source-a",
-        &dependencies,
-        "instructions-a",
-        &eligibility,
-    )
-    .expect("baseline neutral fingerprint");
+    // Every input this guard covers is opted in; by default most are not
+    // material at all [ORB-13638].
+    let policy = PreparationPolicy {
+        freshness: PreparationFreshness {
+            material_fields: vec![
+                MaterialField::Tools,
+                MaterialField::Dependencies,
+                MaterialField::Instructions,
+            ],
+            source_sensitivity: SourceSensitivity::Any,
+        },
+        ..Default::default()
+    };
+    let evidence = MaterialEvidence {
+        source: json!("source-a"),
+        dependencies: json!([{
+            "id": "ORB-12000", "status": "backlog", "relations": [],
+            "criteria": ["original"], "description": "original", "plan": "original",
+            "refs": [], "pr_status": null,
+        }]),
+        instructions: json!("instructions-a"),
+        ..Default::default()
+    };
+    let neutral = |task: &Task, evidence: &MaterialEvidence| {
+        fingerprint_ignoring_status(task, evidence, &policy).expect("neutral fingerprint")
+    };
+    let baseline = neutral(task, &evidence);
 
     let mut changed_task = task.clone();
     changed_task.required_tools.push("orbit.task.show".into());
     assert_ne!(
         baseline,
-        fingerprint_ignoring_status(
-            &changed_task,
-            "source-a",
-            &dependencies,
-            "instructions-a",
-            &eligibility
-        )
-        .unwrap(),
+        neutral(&changed_task, &evidence),
         "required tools must refuse the status retry",
     );
-    let mut changed_dependency = dependencies.clone();
-    changed_dependency[0]["refs"] = json!([{"system": "issue", "id": "one"}]);
+    let mut changed = evidence.clone();
+    changed.dependencies[0]["refs"] = json!([{"system": "issue", "id": "one"}]);
     assert_ne!(
         baseline,
-        fingerprint_ignoring_status(
-            task,
-            "source-a",
-            &changed_dependency,
-            "instructions-a",
-            &eligibility
-        )
-        .unwrap(),
+        neutral(task, &changed),
         "dependency external refs must refuse the status retry",
     );
+    let mut changed = evidence.clone();
+    changed.instructions = json!("instructions-b");
     assert_ne!(
         baseline,
-        fingerprint_ignoring_status(
-            task,
-            "source-a",
-            &dependencies,
-            "instructions-b",
-            &eligibility
-        )
-        .unwrap(),
+        neutral(task, &changed),
         "instruction snapshot must refuse the status retry",
     );
+    let mut changed = evidence.clone();
+    changed.source = json!("source-b");
     assert_ne!(
         baseline,
-        fingerprint_ignoring_status(
-            task,
-            "source-b",
-            &dependencies,
-            "instructions-a",
-            &eligibility
-        )
-        .unwrap(),
+        neutral(task, &changed),
         "source revision must refuse the status retry",
     );
-    let mut status_only = dependencies.clone();
-    status_only[0]["status"] = json!("done");
+    let mut status_only = evidence.clone();
+    status_only.dependencies[0]["status"] = json!("done");
     assert_eq!(
         baseline,
-        fingerprint_ignoring_status(
-            task,
-            "source-a",
-            &status_only,
-            "instructions-a",
-            &eligibility
-        )
-        .unwrap(),
+        neutral(task, &status_only),
         "dependency status alone must permit one retry",
     );
 }
 
+/// [ORB-13638] The pinned revision is evidence of what a pilot assessed; it
+/// is material only under `source_sensitivity = "any"` (or `context_files`
+/// when a selector changed).
 #[test]
-fn post_prepare_source_revision_change_refuses_apply() {
-    let fixture = remote_landing_fixture();
-    let mut prepared = prepare_landing(&fixture).expect("prepare current revision");
-    assert_ne!(fixture.stale_sha, fixture.current_sha);
-    prepared["source"]["source_revision"] = json!(fixture.stale_sha);
-    let applied = apply_selectors(
-        &fixture.runtime,
-        &prepared,
-        &fixture.task,
-        vec!["file:src/existing.rs"],
-    );
-    assert_eq!(applied["status"], "failed");
-    assert_eq!(applied["task_outcomes"][0]["reason"], "material_changed");
-    assert!(
-        fixture
+fn post_prepare_source_revision_change_refuses_apply_only_when_the_head_is_material() {
+    for (fixture, refused) in [
+        (remote_landing_fixture(), false),
+        (full_material_fixture(), true),
+    ] {
+        let mut prepared = prepare_landing(&fixture).expect("prepare current revision");
+        assert_ne!(fixture.stale_sha, fixture.current_sha);
+        prepared["source"]["source_revision"] = json!(fixture.stale_sha);
+        let applied = apply_selectors(
+            &fixture.runtime,
+            &prepared,
+            &fixture.task,
+            vec!["file:src/existing.rs"],
+        );
+        let context_files = fixture
             .runtime
             .get_task(&fixture.task.id)
             .unwrap()
-            .context_files
-            .is_empty()
-    );
+            .context_files;
+        if refused {
+            assert_eq!(applied["status"], "failed");
+            assert_eq!(applied["task_outcomes"][0]["reason"], "material_changed");
+            assert!(context_files.is_empty());
+        } else {
+            assert_eq!(applied["status"], "succeeded", "{applied}");
+            assert_eq!(
+                applied["source"]["source_revision"],
+                json!(fixture.stale_sha)
+            );
+            assert_eq!(context_files, vec!["file:src/existing.rs".to_string()]);
+        }
+    }
 }
 
 #[test]
@@ -1292,7 +1302,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         &fixture.runtime,
         &fixture.task,
         &source.commit,
-        &PreparationEligibility::default(),
+        &PreparationPolicy::default(),
     )
     .unwrap();
     let now = chrono::Utc::now();
@@ -1319,6 +1329,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         deadline_minutes: 30,
         batch_size: None,
         eligibility: PreparationEligibility::default(),
+        freshness: Default::default(),
     };
     let definition: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
         "schemaVersion":1,"name":"pilot","enabled":true,"hosts":["fixture"],"target":"job:task_pilot_pipeline",
@@ -1460,7 +1471,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
             &fixture.runtime,
             &task,
             &fixture.stale_sha,
-            &PreparationEligibility::default(),
+            &PreparationPolicy::default(),
         )
         .unwrap()
     );
@@ -1513,6 +1524,22 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
     let accepted: MemberBatchEvidence = serde_json::from_slice(&receipt.evidence).unwrap();
     assert_eq!(accepted.applied, vec![evidence]);
     assert!(accepted.failed.is_empty());
+
+    // [ORB-13638] The branch head moved twice past the pinned source. Under
+    // the default freshness the accepted assessment still certifies the
+    // unchanged task, so the consumer reports it fresh instead of re-piloting.
+    let later = crate::application::automation::evaluate_routine(
+        &fixture.runtime,
+        &definition,
+        false,
+        now + chrono::Duration::minutes(30),
+    )
+    .unwrap();
+    assert!(
+        matches!(later.reason.as_str(), "fresh" | "fresh_unready"),
+        "{}",
+        later.reason
+    );
 }
 
 /// [ORB-12746] A batched claim over twelve eligible tasks reaches prepare as
@@ -1544,7 +1571,7 @@ fn batched_claim_partitions_one_run_and_settles_members_independently() {
                 &fixture.runtime,
                 task,
                 &source.commit,
-                &PreparationEligibility::default(),
+                &PreparationPolicy::default(),
             )
             .unwrap(),
             source: source.clone(),
@@ -1567,6 +1594,7 @@ fn batched_claim_partitions_one_run_and_settles_members_independently() {
         deadline_minutes: 30,
         batch_size: Some(12),
         eligibility: PreparationEligibility::default(),
+        freshness: Default::default(),
     };
     let definition: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
         "schemaVersion":1,"name":"pilot","enabled":true,"hosts":["fixture"],"target":"job:task_pilot_pipeline",
@@ -1816,7 +1844,7 @@ fn batched_claim_partitions_one_run_and_settles_members_independently() {
 /// the prerequisite's meaning still binds the fingerprint it produces.
 #[test]
 fn preparation_resolves_a_dependency_owned_by_another_workspace_on_this_machine() {
-    let fixture = remote_landing_fixture();
+    let fixture = full_material_fixture();
     let global = fixture._root.path().join("home/.orbit");
     let other_workspace = fixture._root.path().join("other-repo/.orbit");
     fs::create_dir_all(&other_workspace).expect("other workspace orbit dir");

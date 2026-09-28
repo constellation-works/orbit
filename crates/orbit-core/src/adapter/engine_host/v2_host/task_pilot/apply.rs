@@ -106,11 +106,11 @@ pub(in super::super) fn apply(
         .unwrap_or_default();
     let claim = crate::application::automation::members::claim(runtime, prepared_value, &[])
         .map_err(|error| action_failed(action, error.to_string()))?;
-    // The same consumer predicate prepare fingerprinted under; a run without
-    // a claim evaluates the default [ORB-12745].
-    let eligibility =
-        crate::application::automation::preparation::claim_eligibility(runtime, claim.as_ref())
-            .map_err(|error| action_failed(action, error.to_string()))?;
+    // The same consumer policy prepare fingerprinted under; a run without a
+    // claim evaluates the default eligibility and configured freshness
+    // [ORB-12745, ORB-13638].
+    let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
+        .map_err(|error| action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(prepared_value, action)?;
     if let Some(source) = &source {
         source.ensure_commit(action, &workspace_root)?;
@@ -493,7 +493,7 @@ pub(in super::super) fn apply(
 
             inject_concurrent_edit(runtime, task_id)
                 .map_err(|error| action_failed(action, error.to_string()))?;
-            match apply_task(runtime, snapshot, &validated, prepared_value, &eligibility) {
+            match apply_task(runtime, snapshot, &validated, prepared_value, &policy) {
                 Ok(ApplyTaskOutcome::Applied(fingerprint)) => {
                     if let Some(fingerprint) = fingerprint {
                         resulting_fingerprints.insert(task_id.clone(), fingerprint);

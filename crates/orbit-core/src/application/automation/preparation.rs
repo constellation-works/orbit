@@ -2,14 +2,20 @@
 
 use super::source::Source;
 use crate::OrbitRuntime;
+use orbit_automation::AutomationError;
+use orbit_automation::members::preparation::{self, MaterialEvidence};
 use orbit_automation::routines::loader::declared_routine_names;
-use orbit_automation::{AutomationError, members::preparation};
 use orbit_common::OrbitError;
+use orbit_common::fs::selector::Selector;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::RegisteredTaskResolution;
 use orbit_types::task::Task;
-use orbit_types::workflow::automation::members::{MemberAttempt, PreparationEligibility};
+use orbit_types::workflow::automation::members::{
+    MaterialField, MemberAttempt, PreparationEligibility, PreparationPolicy, SourceSensitivity,
+    StateTrigger,
+};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The landing-branch head commit the material fingerprint is bound to.
 /// Tests bind an expected fingerprint to the same revision the evaluator saw.
@@ -28,56 +34,77 @@ pub(crate) fn head_revision(runtime: &OrbitRuntime, branch: &str) -> Result<Stri
 #[derive(Clone)]
 pub(crate) struct InstructionSnapshot(String);
 
-/// The eligibility the state consumer `consumer` evaluates: the
-/// `trigger.state.eligibility` of the routine its key names, read from this
-/// workspace's routine catalog [ORB-12745]. Every consumer of an assessment
-/// — scheduling, the prepare/apply fingerprint check and promotion — resolves
-/// the predicate this way so one definition governs all of them.
+/// The policy a `preparation_eligible` consumer evaluates: its trigger's
+/// eligibility, and its freshness resolved routine > `config.toml` > built-in
+/// default per key [ORB-12745, ORB-13638]. A run with no trigger evaluates
+/// the default eligibility under the configured freshness.
+pub(crate) fn resolve_policy(
+    runtime: &OrbitRuntime,
+    trigger: Option<&StateTrigger>,
+) -> PreparationPolicy {
+    let configured = runtime.task_pilot_freshness();
+    match trigger {
+        Some(trigger) => PreparationPolicy {
+            eligibility: trigger.eligibility.clone(),
+            freshness: configured.overridden_by(&trigger.freshness),
+        },
+        None => PreparationPolicy {
+            eligibility: PreparationEligibility::default(),
+            freshness: configured.normalized(),
+        },
+    }
+}
+
+/// The policy the state consumer `consumer` evaluates, from the
+/// `trigger.state` of the routine its key names in this workspace's routine
+/// catalog. Every consumer of an assessment — scheduling, the prepare/apply
+/// fingerprint check and promotion — resolves it this way so one definition
+/// governs all of them.
 ///
 /// A consumer whose routine no longer exists, or is no longer a state
-/// routine, resolves to the default predicate. That is fail-closed: a
-/// fingerprint computed under the wrong predicate never matches an accepted
+/// routine, resolves as if it had no trigger. That is fail-closed: a
+/// fingerprint computed under the wrong policy never matches an accepted
 /// assessment, so stale evidence is withheld rather than trusted.
-pub(crate) fn consumer_eligibility(
+pub(crate) fn consumer_policy(
     runtime: &OrbitRuntime,
     consumer: &str,
-) -> Result<PreparationEligibility, OrbitError> {
+) -> Result<PreparationPolicy, OrbitError> {
     let Some((_, name)) = consumer.rsplit_once("/routine/") else {
-        return Ok(PreparationEligibility::default());
+        return Ok(resolve_policy(runtime, None));
     };
     let Some(path) = declared_routine_names(&runtime.shared_root()).remove(name) else {
-        return Ok(PreparationEligibility::default());
+        return Ok(resolve_policy(runtime, None));
     };
     let raw = std::fs::read_to_string(&path)
         .map_err(|error| OrbitError::Io(format!("read routine '{}': {error}", path.display())))?;
     let definition = parse_routine_yaml(&raw)?;
-    Ok(definition
-        .trigger
-        .state
-        .map(|trigger| trigger.eligibility)
-        .unwrap_or_default())
+    Ok(resolve_policy(runtime, definition.trigger.state.as_ref()))
 }
 
-/// The eligibility a task-pilot run evaluates: its state claim's consumer
-/// predicate, or the default for an explicit or manual run that carries no
-/// claim.
-pub(crate) fn claim_eligibility(
+/// The policy a task-pilot run evaluates: its state claim's consumer policy,
+/// or the unrouted one for an explicit or manual run that carries no claim.
+pub(crate) fn claim_policy(
     runtime: &OrbitRuntime,
     claim: Option<&MemberAttempt>,
-) -> Result<PreparationEligibility, OrbitError> {
+) -> Result<PreparationPolicy, OrbitError> {
     claim
-        .map(|claim| consumer_eligibility(runtime, &claim.consumer))
-        .unwrap_or_else(|| Ok(PreparationEligibility::default()))
+        .map(|claim| consumer_policy(runtime, &claim.consumer))
+        .unwrap_or_else(|| Ok(resolve_policy(runtime, None)))
 }
 
 pub(crate) fn fingerprint(
     runtime: &OrbitRuntime,
     task: &Task,
     revision: &str,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Result<String, AutomationError> {
-    let instructions = instructions(runtime, revision)?;
-    fingerprint_with_instructions(runtime, task, revision, &instructions, eligibility)
+    fingerprint_with_instructions(
+        runtime,
+        task,
+        revision,
+        &|revision| instructions(runtime, revision),
+        policy,
+    )
 }
 
 /// Task-pilot can assess a local workspace without a Git source snapshot.
@@ -87,13 +114,19 @@ pub(crate) fn pilot_fingerprint(
     runtime: &OrbitRuntime,
     task: &Task,
     revision: Option<&str>,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Result<String, AutomationError> {
     if let Some(revision) = revision {
-        return fingerprint(runtime, task, revision, eligibility);
+        return fingerprint(runtime, task, revision, policy);
     }
-    let dependencies = dependency_evidence(runtime, task)?;
-    preparation::fingerprint(task, "no_git_source", &dependencies, "[]", eligibility)
+    let evidence = evidence(
+        runtime,
+        task,
+        None,
+        &|_| Ok(InstructionSnapshot("[]".into())),
+        policy,
+    )?;
+    preparation::fingerprint(task, &evidence, policy)
 }
 
 pub(crate) fn instructions(
@@ -135,15 +168,17 @@ pub(crate) fn instructions(
     ))
 }
 
+/// Reads instructions through `instructions` — so a caller can share one
+/// snapshot per revision — and only when the policy makes them material.
 pub(crate) fn fingerprint_with_instructions(
     runtime: &OrbitRuntime,
     task: &Task,
     revision: &str,
-    instructions: &InstructionSnapshot,
-    eligibility: &PreparationEligibility,
+    instructions: &dyn Fn(&str) -> Result<InstructionSnapshot, AutomationError>,
+    policy: &PreparationPolicy,
 ) -> Result<String, AutomationError> {
-    let dependencies = dependency_evidence(runtime, task)?;
-    preparation::fingerprint(task, revision, &dependencies, &instructions.0, eligibility)
+    let evidence = evidence(runtime, task, Some(revision), instructions, policy)?;
+    preparation::fingerprint(task, &evidence, policy)
 }
 
 /// Capture both task-pilot hashes from one instruction and dependency read.
@@ -153,23 +188,139 @@ pub(crate) fn fingerprints(
     runtime: &OrbitRuntime,
     task: &Task,
     revision: &str,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Result<(String, String), AutomationError> {
-    let instructions = instructions(runtime, revision)?;
-    let dependencies = dependency_evidence(runtime, task)?;
-    let material =
-        preparation::fingerprint(task, revision, &dependencies, &instructions.0, eligibility)?;
-    let neutral = preparation::fingerprint_ignoring_status(
+    let evidence = evidence(
+        runtime,
         task,
-        revision,
-        &dependencies,
-        &instructions.0,
-        eligibility,
+        Some(revision),
+        &|revision| instructions(runtime, revision),
+        policy,
     )?;
+    let material = preparation::fingerprint(task, &evidence, policy)?;
+    let neutral = preparation::fingerprint_ignoring_status(task, &evidence, policy)?;
     Ok((material, neutral))
 }
 
-fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, AutomationError> {
+/// The `material_v1` fingerprint of `task` as an assessment pinned at
+/// `revision` would have certified it, for carrying such an assessment
+/// forward across the contract change [ORB-13638].
+pub(crate) fn legacy_fingerprint(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: &str,
+    instructions: &InstructionSnapshot,
+    eligibility: &PreparationEligibility,
+) -> Result<String, AutomationError> {
+    let mut dependencies = dependency_evidence(runtime, task)?;
+    dependencies.push(assignment_evidence(runtime, task)?);
+    preparation::legacy_fingerprint(
+        task,
+        revision,
+        &Value::Array(dependencies),
+        &instructions.0,
+        eligibility,
+    )
+}
+
+/// Read only the evidence `policy` makes material: an unread input can
+/// neither invalidate an assessment nor cost a git or registry lookup.
+fn evidence(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: Option<&str>,
+    instructions: &dyn Fn(&str) -> Result<InstructionSnapshot, AutomationError>,
+    policy: &PreparationPolicy,
+) -> Result<MaterialEvidence, AutomationError> {
+    let freshness = &policy.freshness;
+    let mut evidence = MaterialEvidence::default();
+    if freshness.includes(MaterialField::Dependencies) {
+        evidence.dependencies = Value::Array(dependency_evidence(runtime, task)?);
+    }
+    if freshness.includes(MaterialField::Crew) {
+        evidence.assignment = assignment_evidence(runtime, task)?;
+    }
+    if freshness.includes(MaterialField::Instructions) {
+        let snapshot = match revision {
+            Some(revision) => instructions(revision)?,
+            None => InstructionSnapshot("[]".into()),
+        };
+        evidence.instructions = json!(snapshot.0);
+    }
+    evidence.source = match (freshness.source_sensitivity, revision) {
+        (SourceSensitivity::Ignore, _) => Value::Null,
+        (_, None) => json!("no_git_source"),
+        (SourceSensitivity::Any, Some(revision)) => json!(revision),
+        (SourceSensitivity::ContextFiles, Some(revision)) => {
+            selector_objects(runtime, revision, &task.context_files)?
+        }
+    };
+    Ok(evidence)
+}
+
+/// The git object id each selector path names at `revision`, `null` where the
+/// path does not exist there [ORB-13638]. A directory's tree id changes with
+/// anything beneath it, so the head going stale for a selector is exactly a
+/// commit touching a path under it (`file:`/`dir:` by prefix, `symbol:`
+/// through its file). Module and command selectors name no repository path.
+fn selector_objects(
+    runtime: &OrbitRuntime,
+    revision: &str,
+    selectors: &[String],
+) -> Result<Value, AutomationError> {
+    let mut paths = BTreeSet::new();
+    for selector in selectors {
+        if let Ok(Selector::Dir { path } | Selector::File { path } | Selector::Symbol { path, .. }) =
+            selector.parse::<Selector>()
+            && !path.is_empty()
+            && path != "."
+            && !path.starts_with('/')
+            && !path.starts_with("../")
+            && path != ".."
+        {
+            paths.insert(path);
+        }
+    }
+    if paths.len() > 50 {
+        return Err(AutomationError::Deferred("selector_scan_budget".into()));
+    }
+    // A path under another selected directory is already covered by that
+    // directory's tree id; listing both would make git expand the directory.
+    let covered = |path: &String| {
+        paths
+            .iter()
+            .any(|other| other != path && path.starts_with(&format!("{other}/")))
+    };
+    let mut objects = paths
+        .iter()
+        .filter(|path| !covered(path))
+        .map(|path| (path.clone(), Value::Null))
+        .collect::<BTreeMap<_, _>>();
+    if objects.is_empty() {
+        return Ok(json!(objects));
+    }
+    let mut args = vec![
+        "--literal-pathspecs",
+        "ls-tree",
+        "-z",
+        "--full-tree",
+        revision,
+        "--",
+    ];
+    args.extend(objects.keys().map(String::as_str));
+    let listing = Source::new(&runtime.paths().repo_root).git(&args)?;
+    for entry in listing.split('\0') {
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        if let (Some(slot), Some(object)) = (objects.get_mut(path), meta.split(' ').nth(2)) {
+            *slot = json!(object);
+        }
+    }
+    Ok(json!(objects))
+}
+
+fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>, AutomationError> {
     let mut dependencies = Vec::new();
 
     for id in task.dependencies().iter().take(51) {
@@ -209,14 +360,14 @@ fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, Aut
     }
 
     dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());
+    Ok(dependencies)
+}
 
-    // The crew a task would actually run under is part of its material input.
-    // Looked up, not dispatch-checked: enabling or disabling the crew does not
-    // change what the task would be prepared against, and dispatch refuses a
-    // disabled crew on its own.
+/// The crew a task would actually run under. Looked up, not dispatch-checked:
+/// enabling or disabling the crew does not change what the task would be
+/// prepared against, and dispatch refuses a disabled crew on its own.
+fn assignment_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Value, AutomationError> {
     let assignment = runtime.lookup_crew_for_task(None, task.crew.as_deref())?;
-    dependencies.push(json!({"effective_assignment": {"crew": assignment.name,
-        "model": assignment.assignment.model, "provider": assignment.assignment.provider}}));
-
-    Ok(Value::Array(dependencies))
+    Ok(json!({"effective_assignment": {"crew": assignment.name,
+        "model": assignment.assignment.model, "provider": assignment.assignment.provider}}))
 }

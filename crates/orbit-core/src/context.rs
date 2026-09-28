@@ -379,6 +379,9 @@ pub(crate) struct OrbitRuntimeSettings {
     /// How far this owner takes an accepted distributed handoff: `review` or
     /// `done` (`[workflow] distributed_completion`, default `review`).
     workflow_distributed_completion: String,
+    /// `[workflow.task_pilot_freshness]`: the global layer a task-pilot
+    /// routine's `trigger.state.freshness` overrides [ORB-13638].
+    task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
@@ -404,6 +407,7 @@ impl OrbitRuntimeSettings {
         workflow_auto_ship: bool,
         workflow_required_validation_commands: Vec<String>,
         workflow_distributed_completion: String,
+        task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
@@ -422,6 +426,7 @@ impl OrbitRuntimeSettings {
             workflow_auto_ship,
             workflow_required_validation_commands,
             workflow_distributed_completion,
+            task_pilot_freshness,
             crews,
             default_crew,
             complexity_crews,
@@ -462,6 +467,12 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_distributed_completion(&self) -> &str {
         &self.workflow_distributed_completion
+    }
+
+    pub(crate) fn task_pilot_freshness(
+        &self,
+    ) -> &orbit_types::workflow::automation::members::PreparationFreshness {
+        &self.task_pilot_freshness
     }
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {
