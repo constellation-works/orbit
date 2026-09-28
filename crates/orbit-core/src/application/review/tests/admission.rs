@@ -1,10 +1,17 @@
 //! Captured review admission [ORB-11333].
 
-use orbit_types::workflow::{REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming};
-use serde_json::json;
+use chrono::Utc;
+use orbit_engine::RuntimeHost;
+use orbit_types::workflow::{
+    REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, ReviewAdmission,
+    ReviewTiming,
+};
+use serde_json::{Value, json};
 
-use super::{GATED_CONFIG, fixture, seed_task};
-use crate::application::review::install_review_admission;
+use super::{GATED_CONFIG, admit_input, fixture, implement_candidate, seed_task};
+use crate::OrbitRuntime;
+use crate::application::review::{install_review_admission, review_gate_admit};
+use crate::application::task::TaskUpdateParams;
 
 #[test]
 fn delivery_submissions_capture_the_effective_policy_with_its_sources() {
@@ -120,6 +127,172 @@ fn children_inherit_their_parents_snapshot_even_after_the_preference_changes() {
         .expect("present");
     assert_eq!(inherited, captured);
     assert_eq!(inherited.timing, ReviewTiming::BeforePr);
+}
+
+/// A delivery run input carrying the workspace's captured admission with
+/// its contract version rewritten, as an older or newer build would persist.
+fn input_with_contract_version(runtime: &OrbitRuntime, task_ids: &[String], version: u32) -> Value {
+    let mut input = json!({
+        "task_ids": task_ids,
+        "base_branch": "main",
+        "base_sync": "local",
+        "allowed_crews": [],
+    });
+    install_review_admission(runtime, "task_pr_pipeline", &mut input, None, false)
+        .expect("capture admission");
+    input[REVIEW_ADMISSION_KEY]["contract_version"] = json!(version);
+    input
+}
+
+fn persist_run(runtime: &OrbitRuntime, input: Value) -> String {
+    RuntimeHost::insert_job_run(
+        runtime,
+        "task_pr_pipeline",
+        1,
+        Utc::now(),
+        Some(input),
+        None,
+    )
+    .expect("insert run")
+    .run_id
+}
+
+#[test]
+fn run_input_admissions_round_trip_only_at_the_supported_contract_version() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let ids = ["ORB-1".to_string()];
+
+    let current = input_with_contract_version(runtime, &ids, REVIEW_CONTRACT_VERSION);
+    let admission = ReviewAdmission::from_run_input(&current)
+        .expect("readable")
+        .expect("present");
+    assert_eq!(
+        serde_json::to_value(&admission).expect("serialize"),
+        current[REVIEW_ADMISSION_KEY]
+    );
+    assert!(admission.gates_pr());
+
+    // Legacy runs without a captured admission keep reading as absent.
+    assert_eq!(
+        ReviewAdmission::from_run_input(&json!({ "task_ids": ids })).expect("absent"),
+        None
+    );
+    assert_eq!(
+        ReviewAdmission::from_run_input(&json!({ "task_ids": ids, "review": null })).expect("null"),
+        None
+    );
+
+    for version in [0, REVIEW_CONTRACT_VERSION + 1] {
+        let unsupported = input_with_contract_version(runtime, &ids, version);
+        let error = ReviewAdmission::from_run_input(&unsupported)
+            .expect_err("unsupported contract version is refused");
+        assert!(
+            error.contains(&format!("contract_version {version} is not the supported")),
+            "{error}"
+        );
+    }
+}
+
+/// The current-run reader must refuse an unsupported admission before it
+/// decides the gate is inapplicable or issues a fresh manifest.
+#[test]
+fn the_gate_refuses_a_run_admitted_under_an_unsupported_contract_version() {
+    for (config, version) in [
+        (GATED_CONFIG, 0),
+        (GATED_CONFIG, REVIEW_CONTRACT_VERSION + 1),
+        (
+            "[operation]\nreview_policy = \"none\"\n",
+            REVIEW_CONTRACT_VERSION + 1,
+        ),
+        (
+            "[operation]\nreview_policy = \"after-landing\"\n",
+            REVIEW_CONTRACT_VERSION + 1,
+        ),
+    ] {
+        let fixture = fixture(config);
+        let runtime = &fixture.runtime;
+        let task = seed_task(runtime, "unsupported admission");
+        let ids = std::slice::from_ref(&task.id);
+        let run_id = persist_run(runtime, input_with_contract_version(runtime, ids, version));
+        runtime
+            .update_task(
+                &task.id,
+                TaskUpdateParams {
+                    job_run_id: Some(Some(run_id.clone())),
+                    ..TaskUpdateParams::default()
+                },
+            )
+            .expect("bind task to run");
+        implement_candidate(&fixture.repo, &task.id);
+
+        let error = review_gate_admit(
+            runtime,
+            "review_gate_admit",
+            &admit_input(&run_id, ids, &fixture.repo),
+        )
+        .expect_err("unsupported admission is not a gate decision");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("contract_version {version} is not the supported")),
+            "{error}"
+        );
+        assert!(
+            runtime
+                .get_task_artifact(&task.id, REVIEW_MANIFEST_ARTIFACT)
+                .expect("read artifacts")
+                .is_none(),
+            "no manifest may be issued for an unsupported admission"
+        );
+    }
+}
+
+/// The parent-inheritance reader must refuse an unsupported parent snapshot
+/// rather than copy it, or fall back to a fresh current-version capture.
+#[test]
+fn children_refuse_a_parent_snapshot_with_an_unsupported_contract_version() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let ids = ["ORB-1".to_string()];
+
+    for version in [0, REVIEW_CONTRACT_VERSION + 1] {
+        let parent = persist_run(runtime, input_with_contract_version(runtime, &ids, version));
+        let mut child = json!({ "task_ids": ids });
+        let error = install_review_admission(
+            runtime,
+            "task_pr_pipeline",
+            &mut child,
+            Some(&parent),
+            false,
+        )
+        .expect_err("unsupported parent snapshot is refused");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("contract_version {version} is not the supported")),
+            "{error}"
+        );
+        assert!(child.get(REVIEW_ADMISSION_KEY).is_none(), "{child}");
+    }
+
+    // A legacy parent with a null admission still lets the child capture
+    // from configuration, as before.
+    let legacy = persist_run(runtime, json!({ "task_ids": ids, "review": null }));
+    let mut child = json!({ "task_ids": ids });
+    install_review_admission(
+        runtime,
+        "task_pr_pipeline",
+        &mut child,
+        Some(&legacy),
+        false,
+    )
+    .expect("legacy parent");
+    let captured = ReviewAdmission::from_run_input(&child)
+        .expect("readable")
+        .expect("present");
+    assert_eq!(captured.contract_version, REVIEW_CONTRACT_VERSION);
+    assert_eq!(captured.timing, ReviewTiming::BeforePr);
 }
 
 #[test]
