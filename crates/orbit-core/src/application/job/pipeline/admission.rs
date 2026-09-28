@@ -301,7 +301,15 @@ impl OrbitRuntime {
         &self,
         run_id: &str,
     ) -> Result<Option<(JobV2, String)>, OrbitError> {
-        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, run_id)?;
+        let job_runs_dir = &self.paths().job_runs_dir;
+        let snapshot = run_definition_snapshot_path(job_runs_dir, run_id)?;
+        // Re-checked beside the reads: code scanning does not credit the
+        // run-id validation inside the helper that built the path.
+        if !snapshot.starts_with(job_runs_dir) {
+            return Err(OrbitError::InvalidInput(format!(
+                "job run definition snapshot escapes the job runs directory: {run_id}"
+            )));
+        }
         if !snapshot.is_file() {
             return Ok(None);
         }
