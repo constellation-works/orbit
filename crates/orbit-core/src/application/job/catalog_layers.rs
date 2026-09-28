@@ -14,7 +14,6 @@ use orbit_types::workflow::{JobV2, JobV2Step, JobV2StepBody};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::catalog::DEFAULT_JOB_FILES;
 
 /// Layer label for the definitions this binary ships.
 pub const SHIPPED_LAYER: &str = "shipped";
@@ -69,7 +68,7 @@ impl OrbitRuntime {
         job_id: &str,
     ) -> Result<Vec<CatalogReferenceLayer>, OrbitError> {
         let plugin_names = self.plugin_catalog_names();
-        let Ok(entry) = self.show_job_catalog_entry(job_id) else {
+        let Ok((job_path, job)) = self.load_v2_job_asset_by_name(job_id) else {
             return Ok(vec![CatalogReferenceLayer {
                 reference: format!("job:{job_id}"),
                 layer: "unresolved".to_string(),
@@ -78,18 +77,16 @@ impl OrbitRuntime {
             }]);
         };
 
+        let job_layer = self.catalog_layer_of(&job_path);
         let mut rows = vec![CatalogReferenceLayer {
             reference: format!("job:{job_id}"),
-            layer: self.catalog_layer_of(&entry.path),
-            shadows: shadowed_by(
-                plugin_names.jobs.get(job_id),
-                &self.catalog_layer_of(&entry.path),
-            ),
-            path: Some(entry.path.clone()),
+            shadows: shadowed_by(plugin_names.jobs.get(job_id), &job_layer),
+            layer: job_layer,
+            path: Some(job_path),
         }];
 
         let catalog = self.v2_activity_catalog().ok();
-        for name in activity_references(&entry.spec) {
+        for name in activity_references(&job) {
             let path = catalog
                 .as_ref()
                 .and_then(|catalog| catalog.source(&name))
@@ -120,14 +117,6 @@ impl OrbitRuntime {
             return WORKSPACE_LAYER.to_string();
         }
         if path.starts_with(paths.global_dir.join("resources")) {
-            return SHIPPED_LAYER.to_string();
-        }
-        // A file this binary ships but that no root claims can only come from
-        // an explicit catalog override.
-        if DEFAULT_JOB_FILES
-            .iter()
-            .any(|(name, _)| path.file_stem().and_then(|stem| stem.to_str()) == Some(*name))
-        {
             return SHIPPED_LAYER.to_string();
         }
         EXPLICIT_LAYER.to_string()
