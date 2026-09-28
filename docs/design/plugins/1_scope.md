@@ -873,6 +873,9 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   collection after a successful run; the shared collector still requires a
   terminal run, settled task, registered worktree, and clean tree. Jobs omit
   the property by default. Coordinators that only dispatch child jobs omit it.
+- **Delivery jobs.** A plugin job can deliver a task through `orbit run ship` and the drain,
+  behind the same gate as the shipped pipelines. See "Routing a task to a plugin delivery
+  job" below.
 - Activity and job names are unique across active plugins. Loading is deterministic: the first
   valid plugin keeps the name, a later one is refused with a diagnostic naming both.
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action
@@ -891,6 +894,43 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   off by a workspace toggle is skipped only in that workspace, and the warning says so.
 - A `[plugins.<ns>]` value the plugin's schema rejects refuses that plugin at load, naming the
   key (§4.9).
+
+#### Routing a task to a plugin delivery job
+
+**Decision (2026-09-27):** A task selects its delivery job with one `delivery:<job>` tag, and
+the job declares that it can deliver with `spec.task_delivery`. There is no new task field and
+no workspace mapping. A tag already has every task surface (`task add`/`update`, MCP, dashboard,
+auto-task templates) and task history, and it names the job, so the audit trail shows which job
+a task asked for. A tag → job mapping in workspace config would add a second place to look.
+It would also leave nothing on the task to refuse once the plugin that defined the mapping was
+removed. A typed task field would do the same job as the tag but change the persisted task format.
+
+- **Job side.** `spec.task_delivery: { modes: [local] }` says a task may select the job
+  for those ship modes (`pr`, `local`). A live run of any job declaring `task_delivery`
+  holds the delivery slot of every task in its `input.task_ids`. The ship in-flight guard
+  reads this declaration, not a list of names. The shipped `task_auto_pipeline`,
+  `task_gate_pipeline` and claimed leaves declare `task_delivery: {}`: they hold the slot
+  but no task can select them. `task_pr_pipeline` and `task_local_pipeline` declare their
+  own mode. `task_delivery` is independent of `owns_task_worktree` above. A delivery job
+  that creates its task worktree with `worktree_setup` declares both.
+- **Task side.** A task selects a job with one `delivery:<job>` tag. Repeating the same
+  tag is harmless. Two different selections, or `delivery:` with no job name, are refused.
+  A task without the tag ships exactly as before, through `task_<mode>_pipeline`.
+- **Gate.** `task_gate_pipeline` first runs `resolve_delivery_job`, before it reserves
+  anything. The step returns the default pipeline, or the selected job when that job
+  resolves in the active catalog, is a workflow, and lists the ship mode in
+  `task_delivery.modes`. The gate then runs the usual reservation, lock and admission
+  checks and dispatches that job. Run history records the child under the plugin job's
+  name. Bundled tasks that select different jobs are refused.
+- **Refusal, never fallback.** If the selected job cannot deliver, the task is refused and
+  never shipped through the default pipeline. `orbit run ship <task>` refuses before any run
+  exists. The error names the plugin that ships the job and says whether it is disabled on
+  this host, disabled in this workspace, or inactive. When no installed plugin ships the
+  job, the error says so. The gate re-resolves the selection. The drain withholds such a task
+  from admission as `delivery_job_unavailable` (reported by `orbit run readiness`), so a
+  task that stays in `backlog` is not sent to a failing gate on every pass.
+- A workspace job of the same name shadows the plugin's (the catalog layering above). The
+  selection resolves to whichever definition name-based execution would run.
 
 ### 4.6 CLI
 

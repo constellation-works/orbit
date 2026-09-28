@@ -4,12 +4,14 @@
 use orbit_engine::DispatchError;
 
 mod bundles;
+mod delivery;
 mod gate_admission;
 mod gate_starvation;
 mod invoke;
 mod results;
 
 pub(super) use bundles::validate_bundles;
+pub(super) use delivery::resolve_delivery_job;
 pub(super) use gate_starvation::gate_starvation_fail;
 pub(super) use invoke::{invoke_and_wait, invoke_detached};
 pub(super) use results::{pipeline_success_guard, record_pipeline_results_audit};

@@ -142,11 +142,72 @@ impl PluginHostLoad {
             .find(|entry| entry.tools.iter().any(|name| name == tool))
     }
 
+    /// The active plugin whose job definition file is `path`: the
+    /// `plugin:<ns>` catalog layer entry a job name resolved to.
+    pub fn active_job_owner(&self, path: &Path) -> Option<&str> {
+        self.active()
+            .find(|plugin| plugin.definitions.jobs.iter().any(|job| job == path))
+            .map(|plugin| plugin.namespace())
+    }
+
+    /// The installed plugin that ships job `job` but is not serving it: switched
+    /// off on the host or in this workspace, or refused at load. `None` when no
+    /// installed plugin ships that name, or only an active one does.
+    ///
+    /// A row whose grants could not be verified is skipped: nothing is read
+    /// from a tree this host does not trust, not even to name it.
+    pub fn inactive_job_owner(&self, job: &str) -> Option<InactiveJobOwner> {
+        self.registered
+            .iter()
+            .filter(|entry| entry.status != PluginStatus::Active && entry.grants_authorized)
+            .find_map(|entry| {
+                let plugin = entry.loaded.clone().or_else(|| {
+                    // A host-disabled row keeps no manifest; read it here, on
+                    // the refusal path only.
+                    self.installed
+                        .iter()
+                        .find(|row| row.name == entry.name)
+                        .and_then(|row| load_installed_plugin(row).ok())
+                })?;
+                let definitions = super::definitions::load_plugin_definitions(
+                    &plugin,
+                    &super::definitions::shipped_job_names(),
+                )
+                .ok()?;
+                definitions
+                    .jobs
+                    .iter()
+                    .any(|(name, _)| name == job)
+                    .then(|| InactiveJobOwner {
+                        plugin: entry.name.clone(),
+                        state: match (entry.disabled_by, entry.diagnostic.as_deref()) {
+                            (Some(PluginDisabledLayer::Host), _) => {
+                                "is disabled on this host".to_string()
+                            }
+                            (Some(PluginDisabledLayer::Workspace), _) => {
+                                "is disabled in this workspace".to_string()
+                            }
+                            (None, Some(diagnostic)) => format!("is inactive: {diagnostic}"),
+                            (None, None) => "is inactive".to_string(),
+                        },
+                    })
+            })
+    }
+
     fn workspace_disabled(&self) -> impl Iterator<Item = &RegisteredPlugin> {
         self.registered
             .iter()
             .filter(|entry| entry.disabled_by == Some(PluginDisabledLayer::Workspace))
     }
+}
+
+/// An installed plugin that ships a job but is not serving it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InactiveJobOwner {
+    /// The plugin's namespace.
+    pub plugin: String,
+    /// Why it is not serving, phrased to follow the plugin's name.
+    pub state: String,
 }
 
 #[derive(Debug, Default)]

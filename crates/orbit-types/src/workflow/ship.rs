@@ -1,9 +1,12 @@
+use serde::{Deserialize, Serialize};
+
 use crate::workspace::Workspace;
 
 use super::WorkflowError;
 
 /// Pipeline mode for shipping work: open a PR or apply locally.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ShipMode {
     Pr,
     Local,

@@ -2,10 +2,18 @@
 #
 # Admission control for "these must ship" bundles: wait until the bundle's
 # context_files are not held by any in-flight task lock or active
-# reservation, atomically reserve them, then dispatch to either
-# `task_pr_pipeline` or `task_local_pipeline` via `invoke_and_wait`.
+# reservation, atomically reserve them, then dispatch the bundle's delivery
+# job via `invoke_and_wait`: `task_pr_pipeline` or `task_local_pipeline`, or
+# the job the bundle's tasks select with a `delivery:<job>` tag.
 #
 # Behavioral contract
+# - `delivery` resolves the delivery job first, before any reservation: the
+#   default `task_<mode>_pipeline` when no bundled task carries a
+#   `delivery:<job>` tag, otherwise the selected job, which must be active and
+#   declare `task_delivery.modes` containing this mode. A selection naming a
+#   job whose plugin is disabled or uninstalled, or bundled tasks that select
+#   different jobs, fail the gate here, naming the plugin when one is
+#   installed. It never falls back to the default pipeline.
 # - `reserve_locks` refuses admission outright — before the first poll —
 #   when a bundled task's `blocked_by` target is rejected, dangling, or
 #   archived without having reached `done` first (a target archived after
@@ -59,6 +67,9 @@ metadata:
   name: task_gate_pipeline
 spec:
   state: enabled
+  # Holds each carried task's delivery slot while live. No mode: it only
+  # dispatches the delivery job, so no task selects it.
+  task_delivery: {}
   kind: workflow
   max_active_runs: 10
   default_input:
@@ -87,6 +98,12 @@ spec:
     dispatch_timeout_seconds: 14400
 
   steps:
+    - id: delivery
+      target: activity:resolve_delivery_job
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+        mode: "{{ input.mode }}"
+
     - id: wait_for_window
       loop:
         max_iterations: 120
@@ -115,7 +132,7 @@ spec:
     - id: dispatch_child
       target: activity:invoke_and_wait
       default_input:
-        job_name: "task_{{ input.mode }}_pipeline"
+        job_name: "{{ steps.delivery.output.job_name }}"
         run_input:
           task_ids: "{{ input.task_ids }}"
           base_branch: "{{ input.base_branch }}"

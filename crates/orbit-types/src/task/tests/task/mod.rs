@@ -1,3 +1,4 @@
+mod delivery_selection;
 mod dependency_cycles;
 mod dependency_satisfaction;
 mod external_ref;

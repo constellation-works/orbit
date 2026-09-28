@@ -254,7 +254,7 @@ impl OrbitRuntime {
         Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
-    fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
+    pub(super) fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
         self.load_v2_job_catalog(self.v2_job_asset_dirs())
     }
 
@@ -560,7 +560,7 @@ enum V2JobCatalogDirKind {
     Global,
 }
 
-fn is_default_job_name(job_id: &str) -> bool {
+pub(super) fn is_default_job_name(job_id: &str) -> bool {
     DEFAULT_JOB_FILES
         .iter()
         .any(|(default_job_id, _)| *default_job_id == job_id)
@@ -583,7 +583,7 @@ fn matches_job_filter(kind: JobKind, filter: JobCatalogFilter) -> bool {
 /// When `overwrite` is false, existing files are preserved — users who've
 /// edited a previously-seeded workflow won't lose their changes on re-init.
 /// Parse the job asset compiled into this binary.
-fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
+pub(super) fn shipped_job_spec(job_id: &str) -> Result<JobV2, OrbitError> {
     let (_, yaml) = DEFAULT_JOB_FILES
         .iter()
         .find(|(name, _)| *name == job_id)

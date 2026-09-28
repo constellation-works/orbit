@@ -30,6 +30,9 @@ metadata:
   name: task_auto_pipeline
 spec:
   state: enabled
+  # Holds each carried task's delivery slot while live. No mode: it only
+  # dispatches gates, so no task selects it.
+  task_delivery: {}
   kind: workflow
   max_active_runs: 10
   default_input:
@@ -59,6 +62,7 @@ spec:
         max_tasks: "{{ input.max_tasks }}"
         task_ids: "{{ input.task_ids }}"
         allowed_crews: "{{ input.allowed_crews }}"
+        mode: "{{ input.mode }}"
 
     - id: validate_bundles
       target: activity:validate_bundles

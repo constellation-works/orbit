@@ -90,6 +90,12 @@ impl Task {
         self.relation_target(TaskRelationType::RegressionFrom)
     }
 
+    /// The delivery job this task selects with a `delivery:<job>` tag, if any.
+    /// See [`delivery_job_selection`].
+    pub fn delivery_job_selection(&self) -> Result<Option<&str>, TaskError> {
+        delivery_job_selection(&self.tags)
+    }
+
     fn relation_target(&self, relation_type: TaskRelationType) -> Option<&str> {
         self.relations
             .iter()
@@ -170,6 +176,43 @@ pub fn task_matches_tags(task: &Task, required_tags: &[String]) -> bool {
     required_tags
         .iter()
         .all(|tag| available.contains(tag.as_str()))
+}
+
+/// Tag prefix a task uses to select the job that delivers it when shipped.
+///
+/// `delivery:<job>` names a catalog job that declares `spec.task_delivery`
+/// for the ship mode; the gate dispatches it instead of
+/// `task_<mode>_pipeline`. A task without the tag ships as before.
+pub const DELIVERY_JOB_TAG_PREFIX: &str = "delivery:";
+
+/// The job named by a `delivery:<job>` tag among `tags`.
+///
+/// Repeating the same tag is harmless; two different selections, or a tag with
+/// no job name, are refused rather than resolved by order, because either
+/// choice would silently ship the task through a job nobody picked.
+pub fn delivery_job_selection(tags: &[String]) -> Result<Option<&str>, TaskError> {
+    let mut selected: Option<&str> = None;
+    for tag in tags {
+        let Some(job) = tag.trim().strip_prefix(DELIVERY_JOB_TAG_PREFIX) else {
+            continue;
+        };
+        let job = job.trim();
+        if job.is_empty() {
+            return Err(TaskError::Invalid(format!(
+                "tag '{tag}' selects no delivery job; use `{DELIVERY_JOB_TAG_PREFIX}<job>`"
+            )));
+        }
+        match selected {
+            Some(existing) if existing != job => {
+                return Err(TaskError::Invalid(format!(
+                    "tags select two delivery jobs, '{existing}' and '{job}'; keep one \
+                     `{DELIVERY_JOB_TAG_PREFIX}<job>` tag"
+                )));
+            }
+            _ => selected = Some(job),
+        }
+    }
+    Ok(selected)
 }
 
 pub fn build_task_status_index(tasks: &[Task]) -> BTreeMap<OrbitId, TaskStatus> {
