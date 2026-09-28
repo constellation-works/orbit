@@ -5,18 +5,6 @@ use super::*;
 /// enough to spot a duplicate dispatch without walking the whole history.
 const SHIP_IN_FLIGHT_SCAN_LIMIT: usize = 200;
 
-/// Jobs that carry a task through delivery or its reservation gate. The
-/// workspace drain and preparation jobs may list task IDs, but do not hold a
-/// task's delivery slot; their dispatched children are listed here instead.
-const SHIP_DELIVERY_JOBS: &[&str] = &[
-    "task_auto_pipeline",
-    "task_gate_pipeline",
-    "task_pr_pipeline",
-    "task_local_pipeline",
-    "task_claimed_pr_pipeline",
-    "task_claimed_local_pipeline",
-];
-
 /// One durable pipeline submission: what to run, with what input, and how the
 /// detached worker will find the definition again.
 pub(crate) struct PipelineSubmission<'a> {
@@ -136,6 +124,12 @@ impl OrbitRuntime {
     /// surface submitted them. Auto mode has no task ids to key on and is
     /// unaffected.
     ///
+    /// An explicit task that selects its delivery job with a `delivery:<job>`
+    /// tag is refused here, before any run exists, when that job cannot
+    /// deliver it in `mode` — including when the plugin contributing it is
+    /// disabled or uninstalled. The gate resolves the same selection again
+    /// before it reserves anything.
+    ///
     /// [ORB-11187] `completion` is the caller's explicit authorization for this
     /// run to finish delivery and perform the guarded `review -> done`
     /// transition. It defaults to
@@ -242,6 +236,7 @@ impl OrbitRuntime {
                     &format!("explicit ship task '{task_id}'"),
                 )?;
             }
+            self.resolve_delivery_route(std::slice::from_ref(&task), mode)?;
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
@@ -376,6 +371,11 @@ impl OrbitRuntime {
     /// A run's task selection lives in its persisted `input.task_ids`, which is
     /// what [`Self::submit_ship_run`] writes, so this sees every prior
     /// submission regardless of the surface that made it.
+    ///
+    /// Only runs of jobs declaring `spec.task_delivery` hold the slot: the ship
+    /// coordinators, the delivery leaves, and any plugin delivery job. The
+    /// workspace drain and preparation jobs may list task IDs without holding
+    /// it; their dispatched children do.
     fn in_flight_ship_run_for_tasks(
         &self,
         task_ids: &[String],
@@ -383,12 +383,13 @@ impl OrbitRuntime {
         if task_ids.is_empty() {
             return Ok(None);
         }
+        let delivery_jobs = self.task_delivery_job_ids()?;
         let runs = self.list_job_runs(crate::application::job::JobRunListParams {
             limit: Some(SHIP_IN_FLIGHT_SCAN_LIMIT),
             ..Default::default()
         })?;
         Ok(runs.into_iter().find_map(|run| {
-            if run.state.is_terminal() || !SHIP_DELIVERY_JOBS.contains(&run.job_id.as_str()) {
+            if run.state.is_terminal() || !delivery_jobs.contains(&run.job_id) {
                 return None;
             }
             let task_id = run

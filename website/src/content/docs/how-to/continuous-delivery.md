@@ -85,6 +85,10 @@ instead of after an empty window. Common reasons a backlog task waits:
   `orbit task locks contention` shows which files the pending backlog collides
   on, which is what really caps your parallelism.
 - **`crew_not_allowed`,** when you are previewing a crew restriction (below).
+- **`delivery_job_unavailable`,** when the task's `delivery:<job>` tag selects
+  a plugin delivery job that cannot deliver it: its plugin is disabled or
+  uninstalled, or the job does not declare the drain's ship mode. The detail
+  names the plugin. Enable the plugin or remove the tag.
 
 Dependencies and locks are not bypassed by approval or by the drain. They keep
 affected work in the backlog until it is eligible, so a submitted window may

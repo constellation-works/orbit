@@ -1,6 +1,7 @@
 mod conformance;
 mod definition_fixture;
 mod definitions;
+mod delivery;
 mod fixture;
 mod grants;
 mod install;

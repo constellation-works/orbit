@@ -28,6 +28,9 @@ metadata:
   name: task_claimed_local_pipeline
 spec:
   state: enabled
+  # Holds the claimed task's delivery slot while live. No mode: only a claim
+  # binding selects this leaf, never a task tag.
+  task_delivery: {}
   kind: workflow
   max_active_runs: 10
   default_input:

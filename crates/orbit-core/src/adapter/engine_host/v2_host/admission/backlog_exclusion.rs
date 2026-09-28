@@ -8,6 +8,7 @@ use orbit_types::task::{
     EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskReferenceIndex, TaskStatus,
     has_epic_tag, inherited_only_epic_roots, task_dependencies_ready_with_index,
 };
+use orbit_types::workflow::ShipMode;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -42,6 +43,12 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogTaskExclusion {
 #[serde(rename_all = "snake_case")]
 pub(in crate::adapter::engine_host::v2_host) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// The task selects a delivery job with a `delivery:<job>` tag that cannot
+    /// deliver it in the drain's ship mode — its plugin is disabled or
+    /// uninstalled, or the job does not declare that mode. The task stays in
+    /// `backlog` rather than failing a gate run on every drain pass; `detail`
+    /// carries the refusal, naming the plugin when one is installed.
+    DeliveryJobUnavailable,
     /// The run window permits a set of crews and this task's effective crew is
     /// not one of them [ORB-11242]. The task is left in `backlog` exactly as
     /// it is — never silently re-crewed — and the remaining eligible work
@@ -199,11 +206,21 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
                 message: error.to_string(),
             }
         })?;
-        let mut snapshot = backlog_snapshot(
+        let mode = match input.get("mode").and_then(Value::as_str) {
+            Some(mode) => ShipMode::parse(mode.trim()).map_err(|error| {
+                DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: error.to_string(),
+                }
+            })?,
+            None => workspace_ship_mode(runtime),
+        };
+        let mut snapshot = backlog_snapshot_in_mode(
             runtime,
             action,
             allowlist_from_input(runtime, action, input)?.as_ref(),
             &pools,
+            mode,
         )?;
         // Nothing reads the lookup after this, so the admissible tasks move
         // out of it rather than being cloned; the rest is dropped with it.
@@ -355,11 +372,41 @@ pub(in crate::adapter::engine_host::v2_host) fn allowlist_from_input(
     })
 }
 
+/// The ship mode an unattended drain delivers in: the workspace binding's,
+/// local when the workspace is unregistered.
+pub(in crate::adapter::engine_host::v2_host) fn workspace_ship_mode(
+    runtime: &OrbitRuntime,
+) -> ShipMode {
+    runtime
+        .workspace_runtime_binding()
+        .map_or(ShipMode::Local, |binding| binding.ship_mode)
+}
+
+/// The drain's snapshot: admitted work is delivered in the workspace's ship
+/// mode.
 pub(in crate::adapter::engine_host::v2_host) fn backlog_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
+) -> Result<BacklogSnapshot, DispatchError> {
+    backlog_snapshot_in_mode(
+        runtime,
+        action,
+        allowlist,
+        pools,
+        workspace_ship_mode(runtime),
+    )
+}
+
+/// `mode` is the ship mode the admitted work will be delivered in; a task's
+/// `delivery:<job>` selection is checked against it.
+fn backlog_snapshot_in_mode(
+    runtime: &OrbitRuntime,
+    action: &str,
+    allowlist: Option<&CrewAllowlist>,
+    pools: &CapturedCrewPools,
+    mode: ShipMode,
 ) -> Result<BacklogSnapshot, DispatchError> {
     // The population is materialized once, by moving the listing into the
     // lookup. Everything below borrows from it: the backlog is a vector of
@@ -440,6 +487,23 @@ pub(in crate::adapter::engine_host::v2_host) fn backlog_snapshot(
             false
         });
     }
+    // A selection the gate would refuse is withheld here instead: the task is
+    // still `backlog` after a refused gate, so the drain would otherwise
+    // dispatch it again, and fail again, on every pass. A task with no
+    // `delivery:<job>` tag resolves to the default without a catalog read.
+    backlog.retain(|task| {
+        let Err(error) = runtime.resolve_delivery_route(std::slice::from_ref(*task), mode) else {
+            return true;
+        };
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::DeliveryJobUnavailable,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: Some(error.to_string()),
+        });
+        false
+    });
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew

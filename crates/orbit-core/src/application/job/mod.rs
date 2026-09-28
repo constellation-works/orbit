@@ -3,6 +3,7 @@ pub(crate) mod catalog;
 pub(crate) mod catalog_layers;
 pub(crate) mod claimed;
 pub(crate) mod crew_pools;
+pub(crate) mod delivery;
 mod exec;
 pub(crate) mod pipeline;
 mod resume;

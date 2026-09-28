@@ -48,6 +48,38 @@ fn task_worktree_ownership_is_opt_in_and_round_trips() {
     assert!(restored.owns_task_worktree);
 }
 
+#[test]
+fn task_delivery_is_opt_in_and_declares_the_modes_a_task_may_select() {
+    use crate::workflow::ShipMode;
+
+    let ordinary: JobV2 = serde_yaml::from_str("state: enabled\nsteps: []\n").expect("parse");
+    assert!(!ordinary.holds_task_delivery());
+    assert!(!ordinary.delivers_mode(ShipMode::Local));
+
+    let coordinator: JobV2 =
+        serde_yaml::from_str("state: enabled\ntask_delivery: {}\nsteps: []\n").expect("parse");
+    assert!(coordinator.holds_task_delivery());
+    assert!(!coordinator.delivers_mode(ShipMode::Local));
+    assert!(!coordinator.delivers_mode(ShipMode::Pr));
+
+    let leaf: JobV2 =
+        serde_yaml::from_str("state: enabled\ntask_delivery:\n  modes: [local]\nsteps: []\n")
+            .expect("parse");
+    assert!(leaf.delivers_mode(ShipMode::Local));
+    assert!(!leaf.delivers_mode(ShipMode::Pr));
+    let restored: JobV2 =
+        serde_json::from_value(serde_json::to_value(&leaf).expect("serialize")).expect("restore");
+    assert_eq!(restored.task_delivery, leaf.task_delivery);
+
+    for invalid in [
+        "state: enabled\ntask_delivery:\n  modes: [remote]\nsteps: []\n",
+        "state: enabled\ntask_delivery:\n  mode: local\nsteps: []\n",
+    ] {
+        serde_yaml::from_str::<JobV2>(invalid)
+            .expect_err("an unknown mode or key must not silently declare nothing");
+    }
+}
+
 fn assert_step_body_shape_error(yaml: &str) {
     let err = serde_yaml::from_str::<JobV2Step>(yaml).expect_err("step should fail to parse");
     assert!(

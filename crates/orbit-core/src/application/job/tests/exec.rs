@@ -518,6 +518,15 @@ impl RuntimeHost for ScriptedGateHost<'_> {
                     .then_some("scripted child failure"),
             })),
             "release_locks" => Ok(json!({ "released": true })),
+            // Scripted tasks select no delivery job, so the gate routes to
+            // the default `task_<mode>_pipeline`, as it did before selection.
+            "resolve_delivery_job" => Ok(json!({
+                "job_name": format!(
+                    "task_{}_pipeline",
+                    input["mode"].as_str().unwrap_or_default()
+                ),
+                "selected": false,
+            })),
             "pipeline_success_guard" => <OrbitRuntime as RuntimeHost>::run_deterministic(
                 self.runtime,
                 action,

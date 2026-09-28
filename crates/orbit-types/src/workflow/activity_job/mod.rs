@@ -46,6 +46,7 @@ macro_rules! deterministic_action_catalog {
                 PullRefill => "pull_refill",
                 ReleaseLocks => "release_locks",
                 ReserveLocks => "reserve_locks",
+                ResolveDeliveryJob => "resolve_delivery_job",
                 ResolveWorkspaceShipInput => "resolve_workspace_ship_input",
                 ReviewGateAdmit => "review_gate_admit",
                 ReviewGateSettle => "review_gate_settle",
@@ -155,8 +156,9 @@ pub use audit_envelope::{
     V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 pub use job_v2::{
-    BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody, JoinMode,
-    LoopBlock, ParallelBlock, PipelineRef, RetrySpec, TargetRef, TargetStep,
+    BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobTaskDelivery, JobV2, JobV2Step,
+    JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, TargetRef,
+    TargetStep,
 };
 pub use retired::{RetiredFeatureError, validate_job_retired_sessions};
 pub use schema_header::SchemaHeader;

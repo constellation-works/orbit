@@ -1,0 +1,43 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: resolve_delivery_job
+spec:
+  type: deterministic
+  description: >
+    Resolve the job that delivers a gated bundle. With no bundled task
+    carrying a `delivery:<job>` tag this is `task_<mode>_pipeline`, exactly
+    as before. When the tasks select a job, it must resolve in the active
+    job catalog, be a workflow, and declare `spec.task_delivery.modes`
+    containing `mode`; the output then names it and, for a plugin job, its
+    plugin. A selection whose plugin is disabled or uninstalled, a job that
+    does not deliver this mode, or bundled tasks selecting different jobs
+    fail the Run, naming the plugin when one is installed. There is no
+    fallback to the default pipeline.
+  input_schema_json:
+    type: object
+    required: [task_ids, mode]
+    properties:
+      task_ids:
+        type: array
+        items:
+          type: string
+      mode:
+        type: string
+        enum: [pr, local]
+  output_schema_json:
+    type: object
+    required: [job_name, selected]
+    properties:
+      job_name:
+        type: string
+      selected:
+        type: boolean
+        description: >
+          True when a `delivery:<job>` tag chose the job; false for the
+          default `task_<mode>_pipeline`.
+      plugin:
+        type: string
+        description: Namespace of the plugin contributing the selected job.
+  action: resolve_delivery_job
+  config: {}

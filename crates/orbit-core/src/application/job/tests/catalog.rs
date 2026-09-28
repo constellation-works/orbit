@@ -1277,6 +1277,10 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
         .map(|step| step.id.as_str())
         .collect::<Vec<_>>();
 
+    let delivery_index = root_step_ids
+        .iter()
+        .position(|id| *id == "delivery")
+        .expect("task gate pipeline resolves its delivery job");
     let dispatch_index = root_step_ids
         .iter()
         .position(|id| *id == "dispatch_child")
@@ -1289,6 +1293,10 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
         .iter()
         .position(|id| *id == "require_child_success")
         .expect("task gate pipeline has child success guard step");
+    assert!(
+        delivery_index < dispatch_index,
+        "the delivery job must resolve before the child is dispatched"
+    );
     assert!(
         dispatch_index < release_index,
         "reservation must release only after invoke_and_wait returns"
@@ -1308,9 +1316,11 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
         JobV2StepBody::TargetRef(target) => {
             assert_eq!(target.target, "activity:invoke_and_wait");
             let input = target.default_input.as_ref().expect("dispatch input");
+            // The job comes from the `delivery` step, which resolves to
+            // `task_{{ input.mode }}_pipeline` unless a task selects one.
             assert_eq!(
                 input["job_name"],
-                Value::String("task_{{ input.mode }}_pipeline".to_string())
+                Value::String("{{ steps.delivery.output.job_name }}".to_string())
             );
             assert_eq!(
                 input["admission_task_ids"],

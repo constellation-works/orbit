@@ -440,6 +440,13 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::GateStarvationFail => {
             pipeline_actions::gate_starvation_fail(runtime, action, input)
         }
+        // The gate's first step: the job this bundle is delivered by — the
+        // default `task_<mode>_pipeline`, or the job its tasks select with a
+        // `delivery:<job>` tag. A selection that cannot be served fails here,
+        // before any reservation is taken.
+        CoreDeterministicAction::ResolveDeliveryJob => {
+            pipeline_actions::resolve_delivery_job(runtime, action, input)
+        }
     }
 }
 
@@ -529,11 +536,7 @@ fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,
     action: &str,
 ) -> Result<Value, DispatchError> {
-    let mode = runtime
-        .workspace_runtime_binding()
-        .map_or(crate::application::workflow::ShipMode::Local, |binding| {
-            binding.ship_mode
-        });
+    let mode = super::admission::backlog_exclusion::workspace_ship_mode(runtime);
     let mut input = crate::application::workflow::build_ship_input(
         mode,
         runtime.workspace_base_branch(),

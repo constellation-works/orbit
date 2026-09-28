@@ -46,6 +46,7 @@ fn stale_checkpoint_delivery_job() -> JobV2 {
     JobV2 {
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
+        task_delivery: None,
         default_input: None,
         recovery_activity: None,
         resolved_recovery_activity: None,

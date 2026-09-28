@@ -66,6 +66,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/gate_starvation_fail.yaml"),
     ),
     (
+        "resolve_delivery_job",
+        include_str!("../../assets/activities/resolve_delivery_job.yaml"),
+    ),
+    (
         "git_merge",
         include_str!("../../assets/activities/git_merge.yaml"),
     ),
