@@ -37,7 +37,7 @@ pub struct TaskShowArgs {
 impl Execute for TaskShowArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let task = runtime.get_task(&self.id)?;
-        let status_by_id = runtime.task_status_index()?;
+        let status_by_id = runtime.dependency_status_index([&task])?;
         let fields = normalize_task_show_fields(&self.fields)?;
         if !fields.is_empty() {
             let mut doc = task_fields_to_json(runtime, &task, &fields, Some(&status_by_id))?;

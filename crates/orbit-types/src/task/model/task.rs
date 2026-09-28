@@ -395,6 +395,57 @@ pub fn unsatisfiable_task_dependencies_with_index(
         .collect()
 }
 
+/// Whether an archived task reached `done` before it was archived, so a
+/// `blocked_by` edge onto it is satisfied exactly like an edge onto `done`.
+///
+/// Archive is a soft delete reachable from any status: the status alone
+/// cannot tell finished work from abandoned work, but the history can.
+/// Reaching `done` completes the task; any later move to a status other than
+/// `done` or `archived` (a reopen, a restore, a rejection) takes the
+/// completion back. The history must end in the archive, so a history that
+/// disagrees with the archived projection keeps the dead end.
+pub fn archived_task_completed_before_archive(history: &[TaskHistoryEntry]) -> bool {
+    let mut completed = false;
+    let mut last = None;
+    for status in history.iter().filter_map(|entry| entry.to_status) {
+        match status {
+            TaskStatus::Done => completed = true,
+            TaskStatus::Archived => {}
+            _ => completed = false,
+        }
+        last = Some(status);
+    }
+    completed && last == Some(TaskStatus::Archived)
+}
+
+/// Rewrite each archived dependency target that reached `done` before it was
+/// archived ([`archived_task_completed_before_archive`]) to `done` in a
+/// dependency status projection.
+///
+/// Every surface that computes dependency satisfaction — dispatch admission,
+/// readiness and promotion, and the `resolved_dependencies` projection —
+/// applies this to its status projection first, so they share one rule.
+/// Only archived targets among `dependencies` are looked up through
+/// `history_of`; a target without readable history (`None`) stays archived
+/// and remains a dead end.
+pub fn satisfy_completed_archived_dependencies<E>(
+    status_by_id: &mut BTreeMap<OrbitId, TaskStatus>,
+    dependencies: impl IntoIterator<Item = OrbitId>,
+    mut history_of: impl FnMut(&str) -> Result<Option<Vec<TaskHistoryEntry>>, E>,
+) -> Result<(), E> {
+    let archived = dependencies
+        .into_iter()
+        .filter(|id| status_by_id.get(id) == Some(&TaskStatus::Archived))
+        .collect::<BTreeSet<_>>();
+    for id in archived {
+        if history_of(&id)?.is_some_and(|history| archived_task_completed_before_archive(&history))
+        {
+            status_by_id.insert(id, TaskStatus::Done);
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_task_dependencies(
     tasks: &[Task],
     current_task_id: Option<&str>,

@@ -315,21 +315,26 @@ fn all_tasks_json(
     } else {
         None
     };
+    let mut rows = Vec::with_capacity(candidates.len());
+    for (task, runtime, entry) in candidates {
+        if let Some(row) = runtime.get_listed_task_row(&task.id)? {
+            rows.push((row, runtime, entry));
+        }
+    }
     // All runtimes in a dashboard share one coordination registry. Read its
-    // global dependency projection once, after the metadata selection.
-    let statuses = candidates
+    // global dependency projection once, after hydrating the page.
+    let statuses = rows
         .first()
-        .map(|(_, runtime, _)| runtime.task_status_index())
+        .map(|(_, runtime, _)| {
+            runtime.dependency_status_index(rows.iter().map(|(row, _, _)| &row.task))
+        })
         .transpose()?
         .unwrap_or_default();
     // Each workspace's runtime carries its own crew registry; build each one
     // once for the page rather than once per row.
     let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
-    let mut values = Vec::with_capacity(candidates.len());
-    for (task, runtime, entry) in candidates {
-        let Some(row) = runtime.get_listed_task_row(&task.id)? else {
-            continue;
-        };
+    let mut values = Vec::with_capacity(rows.len());
+    for (row, runtime, entry) in rows {
         let projection = projections
             .entry(entry.id.as_str())
             .or_insert_with(|| TaskListProjection::new(&runtime));

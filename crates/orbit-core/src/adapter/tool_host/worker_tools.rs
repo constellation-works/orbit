@@ -93,6 +93,7 @@ pub(crate) fn execute(
             "manifest" => serde_json::to_value(runtime.get_task_artifact_manifest(id)?),
             "comments" => serde_json::to_value(runtime.get_task_comments(id)?),
             "history" => serde_json::to_value(runtime.get_task_history(id)?),
+            "dependency_history" => serde_json::to_value(runtime.dependency_history(id)?),
             "dependency" => match runtime.resolve_dependency_task(id)? {
                 orbit_store::RegisteredTaskResolution::Resolved(task) => serde_json::to_value(task),
                 _ => {

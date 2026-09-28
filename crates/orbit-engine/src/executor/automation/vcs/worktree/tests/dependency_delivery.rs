@@ -18,8 +18,8 @@ use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ExternalRef, Task, TaskArtifact, TaskPriority, TaskRelation, TaskRelationType, TaskStatus,
-    TaskType,
+    ExternalRef, Task, TaskArtifact, TaskHistoryEntry, TaskPriority, TaskRelation,
+    TaskRelationType, TaskStatus, TaskType,
 };
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
@@ -260,6 +260,53 @@ fn an_unfinished_dependency_stays_with_the_lifecycle_gate() {
     .unwrap();
 }
 
+/// A dependency archived after it reached `done` is admitted as completed,
+/// so its delivery is checked exactly like a `done` one; archived without
+/// reaching `done` it stays with the lifecycle gate.
+#[test]
+fn an_archived_dependency_is_delivery_checked_only_when_it_reached_done_first() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let base_sha = commit_marked(&repo, "ORB-BASE", "base.txt", "v1");
+    commit_on_branch(&repo, "orbit/ORB-DEP", "ORB-DEP", "dep.txt", "fixed");
+    let tasks = || {
+        vec![
+            dependent_task("ORB-TASK", "ORB-DEP"),
+            task_fixture("ORB-DEP", TaskStatus::Archived),
+        ]
+    };
+    let check = |host: &FakeHost| {
+        ensure_dependencies_delivered_into_base(
+            host,
+            &repo,
+            &["ORB-TASK".to_string()],
+            BASE_BRANCH,
+            &base_sha,
+        )
+    };
+
+    let finished = FakeHost::new(&repo, tasks()).with_history(
+        "ORB-DEP",
+        &[TaskStatus::Backlog, TaskStatus::Done, TaskStatus::Archived],
+    );
+    let error = check(&finished).unwrap_err();
+    let OrbitError::DependencyNotDelivered(diagnostic) = &error else {
+        panic!("expected DependencyNotDelivered, got {error:?}");
+    };
+    assert_eq!(diagnostic.dependency_id, "ORB-DEP");
+
+    let abandoned = FakeHost::new(&repo, tasks()).with_history(
+        "ORB-DEP",
+        &[
+            TaskStatus::Backlog,
+            TaskStatus::Review,
+            TaskStatus::Archived,
+        ],
+    );
+    check(&abandoned).unwrap();
+}
+
 #[test]
 fn a_dependency_shipping_in_the_same_run_delivers_itself() {
     let temp = tempdir().unwrap();
@@ -334,6 +381,7 @@ fn setup_input() -> Value {
 
 struct FakeHost {
     tasks: BTreeMap<String, Task>,
+    histories: BTreeMap<String, Vec<TaskHistoryEntry>>,
     repo_root: PathBuf,
     data_root: PathBuf,
     scoreboard_dir: PathBuf,
@@ -347,11 +395,29 @@ impl FakeHost {
                 .into_iter()
                 .map(|task| (task.id.clone(), task))
                 .collect(),
+            histories: BTreeMap::new(),
             repo_root: repo_root.to_path_buf(),
             data_root: repo_root.join(".orbit-test-data"),
             scoreboard_dir: repo_root.join(".orbit-test-data").join("scoreboard"),
             admitted: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Record `task_id`'s status transitions, visited in order.
+    fn with_history(mut self, task_id: &str, statuses: &[TaskStatus]) -> Self {
+        let history = statuses
+            .iter()
+            .map(|status| TaskHistoryEntry {
+                at: Utc::now(),
+                by: "fixture".to_string(),
+                event: "status_changed".to_string(),
+                note: None,
+                from_status: None,
+                to_status: Some(*status),
+            })
+            .collect();
+        self.histories.insert(task_id.to_string(), history);
+        self
     }
 
     fn admitted(&self) -> Vec<String> {
@@ -369,6 +435,10 @@ impl RuntimeHost for FakeHost {
 
     fn get_task_artifacts(&self, _task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         Ok(Vec::new())
+    }
+
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        Ok(self.histories.get(task_id).cloned().unwrap_or_default())
     }
 
     fn list_tasks_filtered(

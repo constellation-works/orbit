@@ -15,8 +15,8 @@ spec:
     reported.
 
     Note this activity only fires for *legitimate* waits that ran out of
-    budget. A dependency that can never be satisfied (archived, rejected,
-    or dangling) fails earlier, inside `reserve_locks`, with a
+    budget. A dependency that can never be satisfied (archived before
+    reaching `done`, rejected, or dangling) fails earlier, inside `reserve_locks`, with a
     `task.dependencies.unsatisfiable` error and never reaches the loop.
   input_schema_json:
     type: object

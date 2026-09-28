@@ -179,7 +179,10 @@ impl TaskStatus {
     ///
     /// This deliberately does *not* widen what counts as satisfied
     /// (`Done`-only stays) — it only lets dispatch fail loudly instead of
-    /// polling out its whole budget against an edge that cannot close.
+    /// polling out its whole budget against an edge that cannot close. An
+    /// archived target that reached `done` before its archive is projected as
+    /// `done` before this is consulted
+    /// (`satisfy_completed_archived_dependencies`), so it never lands here.
     pub fn dependency_dead_end(self) -> Option<DependencyDeadEnd> {
         match self {
             TaskStatus::Archived => Some(DependencyDeadEnd::Archived),

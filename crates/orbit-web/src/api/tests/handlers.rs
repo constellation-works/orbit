@@ -6,7 +6,7 @@ use axum::response::Response;
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{JobRunState, OrbitRuntime, TaskStatus};
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::super::*;
@@ -582,6 +582,86 @@ async fn crews_endpoint_returns_sorted_runtime_registry() {
     assert_eq!(crews[2]["name"], json!("system"));
     assert_eq!(crews[2]["is_default"], json!(false));
     assert_eq!(crews[2]["model"], json!("codex-beta"));
+}
+
+/// The dashboard labels a dependency with the rule dispatch admits it by:
+/// archived after `done` reads `[done]` on the task page, the detail view and
+/// the fleet list alike; archived without reaching `done` stays `[archived]`.
+#[tokio::test]
+async fn dashboard_labels_archived_dependencies_by_whether_they_reached_done() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let finished = seed_task(
+        &runtime,
+        "Finished dependency",
+        TaskStatus::Done,
+        Vec::new(),
+    );
+    runtime
+        .archive_task(&finished.id)
+        .expect("archive finished");
+    let abandoned = seed_task(
+        &runtime,
+        "Abandoned dependency",
+        TaskStatus::Backlog,
+        Vec::new(),
+    );
+    runtime
+        .archive_task(&abandoned.id)
+        .expect("archive abandoned");
+    let dependent = seed_task(
+        &runtime,
+        "Dependent",
+        TaskStatus::Backlog,
+        vec![finished.id.clone(), abandoned.id.clone()],
+    );
+    let mut expected = vec![
+        format!("{} [done]", finished.id),
+        format!("{} [archived]", abandoned.id),
+    ];
+    expected.sort();
+    let labels = |row: &Value| {
+        let mut labels = row["resolved_dependencies"]
+            .as_array()
+            .expect("resolved dependencies array")
+            .iter()
+            .map(|label| label.as_str().expect("dependency label").to_string())
+            .collect::<Vec<_>>();
+        labels.sort();
+        labels
+    };
+    let get = |uri: String| {
+        let runtime = runtime.clone();
+        async move {
+            let response = router()
+                .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+                .oneshot(
+                    Request::builder()
+                        .method(Method::GET)
+                        .uri(uri)
+                        .header(header::HOST, "localhost:7878")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            body_json(response).await
+        }
+    };
+
+    for uri in ["/tasks".to_string(), "/tasks/all".to_string()] {
+        let body = get(uri.clone()).await;
+        let row = body["items"]
+            .as_array()
+            .expect("task items")
+            .iter()
+            .find(|task| task["id"].as_str() == Some(&dependent.id))
+            .unwrap_or_else(|| panic!("{uri} lists the dependent"))
+            .clone();
+        assert_eq!(labels(&row), expected, "{uri}");
+    }
+    let detail = get(format!("/tasks/{}", dependent.id)).await;
+    assert_eq!(labels(&detail), expected, "task detail");
 }
 
 #[tokio::test]

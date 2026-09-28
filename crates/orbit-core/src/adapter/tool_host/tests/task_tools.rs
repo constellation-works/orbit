@@ -2395,6 +2395,72 @@ fn task_write_response_projects_relations_with_a_friction_target() {
     assert_eq!(resolves["target"], json!(friction_target));
 }
 
+/// The `resolved_dependencies` projection and `ready` listing apply the
+/// archived-dependency rule dispatch uses: archived after `done` reads as
+/// `done`, archived without it stays `archived` and unmet.
+#[test]
+fn archived_dependencies_project_by_whether_they_reached_done_first() {
+    use crate::application::task::{TaskAddParams, TaskUpdateParams};
+    let (_root, runtime, _repo_root) = test_runtime();
+    let seed = |title: &str, dependencies: Vec<String>| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.to_string(),
+                description: "fixture".to_string(),
+                acceptance_criteria: vec!["fixture".to_string()],
+                plan: "fixture".to_string(),
+                dependencies,
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .expect("seed task")
+            .id
+    };
+    let finished = seed("Finished then archived", Vec::new());
+    let abandoned = seed("Abandoned then archived", Vec::new());
+    runtime
+        .update_task(
+            &finished,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("finish dependency");
+    runtime.archive_task(&finished).expect("archive finished");
+    runtime.archive_task(&abandoned).expect("archive abandoned");
+    let satisfied = seed("Depends on finished work", vec![finished.clone()]);
+    let stranded = seed("Depends on abandoned work", vec![abandoned.clone()]);
+
+    let shown = call(&runtime, "orbit.task.show", json!({"id": satisfied}))
+        .expect("show satisfied dependent");
+    assert_eq!(
+        shown["resolved_dependencies"],
+        json!([format!("{finished} [done]")])
+    );
+    let shown = call(&runtime, "orbit.task.show", json!({"id": stranded}))
+        .expect("show stranded dependent");
+    assert_eq!(
+        shown["resolved_dependencies"],
+        json!([format!("{abandoned} [archived]")])
+    );
+
+    let ready =
+        call(&runtime, "orbit.task.list", json!({"ready": true})).expect("list ready tasks");
+    let ready_ids = task_list_items(&ready)
+        .iter()
+        .filter_map(|task| task["id"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert!(ready_ids.contains(&satisfied), "{ready_ids:?}");
+    assert!(!ready_ids.contains(&stranded), "{ready_ids:?}");
+    let listed = call(&runtime, "orbit.task.list", json!({})).expect("list tasks");
+    let listed_labels = task_list_items(&listed)
+        .iter()
+        .find(|task| task["id"] == satisfied.as_str())
+        .map(|task| task["resolved_dependencies"].clone());
+    assert_eq!(listed_labels, Some(json!([format!("{finished} [done]")])));
+}
+
 #[test]
 fn foreign_task_references_are_marked_and_do_not_block_readiness() {
     let (_root, runtime, _repo_root) = test_runtime();

@@ -37,15 +37,16 @@ host capacity, heartbeats, or automatic reassignment.
 
 The queue is a logical owner-side query, not a required maintained table:
 
-- **Members:** `backlog` tasks whose every dependency is `done`. After epic retirement, the `epic`
-  tag and parent/child hierarchy introduce no special admission path. Sequencing uses dependencies.
+- **Members:** `backlog` tasks whose every dependency is `done` (or archived after it reached
+  `done`). After epic retirement, the `epic` tag and parent/child hierarchy introduce no special
+  admission path. Sequencing uses dependencies.
 - **Order:** the canonical automatic-dispatch comparator, including corrective tag bands, priority,
   age, and task-ID tie-breaker. Readiness reporting and admission share it.
 - **Validation:** selection, dependency checks, current status, canonicalized own `context_files`,
   and conflicts are checked within the admission transaction. Cached projections cannot authorize
   admission. Ordinary task and reservation mutations must participate in the same serialization.
-- **Invalid entries:** dangling/rejected/archived dependencies or invalid/empty lock surfaces are
-  excluded with diagnostics. They do not prevent unrelated valid work from being admitted.
+- **Invalid entries:** dangling/rejected dependencies, dependencies archived before reaching
+  `done`, or invalid/empty lock surfaces are excluded with diagnostics. They do not prevent unrelated valid work from being admitted.
   Missing filesystem targets are valid declarations, not grounds for pruning: retain canonical
   selectors for new files and symbols, and freeze the full footprint on the claim through review.
   All task context read/write and status-lock paths use this non-pruning rule. A truly empty

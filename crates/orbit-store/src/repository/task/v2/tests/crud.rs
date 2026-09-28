@@ -612,6 +612,72 @@ fn registered_task_resolves_a_dependency_owned_by_another_local_workspace() {
     );
 }
 
+/// The archived-dependency rule reads a prerequisite's status history through
+/// its registered owner, and a listing's dependency projection applies it: an
+/// archived prerequisite that reached `done` first projects as `done`.
+#[test]
+fn registered_task_history_follows_the_owner_into_the_listing_projection() {
+    let temp = TempDir::new().unwrap();
+    let dependent = store(&temp);
+    let owner = bound_store(
+        &dependent.registry,
+        &temp,
+        "orbit-test-654321",
+        "other-repo",
+    );
+    let finished = owner
+        .create_task(create_params("Finished", TaskStatus::Backlog))
+        .expect("create finished prerequisite");
+    let abandoned = owner
+        .create_task(create_params("Abandoned", TaskStatus::Backlog))
+        .expect("create abandoned prerequisite");
+    let set_status = |id: &str, status: TaskStatus| {
+        owner
+            .update_task_history(
+                id,
+                &TaskHistoryUpdateParams {
+                    actor: "codex:gpt-5.5".to_string(),
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .expect("move prerequisite");
+    };
+    set_status(&finished.id, TaskStatus::Done);
+    set_status(&finished.id, TaskStatus::Archived);
+    set_status(&abandoned.id, TaskStatus::Archived);
+    let mut params = create_params("Dependent", TaskStatus::Backlog);
+    params.dependencies = vec![finished.id.clone(), abandoned.id.clone()];
+    dependent.create_task(params).expect("create dependent");
+
+    let history = dependent
+        .registered_task_history(&finished.id)
+        .expect("read owner history")
+        .expect("registered prerequisite has history");
+    assert_eq!(
+        history
+            .iter()
+            .filter_map(|entry| entry.to_status)
+            .collect::<Vec<_>>(),
+        vec![TaskStatus::Backlog, TaskStatus::Done, TaskStatus::Archived]
+    );
+    assert_eq!(
+        dependent
+            .registered_task_history("ORB-09999")
+            .expect("read unregistered history"),
+        None
+    );
+
+    let page = dependent
+        .query_task_rows(&crate::contracts::TaskListFilter::default(), 10, None)
+        .expect("list dependent workspace");
+    assert_eq!(page.status_by_id.get(&finished.id), Some(&TaskStatus::Done));
+    assert_eq!(
+        page.status_by_id.get(&abandoned.id),
+        Some(&TaskStatus::Archived)
+    );
+}
+
 /// Fail closed rather than satisfied, and distinguish the two ways a task id
 /// can fail to resolve: gone from a prefix this machine owns, versus owned by
 /// a registry this machine cannot read at all.

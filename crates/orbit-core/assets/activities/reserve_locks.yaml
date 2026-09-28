@@ -17,9 +17,11 @@ spec:
     Dependency edges are checked before locks. An unmet-but-reachable
     dependency yields `reserved: false` with `waiting_on_deps` populated
     (the caller should keep polling); a dependency that can never reach
-    `done` — archived, rejected, or dangling — fails the activity
+    `done` — archived without having reached `done` first, rejected, or
+    dangling — fails the activity
     immediately with a `task.dependencies.unsatisfiable` error rather
-    than making the caller poll out its wait budget.
+    than making the caller poll out its wait budget. A dependency
+    archived after it reached `done` is satisfied, like `done`.
   input_schema_json:
     type: object
     required: [task_ids]

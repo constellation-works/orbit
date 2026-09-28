@@ -703,6 +703,113 @@ fn reserve_locks_fails_fast_on_archived_dependency() {
     assert_eq!(state.waiting_on_deps, Some(vec![dependency]));
 }
 
+fn set_task_status(runtime: &OrbitRuntime, id: &str, status: TaskStatus) {
+    runtime
+        .update_task(
+            id,
+            TaskUpdateParams {
+                status: Some(status),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("move {id} to {status}: {error}"));
+}
+
+/// Archiving finished work — manual cleanup or a retention sweep — must not
+/// strand its dependents behind a `task.dependencies.unsatisfiable` refusal.
+#[test]
+fn reserve_locks_admits_a_dependency_archived_after_it_reached_done() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let dependency = seed_task(&runtime, "Dependency", TaskStatus::Backlog, Vec::new());
+    let blocked = seed_task(
+        &runtime,
+        "Blocked",
+        TaskStatus::Backlog,
+        vec![dependency.clone()],
+    );
+    set_task_status(&runtime, &dependency, TaskStatus::Done);
+    runtime
+        .archive_task(&dependency)
+        .expect("archive dependency");
+
+    let (run_id, result) = reserve_locks_for(&runtime, vec![blocked]);
+    let output = result.expect("an archived-after-done dependency is satisfied");
+
+    assert_eq!(output["reserved"], json!(true));
+    assert_eq!(output["waiting_on_deps"], json!([]));
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read run state")
+        .expect("state exists");
+    assert!(
+        state.waiting_on_deps.unwrap_or_default().is_empty(),
+        "a satisfied dependency must not be recorded as a blocker"
+    );
+}
+
+/// Reaching `done` once is not enough: a dependency reopened to a
+/// non-terminal status and then archived is abandoned work again.
+#[test]
+fn reserve_locks_still_refuses_a_dependency_reopened_after_done_then_archived() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let dependency = seed_task(&runtime, "Dependency", TaskStatus::Backlog, Vec::new());
+    let blocked = seed_task(
+        &runtime,
+        "Blocked",
+        TaskStatus::Backlog,
+        vec![dependency.clone()],
+    );
+    set_task_status(&runtime, &dependency, TaskStatus::Done);
+    set_task_status(&runtime, &dependency, TaskStatus::Backlog);
+    runtime
+        .archive_task(&dependency)
+        .expect("archive dependency");
+
+    let (_, result) = reserve_locks_for(&runtime, vec![blocked]);
+    let message = expect_reserve_locks_failure(result);
+
+    assert!(
+        message.contains("task.dependencies.unsatisfiable"),
+        "{message}"
+    );
+    assert!(message.contains(&dependency), "{message}");
+    assert!(
+        message.contains(orbit_types::task::DependencyDeadEnd::Archived.explanation()),
+        "must keep the archived remedy: {message}"
+    );
+}
+
+/// Archived straight from `review` (never `done`) keeps today's dead end
+/// for readiness and dispatch alike.
+#[test]
+fn a_dependency_archived_from_review_stays_unsatisfied_for_readiness_and_dispatch() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let dependency = seed_task(&runtime, "Dependency", TaskStatus::Backlog, Vec::new());
+    let blocked = seed_task(
+        &runtime,
+        "Blocked",
+        TaskStatus::Backlog,
+        vec![dependency.clone()],
+    );
+    set_task_status(&runtime, &dependency, TaskStatus::Review);
+    runtime
+        .archive_task(&dependency)
+        .expect("archive dependency");
+    let task = runtime.get_task(&blocked).expect("blocked task");
+
+    let statuses = runtime
+        .dependency_status_index([&task])
+        .expect("dependency projection");
+
+    assert_eq!(statuses.get(&dependency), Some(&TaskStatus::Archived));
+    assert!(!orbit_types::task::task_dependencies_ready(
+        &task, &statuses
+    ));
+    let (_, result) = reserve_locks_for(&runtime, vec![blocked]);
+    let message = expect_reserve_locks_failure(result);
+    assert!(message.contains("archived"), "{message}");
+}
+
 #[test]
 fn reserve_locks_fails_fast_on_rejected_dependency() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");

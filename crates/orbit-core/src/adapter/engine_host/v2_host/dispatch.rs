@@ -598,12 +598,15 @@ fn dependency_admission_for_input(
         return Ok(BundleDependencyAdmission::default());
     };
     let task_ids = parse_task_ids(&serde_json::json!({ "task_ids": raw_task_ids }))?;
-    let status_by_id = runtime.task_status_index()?;
+    let tasks = task_ids
+        .iter()
+        .map(|task_id| runtime.get_task(task_id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let status_by_id = runtime.dependency_status_index(&tasks)?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let mut waiting_on = BTreeSet::new();
     let mut unsatisfiable = Vec::new();
-    for task_id in task_ids {
-        let task = runtime.get_task(&task_id)?;
+    for task in tasks {
         let dead_ends =
             unsatisfiable_task_dependencies_with_index(&task, &status_by_id, &reference_index);
         let dead_end_ids = dead_ends

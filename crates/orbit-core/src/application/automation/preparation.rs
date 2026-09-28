@@ -322,21 +322,14 @@ fn selector_objects(
 
 fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>, AutomationError> {
     let mut dependencies = Vec::new();
+    let mut resolved = Vec::new();
 
     for id in task.dependencies().iter().take(51) {
-        if dependencies.len() == 50 {
+        if dependencies.len() + resolved.len() == 50 {
             return Err(AutomationError::Deferred("dependency_scan_budget".into()));
         }
         match runtime.resolve_dependency_task(id)? {
-            // The serialized shape of a resolved dependency is unchanged, so
-            // following ownership changes which prerequisites can be read, not
-            // the fingerprint of any task that already prepared.
-            RegisteredTaskResolution::Resolved(dependency) => {
-                dependencies.push(json!({"id": id, "status": dependency.status,
-                    "relations": dependency.relations, "criteria": dependency.acceptance_criteria,
-                    "description": dependency.description, "plan": dependency.plan,
-                    "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
-            }
+            RegisteredTaskResolution::Resolved(dependency) => resolved.push(dependency),
             // Another host's authority. This machine cannot read the body and
             // must not invent one, so the reference is recorded as explicitly
             // unverified rather than resolved or dropped. That matches the
@@ -357,6 +350,27 @@ fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>
                 return Err(OrbitError::InvalidInput(reason).into());
             }
         }
+    }
+
+    // Report status under the rule readiness and dispatch apply, so a
+    // dependency archived after it reached `done` reads as `done` here too.
+    let mut status_by_id = resolved
+        .iter()
+        .map(|dependency| (dependency.id.clone(), dependency.status))
+        .collect::<BTreeMap<_, _>>();
+    runtime.satisfy_completed_archived_dependencies(&mut status_by_id, [task]);
+    // The serialized shape of a resolved dependency is unchanged, so following
+    // ownership changes which prerequisites can be read, not the fingerprint
+    // of any task that already prepared.
+    for dependency in resolved {
+        let status = status_by_id
+            .get(&dependency.id)
+            .copied()
+            .unwrap_or(dependency.status);
+        dependencies.push(json!({"id": dependency.id, "status": status,
+            "relations": dependency.relations, "criteria": dependency.acceptance_criteria,
+            "description": dependency.description, "plan": dependency.plan,
+            "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
     }
 
     dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());

@@ -79,7 +79,8 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
     /// The registry-global status projection. Deliberately not derived from
     /// `task_lookup`: task lists are workspace-scoped, dependency readiness
     /// is not, and a dependency on a task in another workspace resolves only
-    /// here.
+    /// here. Backlog tasks' archived dependencies that reached `done` first
+    /// project as `done` (`OrbitRuntime::dependency_status_index`).
     pub(in crate::adapter::engine_host::v2_host) status_by_id: BTreeMap<String, TaskStatus>,
     pub(in crate::adapter::engine_host::v2_host) reference_index: TaskReferenceIndex,
     /// Admissible leaf task IDs in dispatch order; the tasks are in
@@ -376,13 +377,16 @@ pub(in crate::adapter::engine_host::v2_host) fn backlog_snapshot(
         .collect();
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
-    let status_by_id =
-        runtime
-            .task_status_index()
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("load global task status projection: {err}"),
-            })?;
+    let status_by_id = runtime
+        .dependency_status_index(
+            task_lookup
+                .values()
+                .filter(|task| task.status == TaskStatus::Backlog),
+        )
+        .map_err(|err| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("load global task status projection: {err}"),
+        })?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
     // [ORB-12500] Claims need no separate holder entry here. A claimed task is

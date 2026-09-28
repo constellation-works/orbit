@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use super::*;
 use crate::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskResidualFilter, TaskRow};
 use crate::driver::sqlite::task_registry::is_terminal_status;
+use orbit_types::task::satisfy_completed_archived_dependencies;
 
 impl TaskV2Store {
     pub(crate) fn task_candidates(
@@ -188,18 +189,45 @@ impl TaskV2Store {
     /// The dependency-status projection one listing needs: this workspace
     /// plus every relation target the selected envelopes name, resolved
     /// wherever it is registered (see `TaskRegistryStore::task_status_index_for`).
+    /// Archived `blocked_by` targets that reached `done` first project as
+    /// `done` (see `satisfy_completed_archived_dependencies`).
     /// Taken before hydration so the residual predicate can run row by row.
     fn listing_status_index<'a>(
         &self,
         selected: impl IntoIterator<Item = &'a TaskEnvelopeV2>,
     ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        let targets = selected
+        let relations = selected
             .into_iter()
             .flat_map(|envelope| envelope.relations.iter())
+            .collect::<Vec<_>>();
+        let targets = relations
+            .iter()
             .map(|relation| relation.target.clone())
             .collect::<BTreeSet<_>>();
-        self.registry
-            .task_status_index_for(&self.workspace_id, &targets)
+        let mut status_by_id = self
+            .registry
+            .task_status_index_for(&self.workspace_id, &targets)?;
+        let dependencies = relations
+            .iter()
+            .filter(|relation| relation.relation_type == TaskRelationType::BlockedBy)
+            .map(|relation| relation.target.clone());
+        // A listing must not fail on one unreadable dependency owner; that
+        // edge keeps its archived dead end, as it did before this rule.
+        let Ok(()) = satisfy_completed_archived_dependencies::<std::convert::Infallible>(
+            &mut status_by_id,
+            dependencies,
+            |id| {
+                Ok(self.registered_task_history(id).unwrap_or_else(|error| {
+                    orbit_common::tracing::warn!(
+                        task_id = id,
+                        %error,
+                        "archived dependency history unreadable; keeping it a dead end"
+                    );
+                    None
+                }))
+            },
+        );
+        Ok(status_by_id)
     }
 
     pub(crate) fn get_task_row(
@@ -235,17 +263,7 @@ impl TaskV2Store {
                 message: comment.body,
             })
             .collect();
-        let history = std::mem::take(&mut bundle.events)
-            .into_iter()
-            .map(|event| TaskHistoryEntry {
-                at: event.at,
-                by: event.by,
-                event: event.event_type,
-                note: event.note,
-                from_status: event.from_status,
-                to_status: event.to_status,
-            })
-            .collect();
+        let history = super::sidecars::task_history_from_events(std::mem::take(&mut bundle.events));
         let mut artifacts = bundle
             .artifact_manifest
             .take()

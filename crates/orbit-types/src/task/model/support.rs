@@ -263,7 +263,10 @@ impl ResolvedTaskDependency {
 pub enum DependencyDeadEnd {
     /// The dependency ID resolves to no task in this workspace.
     Missing,
-    /// Soft-deleted. Restorable via `orbit task restore`, not by waiting.
+    /// Soft-deleted without having completed. Restorable via
+    /// `orbit task restore`, not by waiting. A task archived after it reached
+    /// `done` satisfies the edge instead (see
+    /// `archived_task_completed_before_archive`).
     Archived,
     /// Declined. Re-openable to backlog/in-progress, not by waiting.
     Rejected,
