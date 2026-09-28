@@ -33,15 +33,18 @@ PY
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/orbit-agent-plugin.XXXXXX")"
 trap 'rm -rf -- "$fixture_root"' EXIT
 
+# Every fixture, including the per-case clones below, lives under fixture_root
+# so concurrent runs sharing one TMPDIR never collide and the trap removes them.
+base_fixture="$fixture_root/base"
 "$repo_root/scripts/sync-plugin-skills.sh" --check >/dev/null
-cp -R "$repo_root/plugin" "$fixture_root/plugin"
-mkdir -p "$fixture_root/npm" "$fixture_root/.claude-plugin"
-cp "$repo_root/npm/package.json" "$fixture_root/npm/package.json"
-cp "$repo_root/.claude-plugin/marketplace.json" "$fixture_root/.claude-plugin/marketplace.json"
+mkdir -p "$base_fixture/npm" "$base_fixture/.claude-plugin"
+cp -R "$repo_root/plugin" "$base_fixture/plugin"
+cp "$repo_root/npm/package.json" "$base_fixture/npm/package.json"
+cp "$repo_root/.claude-plugin/marketplace.json" "$base_fixture/.claude-plugin/marketplace.json"
 
-"$validator" "$fixture_root"
+"$validator" "$base_fixture"
 
-python3 - "$repo_root" "$validator" "$fixture_root" <<'PY'
+python3 - "$repo_root" "$validator" "$base_fixture" "$fixture_root" <<'PY'
 from __future__ import annotations
 
 import json
@@ -53,6 +56,7 @@ from pathlib import Path
 repo_root = Path(sys.argv[1]).resolve()
 validator = Path(sys.argv[2])
 base_fixture = Path(sys.argv[3])
+fixture_root = Path(sys.argv[4])
 
 errors: list[str] = []
 
@@ -67,9 +71,7 @@ def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def clone_fixture(name: str) -> Path:
-    dest = base_fixture.parent / name
-    if dest.exists():
-        shutil.rmtree(dest)
+    dest = fixture_root / name
     shutil.copytree(base_fixture, dest, symlinks=True)
     return dest
 
