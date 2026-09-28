@@ -1192,6 +1192,80 @@ fn concurrent_resume_inserts_of_one_source_admit_exactly_one_run() {
     assert_eq!(resumes.len(), 1, "one resume persisted: {resumes:?}");
 }
 
+/// A terminal retry chain deeper than any fixed hop budget still reaches its
+/// root, so a live sibling branching from the root refuses a resume of the
+/// chain's tip without inserting a second live run.
+#[test]
+fn resume_insert_refuses_a_live_sibling_of_a_deep_chains_root() {
+    const CHAIN_LEN: usize = 100;
+    let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+    let root = failed_run(&backend, None);
+    let mut tip = root.clone();
+    for _ in 1..CHAIN_LEN {
+        tip = failed_run(&backend, Some(&tip));
+    }
+    let sibling = backend
+        .insert_resume_job_run("job-resume", 2, Utc::now(), None, &root)
+        .expect("the idle chain admits one resume of its root");
+
+    let refused = backend
+        .insert_resume_job_run("job-resume", 2, Utc::now(), None, &tip)
+        .expect_err("the tip shares the root's lineage and its live sibling");
+    assert_eq!(live_resume_of(refused), (tip.clone(), sibling.run_id));
+    assert!(
+        backend
+            .job_run_retries(&tip, 10)
+            .expect("tip retries")
+            .is_empty(),
+        "a refused resume inserts nothing"
+    );
+}
+
+/// Corrupted `retry_source_run_id` cycles — a self-loop and a three-run
+/// loop — terminate the lineage probe, which still admits exactly one live
+/// run and finds it from every run on the loop.
+#[test]
+fn resume_insert_terminates_on_cyclic_retry_links() {
+    let backend = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws_a");
+    let point_at = |run_id: &str, parent: &str| {
+        assert!(
+            backend
+                .update_run(run_id, |run| {
+                    run.retry_source_run_id = Some(parent.to_string());
+                    Ok(())
+                })
+                .expect("corrupt retry link")
+        );
+    };
+    let looped = failed_run(&backend, None);
+    point_at(&looped, &looped);
+    let first = failed_run(&backend, None);
+    let second = failed_run(&backend, Some(&first));
+    let third = failed_run(&backend, Some(&second));
+    point_at(&first, &third);
+
+    let resumed = backend
+        .insert_resume_job_run("job-resume", 2, Utc::now(), None, &looped)
+        .expect("a self-looped idle run resumes");
+    let refused = backend
+        .insert_resume_job_run("job-resume", 2, Utc::now(), None, &looped)
+        .expect_err("its live resume refuses another");
+    assert_eq!(live_resume_of(refused), (looped.clone(), resumed.run_id));
+
+    let live = backend
+        .insert_resume_job_run("job-resume", 2, Utc::now(), None, &third)
+        .expect("an idle loop resumes");
+    for requested in [&first, &second, &third] {
+        let refused = backend
+            .insert_resume_job_run("job-resume", 2, Utc::now(), None, requested)
+            .expect_err("every run on the loop sees the live resume");
+        assert_eq!(
+            live_resume_of(refused),
+            (requested.clone(), live.run_id.clone())
+        );
+    }
+}
+
 fn keyed(job_id: &str, key: &str, scan_limit: usize) -> KeyedJobRunParams {
     KeyedJobRunParams {
         job_id: job_id.to_string(),
