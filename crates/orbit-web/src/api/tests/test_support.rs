@@ -9,13 +9,6 @@ use serde_json::Value;
 /// Names the one test a re-executed child of this test binary runs in-process.
 const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_WEB_FIXTURE_CHILD";
 
-/// Inherited authority [`orbit_common::test_env::clear_inherited_authority`]
-/// does not cover: `ORBIT_WORKER_CONTEXT_REQUIRED` refuses a disposable root
-/// that holds no worker binding, and `ORBIT_PLUGIN_BROKER` forwards plugin
-/// tool calls to the launching run's broker instead of the fixture's install.
-const WEB_FIXTURE_AUTHORITY_ENV: &[&str] =
-    &["ORBIT_WORKER_CONTEXT_REQUIRED", "ORBIT_PLUGIN_BROKER"];
-
 /// Run the calling test's body in a child of this test binary.
 ///
 /// An explicit-root fixture (`OrbitRuntime::from_roots`, or a global
@@ -53,9 +46,6 @@ fn run_isolated_child(module: &str, test: &str, ignored: bool) -> Option<String>
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    for name in WEB_FIXTURE_AUTHORITY_ENV {
-        command.env_remove(name);
-    }
     command.args(["--exact", &exact_test, "--nocapture", "--test-threads=1"]);
     if ignored {
         command.arg("--ignored");
