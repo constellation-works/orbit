@@ -21,6 +21,7 @@ mod panels;
 mod secrets;
 pub(crate) mod seed;
 pub(crate) mod skills;
+mod visibility;
 
 #[cfg(test)]
 mod tests;
@@ -59,3 +60,6 @@ pub use secrets::{
     PluginSecretStatus, list_plugin_secrets, remove_plugin_secret, set_plugin_secret,
 };
 pub use seed::{PluginSeedAction, PluginSeedOutcome, seed_plugin_definitions};
+pub use visibility::{
+    InactivePlugin, InactivePluginScope, PluginActivity, inactive_plugin, is_listed,
+};

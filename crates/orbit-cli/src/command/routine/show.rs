@@ -4,7 +4,7 @@ use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
-use orbit_core::application::routines::recent_fires;
+use orbit_core::application::routines::{RetiredRoutine, RoutineStatusReport, recent_fires};
 use orbit_types::workflow::automation::members::BatchMember;
 use serde_json::json;
 
@@ -27,6 +27,14 @@ impl RoutineShowArgs {
             .iter()
             .find(|status| status.routine.definition.name == self.name)
         else {
+            // `routine list` hides a routine whose plugin is off; it still
+            // resolves here, reported as inactive with the reason.
+            if let Some(routine) = report
+                .inactive_plugin_routines()
+                .find(|routine| routine.name == self.name)
+            {
+                return Ok(inactive_detail(&report, routine).into());
+            }
             return Err(OrbitError::InvalidInput(format!(
                 "no routine named '{}' (see `orbit routine list`)",
                 self.name
@@ -180,4 +188,32 @@ impl RoutineShowArgs {
         }
         Ok(Payload::detail(doc, out).into())
     }
+}
+
+/// A routine seeded by a plugin that is off where it lives: no schedule state,
+/// only where it is and why it never fires.
+fn inactive_detail(report: &RoutineStatusReport, routine: &RetiredRoutine) -> Payload {
+    let doc = json!({
+        "machine_name": report.machine_name,
+        "machine_id": report.machine_id,
+        "name": routine.name,
+        "source": routine.source_workspace,
+        "origin": routine.origin.as_str(),
+        "path": routine.path.display().to_string(),
+        "target": format!("job:{}", routine.job),
+        "effective": false,
+        "plugin_inactive": true,
+        "skipped_reason": routine.reason,
+    });
+    let out = format!(
+        "Name: {}\nSource: {} ({}, {} origin)\nTarget: job:{}\nEffective on this host: no\n\
+         Inactive: {}\n",
+        routine.name,
+        routine.source_workspace,
+        routine.path.display(),
+        routine.origin.as_str(),
+        routine.job,
+        routine.reason
+    );
+    Payload::detail(doc, out)
 }

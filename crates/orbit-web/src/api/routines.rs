@@ -1,5 +1,6 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -30,6 +31,10 @@ use crate::state::{DashboardState, Ws};
 #[derive(Debug, Deserialize, Default)]
 pub(super) struct OperationsQuery {
     pub(super) workspace: Option<String>,
+    /// List reads only: also return definitions seeded by a plugin that is
+    /// off where they live, marked `plugin_inactive`. Hidden by default.
+    #[serde(default)]
+    pub(super) include_inactive_plugins: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,8 +72,16 @@ pub(super) struct ClockControlRequest {
 /// Clock inspection is independent of definition load: a native-manager
 /// transport failure still returns routine rows, with the clock projected as
 /// `health: unknown` rather than HTTP 500.
-pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> Response {
+///
+/// A routine seeded by a plugin that is off where it lives is omitted unless
+/// `include_inactive_plugins` is set; `inactive_plugin_counts` always reports
+/// how many each workspace hides.
+pub(super) async fn list_routine_health(
+    State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
+) -> Response {
     let generated_at = Utc::now();
+    let include_inactive_plugins = query.include_inactive_plugins;
     let operator_session = state.operator_session();
     match blocking("routine health", move || {
         let report = routine_statuses(state.global_root())?;
@@ -80,9 +93,14 @@ pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> 
     })
     .await
     {
-        Ok((report, clock)) => {
-            Json(report_json(&report, clock, generated_at, operator_session)).into_response()
-        }
+        Ok((report, clock)) => Json(report_json(
+            &report,
+            clock,
+            generated_at,
+            operator_session,
+            include_inactive_plugins,
+        ))
+        .into_response(),
         Err(response) => *response,
     }
 }
@@ -421,7 +439,14 @@ pub(super) fn report_json(
     clock: Value,
     generated_at: DateTime<Utc>,
     operator_session: bool,
+    include_inactive_plugins: bool,
 ) -> Value {
+    let mut inactive_plugin_counts = BTreeMap::<&str, usize>::new();
+    for routine in report.inactive_plugin_routines() {
+        *inactive_plugin_counts
+            .entry(routine.source_workspace.as_str())
+            .or_default() += 1;
+    }
     json!({
         "generated_at": generated_at.to_rfc3339(),
         "machine_name": report.machine_name,
@@ -440,14 +465,16 @@ pub(super) fn report_json(
         },
         "clock": clock,
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
-        "retired": report.retired.iter().map(|routine| json!({
+        "retired": report.listed_retired(include_inactive_plugins).map(|routine| json!({
             "name": routine.name,
             "source": routine.source_workspace,
             "origin": routine.origin.as_str(),
             "path": routine.path.display().to_string(),
             "target": format!("job:{}", routine.job),
             "reason": routine.reason,
+            "plugin_inactive": routine.skipped,
         })).collect::<Vec<_>>(),
+        "inactive_plugin_counts": inactive_plugin_counts,
         "load_errors": report.load_errors.iter().map(|e| json!({
             "source_workspace": e.source_workspace,
             "path": e.path.as_ref().map(|p| p.display().to_string()),

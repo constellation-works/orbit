@@ -59,6 +59,7 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
 }
 .operation-state.enabled, .operation-state.healthy { color: var(--state-success); border-color: var(--state-success); }
 .operation-state.disabled, .operation-state.paused { color: var(--fg-dim); }
+.operation-state.inactive { color: var(--fg-dim); border-style: dashed; }
 .operation-state.blocked, .operation-state.missed, .operation-state.unknown, .operation-state.unhealthy { color: var(--state-failed); border-color: var(--state-failed); }
 .operation-target { margin: 8px 0 10px; color: var(--accent); overflow-wrap: anywhere; }
 .operation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
@@ -107,6 +108,9 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
 #routines-body .operation-group { --ops-columns: 44px minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr); }
 #auto-tasks-body .operation-group { --ops-columns: 44px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 1.3fr) auto; }
 #jobs-body .operation-group { --ops-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.2fr) 90px auto; }
+/* A plugin-off definition is two cells: what it is, and why it never fires. */
+#routines-body .operation-group.inactive-plugin-group,
+#auto-tasks-body .operation-group.inactive-plugin-group { --ops-columns: minmax(0, 1fr) minmax(0, 2fr); }
 .operation-group {
   min-width: 0; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg-elev); overflow: hidden;

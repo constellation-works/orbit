@@ -273,10 +273,17 @@
   {
     "active": true,
     "builtin": true,
-    "description": "List every auto-task definition in this workspace.",
+    "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
     "enabled": true,
     "name": "orbit.auto_task.list",
-    "parameters": [],
+    "parameters": [
+      {
+        "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
+        "name": "include_inactive_plugins",
+        "param_type": "boolean",
+        "required": false
+      }
+    ],
     "status": "active"
   },
   {

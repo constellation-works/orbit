@@ -114,7 +114,7 @@ never fire on a quiet tree.
 ## Managing definitions
 
 ```bash
-orbit auto-task list                    # every definition with its schedule and state
+orbit auto-task list                    # definitions with schedule and state (--all: plugin-off too)
 orbit auto-task show <name>
 orbit auto-task update <name> --cron "0 9 * * 2"   # present fields only
 orbit auto-task toggle <name> on|off    # the kill-switch — preserved, not deleted
@@ -185,9 +185,11 @@ definition that is already enabled. Review it, then `orbit auto-task toggle
 
 An upgrade re-seeds a seeded file only while it still matches what the plugin
 wrote; a file you edited is preserved with a warning until
-`orbit plugin enable <ns> --force`. While the plugin is disabled or removed
-the definition stays on disk and is skipped: `orbit auto-task list` shows it
-as `skipped` with a reason naming the plugin. Tasks minted from one carry
+`orbit plugin enable <ns> --force`. While the plugin is disabled, removed, or
+switched off in this workspace, the definition stays on disk and is skipped,
+and listings hide it: `orbit auto-task list --all` shows it as `inactive` with
+a reason naming the plugin, and `orbit auto-task show <name>` still resolves
+it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 

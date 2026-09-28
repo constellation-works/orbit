@@ -13,12 +13,11 @@ use orbit_common::governance::authorization::{
 use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
 use orbit_core::application::auto_tasks::{
-    AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
+    AutoTaskCursor, ListedAutoTask, collect_auto_tasks, cursor_state_path, load_cursor_state,
 };
+use orbit_core::application::plugin::is_listed;
 use orbit_core::application::routines::ScheduleDisplayState;
-use orbit_types::workflow::{
-    AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
-};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -68,6 +67,7 @@ pub(super) async fn list_auto_tasks(
         .into_response();
     };
     let workspace = workspace.to_string();
+    let include_inactive_plugins = query.include_inactive_plugins;
     match blocking("auto-task list", {
         let state = state.clone();
         let workspace = workspace.clone();
@@ -79,6 +79,7 @@ pub(super) async fn list_auto_tasks(
                     &workspace_name,
                     generated_at,
                     state.operator_session(),
+                    include_inactive_plugins,
                 ),
                 Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
             })
@@ -359,31 +360,45 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": [],
+        "inactive_plugin_count": 0,
         "cursor_state_error": null,
         "load_errors": [],
     })
 }
 
+/// `inactive_plugin_count` counts the definitions whose seeding plugin is off
+/// in this workspace whether or not they are listed, so the panel can offer
+/// to show them; they never enter the listed counts or next-mint summary.
 fn list_json(
     runtime: &OrbitRuntime,
     workspace: &str,
     workspace_name: &str,
     generated_at: DateTime<Utc>,
     operator_session: bool,
+    include_inactive_plugins: bool,
 ) -> Value {
     let collection = collect_auto_tasks(&runtime.paths().local_dir);
     let cursor_load = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
     let cursor_state_error = cursor_load.as_ref().err().map(ToString::to_string);
     let cursors = cursor_load.as_ref().ok();
     let now = Utc::now();
-    let definitions = collection
+    let listed = collection
         .definitions
         .iter()
-        .map(|loaded| {
+        .map(|loaded| runtime.listed_auto_task(loaded.definition.clone()))
+        .collect::<Vec<_>>();
+    let inactive_plugin_count = listed
+        .iter()
+        .filter(|listed| listed.inactive_plugin.is_some())
+        .count();
+    let definitions = listed
+        .iter()
+        .filter(|listed| is_listed(listed.inactive_plugin.is_some(), include_inactive_plugins))
+        .map(|listed| {
             definition_json(
                 runtime,
-                &loaded.definition,
-                cursors.and_then(|state| state.definitions.get(&loaded.definition.name)),
+                listed,
+                cursors.and_then(|state| state.definitions.get(&listed.definition.name)),
                 cursor_state_error.is_some(),
                 now,
             )
@@ -404,6 +419,7 @@ fn list_json(
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
         "definitions": definitions,
+        "inactive_plugin_count": inactive_plugin_count,
         "cursor_state_error": cursor_state_error,
         "load_errors": collection.errors.iter().map(|error| json!({
             "path": error.path.as_ref().map(|path| path.display().to_string()),
@@ -414,11 +430,12 @@ fn list_json(
 
 fn definition_json(
     runtime: &OrbitRuntime,
-    definition: &AutoTaskDefinition,
+    listed: &ListedAutoTask,
     cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
     cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
+    let definition = &listed.definition;
     let automation = match &definition.schedule {
         AutoTaskSchedule::Deliveries { .. } => Some(
             match orbit_core::application::automation::inspect_auto_task(runtime, definition, now) {
@@ -491,6 +508,9 @@ fn definition_json(
         ),
         "open_duplicate": open_duplicate,
         "may_create_open_duplicate": open_duplicate,
+        "plugin_inactive": listed.inactive_plugin.is_some(),
+        "inactive_plugin": listed.inactive_plugin,
+        "skipped_reason": listed.skipped_reason,
     })
 }
 

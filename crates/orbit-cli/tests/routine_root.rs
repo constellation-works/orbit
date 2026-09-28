@@ -426,3 +426,137 @@ fn run_git(cwd: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// A routine and an auto-task seeded by a plugin this host never enabled are
+/// hidden from both listings (JSON and text), listed marked inactive on
+/// request, and still resolve through `show` with the reason.
+#[test]
+fn plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_name() {
+    let fixture = Fixture::initialized();
+    let root_arg = fixture.root.to_string_lossy().into_owned();
+    let orbit = |args: &[&str]| {
+        let mut full = vec!["--root", root_arg.as_str()];
+        full.extend_from_slice(args);
+        full.into_iter().map(str::to_string).collect::<Vec<_>>()
+    };
+    let json = |args: &[&str]| {
+        let args = orbit(args);
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_json(&fixture.repo, &fixture.home, &args, None)
+    };
+    let text = |args: &[&str]| {
+        let args = orbit(args);
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_text(&fixture.repo, &fixture.home, &args, None)
+    };
+
+    let seeded_routine = json(&["routine", "show", &fixture.routine_name, "--format", "json"]);
+    let routines_dir = PathBuf::from(seeded_routine["path"].as_str().expect("routine path"))
+        .parent()
+        .expect("routines dir")
+        .to_path_buf();
+    fs::write(
+        routines_dir.join("ghost-refresh.yaml"),
+        "# provenance: plugin:ghost@1.0.0\nschemaVersion: 1\nname: ghost-refresh\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:ghost_refresh_pipeline\n",
+    )
+    .expect("write seeded routine");
+    // Copy a shipped auto-task under the plugin's name and provenance.
+    let defaults = json(&["auto-task", "list", "--format", "json"]);
+    let template = defaults
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["name"].as_str())
+        .unwrap_or_else(|| panic!("a default auto-task: {defaults}"))
+        .to_string();
+    let shown = json(&["auto-task", "show", &template, "--format", "json"]);
+    let source = PathBuf::from(
+        shown["definition_source"]["path"]
+            .as_str()
+            .expect("definition path"),
+    );
+    let body = fs::read_to_string(&source).expect("read default auto-task");
+    fs::write(
+        source.with_file_name("ghost-reindex.yaml"),
+        format!(
+            "# provenance: plugin:ghost@1.0.0\n{}",
+            body.replace(&format!("name: {template}"), "name: ghost-reindex")
+        ),
+    )
+    .expect("write seeded auto-task");
+
+    let names = |value: &Value, key: Option<&str>| -> Vec<String> {
+        key.map_or(value, |key| &value[key])
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter_map(|item| item["name"].as_str().map(str::to_string))
+            .collect()
+    };
+
+    // Default listings hide both, in JSON and in text.
+    let auto_tasks = json(&["auto-task", "list", "--format", "json"]);
+    assert!(!names(&auto_tasks, None).contains(&"ghost-reindex".to_string()));
+    assert!(names(&auto_tasks, None).contains(&template));
+    assert!(!text(&["auto-task", "list"]).contains("ghost-reindex"));
+    let routines = json(&["routine", "list", "--format", "json"]);
+    assert!(!names(&routines, Some("retired")).contains(&"ghost-refresh".to_string()));
+    assert!(!names(&routines, Some("routines")).contains(&"ghost-refresh".to_string()));
+    assert!(!text(&["routine", "list"]).contains("ghost-refresh"));
+
+    // The opt-in lists them, marked inactive with the reason.
+    let all = json(&[
+        "auto-task",
+        "list",
+        "--include-inactive-plugins",
+        "--format",
+        "json",
+    ]);
+    let ghost = all
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|item| item["name"] == "ghost-reindex")
+        .unwrap_or_else(|| panic!("listed on request: {all}"));
+    assert_eq!(ghost["plugin_inactive"], true);
+    assert!(
+        ghost["skipped_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("orbit plugin enable ghost")),
+        "{ghost}"
+    );
+    let listed = text(&["auto-task", "list", "--all"]);
+    assert!(
+        listed.contains("ghost-reindex") && listed.contains("inactive"),
+        "{listed}"
+    );
+    let all_routines = json(&["routine", "list", "--all", "--format", "json"]);
+    let parked = all_routines["retired"]
+        .as_array()
+        .expect("retired")
+        .iter()
+        .find(|item| item["name"] == "ghost-refresh")
+        .unwrap_or_else(|| panic!("listed on request: {all_routines}"));
+    assert_eq!(parked["plugin_inactive"], true);
+    assert!(
+        parked["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("plugin:ghost@1.0.0")),
+        "{parked}"
+    );
+
+    // `show` resolves each by name and says why it is inactive.
+    let auto_task = json(&["auto-task", "show", "ghost-reindex", "--format", "json"]);
+    assert_eq!(auto_task["plugin_inactive"], true);
+    assert!(auto_task["skipped_reason"].is_string(), "{auto_task}");
+    assert!(
+        text(&["auto-task", "show", "ghost-reindex"]).contains("inactive: seeded by plugin:ghost")
+    );
+    let routine = json(&["routine", "show", "ghost-refresh", "--format", "json"]);
+    assert_eq!(routine["plugin_inactive"], true);
+    assert_eq!(routine["effective"], false);
+    assert!(
+        text(&["routine", "show", "ghost-refresh"]).contains("Inactive: seeded by plugin:ghost")
+    );
+    assert_home_empty(&fixture.home);
+}

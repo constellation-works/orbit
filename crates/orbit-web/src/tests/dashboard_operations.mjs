@@ -66,6 +66,12 @@ globalThis.fetch = async (path, options = {}) => {
   if (url.pathname === '/api/auto-tasks') {
     if (readbackError) throw new Error('Fixture readback unavailable');
     const payload = { workspace, controls_authorized: capabilities.auto_task_toggle.authorized && capabilities.auto_task_mint.authorized, capabilities: { ...capabilities }, unconditional_mint_warning: "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.", definitions: [{ name: `Chore ${workspace}`, enabled: enabled[workspace], template: { title: 'Fixture chore' }, template_summary: 'Fixture chore', schedule_summary: 'every 15 minutes', description: 'Remediate CI failures for the selected workspace.', may_create_open_duplicate: true, open_duplicate: true, last_minted_task_id: 'ORB-00099', last_minted_task_status: 'backlog', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00001', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' }, automation: { reason: 'covered', state: { consumer: `auto-task/${workspace}`, baseline: { commit: 'abc1234', tree: 'def5678' }, observed: { commit: 'abc1234', tree: 'def5678' }, covered: { commit: 'abc1234', tree: 'def5678' }, pending: [], pending_commits: [], waived: [], excluded: [], unresolved: {} } } }, { name: `Someday ${workspace}`, enabled: true, template: { title: 'Parked chore' }, template_summary: 'Parked chore', schedule_summary: 'every 60 minutes', description: 'Auto-task whose only instance is parked in someday.', dedupe: 'skip_if_open', may_create_open_duplicate: false, open_duplicate: false, last_minted_task_id: 'ORB-00100', last_minted_task_status: 'someday', last_evaluation: { kind: 'fired', last_task_id: 'ORB-00100', last_fired_at: '2026-09-07T20:00:00Z' }, next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } }] };
+    // A plugin-off definition is hidden unless asked for; listed, it is
+    // enabled with an earlier slot, so leaking into a summary would show.
+    payload.inactive_plugin_count = 1;
+    if (url.searchParams.get('include_inactive_plugins') === 'true') {
+      payload.definitions.push({ name: 'graph-reindex', enabled: true, plugin_inactive: true, skipped_reason: "seeded by plugin:graph@1.0.0, which is switched off in this workspace; run `orbit plugin enable graph --scope workspace` to fire it again", template: { title: 'Reindex' }, schedule_summary: 'every 5 minutes', next_evaluation: { state: 'scheduled', at: '2026-09-07T20:05:00Z' } });
+    }
     if (delayGet) await new Promise(resolve => { releaseGet = resolve; });
     return response(payload);
   }
@@ -76,6 +82,10 @@ globalThis.fetch = async (path, options = {}) => {
       { name: 'Parked one', source: 'one', target: 'job:parked_pipeline', enabled: false, cron: '*/20 * * * *', description: 'Kept in the repo, never fires.', next_evaluation: { state: 'disabled', at: '2026-09-07T21:40:00Z', hypothetical: true } },
     ],
     clock: { ...clock },
+    inactive_plugin_counts: { one: 1 },
+    retired: url.searchParams.get('include_inactive_plugins') === 'true'
+      ? [{ name: 'graph-refresh', source: 'one', target: 'job:graph_refresh_pipeline', plugin_inactive: true, reason: "seeded by plugin:graph@1.0.0, which is switched off in workspace 'one'; run `orbit plugin enable graph --scope workspace` there to fire it again" }]
+      : [],
   });
   if (url.pathname === '/api/job-runs') return response({
     items: [
@@ -451,6 +461,35 @@ somedayMint.click(); await tick(); await tick();
 const somedayConfirm = confirmations.at(-1);
 assert(somedayConfirm.includes('No open instance is currently tagged for this definition.'), 'someday mint confirmation reports no open instance');
 assert(!somedayConfirm.includes('An open instance already exists'), 'someday mint confirmation does not claim open instance exists');
+
+// Plugin-off definitions: hidden by default with an offer to show them; shown,
+// they sit in their own group, outside every count and next-fire summary.
+setWorkspace('one');
+enabled.one = true;
+responseError = null;
+await fetchAndRenderOperations();
+const autoCountBefore = get('auto-tasks-count').textContent;
+const routineCountBefore = get('routines-count').textContent;
+assert(!get('auto-tasks-body').textContent.includes('graph-reindex'), 'a plugin-off auto-task is hidden by default');
+assert(!get('routines-body').textContent.includes('graph-refresh'), 'a plugin-off routine is hidden by default');
+const showHidden = button('auto-tasks-body', 'Show 1 hidden · plugin off');
+assert(showHidden && showHidden.getAttribute('aria-pressed') === 'false', 'the auto-task pane offers the hidden definition');
+assert(button('routines-body', 'Show 1 hidden · plugin off'), 'the routine pane offers the hidden routine');
+await showHidden.click(); await tick(); await tick();
+assert(requests.some(request => request.path === '/api/auto-tasks') && requests.some(request => request.path === '/api/routines'), 'toggle refetches both panes');
+for (const [pane, name] of [['auto-tasks-body', 'graph-reindex'], ['routines-body', 'graph-refresh']]) {
+  const group = descendants(get(pane)).find(node => String(node.className || '').includes('inactive-plugin-group'));
+  assert(group && group.textContent.includes(name) && group.textContent.includes('Plugin off'), `${pane} lists ${name} in the plugin-off group`);
+  assert(group.textContent.includes('--scope workspace'), `${pane} shows the skip reason naming the enable command`);
+  assert(button(pane, 'Hide plugin-off definitions')?.getAttribute('aria-pressed') === 'true', `${pane} can hide them again`);
+}
+assert(get('auto-tasks-count').textContent === autoCountBefore, `auto-task counts exclude the inactive definition: ${get('auto-tasks-count').textContent}`);
+assert(get('routines-count').textContent === routineCountBefore, 'routine counts exclude the inactive routine');
+const autoSummary = descendants(get('auto-tasks-body')).find(node => String(node.className || '').includes('auto-tasks-summary'));
+assert(autoSummary && !autoSummary.textContent.includes('20:05'), 'the inactive definition never becomes the next mint');
+assert(!descendants(get('auto-tasks-body')).some(node => String(node.className || '').includes('auto-task-card') && node.textContent.includes('graph-reindex')), 'no toggle or mint row for the inactive definition');
+await button('routines-body', 'Hide plugin-off definitions').click(); await tick(); await tick();
+assert(!get('auto-tasks-body').textContent.includes('graph-reindex') && !get('routines-body').textContent.includes('graph-refresh'), 'hiding again restores the default view');
 
 globalThis.operationsTestsPassed = true;
 globalThis.setDrainFixturePhase = async (phase) => {

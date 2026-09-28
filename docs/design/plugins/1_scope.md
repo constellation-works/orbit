@@ -889,6 +889,14 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 - A disabled plugin's seeded definitions are skipped through the retired-routine
   reconciliation path with a warning naming the plugin, not load errors. A plugin switched
   off by a workspace toggle is skipped only in that workspace, and the warning says so.
+- Listings hide them. `orbit auto-task list`, `orbit routine list`, MCP
+  `orbit.auto_task.list` and the dashboard's auto-task and routine views omit a definition
+  whose provenance names a plugin that is not active where it lives, and leave it out of
+  every count and next-fire summary. `--all` / `--include-inactive-plugins` (MCP
+  `include_inactive_plugins`, the dashboard's "Show hidden") lists it marked
+  `plugin_inactive` with the skip reason; `show <name>` still resolves it. One Core rule,
+  `inactive_plugin`, decides both the skip and the hiding, so re-enabling at either scope
+  brings the definition back without a re-seed.
 - A `[plugins.<ns>]` value the plugin's schema rejects refuses that plugin at load, naming the
   key (§4.9).
 

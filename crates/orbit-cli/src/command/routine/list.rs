@@ -3,6 +3,7 @@ use std::path::Path;
 use clap::Args;
 use comfy_table::Cell;
 use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
+use orbit_core::application::routines::RetiredRoutine;
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
@@ -13,6 +14,10 @@ pub struct RoutineListArgs {
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
+    /// Also list routines seeded by a plugin that is switched off in their
+    /// workspace or on the host, marked inactive with the reason
+    #[arg(long, visible_alias = "all")]
+    pub include_inactive_plugins: bool,
 }
 
 impl RoutineListArgs {
@@ -25,6 +30,11 @@ impl RoutineListArgs {
             Some(selector) => routine_statuses_for_workspace(global_root, selector)?,
             None => routine_statuses(global_root)?,
         };
+        // A routine a plugin seeded never fires while that plugin is off where
+        // it lives, so it is hidden unless asked for.
+        let retired: Vec<_> = report
+            .listed_retired(self.include_inactive_plugins)
+            .collect();
 
         let statuses: Vec<_> = report
             .statuses
@@ -53,13 +63,14 @@ impl RoutineListArgs {
             "machine_name": report.machine_name,
             "machine_id": report.machine_id,
             "routines": statuses,
-            "retired": report.retired.iter().map(|routine| json!({
+            "retired": retired.iter().map(|routine| json!({
                 "name": routine.name,
                 "source": routine.source_workspace,
                 "origin": routine.origin.as_str(),
                 "path": routine.path.display().to_string(),
                 "target": format!("job:{}", routine.job),
                 "reason": routine.reason,
+                "plugin_inactive": routine.skipped,
             })).collect::<Vec<_>>(),
             "load_errors": report.load_errors.iter().map(|e| json!({
                 "source_workspace": e.source_workspace,
@@ -110,24 +121,33 @@ impl RoutineListArgs {
                 Cell::new(last_fire),
             ]);
         }
-        // A definition targeting a retired job is listed so the operator can
-        // see it exists, but it has no schedule state of its own.
-        for routine in &report.retired {
+        // A definition targeting a retired job, or one whose plugin is off
+        // (on request), is listed so the operator can see it exists, but it
+        // has no schedule state of its own.
+        let label = |routine: &RetiredRoutine| {
+            if routine.skipped {
+                "inactive"
+            } else {
+                "retired"
+            }
+        };
+        for routine in &retired {
             table.add_row(vec![
                 Cell::new(&routine.name),
                 Cell::new(&routine.source_workspace),
                 Cell::new(routine.origin.as_str()),
                 Cell::new("—"),
                 Cell::new("—"),
-                Cell::new("retired"),
+                Cell::new(label(routine)),
                 Cell::new("—"),
             ]);
         }
         // Context about where the list came from, not a record in it (spec §5).
         eprintln!("host: {}", report.machine_name);
-        for routine in &report.retired {
+        for routine in &retired {
             eprintln!(
-                "retired [{}] ({}): {}",
+                "{} [{}] ({}): {}",
+                label(routine),
                 routine.source_workspace,
                 routine.path.display(),
                 routine.reason

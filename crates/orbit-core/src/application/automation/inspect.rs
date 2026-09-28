@@ -28,13 +28,15 @@ pub struct UnresolvableBranch {
 
 /// Every enabled delivery auto-task owned here whose branch git cannot
 /// resolve, in definition order. A definition with persisted state is checked
-/// too: a branch deleted after baseline stops it just as surely.
+/// too: a branch deleted after baseline stops it just as surely. One whose
+/// seeding plugin is off here never ticks, so it is not reported.
 pub fn unresolvable_delivery_branches(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnresolvableBranch>, OrbitError> {
     let source = Source::new(&runtime.paths().repo_root);
     let mut unresolvable = Vec::new();
-    for definition in runtime.auto_task_list()? {
+    for listed in runtime.auto_task_listing(false)? {
+        let definition = listed.definition;
         let AutoTaskSchedule::Deliveries {
             deliveries_landed: declared,
         } = &definition.schedule
@@ -163,14 +165,15 @@ pub fn delivery_ownership_refusal(
 
 /// Every enabled delivery auto-task this host can never admit work for, in
 /// definition order. `orbit doctor` reports them; `orbit auto-task list`
-/// reports each one on its own row.
+/// reports each one on its own row. One whose seeding plugin is off here is
+/// already parked for that reason and is not reported twice.
 pub fn unadmittable_delivery_definitions(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnadmittableDefinition>, OrbitError> {
     Ok(runtime
-        .auto_task_list()?
+        .auto_task_listing(false)?
         .iter()
-        .filter_map(|definition| delivery_ownership_refusal(runtime, definition))
+        .filter_map(|listed| delivery_ownership_refusal(runtime, &listed.definition))
         .collect())
 }
 

@@ -27,7 +27,14 @@ impl Execute for AutoTaskShowArgs {
             OrbitError::InvalidInput(format!("no such auto-task '{}'", self.name))
         })?;
 
+        // A definition listings hide while its plugin is off still resolves
+        // here, reported as inactive with the reason it never fires.
+        let listed = runtime.listed_auto_task(definition);
+        let definition = listed.definition;
         let mut doc = definition_to_json(&definition);
+        doc["plugin_inactive"] = Value::Bool(listed.inactive_plugin.is_some());
+        doc["inactive_plugin"] = json!(listed.inactive_plugin);
+        doc["skipped_reason"] = json!(listed.skipped_reason);
         let definition_root = runtime.local_root();
         let source_path = definition_path(&definition_root, &self.name);
         doc["definition_source"] = json!({
@@ -81,12 +88,17 @@ impl Execute for AutoTaskShowArgs {
             out,
             "{} ({})",
             definition.name,
-            if definition.enabled {
+            if listed.inactive_plugin.is_some() {
+                "inactive"
+            } else if definition.enabled {
                 "enabled"
             } else {
                 "disabled"
             }
         );
+        if let Some(reason) = &listed.skipped_reason {
+            let _ = writeln!(out, "  inactive: {reason}");
+        }
         if !definition.description.is_empty() {
             let _ = writeln!(out, "  {}", definition.description);
         }

@@ -130,9 +130,11 @@ reviewed edit described above.
 An upgrade re-seeds a seeded file only while it still matches what the plugin
 wrote; a file you edited is preserved with a warning until
 `orbit plugin enable <ns> --force` overwrites it. Disabling or removing the
-plugin leaves the file where it is: the clock tick skips it with a reason
-naming the plugin, and `orbit routine list` shows it with that reason rather
-than as a load error.
+plugin — on the host, or in one workspace with `--scope workspace` — leaves the
+file where it is: the clock tick skips it, never as a load error, and
+`orbit routine list` and the dashboard hide it. `orbit routine list --all`
+lists it as `inactive` with a reason naming the plugin, and `orbit routine show
+<name>` still resolves it. Re-enabling brings it back with no re-seed.
 
 ## Tuning which tasks task-pilot prepares
 

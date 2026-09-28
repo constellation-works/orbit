@@ -8,6 +8,7 @@ use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::auto_tasks::ListedAutoTask;
 use crate::application::auto_tasks::crud::{AutoTaskAddParams, AutoTaskUpdateParams};
 use crate::application::auto_tasks::delete::AutoTaskDeleteParams;
 
@@ -37,13 +38,32 @@ pub(super) fn add(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitEr
     Ok(response)
 }
 
-pub(super) fn list(runtime: &OrbitRuntime, _input: Value) -> Result<Value, OrbitError> {
-    let definitions = runtime.auto_task_list()?;
-    let array = definitions
+/// Definitions whose seeding plugin is off in this workspace are omitted
+/// unless `include_inactive_plugins` is true; then each is marked with the
+/// plugin and the reason it never fires.
+pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let include_inactive_plugins = input
+        .get("include_inactive_plugins")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let array = runtime
+        .auto_task_listing(include_inactive_plugins)?
         .iter()
-        .map(|definition| serde_json::to_value(definition).unwrap_or(Value::Null))
-        .collect();
+        .map(listed_json)
+        .collect::<Result<_, _>>()?;
     Ok(Value::Array(array))
+}
+
+/// The canonical definition record, plus the inactive-plugin marker when its
+/// seeding plugin is off here. A live definition is the bare record.
+fn listed_json(listed: &ListedAutoTask) -> Result<Value, OrbitError> {
+    let mut value = to_json(&listed.definition)?;
+    if let (Some(inactive), Some(object)) = (&listed.inactive_plugin, value.as_object_mut()) {
+        object.insert("plugin_inactive".to_string(), json!(true));
+        object.insert("inactive_plugin".to_string(), json!(inactive));
+        object.insert("skipped_reason".to_string(), json!(listed.skipped_reason));
+    }
+    Ok(value)
 }
 
 /// Mint one task from a definition on demand [ORB-10798]. The adapter only
@@ -60,7 +80,10 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let definition = runtime
         .auto_task_show(&name)?
         .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
-    let mut value = to_json(&definition)?;
+    // A definition listings hide still resolves here, marked inactive.
+    let listed = runtime.listed_auto_task(definition);
+    let mut value = listed_json(&listed)?;
+    let definition = listed.definition;
     if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
         let diagnostic = if input
             .get("preview")

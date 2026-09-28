@@ -85,47 +85,52 @@ fn workspace_plugin_states(workspaces: &[(Workspace, OrbitRuntime)]) -> Vec<Work
         .collect()
 }
 
+impl crate::application::plugin::PluginActivity for WorkspacePluginState {
+    fn is_active(&self, namespace: &str) -> bool {
+        self.active.contains(namespace)
+    }
+
+    fn is_disabled_in_workspace(&self, namespace: &str) -> bool {
+        self.switched_off.contains(namespace)
+    }
+}
+
+/// The host-wide view, for a path outside every discovered source: a plugin
+/// counts as active when any workspace has it on, and no workspace toggle
+/// applies.
+struct HostPluginActivity<'a>(&'a [WorkspacePluginState]);
+
+impl crate::application::plugin::PluginActivity for HostPluginActivity<'_> {
+    fn is_active(&self, namespace: &str) -> bool {
+        self.0.iter().any(|state| state.active.contains(namespace))
+    }
+
+    fn is_disabled_in_workspace(&self, _namespace: &str) -> bool {
+        false
+    }
+}
+
 /// Skip a definition a plugin seeded while that plugin is disabled, removed,
 /// or switched off in the workspace the definition lives in.
 ///
 /// The seeded file stays on disk with the operator's edits; it simply does not
 /// fire, and the reason names the plugin (design §4.5). This is deliberately
 /// not a load error: a disabled plugin is an ordinary operator state, not a
-/// broken workspace.
+/// broken workspace. The judgement is the shared
+/// [`inactive_plugin`](crate::application::plugin::inactive_plugin) rule, so
+/// `routine list` hides exactly what the sweep skips.
 fn inactive_plugin_skip(path: &Path, states: &[WorkspacePluginState]) -> Option<String> {
-    let (namespace, version) = crate::application::plugin::read_definition_provenance(path)?;
+    use crate::application::plugin::inactive_plugin;
     let Some(state) = states
         .iter()
         .find(|state| path.starts_with(&state.routines_dir))
     else {
         // Every collected routine comes from one of the discovered sources;
         // a path outside them all is judged by the host-wide view.
-        if states.iter().any(|state| state.active.contains(&namespace)) {
-            return None;
-        }
-        return Some(not_enabled_on_host(&namespace, &version, path));
+        return inactive_plugin(path, &HostPluginActivity(states))
+            .map(|inactive| inactive.reason(path, None));
     };
-    if state.active.contains(&namespace) {
-        return None;
-    }
-    if state.switched_off.contains(&namespace) {
-        return Some(format!(
-            "seeded by plugin:{namespace}@{version}, which is switched off in workspace '{}'; \
-             run `orbit plugin enable {namespace} --scope workspace` there to fire it again, or \
-             delete '{}'",
-            state.workspace,
-            path.display()
-        ));
-    }
-    Some(not_enabled_on_host(&namespace, &version, path))
-}
-
-fn not_enabled_on_host(namespace: &str, version: &str, path: &Path) -> String {
-    format!(
-        "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
-         `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
-        path.display()
-    )
+    inactive_plugin(path, state).map(|inactive| inactive.reason(path, Some(&state.workspace)))
 }
 
 /// Discovery states the synchronization step for every retired definition
