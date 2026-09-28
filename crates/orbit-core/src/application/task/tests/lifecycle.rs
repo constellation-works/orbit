@@ -15,7 +15,7 @@ use orbit_types::workflow::{ChildDispatch, PipelineState};
 use rusqlite::{Connection, params};
 
 use super::super::lifecycle::task_status_transition_allowed;
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -87,6 +87,12 @@ fn guarded_status(
 
 #[test]
 fn guarded_update_writes_every_legal_edge_and_refuses_every_other_one() {
+    if !enter_isolated_child(
+        module_path!(),
+        "guarded_update_writes_every_legal_edge_and_refuses_every_other_one",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     for from in ALL_STATUSES {
@@ -129,6 +135,12 @@ fn guarded_update_writes_every_legal_edge_and_refuses_every_other_one() {
 
 #[test]
 fn done_is_unreachable_from_proposed_and_backlog() {
+    if !enter_isolated_child(
+        module_path!(),
+        "done_is_unreachable_from_proposed_and_backlog",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     for from in [TaskStatus::Proposed, TaskStatus::Backlog] {
@@ -147,6 +159,12 @@ fn done_is_unreachable_from_proposed_and_backlog() {
 
 #[test]
 fn in_progress_requires_a_plan_exactly_like_task_start() {
+    if !enter_isolated_child(
+        module_path!(),
+        "in_progress_requires_a_plan_exactly_like_task_start",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -183,6 +201,12 @@ fn in_progress_requires_a_plan_exactly_like_task_start() {
 
 #[test]
 fn completion_requires_a_summary_or_a_successful_run() {
+    if !enter_isolated_child(
+        module_path!(),
+        "completion_requires_a_summary_or_a_successful_run",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task_with_evidence(&runtime, "Evidence for completion");
     runtime
@@ -232,6 +256,12 @@ fn completion_requires_a_summary_or_a_successful_run() {
 
 #[test]
 fn completion_accepts_a_summary_written_by_the_same_update() {
+    if !enter_isolated_child(
+        module_path!(),
+        "completion_accepts_a_summary_written_by_the_same_update",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task_with_evidence(&runtime, "Summary with the transition");
     runtime
@@ -259,6 +289,12 @@ fn completion_accepts_a_summary_written_by_the_same_update() {
 
 #[test]
 fn terminal_statuses_stay_closed_while_a_rejection_can_be_reconsidered() {
+    if !enter_isolated_child(
+        module_path!(),
+        "terminal_statuses_stay_closed_while_a_rejection_can_be_reconsidered",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     for target in [
@@ -287,6 +323,12 @@ fn terminal_statuses_stay_closed_while_a_rejection_can_be_reconsidered() {
 
 #[test]
 fn forcing_a_refused_transition_records_the_override_in_history() {
+    if !enter_isolated_child(
+        module_path!(),
+        "forcing_a_refused_transition_records_the_override_in_history",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task_with_evidence(&runtime, "Forced reopen");
     seed_status(&runtime, &task.id, TaskStatus::Done);
@@ -316,6 +358,12 @@ fn forcing_a_refused_transition_records_the_override_in_history() {
 
 #[test]
 fn forcing_a_legal_transition_still_records_it_as_an_override() {
+    if !enter_isolated_child(
+        module_path!(),
+        "forcing_a_legal_transition_still_records_it_as_an_override",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task_with_evidence(&runtime, "Forced but legal");
 
@@ -340,6 +388,12 @@ fn forcing_a_legal_transition_still_records_it_as_an_override() {
 /// them — archiving delivered work stays a one-step operator action.
 #[test]
 fn internal_callers_keep_transitions_the_table_refuses() {
+    if !enter_isolated_child(
+        module_path!(),
+        "internal_callers_keep_transitions_the_table_refuses",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task_with_evidence(&runtime, "Archive delivered work");
     seed_status(&runtime, &task.id, TaskStatus::Done);
@@ -416,6 +470,12 @@ fn reviewed_task_with_run(runtime: &OrbitRuntime, title: &str, run_id: Option<&s
 #[cfg(unix)]
 #[test]
 fn live_linked_run_refuses_guarded_completion_and_review_approval() {
+    if !enter_isolated_child(
+        module_path!(),
+        "live_linked_run_refuses_guarded_completion_and_review_approval",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let token = format!("{STABLE_TOKEN_PREFIX_V1}owner");
     let _probe = crate::application::job::override_start_identity_probe(move |_| {
@@ -467,6 +527,12 @@ fn live_linked_run_refuses_guarded_completion_and_review_approval() {
 #[cfg(unix)]
 #[test]
 fn completion_allows_reaped_dead_mismatched_and_unlinked_runs() {
+    if !enter_isolated_child(
+        module_path!(),
+        "completion_allows_reaped_dead_mismatched_and_unlinked_runs",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let current_pid = std::process::id();
     let _probe = crate::application::job::override_start_identity_probe(move |pid| {
@@ -520,6 +586,12 @@ fn completion_allows_reaped_dead_mismatched_and_unlinked_runs() {
 #[cfg(unix)]
 #[test]
 fn completion_activity_exempts_its_own_run_but_not_a_live_child() {
+    if !enter_isolated_child(
+        module_path!(),
+        "completion_activity_exempts_its_own_run_but_not_a_live_child",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let token = format!("{STABLE_TOKEN_PREFIX_V1}owner");
     let _probe = crate::application::job::override_start_identity_probe(move |_| {

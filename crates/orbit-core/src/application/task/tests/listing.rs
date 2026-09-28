@@ -1,9 +1,15 @@
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 use crate::application::task::{TaskAddParams, TaskListFilter, TaskListQuery};
 use orbit_types::task::TaskStatus;
 
 #[test]
 fn readiness_and_projection_statuses_are_captured_after_index_repair() {
+    if !enter_isolated_child(
+        module_path!(),
+        "readiness_and_projection_statuses_are_captured_after_index_repair",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let runtime = runtime.with_actor(crate::ActorIdentity::human("human"));
     let dependency = runtime
@@ -49,6 +55,12 @@ fn readiness_and_projection_statuses_are_captured_after_index_repair() {
 
 #[test]
 fn readiness_and_path_filters_find_a_match_older_than_the_first_page() {
+    if !enter_isolated_child(
+        module_path!(),
+        "readiness_and_path_filters_find_a_match_older_than_the_first_page",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let file = runtime.paths().repo_root.join("selection.rs");
     std::fs::write(&file, "// fixture").unwrap();
@@ -92,6 +104,12 @@ fn readiness_and_path_filters_find_a_match_older_than_the_first_page() {
 
 #[test]
 fn replica_visibility_is_preserved_for_candidates_and_bounded_rows() {
+    if !enter_isolated_child(
+        module_path!(),
+        "replica_visibility_is_preserved_for_candidates_and_bounded_rows",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -119,6 +137,12 @@ fn replica_visibility_is_preserved_for_candidates_and_bounded_rows() {
 
 #[test]
 fn status_aware_listing_fills_the_page_with_active_work_before_terminal_tasks() {
+    if !enter_isolated_child(
+        module_path!(),
+        "status_aware_listing_fills_the_page_with_active_work_before_terminal_tasks",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let runtime = runtime.with_actor(crate::ActorIdentity::human("human"));
     let mut ids = Vec::new();

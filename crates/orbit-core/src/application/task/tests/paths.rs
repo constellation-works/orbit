@@ -9,7 +9,7 @@ use orbit_store::maintenance::task_registry::{
 };
 use tempfile::tempdir;
 
-use super::test_runtime;
+use super::{assert_isolated_child, enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::task::paths::{
     canonicalize_context_files_for_read, normalize_context_files_for_write, task_path_exists,
@@ -75,6 +75,12 @@ fn normalize_context_files_keeps_selectors_that_do_not_exist_yet() {
 
 #[test]
 fn ensure_context_selectors_exist_accepts_resolvable_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_accepts_resolvable_selectors",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("src")).expect("create src");
@@ -91,6 +97,12 @@ fn ensure_context_selectors_exist_accepts_resolvable_selectors() {
 
 #[test]
 fn ensure_context_selectors_exist_accepts_symbol_whose_name_is_absent() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_accepts_symbol_whose_name_is_absent",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("src")).expect("create src");
@@ -104,6 +116,12 @@ fn ensure_context_selectors_exist_accepts_symbol_whose_name_is_absent() {
 
 #[test]
 fn ensure_context_selectors_exist_rejects_missing_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_rejects_missing_selectors",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let message = expect_selector_rejection(&runtime, "file:does/not/exist.rs");
@@ -143,6 +161,12 @@ fn ensure_context_selectors_exist_rejects_missing_selectors() {
 /// something `allow_missing_context` should be suggested for.
 #[test]
 fn ensure_context_selectors_exist_hint_is_limited_to_missing_targets() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_hint_is_limited_to_missing_targets",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("src")).expect("create src");
@@ -161,6 +185,12 @@ fn ensure_context_selectors_exist_hint_is_limited_to_missing_targets() {
 /// is relaxed and nothing is reported unverified.
 #[test]
 fn ensure_context_selectors_exist_for_task_write_is_strict_without_an_owner_run() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_for_task_write_is_strict_without_an_owner_run",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("src")).expect("create src");
@@ -190,6 +220,12 @@ fn ensure_context_selectors_exist_for_task_write_is_strict_without_an_owner_run(
 
 #[test]
 fn ensure_context_selectors_exist_rejects_target_kind_mismatch() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_rejects_target_kind_mismatch",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("src")).expect("create src");
@@ -204,6 +240,12 @@ fn ensure_context_selectors_exist_rejects_target_kind_mismatch() {
 
 #[test]
 fn ensure_context_selectors_exist_rejects_unsupported_kinds_and_malformed_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ensure_context_selectors_exist_rejects_unsupported_kinds_and_malformed_selectors",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     for selector in ["module:orbit_core::task", "command:task"] {
@@ -243,6 +285,7 @@ fn symbol_context_validation_rejects_missing_and_outside_anchors() {
 /// even when this runtime open has no cwd binding. The guard must use that
 /// checkout, not `parent(orbit-root)`.
 fn explicit_root_runtime() -> (tempfile::TempDir, OrbitRuntime) {
+    assert_isolated_child();
     let root = tempdir().expect("create tempdir");
     let data_dir = root.path().join("orbit-root");
     let repo = root.path().join("repo");
@@ -278,6 +321,12 @@ fn explicit_root_runtime() -> (tempfile::TempDir, OrbitRuntime) {
 
 #[test]
 fn explicit_root_without_cwd_binding_accepts_the_stored_checkout_selector() {
+    if !enter_isolated_child(
+        module_path!(),
+        "explicit_root_without_cwd_binding_accepts_the_stored_checkout_selector",
+    ) {
+        return;
+    }
     let (_root, runtime) = explicit_root_runtime();
 
     runtime
@@ -287,6 +336,12 @@ fn explicit_root_without_cwd_binding_accepts_the_stored_checkout_selector() {
 
 #[test]
 fn explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
+    ) {
+        return;
+    }
     let (_root, runtime) = explicit_root_runtime();
 
     for selector in ["dir:orbit-root", "dir:repo", "file:config.toml"] {
@@ -304,6 +359,12 @@ fn explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors() {
 
 #[test]
 fn unbound_explicit_data_dir_refuses_selector_validation_without_a_checkout_binding() {
+    if !enter_isolated_child(
+        module_path!(),
+        "unbound_explicit_data_dir_refuses_selector_validation_without_a_checkout_binding",
+    ) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let data_dir = root.path().join("orbit-root");
     std::fs::create_dir_all(&data_dir).expect("create data dir");

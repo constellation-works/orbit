@@ -5,7 +5,7 @@
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -36,6 +36,9 @@ fn update_status(
 
 #[test]
 fn update_status_covers_approve_transitions() {
+    if !enter_isolated_child(module_path!(), "update_status_covers_approve_transitions") {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Approve via update");
 
@@ -62,6 +65,12 @@ fn update_status_covers_approve_transitions() {
 /// must survive intact.
 #[test]
 fn forced_reopen_preserves_identity_history_artifacts_and_execution_evidence() {
+    if !enter_isolated_child(
+        module_path!(),
+        "forced_reopen_preserves_identity_history_artifacts_and_execution_evidence",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Preserve reopen evidence");
     runtime
@@ -112,6 +121,12 @@ fn forced_reopen_preserves_identity_history_artifacts_and_execution_evidence() {
 
 #[test]
 fn manual_status_edits_do_not_require_execution_fields_or_fabricate_attribution() {
+    if !enter_isolated_child(
+        module_path!(),
+        "manual_status_edits_do_not_require_execution_fields_or_fabricate_attribution",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Classification is not execution");
     update_status(&runtime, &task.id, TaskStatus::Backlog).expect("approve the proposal");
@@ -128,6 +143,12 @@ fn manual_status_edits_do_not_require_execution_fields_or_fabricate_attribution(
 
 #[test]
 fn invalid_accompanying_edit_does_not_partially_apply_status() {
+    if !enter_isolated_child(
+        module_path!(),
+        "invalid_accompanying_edit_does_not_partially_apply_status",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Atomic invalid edit");
 
@@ -149,6 +170,12 @@ fn invalid_accompanying_edit_does_not_partially_apply_status() {
 
 #[test]
 fn crew_history_records_only_persisted_changes_with_the_update_actor() {
+    if !enter_isolated_child(
+        module_path!(),
+        "crew_history_records_only_persisted_changes_with_the_update_actor",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -212,6 +239,12 @@ fn crew_history_records_only_persisted_changes_with_the_update_actor() {
 
 #[test]
 fn stale_activity_status_write_cannot_overwrite_operator_reclassification() {
+    if !enter_isolated_child(
+        module_path!(),
+        "stale_activity_status_write_cannot_overwrite_operator_reclassification",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Stale activity");
     update_status(&runtime, &task.id, TaskStatus::Review).expect("prepare review snapshot");
@@ -241,6 +274,12 @@ fn stale_activity_status_write_cannot_overwrite_operator_reclassification() {
 
 #[test]
 fn orchestrator_is_explicit_mutable_before_start_and_never_routes_execution() {
+    if !enter_isolated_child(
+        module_path!(),
+        "orchestrator_is_explicit_mutable_before_start_and_never_routes_execution",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -319,6 +358,9 @@ fn orchestrator_is_explicit_mutable_before_start_and_never_routes_execution() {
 
 #[test]
 fn update_dependencies_rejects_self_cycle() {
+    if !enter_isolated_child(module_path!(), "update_dependencies_rejects_self_cycle") {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Self cycle");
     let error = runtime
@@ -340,6 +382,12 @@ fn update_dependencies_rejects_self_cycle() {
 
 #[test]
 fn update_dependencies_rejects_multi_hop_cycle() {
+    if !enter_isolated_child(
+        module_path!(),
+        "update_dependencies_rejects_multi_hop_cycle",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task_a = add_proposed_task(&runtime, "Cycle A");
     let task_b = add_proposed_task(&runtime, "Cycle B");
@@ -388,6 +436,12 @@ fn update_dependencies_rejects_multi_hop_cycle() {
 
 #[test]
 fn update_dependencies_allows_acyclic_chain_among_unrelated_peers() {
+    if !enter_isolated_child(
+        module_path!(),
+        "update_dependencies_allows_acyclic_chain_among_unrelated_peers",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task_a = add_proposed_task(&runtime, "Chain A");
     let task_b = add_proposed_task(&runtime, "Chain B");
@@ -417,6 +471,12 @@ fn update_dependencies_allows_acyclic_chain_among_unrelated_peers() {
 
 #[test]
 fn orchestrator_is_rejected_on_non_draft_initial_statuses_including_someday() {
+    if !enter_isolated_child(
+        module_path!(),
+        "orchestrator_is_rejected_on_non_draft_initial_statuses_including_someday",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     for status in [TaskStatus::Someday, TaskStatus::InProgress] {
@@ -472,6 +532,12 @@ fn drive_to_done(runtime: &OrbitRuntime, id: &str) -> Task {
 /// weaken serialization or restore an older status snapshot.
 #[test]
 fn concurrent_explicit_edit_preserves_the_newer_status() {
+    if !enter_isolated_child(
+        module_path!(),
+        "concurrent_explicit_edit_preserves_the_newer_status",
+    ) {
+        return;
+    }
     use std::sync::mpsc::sync_channel;
     use std::time::Duration;
 
@@ -531,6 +597,12 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
 /// update`, `orbit.task.update`) behind `--allow-missing-context`.
 #[test]
 fn task_update_keeps_context_selectors_that_do_not_exist_yet() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_update_keeps_context_selectors_that_do_not_exist_yet",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_dir = root.path().join("repo");
     std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
@@ -573,6 +645,12 @@ fn task_update_keeps_context_selectors_that_do_not_exist_yet() {
 /// the file from a concurrent task.
 #[test]
 fn task_update_preserves_missing_context_selectors_on_unrelated_edits() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_update_preserves_missing_context_selectors_on_unrelated_edits",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_dir = root.path().join("repo");
     std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
@@ -620,6 +698,12 @@ fn task_update_preserves_missing_context_selectors_on_unrelated_edits() {
 
 #[test]
 fn task_update_accepts_valid_context_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_update_accepts_valid_context_selectors",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_dir = root.path().join("repo");
     std::fs::create_dir_all(repo_dir.join("src")).expect("create src");

@@ -5,7 +5,7 @@ use orbit_store::contracts::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{TaskRelation, TaskRelationType, TaskStatus};
 
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 fn add_task(runtime: &crate::OrbitRuntime, title: &str) -> orbit_types::task::Task {
@@ -42,6 +42,12 @@ fn with_changed_status(runtime: &crate::OrbitRuntime, id: &str, test: impl FnOnc
 
 #[test]
 fn approve_does_not_overwrite_a_status_changed_after_its_read() {
+    if !enter_isolated_child(
+        module_path!(),
+        "approve_does_not_overwrite_a_status_changed_after_its_read",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task(&runtime, "Approve CAS");
     set_status(&runtime, &task.id, TaskStatus::Review);
@@ -64,6 +70,12 @@ fn approve_does_not_overwrite_a_status_changed_after_its_read() {
 
 #[test]
 fn rejected_review_approval_does_not_apply_resolves_side_effects() {
+    if !enter_isolated_child(
+        module_path!(),
+        "rejected_review_approval_does_not_apply_resolves_side_effects",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task(&runtime, "Approve resolves CAS");
     let frictions = crate::runtime::friction::store_for(&runtime).expect("friction store");
@@ -110,6 +122,12 @@ fn rejected_review_approval_does_not_apply_resolves_side_effects() {
 
 #[test]
 fn start_does_not_overwrite_a_status_changed_after_its_read() {
+    if !enter_isolated_child(
+        module_path!(),
+        "start_does_not_overwrite_a_status_changed_after_its_read",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task(&runtime, "Start CAS");
     set_status(&runtime, &task.id, TaskStatus::Backlog);
@@ -132,6 +150,12 @@ fn start_does_not_overwrite_a_status_changed_after_its_read() {
 
 #[test]
 fn reject_does_not_overwrite_a_status_changed_after_its_read() {
+    if !enter_isolated_child(
+        module_path!(),
+        "reject_does_not_overwrite_a_status_changed_after_its_read",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = add_task(&runtime, "Reject CAS");
     set_status(&runtime, &task.id, TaskStatus::Review);
@@ -154,6 +178,12 @@ fn reject_does_not_overwrite_a_status_changed_after_its_read() {
 
 #[test]
 fn transition_read_hook_does_not_affect_a_sibling_runtime_with_the_same_task_id() {
+    if !enter_isolated_child(
+        module_path!(),
+        "transition_read_hook_does_not_affect_a_sibling_runtime_with_the_same_task_id",
+    ) {
+        return;
+    }
     let (_root_a, runtime_a) = test_runtime();
     let (_root_b, runtime_b) = test_runtime();
     let task_a = add_task(&runtime_a, "Hooked CAS");
@@ -219,6 +249,12 @@ fn missing_launcher_error(program: &std::path::Path) -> String {
 #[cfg(unix)]
 #[test]
 fn requeue_returns_only_cleared_infra_blocks_to_backlog_with_an_audit_note() {
+    if !enter_isolated_child(
+        module_path!(),
+        "requeue_returns_only_cleared_infra_blocks_to_backlog_with_an_audit_note",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
 
     let (root, runtime) = test_runtime();

@@ -5,7 +5,7 @@
 use chrono::Utc;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::test_support::create_context_task;
 use crate::application::task::TaskRecordUpdateParams;
@@ -35,6 +35,12 @@ fn record_pruned_history(runtime: &OrbitRuntime, task: &Task, note: &str) {
 
 #[test]
 fn restores_selectors_a_pruning_entry_recorded() {
+    if !enter_isolated_child(
+        module_path!(),
+        "restores_selectors_a_pruning_entry_recorded",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(
@@ -114,6 +120,9 @@ fn restores_selectors_a_pruning_entry_recorded() {
 /// description — is the invention this path refuses.
 #[test]
 fn invents_no_scope_without_pruning_evidence() {
+    if !enter_isolated_child(module_path!(), "invents_no_scope_without_pruning_evidence") {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &[]);
@@ -130,6 +139,12 @@ fn invents_no_scope_without_pruning_evidence() {
 /// for operator repair rather than rewritten into something plausible.
 #[test]
 fn reports_recorded_selectors_that_cannot_be_canonicalized() {
+    if !enter_isolated_child(
+        module_path!(),
+        "reports_recorded_selectors_that_cannot_be_canonicalized",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &[]);
@@ -153,6 +168,12 @@ fn reports_recorded_selectors_that_cannot_be_canonicalized() {
 /// An unparseable note carries no evidence, so it restores nothing at all.
 #[test]
 fn ignores_history_notes_that_do_not_name_selectors() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ignores_history_notes_that_do_not_name_selectors",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &[]);
@@ -167,6 +188,9 @@ fn ignores_history_notes_that_do_not_name_selectors() {
 /// A selector an operator re-declared by hand is not added twice.
 #[test]
 fn skips_selectors_the_task_already_declares() {
+    if !enter_isolated_child(module_path!(), "skips_selectors_the_task_already_declares") {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(

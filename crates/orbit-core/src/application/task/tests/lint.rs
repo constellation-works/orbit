@@ -6,12 +6,18 @@ use chrono::Utc;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, TaskType};
 
 use super::super::lint::context_entry_covers_path;
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 use crate::adapter::tool_host::test_support::create_context_task;
 use crate::application::task::{TaskAddParams, TaskLintSeverity, TaskRecordUpdateParams};
 
 #[test]
 fn a_missing_declared_target_warns_without_asking_for_its_removal() {
+    if !enter_isolated_child(
+        module_path!(),
+        "a_missing_declared_target_warns_without_asking_for_its_removal",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("src")).expect("create src");
@@ -50,6 +56,12 @@ fn a_missing_declared_target_warns_without_asking_for_its_removal() {
 
 #[test]
 fn an_empty_surface_is_an_advisory_warning_that_names_each_admission_rule() {
+    if !enter_isolated_child(
+        module_path!(),
+        "an_empty_surface_is_an_advisory_warning_that_names_each_admission_rule",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -122,6 +134,12 @@ fn an_empty_surface_is_an_advisory_warning_that_names_each_admission_rule() {
 /// legacy v2 admission permits an empty surface regardless of task type.
 #[test]
 fn an_empty_chore_surface_is_reported_as_a_warning() {
+    if !enter_isolated_child(
+        module_path!(),
+        "an_empty_chore_surface_is_reported_as_a_warning",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &[]);
@@ -137,6 +155,12 @@ fn an_empty_chore_surface_is_reported_as_a_warning() {
 
 #[test]
 fn an_out_of_workspace_selector_is_a_path_validity_error() {
+    if !enter_isolated_child(
+        module_path!(),
+        "an_out_of_workspace_selector_is_a_path_validity_error",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     let task = create_context_task(

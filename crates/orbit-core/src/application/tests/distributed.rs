@@ -22,13 +22,73 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::adapter::command::ToolEntryPoint;
-use crate::adapter::tool_host::test_support::{create_context_task, test_runtime};
+use crate::adapter::tool_host::test_support::create_context_task;
 use crate::application::distributed::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DrainEntryRefusal,
     ensure_distributed_mutation_available, owner_binary_version,
 };
 use crate::application::workflow::ShipMode;
 use crate::runtime::WorkspaceRuntimeBinding;
+
+/// Names the one test a re-executed child of this test binary runs in-process.
+const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_DISTRIBUTED_FIXTURE_CHILD";
+
+/// Run the calling test's body in a child of this test binary.
+///
+/// These fixtures write task, claim and run state, and runtime construction
+/// reads ambient authority from the process environment: inherited routing can
+/// reach the live workspace, and `ORBIT_WORKER_CONTEXT_REQUIRED` refuses a
+/// fresh root that holds no worker binding. The child starts with that
+/// authority cleared and a disposable `HOME`, `USERPROFILE` and working
+/// directory.
+///
+/// Returns `true` inside the child, where the caller runs its body, and
+/// `false` in the parent once the child ran exactly that test and passed.
+fn enter_isolated_child(test: &str) -> bool {
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module_path!());
+    let exact_test = format!("{module}::{test}");
+    if std::env::var_os(ISOLATED_TEST_ENV).is_some_and(|name| name == exact_test.as_str()) {
+        return true;
+    }
+
+    let home = tempfile::tempdir().expect("isolated fixture home");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args(["--exact", &exact_test, "--nocapture", "--test-threads=1"])
+        .env_remove("ORBIT_WORKER_CONTEXT_REQUIRED")
+        .env(ISOLATED_TEST_ENV, &exact_test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("run isolated fixture");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "isolated `{exact_test}` failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("test result: ok. 1 passed;"),
+        "the isolated child must run `{exact_test}` itself, not filter it out:\n{stdout}"
+    );
+    false
+}
+
+/// The shared tool-host fixture, refused outside [`enter_isolated_child`] so a
+/// new test cannot silently run with the launching process's authority.
+fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, std::path::PathBuf) {
+    assert!(
+        std::env::var_os(ISOLATED_TEST_ENV).is_some(),
+        "mutable distributed fixtures must run through `enter_isolated_child`"
+    );
+    crate::adapter::tool_host::test_support::test_runtime()
+}
 
 const FOLLOWER: &str = "hm_follower";
 const OWNER: &str = "hm_owner";
@@ -176,6 +236,9 @@ fn claim_id(lookup: &AdmissionLookup) -> String {
 
 #[test]
 fn probe_reports_owner_facts_and_creates_no_admission_state() {
+    if !enter_isolated_child("probe_reports_owner_facts_and_creates_no_admission_state") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
 
@@ -218,6 +281,9 @@ fn probe_reports_owner_facts_and_creates_no_admission_state() {
 
 #[test]
 fn probe_reports_the_first_refusal_the_admission_ladder_would_raise() {
+    if !enter_isolated_child("probe_reports_the_first_refusal_the_admission_ladder_would_raise") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     // Malformed version field: invalid input, not a compatibility comparison.
@@ -286,6 +352,10 @@ fn probe_reports_the_first_refusal_the_admission_ladder_would_raise() {
 
 #[test]
 fn remote_probe_against_local_ship_mode_matches_fully_declared_verdict() {
+    if !enter_isolated_child("remote_probe_against_local_ship_mode_matches_fully_declared_verdict")
+    {
+        return;
+    }
     let (_root, runtime, _repo_root) = local_ship_runtime();
     let matching = json!({
         "caller_version": owner_binary_version(),
@@ -318,6 +388,9 @@ fn remote_probe_against_local_ship_mode_matches_fully_declared_verdict() {
 
 #[test]
 fn an_upgraded_lookup_finds_the_original_receipt_without_rewriting_it() {
+    if !enter_isolated_child("an_upgraded_lookup_finds_the_original_receipt_without_rewriting_it") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     // The receipt is written by an older binary pair; the lookup below runs on
@@ -355,6 +428,9 @@ fn an_upgraded_lookup_finds_the_original_receipt_without_rewriting_it() {
 
 #[test]
 fn an_incompatible_lookup_protocol_refuses_instead_of_answering() {
+    if !enter_isolated_child("an_incompatible_lookup_protocol_refuses_instead_of_answering") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     admit(
@@ -380,6 +456,9 @@ fn an_incompatible_lookup_protocol_refuses_instead_of_answering() {
 
 #[test]
 fn not_found_grants_nothing_and_licenses_no_replacement_request() {
+    if !enter_isolated_child("not_found_grants_nothing_and_licenses_no_replacement_request") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     let missing = run_as(
@@ -413,6 +492,11 @@ fn not_found_grants_nothing_and_licenses_no_replacement_request() {
 
 #[test]
 fn a_worker_reads_its_own_namespace_and_only_an_operator_reads_across_attempts() {
+    if !enter_isolated_child(
+        "a_worker_reads_its_own_namespace_and_only_an_operator_reads_across_attempts",
+    ) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     admit(
@@ -460,6 +544,9 @@ fn a_worker_reads_its_own_namespace_and_only_an_operator_reads_across_attempts()
 
 #[test]
 fn a_revoked_claim_is_reported_as_revoked_and_confers_no_authority() {
+    if !enter_isolated_child("a_revoked_claim_is_reported_as_revoked_and_confers_no_authority") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     let admitted = admit(
@@ -518,6 +605,9 @@ fn a_revoked_claim_is_reported_as_revoked_and_confers_no_authority() {
 
 #[test]
 fn claim_mutation_requires_trusted_invocation_context() {
+    if !enter_isolated_child("claim_mutation_requires_trusted_invocation_context") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     let error = runtime
@@ -536,11 +626,11 @@ fn claim_mutation_requires_trusted_invocation_context() {
 
 #[test]
 fn the_read_only_surface_serves_an_owner_local_session_and_refuses_a_replica() {
-    let _env = orbit_common::test_env::unset([
-        "ORBIT_MANAGED_RUN_CONTEXT",
-        "ORBIT_TASK_ACTOR_KIND",
-        "ORBIT_ACTIVITY_TOOLS",
-    ]);
+    if !enter_isolated_child(
+        "the_read_only_surface_serves_an_owner_local_session_and_refuses_a_replica",
+    ) {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     let local = run_as(
@@ -578,6 +668,9 @@ fn the_read_only_surface_serves_an_owner_local_session_and_refuses_a_replica() {
 /// what refuses it.
 #[test]
 fn a_session_without_agent_capability_reaches_neither_read_only_tool() {
+    if !enter_isolated_child("a_session_without_agent_capability_reaches_neither_read_only_tool") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let anonymous = ToolSessionContext {
         effective_capabilities: BTreeSet::new(),
@@ -620,11 +713,9 @@ fn a_session_without_agent_capability_reaches_neither_read_only_tool() {
 /// cannot land again.
 #[test]
 fn the_operator_reaches_claim_inspection_through_the_cli_tool_route() {
-    let _env = orbit_common::test_env::unset([
-        "ORBIT_MANAGED_RUN_CONTEXT",
-        "ORBIT_TASK_ACTOR_KIND",
-        "ORBIT_ACTIVITY_TOOLS",
-    ]);
+    if !enter_isolated_child("the_operator_reaches_claim_inspection_through_the_cli_tool_route") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     let advertised = runtime
@@ -669,11 +760,9 @@ fn the_operator_reaches_claim_inspection_through_the_cli_tool_route() {
 /// The same route refuses an agent — placement is not what governs it.
 #[test]
 fn an_agent_session_is_refused_claim_inspection_on_the_same_route() {
-    let _env = orbit_common::test_env::unset([
-        "ORBIT_MANAGED_RUN_CONTEXT",
-        "ORBIT_TASK_ACTOR_KIND",
-        "ORBIT_ACTIVITY_TOOLS",
-    ]);
+    if !enter_isolated_child("an_agent_session_is_refused_claim_inspection_on_the_same_route") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     let error = runtime
@@ -702,6 +791,9 @@ fn an_agent_session_is_refused_claim_inspection_on_the_same_route() {
 /// stay owner-operator dashboard actions with no tool at all [ORB-13625].
 #[test]
 fn only_the_executor_lifecycle_is_registered_when_the_feature_is_open() {
+    if !enter_isolated_child("only_the_executor_lifecycle_is_registered_when_the_feature_is_open") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
 
     const { assert!(DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED) };
@@ -770,6 +862,9 @@ fn admissible_task(runtime: &OrbitRuntime, title: &str, context_files: &[&str]) 
 /// executing cannot be shipped beside itself, whichever surface asks.
 #[test]
 fn a_live_claim_fences_every_retained_entry_point_from_the_same_task() {
+    if !enter_isolated_child("a_live_claim_fences_every_retained_entry_point_from_the_same_task") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let task = admissible_task(&runtime, "claimed by a live attempt", &["src/a.rs"]);
     let lookup = admit(
@@ -839,6 +934,11 @@ fn a_live_claim_fences_every_retained_entry_point_from_the_same_task() {
 /// bounds it.
 #[test]
 fn claimed_occupancy_stands_the_unattended_sweep_down_but_not_an_explicit_ship() {
+    if !enter_isolated_child(
+        "claimed_occupancy_stands_the_unattended_sweep_down_but_not_an_explicit_ship",
+    ) {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     runtime
         .stores()
@@ -885,6 +985,11 @@ fn claimed_occupancy_stands_the_unattended_sweep_down_but_not_an_explicit_ship()
 /// with the schedule reported beside the decision.
 #[test]
 fn a_scheduled_host_shutdown_stands_unattended_entry_down_but_not_an_explicit_one() {
+    if !enter_isolated_child(
+        "a_scheduled_host_shutdown_stands_unattended_entry_down_but_not_an_explicit_one",
+    ) {
+        return;
+    }
     use crate::application::distributed::DrainEntryPoint;
     use crate::runtime::host_signal::{FixedHostSignals, ScheduledShutdown};
 
@@ -931,6 +1036,9 @@ fn a_scheduled_host_shutdown_stands_unattended_entry_down_but_not_an_explicit_on
 /// role split.
 #[test]
 fn a_replica_checkout_refuses_every_retained_entry_point() {
+    if !enter_isolated_child("a_replica_checkout_refuses_every_retained_entry_point") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let replica = runtime.with_coordination_write_owner(Some(OWNER.to_string()));
     for entry in [
@@ -959,6 +1067,9 @@ fn a_replica_checkout_refuses_every_retained_entry_point() {
 /// surface has to look it up for itself.
 #[test]
 fn the_shared_decision_reports_the_claim_contract_verdict() {
+    if !enter_isolated_child("the_shared_decision_reports_the_claim_contract_verdict") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let decision = runtime
         .drain_entry_admission(
@@ -985,6 +1096,11 @@ fn the_shared_decision_reports_the_claim_contract_verdict() {
 /// ledger themselves.
 #[test]
 fn a_claimed_tasks_declaration_cannot_drift_from_the_footprint_its_claim_froze() {
+    if !enter_isolated_child(
+        "a_claimed_tasks_declaration_cannot_drift_from_the_footprint_its_claim_froze",
+    ) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let claimed = admissible_task(&runtime, "claimed by a live attempt", &["src/a.rs"]);
     admit(
@@ -1091,6 +1207,11 @@ fn pulled_claim(runtime: &OrbitRuntime, request_id: &str) -> (Value, String) {
 
 #[test]
 fn a_follower_pull_claims_one_task_for_its_own_machine_and_replays_the_receipt() {
+    if !enter_isolated_child(
+        "a_follower_pull_claims_one_task_for_its_own_machine_and_replays_the_receipt",
+    ) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
 
@@ -1140,6 +1261,9 @@ fn a_follower_pull_claims_one_task_for_its_own_machine_and_replays_the_receipt()
 
 #[test]
 fn a_new_request_must_carry_the_ship_contract_the_owner_resolves_now() {
+    if !enter_isolated_child("a_new_request_must_carry_the_ship_contract_the_owner_resolves_now") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
 
@@ -1165,6 +1289,11 @@ fn a_new_request_must_carry_the_ship_contract_the_owner_resolves_now() {
 
 #[test]
 fn bind_and_failure_settlement_are_fenced_to_the_admitted_machine_and_run() {
+    if !enter_isolated_child(
+        "bind_and_failure_settlement_are_fenced_to_the_admitted_machine_and_run",
+    ) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     let (response, claim_id) = pulled_claim(&runtime, "req-1");
@@ -1245,6 +1374,9 @@ fn bind_and_failure_settlement_are_fenced_to_the_admitted_machine_and_run() {
 
 #[test]
 fn settlement_accepts_only_a_handoff_or_a_failure() {
+    if !enter_isolated_child("settlement_accepts_only_a_handoff_or_a_failure") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     let (_response, claim_id) = pulled_claim(&runtime, "req-1");
@@ -1262,6 +1394,9 @@ fn settlement_accepts_only_a_handoff_or_a_failure() {
 
 #[test]
 fn a_follower_cannot_hand_off_a_candidate_only_its_own_checkout_holds() {
+    if !enter_isolated_child("a_follower_cannot_hand_off_a_candidate_only_its_own_checkout_holds") {
+        return;
+    }
     use orbit_types::workflow::handoff::{
         HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition, TaskHandoff,
     };
@@ -1327,6 +1462,9 @@ fn a_follower_cannot_hand_off_a_candidate_only_its_own_checkout_holds() {
 
 #[test]
 fn a_replica_serves_no_mutating_entry_point() {
+    if !enter_isolated_child("a_replica_serves_no_mutating_entry_point") {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let input = pull_input(&runtime, "req-1");
     let replica = runtime
@@ -1369,6 +1507,9 @@ fn a_replica_serves_no_mutating_entry_point() {
 
 #[test]
 fn a_local_ship_owner_refuses_a_remote_pull_before_admitting() {
+    if !enter_isolated_child("a_local_ship_owner_refuses_a_remote_pull_before_admitting") {
+        return;
+    }
     let (_root, runtime, repo_root) = local_ship_runtime();
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     let error = run_as(
@@ -1390,6 +1531,9 @@ fn a_local_ship_owner_refuses_a_remote_pull_before_admitting() {
 
 #[test]
 fn a_pull_requires_agent_capability_on_the_session() {
+    if !enter_isolated_child("a_pull_requires_agent_capability_on_the_session") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &["src/a.rs"]);
     let input = pull_input(&runtime, "req-1");
@@ -1412,6 +1556,9 @@ fn a_pull_requires_agent_capability_on_the_session() {
 /// before a new request is admitted.
 #[test]
 fn the_owner_completion_policy_reaches_the_probe_and_admission() {
+    if !enter_isolated_child("the_owner_completion_policy_reaches_the_probe_and_admission") {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let stale = pull_input(&runtime, "stale-review");
     assert_eq!(stale["ship"]["completion"], "review");
