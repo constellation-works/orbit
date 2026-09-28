@@ -149,6 +149,21 @@ identity, base, reviewed and final candidate, implementation and repair
 commits, findings, validation, consumed budget, and escalation. Settlement is
 idempotent: a replay reconciles the recorded certificate.
 
+Settlement persists in order — repair commit, ledger charge, certificate,
+then each task's `review-gate.json` and verdict comment — and a replay
+resumes from whichever step last persisted. A head one commit past the
+admitted candidate is adopted as the attempt's repair only when that commit
+has the candidate as its sole parent, carries this attempt's trailer, and has
+the reviewer author and Orbit committer; its paths are judged as they were
+before the commit, so a drive-by still downgrades. A ledger that settled
+without a certificate is re-judged against the ledger as it stood before its
+own charge, with the elapsed time it recorded. The certificate is issued only
+when that judgement reproduces the recorded verdict and repair count;
+otherwise the replay refuses with `settlement_diverged`. Nothing is committed
+or charged twice. A recorded certificate is restored onto every bundle task
+that lacks it before the replay reports its verdict. A pass still refuses
+task-meaning or head drift first.
+
 A pass returns `reviewed_head_sha` / `reviewed_base_sha`; `pr_open` refuses
 (`review_gate_stale`, phase `stale-review-gate`) when the checked-out head or
 pinned base differ. A non-pass fails the step; the failure handoff commits

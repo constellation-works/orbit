@@ -3,15 +3,22 @@
 use std::fs;
 
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{REVIEW_MANIFEST_ARTIFACT, ReviewVerdict};
+use orbit_types::workflow::{
+    REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, ReviewAttemptState, ReviewLedger, ReviewVerdict,
+};
 use serde_json::{Value, json};
 
+use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
-use crate::application::review::exclusions;
-use crate::application::review::tests::{GATED_CONFIG, git, report, write_report};
+use crate::application::review::tests::{
+    GATED_CONFIG, admit_input, admitted_run, fixture, git, implement_candidate, report, seed_task,
+    settle_input, write_report,
+};
+use crate::application::review::{exclusions, review_gate_admit, review_gate_settle};
 use crate::application::task::TaskUpdateParams;
 
-use super::support::{gated_fixture, land_squash, page_for};
+use super::super::settle::{Checkpoint, interrupt_after};
+use super::support::{Gated, gated_fixture, land_squash, page_for};
 
 #[test]
 fn a_clean_review_passes_without_repairs_and_pins_the_reviewed_candidate() {
@@ -420,4 +427,358 @@ fn externally_completed_merge_is_audited_and_keeps_review_coverage_open() {
                 && args["reason"] == "external_landing_race"),
         "external landing audit carries its provenance"
     );
+}
+
+/// One repair cycle only: a resumed settlement that counted its own charge
+/// against the lineage would find none left and downgrade the pass.
+const ONE_REPAIR_CONFIG: &str = "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"reviewers\"\nreview_repair_cycles = 1\n";
+
+/// Admit, let the reviewer edit the worktree, and report the repair.
+fn admit_with_reviewer_repair(gated: &Gated) -> Value {
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    fs::write(
+        gated.fixture.repo.join("src.txt"),
+        "implementation target\nimplemented\nrepaired\n",
+    )
+    .expect("repair");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithRepairs, true),
+    );
+    admission
+}
+
+fn ledger(runtime: &OrbitRuntime, admission: &Value) -> ReviewLedger {
+    runtime
+        .review_store()
+        .expect("store")
+        .review_ledger(
+            &runtime.workspace_id().expect("workspace"),
+            admission["lineage_key"].as_str().expect("lineage key"),
+        )
+        .expect("ledger")
+        .expect("present")
+}
+
+fn stored_certificate_exists(runtime: &OrbitRuntime, admission: &Value) -> bool {
+    runtime
+        .review_store()
+        .expect("store")
+        .review_certificate(
+            &runtime.workspace_id().expect("workspace"),
+            admission["attempt_id"].as_str().expect("attempt id"),
+        )
+        .expect("certificate lookup")
+        .is_some()
+}
+
+fn verdict_comments(runtime: &OrbitRuntime, task_id: &str, attempt_id: &str) -> usize {
+    let marker = format!("settled attempt `{attempt_id}`");
+    runtime
+        .get_task_comments(task_id)
+        .expect("comments")
+        .iter()
+        .filter(|comment| comment.message.contains(&marker))
+        .count()
+}
+
+#[test]
+fn a_restart_after_the_repair_commit_settles_that_repair_once() {
+    let gated = gated_fixture(ONE_REPAIR_CONFIG);
+    let admission = admit_with_reviewer_repair(&gated);
+    let runtime = &gated.fixture.runtime;
+
+    interrupt_after(Checkpoint::RepairCommitted, 1);
+    let error = gated.settle(&admission).expect_err("interrupted");
+    assert!(error.to_string().contains("injected"), "{error}");
+    let repair_head = gated.head();
+    assert_ne!(
+        repair_head, gated.implementation_sha,
+        "the repair committed"
+    );
+    assert_eq!(
+        ledger(runtime, &admission).attempts[0].state,
+        ReviewAttemptState::Open,
+        "the interruption preceded ledger settlement"
+    );
+
+    let settled = gated
+        .settle(&admission)
+        .expect("resume from the repair commit");
+    assert_eq!(settled["verdict"], "passed_with_repairs");
+    assert_eq!(settled["reviewed_head_sha"], repair_head);
+    assert_eq!(settled["repair_commits"], json!([repair_head]));
+    assert_eq!(gated.head(), repair_head, "no duplicate repair commit");
+    assert_eq!(
+        gated.author_of("HEAD"),
+        "codex-reviewer <codex-reviewer@orbit.local>",
+        "the repair keeps the reviewer's attribution"
+    );
+
+    let certificate = gated.certificate();
+    assert_eq!(
+        certificate.reviewed_candidate.commit,
+        gated.implementation_sha
+    );
+    assert_eq!(certificate.final_candidate.commit, repair_head);
+    assert_eq!(certificate.repair_commits.len(), 1);
+    assert_eq!(
+        certificate.repair_commits[0].author,
+        "codex-reviewer <codex-reviewer@orbit.local>"
+    );
+    assert_eq!(certificate.consumed.reviewer_starts, 1);
+    assert_eq!(certificate.consumed.repair_cycles, 1);
+    let settled_ledger = ledger(runtime, &admission);
+    assert_eq!(settled_ledger.attempts.len(), 1);
+    assert_eq!(settled_ledger.consumed().repair_cycles, 1, "charged once");
+    assert_eq!(
+        verdict_comments(runtime, &gated.task_id, &certificate.attempt_id),
+        1
+    );
+}
+
+#[test]
+fn a_commit_on_the_candidate_that_is_not_the_gates_repair_still_refuses() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithRepairs, true),
+    );
+    // The attempt trailer alone does not make a commit the gate's own.
+    fs::write(gated.fixture.repo.join("src.txt"), "someone else\n").expect("edit");
+    git(
+        &gated.fixture.repo,
+        &[
+            "commit",
+            "-am",
+            &format!("edit\n\nOrbit-Review-Attempt: {attempt_id}"),
+        ],
+    );
+    let head = gated.head();
+
+    let error = gated.settle(&admission).expect_err("foreign commit");
+    assert!(error.to_string().contains("candidate_changed"), "{error}");
+    assert_eq!(gated.head(), head);
+    assert_eq!(
+        ledger(&gated.fixture.runtime, &admission).attempts[0].state,
+        ReviewAttemptState::Open,
+        "a refusal charges nothing"
+    );
+}
+
+#[test]
+fn a_restart_after_ledger_settlement_finishes_the_recorded_outcome() {
+    let gated = gated_fixture(ONE_REPAIR_CONFIG);
+    let admission = admit_with_reviewer_repair(&gated);
+    let runtime = &gated.fixture.runtime;
+
+    interrupt_after(Checkpoint::LedgerSettled, 1);
+    gated.settle(&admission).expect_err("interrupted");
+    let charged = ledger(runtime, &admission);
+    assert_eq!(
+        charged.attempts[0].state,
+        ReviewAttemptState::Settled {
+            verdict: ReviewVerdict::PassedWithRepairs
+        }
+    );
+    assert!(!stored_certificate_exists(runtime, &admission));
+    let repair_head = gated.head();
+
+    let settled = gated.settle(&admission).expect("finish the settlement");
+    assert_eq!(settled["verdict"], "passed_with_repairs");
+    assert_eq!(settled["reviewed_head_sha"], repair_head);
+    assert_eq!(gated.head(), repair_head, "no second repair commit");
+    assert_eq!(
+        ledger(runtime, &admission),
+        charged,
+        "finishing never charges the ledger again"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.verdict, ReviewVerdict::PassedWithRepairs);
+    assert_eq!(certificate.consumed, charged.consumed());
+    assert_eq!(certificate.repair_commits[0].commit, repair_head);
+    assert!(stored_certificate_exists(runtime, &admission));
+    assert_eq!(gated.settle(&admission).expect("replay"), settled);
+}
+
+#[test]
+fn a_settled_attempt_whose_task_meaning_drifted_refuses_to_finish() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+    );
+    interrupt_after(Checkpoint::LedgerSettled, 1);
+    gated.settle(&admission).expect_err("interrupted");
+    let charged = ledger(&gated.fixture.runtime, &admission);
+
+    gated
+        .fixture
+        .runtime
+        .update_task(
+            &gated.task_id,
+            TaskUpdateParams {
+                acceptance_criteria: Some(vec!["Revised acceptance criterion.".into()]),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("change task meaning");
+    let error = gated.settle(&admission).expect_err("drifted");
+    let message = error.to_string();
+    assert!(message.contains("settlement_diverged"), "{message}");
+    assert!(message.contains("task_meaning_changed"), "{message}");
+    assert_eq!(ledger(&gated.fixture.runtime, &admission), charged);
+    assert!(!stored_certificate_exists(
+        &gated.fixture.runtime,
+        &admission
+    ));
+}
+
+#[test]
+fn a_restart_after_the_certificate_restores_every_bundle_task_artifact_once() {
+    let fixture = fixture(GATED_CONFIG);
+    let runtime = &fixture.runtime;
+    let task_ids = vec![
+        seed_task(runtime, "bundle first").id,
+        seed_task(runtime, "bundle second").id,
+    ];
+    let run = admitted_run(runtime, "task_pr_pipeline", &task_ids);
+    implement_candidate(&fixture.repo, &task_ids[0]);
+    let admission = review_gate_admit(
+        runtime,
+        "review_gate_admit",
+        &admit_input(&run.run_id, &task_ids, &fixture.repo),
+    )
+    .expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    write_report(
+        runtime,
+        &task_ids[0],
+        &report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+    );
+    let settle = || {
+        review_gate_settle(
+            runtime,
+            "review_gate_settle",
+            &settle_input(&run.run_id, &task_ids, &fixture.repo, &admission),
+        )
+    };
+
+    interrupt_after(Checkpoint::TaskPublished, 1);
+    settle().expect_err("interrupted");
+    assert!(stored_certificate_exists(runtime, &admission));
+    assert!(
+        runtime
+            .get_task_artifact(&task_ids[1], REVIEW_GATE_ARTIFACT)
+            .expect("read")
+            .is_none(),
+        "the second task was not published before the interruption"
+    );
+
+    let settled = settle().expect("restore and pass");
+    assert_eq!(settled["gate"], "passed");
+    let replay = settle().expect("idempotent replay");
+    assert_eq!(replay, settled);
+    let published = task_ids
+        .iter()
+        .map(|task_id| {
+            runtime
+                .get_task_artifact(task_id, REVIEW_GATE_ARTIFACT)
+                .expect("read")
+                .expect("every bundle task carries the certificate")
+                .content
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(published[0], published[1]);
+    for task_id in &task_ids {
+        assert_eq!(
+            verdict_comments(runtime, task_id, attempt_id),
+            1,
+            "{task_id}: the verdict is disclosed exactly once"
+        );
+    }
+}
+
+#[test]
+fn a_restart_after_the_certificate_refuses_a_changed_candidate_without_publishing() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+    write_report(
+        &gated.fixture.runtime,
+        &gated.task_id,
+        &report(attempt_id, ReviewVerdict::PassedWithoutRepairs, false),
+    );
+    interrupt_after(Checkpoint::CertificateRecorded, 1);
+    gated.settle(&admission).expect_err("interrupted");
+    assert!(stored_certificate_exists(
+        &gated.fixture.runtime,
+        &admission
+    ));
+
+    fs::write(gated.fixture.repo.join("src.txt"), "unrelated edit\n").expect("edit");
+    git(&gated.fixture.repo, &["commit", "-am", "unrelated"]);
+    let error = gated.settle(&admission).expect_err("drifted candidate");
+    assert!(error.to_string().contains("candidate_changed"), "{error}");
+    assert!(
+        gated
+            .fixture
+            .runtime
+            .get_task_artifact(&gated.task_id, REVIEW_GATE_ARTIFACT)
+            .expect("read")
+            .is_none(),
+        "a refused replay publishes nothing"
+    );
+
+    git(&gated.fixture.repo, &["reset", "--hard", "HEAD~1"]);
+    let settled = gated
+        .settle(&admission)
+        .expect("restore on the certified head");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(gated.certificate().attempt_id, attempt_id);
+}
+
+#[test]
+fn a_resumed_repair_keeps_its_declared_widening_and_still_downgrades_drive_bys() {
+    for undeclared in [false, true] {
+        let gated = gated_fixture(GATED_CONFIG);
+        let admission = gated.admit().expect("admit");
+        let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+        fs::write(
+            gated.fixture.repo.join("README.md"),
+            "coupled repair of derived artifact\n",
+        )
+        .expect("repair");
+        if undeclared {
+            fs::write(gated.fixture.repo.join("stray.txt"), "drive-by\n").expect("stray");
+        }
+        let mut claim = report(attempt_id, ReviewVerdict::PassedWithRepairs, true);
+        claim.findings[0].paths = vec!["README.md".to_string()];
+        write_report(&gated.fixture.runtime, &gated.task_id, &claim);
+
+        interrupt_after(Checkpoint::RepairCommitted, 1);
+        gated.settle(&admission).expect_err("interrupted");
+        let resumed = gated.settle(&admission);
+        let certificate = gated.certificate();
+        assert_eq!(
+            certificate.selectors_widened,
+            vec!["file:README.md"],
+            "undeclared={undeclared}"
+        );
+        if undeclared {
+            let error = resumed.expect_err("a drive-by is never laundered by a restart");
+            assert!(error.to_string().contains("repair_out_of_scope"), "{error}");
+            assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+        } else {
+            assert_eq!(resumed.expect("pass")["verdict"], "passed_with_repairs");
+        }
+    }
 }

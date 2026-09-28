@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_engine::review_gate::candidate_identity;
-use orbit_store::contracts::{ReviewSettlement, ReviewStoreBackend};
+use orbit_engine::review_gate::{candidate_identity_at, committed_paths, uncommitted_paths};
+use orbit_store::contracts::ReviewSettlement;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
@@ -21,7 +21,7 @@ use crate::application::task::TaskUpdateParams;
 
 use super::admit::reviewer_identity;
 use super::context::GateContext;
-use super::judgement::{Judgement, verdict_comment, write_artifact};
+use super::judgement::{Judgement, repair_author_label, verdict_comment, write_artifact};
 
 /// Close the admitted attempt with an honest verdict.
 ///
@@ -131,6 +131,56 @@ enum Settled {
     Blocked { certificate: Box<ReviewCertificate> },
 }
 
+/// The durable steps of one settlement, in order. A restart may interrupt
+/// settlement after any of them; replay resumes from what persisted instead
+/// of repeating a repair, charging the ledger twice, or trapping the attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Checkpoint {
+    /// The reviewer's repairs are committed under the reviewer's identity.
+    RepairCommitted,
+    /// The ledger recorded the verdict and charged the attempt.
+    LedgerSettled,
+    /// The immutable certificate is stored.
+    CertificateRecorded,
+    /// One task carries the certificate artifact and verdict comment.
+    TaskPublished,
+}
+
+#[cfg(test)]
+thread_local! {
+    static INTERRUPT: std::cell::Cell<Option<(Checkpoint, usize)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Fail the settlement right after the `occurrence`-th (one-based) time it
+/// passes `checkpoint`, the way a crash or write error there would.
+#[cfg(test)]
+pub(super) fn interrupt_after(checkpoint: Checkpoint, occurrence: usize) {
+    INTERRUPT.with(|slot| slot.set(Some((checkpoint, occurrence))));
+}
+
+fn reached(checkpoint: Checkpoint) -> Result<(), OrbitError> {
+    #[cfg(test)]
+    {
+        let fire = INTERRUPT.with(|slot| match slot.get() {
+            Some((pending, remaining)) if pending == checkpoint => {
+                let fire = remaining <= 1;
+                slot.set((!fire).then(|| (pending, remaining.saturating_sub(1))));
+                fire
+            }
+            _ => false,
+        });
+        if fire {
+            return Err(OrbitError::Execution(format!(
+                "injected settlement interruption after {checkpoint:?}"
+            )));
+        }
+    }
+    #[cfg(not(test))]
+    let _ = checkpoint;
+    Ok(())
+}
+
 fn settle(
     runtime: &OrbitRuntime,
     context: &mut GateContext,
@@ -158,20 +208,55 @@ fn settle(
             ))
         })?;
 
-    // A replay after the attempt already settled reconciles the recorded
-    // certificate instead of judging the candidate twice.
-    if let ReviewAttemptState::Settled { .. } = attempt.state {
-        return reconcile_settled(context, store.as_ref(), attempt_id);
+    // A replay after the certificate was recorded reconciles it instead of
+    // judging the candidate twice. A ledger that settled without one is an
+    // interrupted settlement, finished below from the same evidence.
+    let recorded = match attempt.state {
+        ReviewAttemptState::Settled { verdict } => Some(verdict),
+        ReviewAttemptState::Open => None,
+    };
+    if recorded.is_some()
+        && let Some(certificate) = store.review_certificate(&context.workspace_id, attempt_id)?
+    {
+        return reconcile_settled(runtime, context, certificate);
     }
 
-    let reviewed = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
-    if reviewed.head.commit != attempt.candidate.commit {
-        return Err(OrbitError::Execution(format!(
-            "review_gate_stale: candidate_changed: the worktree head is {} but attempt \
-             {attempt_id} admitted {}; only one worker may settle a candidate",
-            reviewed.head.commit, attempt.candidate.commit
-        )));
+    let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
+    let committed_repair = if head.commit == attempt.candidate.commit {
+        None
+    } else {
+        // Only this attempt's own repair commit may sit on the candidate.
+        let repair = orbit_engine::review_gate::review_repair_at_head(
+            &context.workspace_path,
+            &attempt.candidate.commit,
+            attempt_id,
+            &repair_author_label(&reviewer),
+        )?
+        .ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "review_gate_stale: candidate_changed: the worktree head is {} but attempt \
+                 {attempt_id} admitted {}; only one worker may settle a candidate",
+                head.commit, attempt.candidate.commit
+            ))
+        })?;
+        Some(repair)
+    };
+    let resumed = committed_repair.is_some() || recorded.is_some();
+    if resumed {
+        let dirty = uncommitted_paths(&context.workspace_path)?;
+        if !dirty.is_empty() {
+            return Err(OrbitError::Execution(format!(
+                "review_gate_stale: candidate_changed: attempt {attempt_id} already committed \
+                 or settled its repairs but the worktree has further changes to {}",
+                dirty.join(", ")
+            )));
+        }
     }
+    let reviewed = candidate_identity_at(
+        &context.workspace_path,
+        &context.base_sha()?,
+        &attempt.candidate.commit,
+    )?;
 
     let mut judgement = Judgement::from_report(runtime, context, &attempt)?;
     let admitted_selectors = admission_output
@@ -184,11 +269,75 @@ fn settle(
         })?
         .unwrap_or_default();
     judgement.check_task_meaning(context, &attempt, &admitted_selectors)?;
-    let repair = judgement.commit_repairs(runtime, context, &reviewer, &attempt)?;
-    judgement.reconcile_verdict(&ledger, repair.as_ref());
+    let repair = match committed_repair {
+        Some(commit) => {
+            let paths = committed_paths(&context.workspace_path, &commit.commit)?;
+            judgement.adopt_repairs(runtime, context, &paths, &admitted_selectors)?;
+            Some(commit)
+        }
+        // A settled ledger never charged a repair that was not committed.
+        None if recorded.is_some() => None,
+        None => {
+            let commit = judgement.commit_repairs(runtime, context, &reviewer, &attempt)?;
+            if commit.is_some() {
+                reached(Checkpoint::RepairCommitted)?;
+            }
+            commit
+        }
+    };
+    let repair_cycles = u32::from(repair.is_some());
+
+    // A resumed settlement judges against the ledger as it stood before its
+    // own charge, with the elapsed time it already recorded.
+    let judged_ledger = match recorded {
+        Some(_) => ledger.before_settling(attempt_id),
+        None => Some(ledger.clone()),
+    }
+    .ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "review_gate_stale: attempt {attempt_id} is not part of lineage '{lineage_key}'"
+        ))
+    })?;
+    judgement.reconcile_verdict(&judged_ledger, repair.as_ref());
     let now = Utc::now();
     let elapsed_seconds = attempt.elapsed_at(now);
-    judgement.enforce_wall_time(&ledger, elapsed_seconds);
+    judgement.enforce_wall_time(&judged_ledger, elapsed_seconds);
+
+    let settled = match recorded {
+        Some(verdict) => {
+            if verdict != judgement.verdict || attempt.repair_cycles != repair_cycles {
+                return Err(OrbitError::Execution(format!(
+                    "review_gate_stale: settlement_diverged: attempt {attempt_id} settled {} \
+                     with {} repair cycle(s) but its evidence now judges {} with {repair_cycles}{}; \
+                     a fresh reviewer start is required",
+                    verdict.as_str(),
+                    attempt.repair_cycles,
+                    judgement.verdict.as_str(),
+                    judgement
+                        .escalation
+                        .as_deref()
+                        .map(|reason| format!(" ({reason})"))
+                        .unwrap_or_default(),
+                )));
+            }
+            ledger.as_of(attempt_id).unwrap_or(ledger)
+        }
+        None => {
+            let settled = store.review_settle(
+                &context.workspace_id,
+                &ReviewSettlement {
+                    lineage_key: &lineage_key,
+                    attempt_id,
+                    verdict: judgement.verdict,
+                    repair_cycles,
+                    elapsed_seconds,
+                    now,
+                },
+            )?;
+            reached(Checkpoint::LedgerSettled)?;
+            settled
+        }
+    };
 
     let final_candidate = match &repair {
         Some(commit) => SourceRevision {
@@ -197,19 +346,6 @@ fn settle(
         },
         None => reviewed.head.clone(),
     };
-    let repair_cycles = u32::from(repair.is_some());
-    let ledger = store.review_settle(
-        &context.workspace_id,
-        &ReviewSettlement {
-            lineage_key: &lineage_key,
-            attempt_id,
-            verdict: judgement.verdict,
-            repair_cycles,
-            elapsed_seconds,
-            now,
-        },
-    )?;
-
     let certificate = ReviewCertificate {
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.to_string(),
@@ -219,83 +355,117 @@ fn settle(
         repository: context.repository.clone(),
         base: reviewed.base.clone(),
         reviewed_candidate: reviewed.head.clone(),
-        final_candidate: final_candidate.clone(),
+        final_candidate,
         implementation_commits: reviewed.commits.clone(),
-        repair_commits: repair.clone().into_iter().collect(),
+        repair_commits: repair.into_iter().collect(),
         verdict: judgement.verdict,
         assurance: judgement.verdict.assurance(),
         findings: judgement.findings.clone(),
         validation: judgement.validation.clone(),
         validation_complete: judgement.validation_complete,
         reviewer,
-        consumed: ledger.consumed(),
-        budget: ledger.budget,
+        consumed: settled.consumed(),
+        budget: settled.budget,
         escalation: judgement.escalation.clone(),
         selectors_widened: judgement.selectors_widened.clone(),
         issued_at: now,
     };
     store.review_certificate_record(&context.workspace_id, &certificate)?;
-    let certificate_bytes = serde_json::to_vec_pretty(&certificate)
-        .map_err(|error| OrbitError::Execution(format!("serialize review certificate: {error}")))?;
-    for task in &context.tasks {
-        write_artifact(
-            runtime,
-            &task.id,
-            &context.run_id,
-            REVIEW_GATE_ARTIFACT,
-            &certificate_bytes,
-        )?;
-        runtime.update_task(
-            &task.id,
-            TaskUpdateParams {
-                comment: Some(verdict_comment(&certificate, &reviewed)),
-                ..TaskUpdateParams::default()
-            },
-        )?;
-    }
-
-    if certificate.verdict.passed() {
-        Ok(Settled::Passed(passed_output(&certificate)))
-    } else {
-        Ok(Settled::Blocked {
-            certificate: Box::new(certificate),
-        })
-    }
+    reached(Checkpoint::CertificateRecorded)?;
+    publish_certificate(runtime, context, &certificate)?;
+    Ok(settled_outcome(certificate))
 }
 
 fn reconcile_settled(
+    runtime: &OrbitRuntime,
     context: &GateContext,
-    store: &dyn ReviewStoreBackend,
-    attempt_id: &str,
+    certificate: ReviewCertificate,
 ) -> Result<Settled, OrbitError> {
-    let certificate = store
-        .review_certificate(&context.workspace_id, attempt_id)?
-        .ok_or_else(|| {
-            OrbitError::Execution(format!(
-                "review_gate_stale: attempt {attempt_id} settled without a recorded certificate; \
-                 a fresh reviewer start is required"
-            ))
-        })?;
-    if !certificate.verdict.passed() {
-        return Ok(Settled::Blocked {
+    let attempt_id = certificate.attempt_id.as_str();
+    if certificate.verdict.passed() {
+        if context.task_digests.1 != certificate.task_meaning_digest {
+            return Err(OrbitError::Execution(format!(
+                "review_gate_stale: task_meaning_changed: task meaning no longer matches \
+                 settled certificate {attempt_id}"
+            )));
+        }
+        let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
+        if head != certificate.final_candidate {
+            return Err(OrbitError::Execution(format!(
+                "review_gate_stale: candidate_changed: the worktree head is {} but certificate \
+                 {attempt_id} settled {}",
+                head.commit, certificate.final_candidate.commit
+            )));
+        }
+    }
+    // Settlement may have stopped before every task carried the evidence.
+    publish_certificate(runtime, context, &certificate)?;
+    Ok(settled_outcome(certificate))
+}
+
+/// Give every task the certificate artifact and verdict comment, writing
+/// only what is missing so a replay after a partial publish neither loses
+/// nor duplicates evidence. A task already carrying a later attempt's
+/// certificate keeps it.
+fn publish_certificate(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    certificate: &ReviewCertificate,
+) -> Result<(), OrbitError> {
+    let certificate_bytes = serde_json::to_vec_pretty(certificate)
+        .map_err(|error| OrbitError::Execution(format!("serialize review certificate: {error}")))?;
+    let comment = verdict_comment(certificate);
+    for task in &context.tasks {
+        let current = runtime.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?;
+        let current_matches = current
+            .as_ref()
+            .is_some_and(|artifact| artifact.content == certificate_bytes);
+        let superseded = current
+            .as_ref()
+            .and_then(|artifact| {
+                serde_json::from_slice::<ReviewCertificate>(&artifact.content).ok()
+            })
+            .is_some_and(|held| {
+                held.attempt_id != certificate.attempt_id && held.issued_at > certificate.issued_at
+            });
+        if superseded {
+            continue;
+        }
+        if !current_matches {
+            write_artifact(
+                runtime,
+                &task.id,
+                &context.run_id,
+                REVIEW_GATE_ARTIFACT,
+                &certificate_bytes,
+            )?;
+        }
+        let disclosed = runtime
+            .get_task_comments(&task.id)?
+            .iter()
+            .any(|existing| existing.message.trim() == comment.trim());
+        if !disclosed {
+            runtime.update_task(
+                &task.id,
+                TaskUpdateParams {
+                    comment: Some(comment.clone()),
+                    ..TaskUpdateParams::default()
+                },
+            )?;
+        }
+        reached(Checkpoint::TaskPublished)?;
+    }
+    Ok(())
+}
+
+fn settled_outcome(certificate: ReviewCertificate) -> Settled {
+    if certificate.verdict.passed() {
+        Settled::Passed(passed_output(&certificate))
+    } else {
+        Settled::Blocked {
             certificate: Box::new(certificate),
-        });
+        }
     }
-    if context.task_digests.1 != certificate.task_meaning_digest {
-        return Err(OrbitError::Execution(format!(
-            "review_gate_stale: task_meaning_changed: task meaning no longer matches \
-             settled certificate {attempt_id}"
-        )));
-    }
-    let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
-    if head != certificate.final_candidate {
-        return Err(OrbitError::Execution(format!(
-            "review_gate_stale: candidate_changed: the worktree head is {} but certificate \
-             {attempt_id} settled {}",
-            head.commit, certificate.final_candidate.commit
-        )));
-    }
-    Ok(Settled::Passed(passed_output(&certificate)))
 }
 
 fn passed_output(certificate: &ReviewCertificate) -> Value {
