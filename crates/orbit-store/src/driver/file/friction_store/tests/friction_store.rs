@@ -149,17 +149,19 @@ fn a_record_round_trips_through_the_legacy_markdown_layout() {
         rehome_to: None,
         body: "The worker exited before claiming the run.".to_string(),
     };
+    let rehomed = FrictionRecord {
+        id: "F2026-05-002".to_string(),
+        rehome_to: Some("ws_owner".to_string()),
+        ..record.clone()
+    };
 
-    write_record_at(&path, &record).expect("write record");
-    let stored = read_record_at(&path).expect("read record");
+    for record in [record, rehomed] {
+        write_record_at(&path, &record).expect("write record");
+        let stored = read_record_at(&path).expect("read record");
 
-    assert_eq!(stored.record.id, record.id);
-    assert_eq!(stored.record.title, record.title);
-    assert_eq!(stored.record.status, record.status);
-    assert_eq!(stored.record.tags, record.tags);
-    assert_eq!(stored.record.during_task, record.during_task);
-    assert_eq!(stored.record.body, record.body);
-    assert_eq!(stored.path.as_deref(), Some(path.as_path()));
+        assert_eq!(stored.record, record);
+        assert_eq!(stored.path.as_deref(), Some(path.as_path()));
+    }
 }
 
 /// A record written before `title` existed still parses; its handle comes from
@@ -180,6 +182,7 @@ fn a_record_without_a_title_field_still_parses() {
     let stored = read_record_at(&path).expect("read record");
 
     assert_eq!(stored.record.title, None);
+    assert_eq!(stored.record.rehome_to, None);
     assert_eq!(
         stored.record.body,
         "The worker exited before claiming the run."

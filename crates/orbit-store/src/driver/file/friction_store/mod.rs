@@ -456,6 +456,7 @@ pub(crate) fn write_record_at(path: &Path, record: &FrictionRecord) -> Result<()
         resolved_at: record.resolved_at,
         during_task: record.during_task.clone(),
         resolved_by_task: record.resolved_by_task.clone(),
+        rehome_to: record.rehome_to.clone(),
     };
     let yaml = serialize_yaml_with(&frontmatter, |error| {
         OrbitError::Store(format!("serialize friction frontmatter: {error}"))
@@ -491,7 +492,7 @@ pub(crate) fn read_record_at(path: &Path) -> Result<StoredFrictionRecord, OrbitE
             resolved_at: frontmatter.resolved_at,
             during_task: frontmatter.during_task,
             resolved_by_task: frontmatter.resolved_by_task,
-            rehome_to: None,
+            rehome_to: frontmatter.rehome_to,
             body: body.trim_start_matches('\n').trim_end().to_string(),
         },
         path: Some(path.to_path_buf()),
