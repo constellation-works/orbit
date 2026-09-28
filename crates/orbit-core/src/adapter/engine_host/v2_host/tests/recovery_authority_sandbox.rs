@@ -31,9 +31,12 @@ use crate::runtime::recovery_authority::RecoveryAuthority;
 
 /// Each probe writes one `<name>=<outcome>` line so a failure names the vector
 /// that got through instead of only the exit status.
+// The write runs in a subshell: under dash (`/bin/sh` on Debian/Ubuntu) a
+// failed redirection on the special builtin `:` exits the whole script, so the
+// first correctly denied write would abort every probe after it.
 const PROBE_SCRIPT: &str = r#"
 probe() {
-  if : > "$2" 2>/dev/null; then echo "$1=WRITABLE"; else echo "$1=denied"; fi
+  if (: > "$2") 2>/dev/null; then echo "$1=WRITABLE"; else echo "$1=denied"; fi
 }
 rename() {
   if mv "$2" "$2.moved" 2>/dev/null; then echo "$1=REPLACED"; else echo "$1=denied"; fi

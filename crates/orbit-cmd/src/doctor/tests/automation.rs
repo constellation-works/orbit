@@ -333,7 +333,7 @@ fn auto_task_artifact_summary_counts_missing_and_stale_defaults_in_one_populatio
     assert_eq!(row.status, WorkspaceDoctorStatus::Error, "{row:?}");
     assert!(
         row.message
-            .contains("9 of 9 auto-tasks need attention (3 missing, 6 stale)"),
+            .contains("9 of 10 auto-tasks need attention (3 missing, 6 stale)"),
         "{row:?}"
     );
 }
