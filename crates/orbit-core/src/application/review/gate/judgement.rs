@@ -8,7 +8,9 @@ use orbit_automation::review::{
 };
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
-use orbit_engine::review_gate::{CandidateIdentity, commit_reviewer_repairs, uncommitted_paths};
+use orbit_engine::review_gate::{
+    REVIEW_ATTEMPT_TRAILER, commit_reviewer_repairs, uncommitted_paths,
+};
 use orbit_types::task::{Task, TaskArtifact};
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
@@ -136,19 +138,7 @@ impl Judgement {
         if changed.is_empty() {
             return Ok(None);
         }
-        let declared = declared_repair_paths(&self.findings);
-        let mut declared_out_of_scope = Vec::new();
-        let mut undeclared = Vec::new();
-        for path in &changed {
-            if path_in_scope(path, &context.tasks) {
-                continue;
-            }
-            if declared.contains(&normalize_git_path(path)) {
-                declared_out_of_scope.push(path.clone());
-            } else {
-                undeclared.push(path.clone());
-            }
-        }
+        let (declared_out_of_scope, undeclared) = self.classify_repairs(&changed, &context.tasks);
         if !declared_out_of_scope.is_empty() {
             self.widen_declared_selectors(runtime, context, &declared_out_of_scope)?;
         }
@@ -159,7 +149,7 @@ impl Judgement {
             .map(|finding| finding.id.clone())
             .collect::<Vec<_>>();
         let message = format!(
-            "review: {} [{}]\n\nFindings: {}\nPaths: {}\nOrbit-Review-Attempt: {}\nOrbit-Review-Crew: {}",
+            "review: {} [{}]\n\nFindings: {}\nPaths: {}\n{REVIEW_ATTEMPT_TRAILER}: {}\nOrbit-Review-Crew: {}",
             if self.summary.trim().is_empty() {
                 "reviewer repairs".to_string()
             } else {
@@ -182,12 +172,75 @@ impl Judgement {
         );
         // The provider names the agent family the repair commit is attributed
         // to; the model alone may carry no family hint.
-        let reviewer_label = format!("{} / {}", reviewer.provider, reviewer.model);
-        let commit = commit_reviewer_repairs(&context.workspace_path, &reviewer_label, &message)?;
+        let commit = commit_reviewer_repairs(
+            &context.workspace_path,
+            &repair_author_label(reviewer),
+            &message,
+        )?;
         if !undeclared.is_empty() {
             self.downgrade(&undeclared_repair_reason(&undeclared));
         }
         Ok(commit)
+    }
+
+    /// Adopt the repair commit an interrupted settlement of this attempt
+    /// already made, judging its paths exactly as [`Self::commit_repairs`]
+    /// judged them before committing: an undeclared out-of-scope path still
+    /// downgrades. The interrupted run widened selectors before committing,
+    /// so a declared repair path outside the admitted selectors is reported
+    /// as widened even though it is in scope by now.
+    pub(super) fn adopt_repairs(
+        &mut self,
+        runtime: &OrbitRuntime,
+        context: &mut GateContext,
+        committed: &[String],
+        admitted_selectors: &BTreeMap<String, Vec<String>>,
+    ) -> Result<(), OrbitError> {
+        let (declared_out_of_scope, undeclared) = self.classify_repairs(committed, &context.tasks);
+        if !declared_out_of_scope.is_empty() {
+            self.widen_declared_selectors(runtime, context, &declared_out_of_scope)?;
+        }
+        let admitted_tasks = context
+            .tasks
+            .iter()
+            .map(|task| {
+                let mut admitted = task.clone();
+                if let Some(selectors) = admitted_selectors.get(task.id.as_str()) {
+                    admitted.context_files = selectors.clone();
+                }
+                admitted
+            })
+            .collect::<Vec<_>>();
+        let (widened_since_admission, _) = self.classify_repairs(committed, &admitted_tasks);
+        for path in widened_since_admission {
+            let selector = format!("file:{}", normalize_git_path(&path));
+            if !self.selectors_widened.contains(&selector) {
+                self.selectors_widened.push(selector);
+            }
+        }
+        if !undeclared.is_empty() {
+            self.downgrade(&undeclared_repair_reason(&undeclared));
+        }
+        Ok(())
+    }
+
+    /// Split repair paths outside every task's scope into those a repaired
+    /// finding declared and those no finding named.
+    fn classify_repairs(&self, paths: &[String], tasks: &[Task]) -> (Vec<String>, Vec<String>) {
+        let declared = declared_repair_paths(&self.findings);
+        let mut declared_out_of_scope = Vec::new();
+        let mut undeclared = Vec::new();
+        for path in paths {
+            if path_in_scope(path, tasks) {
+                continue;
+            }
+            if declared.contains(&normalize_git_path(path)) {
+                declared_out_of_scope.push(path.clone());
+            } else {
+                undeclared.push(path.clone());
+            }
+        }
+        (declared_out_of_scope, undeclared)
     }
 
     /// Append `file:<path>` selectors for declared coupled repairs, then bind
@@ -394,10 +447,12 @@ fn undeclared_repair_reason(paths: &[String]) -> String {
     }
 }
 
-pub(super) fn verdict_comment(
-    certificate: &ReviewCertificate,
-    reviewed: &CandidateIdentity,
-) -> String {
+/// The author label a reviewer's repair commit is attributed to.
+pub(super) fn repair_author_label(reviewer: &ReviewerIdentity) -> String {
+    format!("{} / {}", reviewer.provider, reviewer.model)
+}
+
+pub(super) fn verdict_comment(certificate: &ReviewCertificate) -> String {
     let assurance = certificate
         .assurance
         .map(|assurance| assurance.as_str().to_string())
@@ -436,9 +491,9 @@ pub(super) fn verdict_comment(
         } else {
             ""
         },
-        reviewed.head.commit,
-        reviewed.base.commit,
-        reviewed.commits.len(),
+        certificate.reviewed_candidate.commit,
+        certificate.base.commit,
+        certificate.implementation_commits.len(),
         certificate.final_candidate.commit,
         repairs,
         if certificate.selectors_widened.is_empty() {

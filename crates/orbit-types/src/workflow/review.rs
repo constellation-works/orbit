@@ -607,6 +607,41 @@ impl ReviewLedger {
         }
     }
 
+    /// The ledger as `attempt_id`'s settlement left it: attempts admitted
+    /// later are dropped, so a settlement finished after a restart reports
+    /// what the lineage had consumed then. `None` when the attempt is not
+    /// part of this lineage.
+    pub fn as_of(&self, attempt_id: &str) -> Option<ReviewLedger> {
+        let position = self
+            .attempts
+            .iter()
+            .position(|attempt| attempt.attempt_id == attempt_id)?;
+        let mut ledger = self.clone();
+        ledger.attempts.truncate(position.saturating_add(1));
+        // Only settlement charges seconds, so settled consumption is the
+        // sum of the kept attempts' recorded elapsed time.
+        ledger.consumed_seconds = ledger
+            .attempts
+            .iter()
+            .filter_map(|attempt| attempt.elapsed_seconds)
+            .fold(0, u64::saturating_add);
+        Some(ledger)
+    }
+
+    /// The ledger while `attempt_id` was still open: [`Self::as_of`] with
+    /// the attempt's own settlement undone. A settlement resumed after the
+    /// ledger recorded it judges against this view, so its own charge is
+    /// not counted against it twice.
+    pub fn before_settling(&self, attempt_id: &str) -> Option<ReviewLedger> {
+        let mut ledger = self.as_of(attempt_id)?;
+        let attempt = ledger.attempts.last_mut()?;
+        let charged = attempt.elapsed_seconds.take().unwrap_or(0);
+        attempt.state = ReviewAttemptState::Open;
+        attempt.repair_cycles = 0;
+        ledger.consumed_seconds = ledger.consumed_seconds.saturating_sub(charged);
+        Some(ledger)
+    }
+
     /// The still-open attempt, if any.
     pub fn open_attempt(&self) -> Option<&ReviewAttempt> {
         self.attempts

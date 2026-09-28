@@ -19,7 +19,7 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::failure::commit_head_matches_failure_handoff;
 use super::git::{git_command_success, git_output, git_output_raw, git_success};
 use super::handoff::reject_failed_delivery;
-use author::{append_co_author_trailers, commit_author_for_tasks, reviewer_author};
+use author::{GitAuthor, append_co_author_trailers, commit_author_for_tasks, reviewer_author};
 use git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, git_commit_paths_with_identity,
     git_commit_with_identity, stage_paths, staged_changed_files,
@@ -392,6 +392,15 @@ pub(super) fn commit_reviewer_repairs_in(
     message: &str,
 ) -> Result<(), OrbitError> {
     git_commit_as(workspace_path, message, &reviewer_author(reviewer_model))
+}
+
+/// The `name <email>` author and committer Git records on a reviewer repair
+/// commit.
+pub(super) fn reviewer_repair_identity(reviewer_model: &str) -> (String, String) {
+    (
+        reviewer_author(reviewer_model).spec(),
+        GitAuthor::orbit().spec(),
+    )
 }
 
 /// Commit a terminally-failed shipment's dirty candidate without consulting
