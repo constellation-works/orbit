@@ -83,6 +83,12 @@ fn production_sweep_options_follow_the_host_clock_cadence() {
 
 #[test]
 fn sweep_refreshes_token_scoreboard_for_each_discovered_workspace() {
+    if super::isolated_child(
+        module_path!(),
+        "sweep_refreshes_token_scoreboard_for_each_discovered_workspace",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -327,6 +333,12 @@ where
 
 #[test]
 fn every_workspace_load_error_sets_a_single_no_workspace_loaded_row() {
+    if super::isolated_child(
+        module_path!(),
+        "every_workspace_load_error_sets_a_single_no_workspace_loaded_row",
+    ) {
+        return;
+    }
     let (_root, global) = prepared_global_root();
     let provider = ScriptedWorkspaces {
         result: DiscoveredWorkspaces {
@@ -371,6 +383,12 @@ fn every_workspace_load_error_sets_a_single_no_workspace_loaded_row() {
 
 #[test]
 fn partial_workspace_load_errors_do_not_fail_the_pass() {
+    if super::isolated_child(
+        module_path!(),
+        "partial_workspace_load_errors_do_not_fail_the_pass",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -430,6 +448,12 @@ fn partial_workspace_load_errors_do_not_fail_the_pass() {
 
 #[test]
 fn unconfigured_host_does_not_report_no_workspace_loaded() {
+    if super::isolated_child(
+        module_path!(),
+        "unconfigured_host_does_not_report_no_workspace_loaded",
+    ) {
+        return;
+    }
     let (_root, global) = prepared_global_root();
     let provider = ScriptedWorkspaces {
         result: DiscoveredWorkspaces::default(),
@@ -443,6 +467,12 @@ fn unconfigured_host_does_not_report_no_workspace_loaded() {
 
 #[test]
 fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
+    if super::isolated_child(
+        module_path!(),
+        "tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert",
+    ) {
+        return;
+    }
     let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
@@ -546,6 +576,12 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
 
 #[test]
 fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error() {
+    if super::isolated_child(
+        module_path!(),
+        "one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error",
+    ) {
+        return;
+    }
     let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
@@ -645,6 +681,12 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
 /// no longer ships.
 #[test]
 fn tick_reports_every_retired_default_as_skipped_rather_than_a_load_error() {
+    if super::isolated_child(
+        module_path!(),
+        "tick_reports_every_retired_default_as_skipped_rather_than_a_load_error",
+    ) {
+        return;
+    }
     let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
@@ -734,6 +776,12 @@ fn tick_reports_every_retired_default_as_skipped_rather_than_a_load_error() {
 /// schedule is gone the next tick fires again on its own.
 #[test]
 fn a_scheduled_host_shutdown_holds_every_fire_until_it_clears() {
+    if super::isolated_child(
+        module_path!(),
+        "a_scheduled_host_shutdown_holds_every_fire_until_it_clears",
+    ) {
+        return;
+    }
     let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
@@ -842,6 +890,12 @@ fn a_scheduled_host_shutdown_holds_every_fire_until_it_clears() {
 
 #[test]
 fn scheduled_ship_slot_records_the_running_drain_instead_of_dispatching() {
+    if super::isolated_child(
+        module_path!(),
+        "scheduled_ship_slot_records_the_running_drain_instead_of_dispatching",
+    ) {
+        return;
+    }
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
     let orbit_dir = root.path().join("repo/.orbit");

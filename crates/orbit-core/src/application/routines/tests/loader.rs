@@ -184,6 +184,12 @@ where
 
 #[test]
 fn workspace_routine_loads_with_workspace_origin() {
+    if super::isolated_child(
+        module_path!(),
+        "workspace_routine_loads_with_workspace_origin",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(&ws.routines_dir, "nightly.yaml", &definition("nightly"));
 
@@ -195,6 +201,9 @@ fn workspace_routine_loads_with_workspace_origin() {
 
 #[test]
 fn disabled_workspace_routine_still_loads() {
+    if super::isolated_child(module_path!(), "disabled_workspace_routine_still_loads") {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
@@ -214,6 +223,12 @@ fn disabled_workspace_routine_still_loads() {
 /// the key can be dropped before the next release rejects it.
 #[test]
 fn retired_host_pin_loads_with_a_warning_naming_the_file() {
+    if super::isolated_child(
+        module_path!(),
+        "retired_host_pin_loads_with_a_warning_naming_the_file",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
@@ -234,6 +249,12 @@ fn retired_host_pin_loads_with_a_warning_naming_the_file() {
 
 #[test]
 fn local_routine_loads_offline_with_local_origin() {
+    if super::isolated_child(
+        module_path!(),
+        "local_routine_loads_offline_with_local_origin",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     // No registry cache, no network — discovery reads only the local registry.
     write_routine(&ws.local_dir, "personal.yaml", &definition("local-only"));
@@ -248,6 +269,12 @@ fn local_routine_loads_offline_with_local_origin() {
 
 #[test]
 fn duplicate_name_across_workspace_and_local_fails_deterministically() {
+    if super::isolated_child(
+        module_path!(),
+        "duplicate_name_across_workspace_and_local_fails_deterministically",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(&ws.routines_dir, "dup.yaml", &definition("dup-name"));
     write_routine(&ws.local_dir, "dup.yaml", &definition("dup-name"));
@@ -286,6 +313,12 @@ fn duplicate_name_across_workspace_and_local_fails_deterministically() {
 /// load error on every pass [DANI-10392].
 #[test]
 fn routine_targeting_a_retired_job_is_skipped_not_failed() {
+    if super::isolated_child(
+        module_path!(),
+        "routine_targeting_a_retired_job_is_skipped_not_failed",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
@@ -344,6 +377,12 @@ fn routine_targeting_a_retired_job_is_skipped_not_failed() {
 /// the operator is told the one command that clears it [DANI-10502].
 #[test]
 fn orbit_seeded_retired_default_keeps_the_sync_advice() {
+    if super::isolated_child(
+        module_path!(),
+        "orbit_seeded_retired_default_keeps_the_sync_advice",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
@@ -379,6 +418,12 @@ fn retired_scheduler_template(name: &str) -> String {
 /// name itself keeps an ordinary, evaluable routine.
 #[test]
 fn workspace_defined_job_of_a_retired_name_still_loads_normally() {
+    if super::isolated_child(
+        module_path!(),
+        "workspace_defined_job_of_a_retired_name_still_loads_normally",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     fs::write(
         ws.routines_dir
@@ -408,6 +453,9 @@ fn workspace_defined_job_of_a_retired_name_still_loads_normally() {
 /// fail-closed load error (ADR-0206).
 #[test]
 fn unknown_target_is_still_a_load_error() {
+    if super::isolated_child(module_path!(), "unknown_target_is_still_a_load_error") {
+        return;
+    }
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
@@ -436,6 +484,12 @@ fn unknown_target_is_still_a_load_error() {
 /// Membership checks must not re-parse every job YAML per routine definition.
 #[test]
 fn collect_routines_parses_each_workspace_catalog_once() {
+    if super::isolated_child(
+        module_path!(),
+        "collect_routines_parses_each_workspace_catalog_once",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     for name in ["alpha", "beta", "gamma"] {
         write_routine(&ws.routines_dir, &format!("{name}.yaml"), &definition(name));
@@ -454,6 +508,12 @@ fn collect_routines_parses_each_workspace_catalog_once() {
 
 #[test]
 fn collect_routines_parses_one_catalog_per_workspace() {
+    if super::isolated_child(
+        module_path!(),
+        "collect_routines_parses_one_catalog_per_workspace",
+    ) {
+        return;
+    }
     let first = seed_source_workspace();
     let second = seed_source_workspace();
     write_routine(&first.routines_dir, "one.yaml", &definition("one"));
@@ -476,6 +536,12 @@ fn collect_routines_parses_one_catalog_per_workspace() {
 
 #[test]
 fn default_routine_survives_a_distinct_workspace_job_catalog_error() {
+    if super::isolated_child(
+        module_path!(),
+        "default_routine_survives_a_distinct_workspace_job_catalog_error",
+    ) {
+        return;
+    }
     let ws = seed_source_workspace();
     let default_yaml = DEFAULT_JOB_FILES
         .iter()
@@ -545,6 +611,12 @@ fn default_routine_survives_a_distinct_workspace_job_catalog_error() {
 
 #[test]
 fn routine_targeting_healthy_job_survives_malformed_job_in_shared_root() {
+    if super::isolated_child(
+        module_path!(),
+        "routine_targeting_healthy_job_survives_malformed_job_in_shared_root",
+    ) {
+        return;
+    }
     let ws = seed_shared_source_workspace();
     let default_yaml = DEFAULT_JOB_FILES
         .iter()
