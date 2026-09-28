@@ -562,7 +562,13 @@ fn read_compat(root: &Path, recorded: &str) -> Option<Envelope> {
     if recorded.is_empty() {
         return None;
     }
-    let path = validated_generation_record_path(root, COMPAT_RECORD).ok()?;
+    let root = validated_generation_root(root).ok()?;
+    let path = validated_generation_record_path(&root, COMPAT_RECORD).ok()?;
+    // Re-checked beside the open, as `open` does: code scanning does not
+    // credit the containment check inside the helper that built the path.
+    if !path.starts_with(&root) {
+        return None;
+    }
     let file = File::open(&path).ok()?;
     let mut raw = String::new();
     file.take(16 * 1024).read_to_string(&mut raw).ok()?;

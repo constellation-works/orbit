@@ -941,6 +941,43 @@ fn participants_register_while_live_and_withdraw_on_exit() {
 }
 
 #[test]
+fn registry_and_compat_records_resolve_to_one_authority_whatever_its_spelling() {
+    let parent = tempfile::tempdir().expect("parent");
+    let root = parent.path().join("nested");
+    std::fs::create_dir(&root).expect("nested");
+    let alias = root.join("..").join("nested");
+    let older = identity(32, 28, 26);
+    let live = join_as(
+        &alias,
+        OLD,
+        &older,
+        ParticipantRole::Drain,
+        Access::Write,
+        Duration::ZERO,
+    )
+    .expect("join through an alias");
+    assert_eq!(
+        std::fs::read_dir(root.join(".generation-participants"))
+            .expect("participants under the resolved root")
+            .count(),
+        1
+    );
+    join_writer(&root, NEW, &older)
+        .expect("the compatibility record written through the alias admits a compatible build");
+    let refusal = refusal_text(join_writer(&root, THIRD, &identity(33, 33, 26)));
+    assert!(
+        refusal.contains(&format!("pid {} (drain, started ", std::process::id())),
+        "the participant registered through the alias blocks the switch: {refusal}"
+    );
+    assert!(pending_switch(&alias).is_none());
+
+    let missing = parent.path().join("missing");
+    assert!(pending_switch(&missing).is_none());
+    assert!(!missing.exists());
+    drop(live);
+}
+
+#[test]
 fn an_update_pin_with_an_identity_admits_compatible_builds() {
     let root = tempfile::tempdir().expect("root");
     let current = identity(32, 28, 26);
