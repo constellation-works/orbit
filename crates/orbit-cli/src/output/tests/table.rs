@@ -344,6 +344,50 @@ fn a_multi_line_value_still_occupies_exactly_one_line() {
     );
 }
 
+/// A piped sink: `auto` against a non-terminal resolves to the plain form.
+fn plain_sink() -> OutputSink {
+    OutputSink::resolve(false, &SinkEnv::default(), None, None, false)
+}
+
+#[test]
+fn plain_escapes_embedded_separators_so_each_record_is_one_line_of_whole_fields() {
+    let mut table = build_table(&["ID", "TITLE", "STATUS"]);
+    table.add_row(vec!["T1", "first line\nsecond\tfield", "proposed"]);
+    table.add_row(vec!["T2", "carriage\r\nreturn", "done"]);
+    table.add_row(vec!["T3", "ordinary title", "blocked"]);
+
+    let rendered = table.render_plain(&plain_sink());
+    let rows = rendered.split('\n').collect::<Vec<_>>();
+
+    assert_eq!(rows.len(), 3, "one physical line per record: {rendered:?}");
+    assert!(
+        !rendered.contains('\r'),
+        "a raw carriage return survived: {rendered:?}"
+    );
+    for row in &rows {
+        assert_eq!(row.split('\t').count(), 3, "field count drifted: {row:?}");
+    }
+    assert_eq!(rows[0], "T1\tfirst line\\nsecond\\tfield\tproposed");
+    assert_eq!(rows[1], "T2\tcarriage\\r\\nreturn\tdone");
+    assert_eq!(
+        rows[2], "T3\tordinary title\tblocked",
+        "a value without separators renders unchanged"
+    );
+}
+
+#[test]
+fn plain_escapes_backslash_so_the_encoding_is_unambiguous() {
+    let mut table = build_table(&["ID", "VALUE"]);
+    // A literal backslash-n and a real line feed must not render alike.
+    table.add_row(vec!["T1", "literal \\n"]);
+    table.add_row(vec!["T2", "real \n"]);
+
+    let rendered = table.render_plain(&plain_sink());
+    let rows = rendered.lines().collect::<Vec<_>>();
+
+    assert_eq!(rows, ["T1\tliteral \\\\n", "T2\treal \\n"]);
+}
+
 // --- ORB-10571: golden coverage for the "table" form of three real list
 // commands, at a pinned width. Each fixture below reproduces the column
 // layout its command builds (cross-checked against the source at the call
