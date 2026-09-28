@@ -149,6 +149,21 @@ impl FrictionStore {
         id: &str,
         params: FrictionUpdateParams,
     ) -> Result<StoredFrictionRecord, OrbitError> {
+        self.update_unless(id, params, |_| false)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))
+    }
+
+    /// Apply `params` to `id` unless `keep` accepts the record as it stands
+    /// under the write lock, in which case it is returned untouched.
+    /// `Ok(None)` means no such record exists. The check and the write share
+    /// one `BEGIN IMMEDIATE` transaction, so no other writer can land between
+    /// them.
+    fn update_unless(
+        &self,
+        id: &str,
+        params: FrictionUpdateParams,
+        keep: impl FnOnce(&StoredFrictionRecord) -> bool,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
         validate_friction_id(id)?;
         let taxonomy = match params.tags {
             Some(_) => Some(load_tag_taxonomy(&self.files_root)?),
@@ -160,8 +175,12 @@ impl FrictionStore {
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 let conn = tx.connection();
-                let mut stored = queries::show_record(conn, &self.workspace_id, id)?
-                    .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id))?;
+                let Some(mut stored) = queries::show_record(conn, &self.workspace_id, id)? else {
+                    return Ok(None);
+                };
+                if keep(&stored) {
+                    return Ok(Some(stored));
+                }
                 if let (Some(tags), Some(taxonomy)) = (params.tags.clone(), taxonomy.as_ref()) {
                     stored.record.tags = normalize_and_validate_tags(tags, taxonomy)?;
                 }
@@ -205,7 +224,7 @@ impl FrictionStore {
                         .map(|path| path.to_string_lossy())
                         .as_deref(),
                 )?;
-                Ok(stored)
+                Ok(Some(stored))
             })
     }
 
@@ -343,37 +362,24 @@ impl FrictionStore {
         task_id: &str,
         resolved_at: DateTime<Utc>,
     ) -> Result<StoredFrictionRecord, OrbitError> {
-        self.update(
-            id,
-            FrictionUpdateParams {
-                status: Some(FrictionStatus::Resolved),
-                tags: None,
-                title: None,
-                body: None,
-                resolved_by_task: Some(task_id.to_string()),
-                rehome_to: None,
-                updated_at: resolved_at,
-            },
-        )
+        self.update(id, resolve_by_task_params(task_id, resolved_at))
     }
 
     /// Resolve `id` as a side effect of `task_id` completing, unless someone
     /// already resolved it. A task's `resolves` relation is a claim, not an
     /// override: an existing resolution (and the task it names) is kept and
-    /// returned untouched. `Ok(None)` means no such record exists locally.
+    /// returned untouched. The check happens under the write lock, so a
+    /// resolution committed by a concurrent writer is never overwritten.
+    /// `Ok(None)` means no such record exists locally.
     pub fn auto_resolve_by_task(
         &self,
         id: &str,
         task_id: &str,
         resolved_at: DateTime<Utc>,
     ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
-        let Some(stored) = self.show(id)? else {
-            return Ok(None);
-        };
-        if stored.record.status == FrictionStatus::Resolved {
-            return Ok(Some(stored));
-        }
-        self.resolve_by_task(id, task_id, resolved_at).map(Some)
+        self.update_unless(id, resolve_by_task_params(task_id, resolved_at), |stored| {
+            stored.record.status == FrictionStatus::Resolved
+        })
     }
 
     pub fn tags(&self) -> Result<Vec<String>, OrbitError> {
@@ -495,6 +501,18 @@ fn split_friction_id(id: &str) -> Option<(String, u32)> {
     let month = id.get(1..8)?.to_string();
     let seq = id.get(9..12)?.parse::<u32>().ok()?;
     (seq > 0).then_some((month, seq))
+}
+
+fn resolve_by_task_params(task_id: &str, resolved_at: DateTime<Utc>) -> FrictionUpdateParams {
+    FrictionUpdateParams {
+        status: Some(FrictionStatus::Resolved),
+        tags: None,
+        title: None,
+        body: None,
+        resolved_by_task: Some(task_id.to_string()),
+        rehome_to: None,
+        updated_at: resolved_at,
+    }
 }
 
 impl crate::contracts::FrictionStoreBackend for FrictionStore {

@@ -1,12 +1,16 @@
 //! Read/write behaviour of the SQLite friction store (ORB-10680).
 
+use std::sync::Barrier;
+use std::time::Duration;
+
 use chrono::{TimeZone, Utc};
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::record::FrictionStatus;
+use rusqlite::TransactionBehavior;
 use serde_json::json;
 
-use super::super::queries::DECODED_RECORDS;
+use super::super::queries::{self, DECODED_RECORDS};
 use super::super::{FrictionListFilter, FrictionStore, FrictionUpdateParams};
 use super::support::{add_params, at, done_task, friction_store, store};
 
@@ -499,6 +503,118 @@ fn auto_resolution_yields_to_an_existing_resolution() {
             .expect("missing record is not an error")
             .is_none()
     );
+}
+
+/// How long a writer keeps the lock after the racing resolvers are released,
+/// so they are already in flight when it commits.
+const RACE_WINDOW: Duration = Duration::from_millis(200);
+
+/// An auto-resolver in flight while another writer commits a resolution must
+/// yield to that committed resolution rather than overwrite its task.
+#[test]
+fn auto_resolution_racing_a_committed_resolution_keeps_the_incumbent() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frictions = friction_store(temp.path(), "ws_one");
+    let id = frictions
+        .add(add_params(TEST_CODEX_MODEL, at(1, 0), &["tooling"]))
+        .expect("seed record")
+        .record
+        .id;
+    let holding = Barrier::new(2);
+
+    let auto = std::thread::scope(|scope| {
+        let incumbent = scope.spawn(|| {
+            frictions
+                .store
+                .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                    let conn = tx.connection();
+                    let mut stored =
+                        queries::show_record(conn, "ws_one", &id)?.expect("seeded record");
+                    stored.record.status = FrictionStatus::Resolved;
+                    stored.record.resolved_at = Some(at(2, 0));
+                    stored.record.resolved_by_task = Some("ORB-00001".to_string());
+                    queries::upsert_record(
+                        conn,
+                        "ws_one",
+                        &stored.record,
+                        &id[1..8],
+                        id[9..12].parse().expect("seq"),
+                        None,
+                    )?;
+                    holding.wait();
+                    std::thread::sleep(RACE_WINDOW);
+                    Ok(())
+                })
+        });
+        holding.wait();
+        let auto = frictions
+            .auto_resolve_by_task(&id, "ORB-00002", at(3, 0))
+            .expect("auto-resolve during a concurrent resolution")
+            .expect("record exists");
+        incumbent
+            .join()
+            .expect("incumbent thread")
+            .expect("commit the incumbent resolution");
+        auto
+    });
+
+    let stored = frictions.show(&id).expect("show").expect("record exists");
+    for record in [&auto.record, &stored.record] {
+        assert_eq!(record.status, FrictionStatus::Resolved);
+        assert_eq!(record.resolved_by_task.as_deref(), Some("ORB-00001"));
+        assert_eq!(record.resolved_at, Some(at(2, 0)));
+    }
+}
+
+/// Two auto-resolvers released together: whichever commits first owns the
+/// resolution, and the other returns that winner without touching it.
+#[test]
+fn racing_auto_resolvers_cannot_overwrite_the_winner() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frictions = friction_store(temp.path(), "ws_one");
+    let id = frictions
+        .add(add_params(TEST_CODEX_MODEL, at(1, 0), &["tooling"]))
+        .expect("seed record")
+        .record
+        .id;
+    let holding = Barrier::new(3);
+
+    let results = std::thread::scope(|scope| {
+        let gate = scope.spawn(|| {
+            frictions
+                .store
+                .with_transaction_behavior(TransactionBehavior::Immediate, |_| {
+                    holding.wait();
+                    std::thread::sleep(RACE_WINDOW);
+                    Ok(())
+                })
+        });
+        let resolvers = [("ORB-00001", at(2, 0)), ("ORB-00002", at(3, 0))].map(|(task, when)| {
+            let (frictions, holding, id) = (&frictions, &holding, &id);
+            scope.spawn(move || {
+                holding.wait();
+                frictions
+                    .auto_resolve_by_task(id, task, when)
+                    .expect("auto-resolve")
+                    .expect("record exists")
+            })
+        });
+        gate.join().expect("gate thread").expect("hold the writer");
+        resolvers.map(|resolver| resolver.join().expect("resolver thread"))
+    });
+
+    let stored = frictions.show(&id).expect("show").expect("record exists");
+    let winner = stored.record.resolved_by_task.as_deref();
+    let expected_at = match winner {
+        Some("ORB-00001") => at(2, 0),
+        Some("ORB-00002") => at(3, 0),
+        other => panic!("resolution must name one of the racing tasks, got {other:?}"),
+    };
+    assert_eq!(stored.record.resolved_at, Some(expected_at));
+    for result in &results {
+        assert_eq!(result.record.resolved_by_task.as_deref(), winner);
+        assert_eq!(result.record.resolved_at, Some(expected_at));
+    }
 }
 
 /// The taxonomy stayed a file; record persistence moving does not move it.
