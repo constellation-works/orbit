@@ -12,8 +12,8 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::super::claim::{
-    MAX_CAPTURED_OUTPUT_BYTES, capture, claim_handoff, claim_validate, delivery, observe_candidate,
-    pull_request_number, slug,
+    MAX_CAPTURED_OUTPUT_BYTES, MAX_HANDOFF_SUMMARY_BYTES, capture, claim_handoff, claim_validate,
+    delivery, observe_candidate, pull_request_number, slug,
 };
 
 fn claim_context(ship_mode: &str) -> ClaimExecutionContext {
@@ -374,6 +374,137 @@ fn handoff_refuses_a_dirty_tree_after_validation() {
         .expect_err("dirty candidate must not reach typed handoff");
     assert!(error.to_string().contains("staged, tracked, or untracked"));
     assert!(host.handoff.lock().expect("handoff lock").is_none());
+}
+
+/// Validate the checked-out candidate and hand it off with `extra` merged
+/// into the handoff input, returning the typed handoff's summary or the
+/// handoff's refusal.
+fn hand_off(repo: &Path, extra: serde_json::Value) -> (ClaimHost, Result<String, OrbitError>) {
+    let host = ClaimHost::local_with_commands(&["true"]);
+    let mut input = local_input(repo);
+    let validated = claim_validate(&host, &input).expect("clean candidate validation");
+    input["candidate"] = validated["candidate"].clone();
+    input["validation"] = validated["validation"].clone();
+    if let serde_json::Value::Object(extra) = extra {
+        for (key, value) in extra {
+            input[key.as_str()] = value;
+        }
+    }
+    let result = claim_handoff(&host, &input).map(|_| {
+        host.handoff
+            .lock()
+            .expect("handoff lock")
+            .clone()
+            .expect("typed handoff recorded")
+            .execution_summary
+    });
+    (host, result)
+}
+
+/// The typed handoff is what writes the owner's `execution_summary`, and a
+/// claimed-mode implementer writes no owner task state: its summary arrives
+/// as the implement step's output and has to travel in the handoff.
+#[test]
+fn handoff_carries_the_claimed_implementers_output_summary() {
+    let (_temp, repo, head) = local_candidate();
+    let summary = "Outcome: success\nChanges:\n- wrote input.txt\nAssessment: done";
+    let (_host, handed) = hand_off(
+        &repo,
+        json!({"implementation": {
+            "summary": "short result",
+            "execution_summary": summary,
+            "comment": "left a note for the owner",
+            "context_files_added": ["file:docs/new.md", "  "],
+        }}),
+    );
+    let handed = handed.expect("an implementer summary hands off");
+
+    assert!(
+        handed.starts_with(summary),
+        "the implementer's words come first: {handed}"
+    );
+    assert!(handed.contains("left a note for the owner"), "{handed}");
+    assert!(handed.contains("- file:docs/new.md"), "{handed}");
+    assert!(
+        !handed.contains("short result"),
+        "the full summary wins over the short one: {handed}"
+    );
+    assert!(
+        handed.ends_with(&format!(
+            "Claimed execution delivered candidate {head} on base {}; required validation passed \
+             on the exact candidate and the owner holds every captured log.",
+            git(&repo, &["rev-parse", "agent-main"])
+        )),
+        "the delivery line names the candidate: {handed}"
+    );
+}
+
+#[test]
+fn handoff_falls_back_to_the_short_summary_then_to_the_delivery_statement() {
+    let (_temp, repo, head) = local_candidate();
+    let (_host, handed) = hand_off(
+        &repo,
+        json!({"implementation": {"summary": "short result"}}),
+    );
+    assert!(handed.expect("short summary").starts_with("short result"));
+
+    // A deterministic stand-in reports neither; so does an absent output.
+    for extra in [json!({"implementation": {"stdout": ""}}), json!({})] {
+        let (_host, handed) = hand_off(&repo, extra);
+        let handed = handed.expect("no summary still hands off");
+        assert!(
+            handed.starts_with(&format!("Claimed execution delivered candidate {head}")),
+            "{handed}"
+        );
+    }
+}
+
+#[test]
+fn an_explicit_summary_input_wins_over_the_implementer_output() {
+    let (_temp, repo, _) = local_candidate();
+    let (_host, handed) = hand_off(
+        &repo,
+        json!({
+            "execution_summary": "Outcome: success\nfrom the input",
+            "implementation": {"execution_summary": "Outcome: success\nfrom the output"},
+        }),
+    );
+    let handed = handed.expect("explicit summary hands off");
+    assert!(
+        handed.starts_with("Outcome: success\nfrom the input"),
+        "{handed}"
+    );
+    assert!(!handed.contains("from the output"), "{handed}");
+}
+
+/// The owner refuses a handoff whose summary opens with `Outcome: failed`;
+/// refusing it here keeps a failed implementation from becoming a durable
+/// settlement the owner can only reject.
+#[test]
+fn an_implementer_summary_reporting_failure_is_not_handed_off() {
+    let (_temp, repo, _) = local_candidate();
+    let (host, handed) = hand_off(
+        &repo,
+        json!({"implementation": {"execution_summary": "\n  Outcome: failed\nincomplete"}}),
+    );
+    let error = handed.expect_err("a failed summary is refused");
+    assert!(error.to_string().contains("Outcome: failed"), "{error}");
+    assert!(host.handoff.lock().expect("handoff lock").is_none());
+}
+
+#[test]
+fn an_oversized_implementer_summary_is_truncated_and_says_so() {
+    let (_temp, repo, _) = local_candidate();
+    let (_host, handed) = hand_off(
+        &repo,
+        json!({"implementation": {"execution_summary": "y".repeat(MAX_HANDOFF_SUMMARY_BYTES + 100)}}),
+    );
+    let handed = handed.expect("oversized summary hands off");
+    assert!(
+        handed.contains("[summary truncated to"),
+        "truncation is reported"
+    );
+    assert!(handed.len() < MAX_HANDOFF_SUMMARY_BYTES + 1024);
 }
 
 /// Host that records claim validation logs and the typed handoff so the

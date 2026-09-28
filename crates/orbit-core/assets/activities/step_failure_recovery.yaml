@@ -167,6 +167,19 @@ spec:
     - failed_step_input: the complete rendered failed-target input for inspecting
       delivery checkpoints; it is evidence, not independent execution authority
 
+    Claimed leaves: a run of `task_claimed_pr_pipeline` or
+    `task_claimed_local_pipeline` (its implement input carries
+    `claimed: true`) executes a task another machine owns, and ends at the
+    typed handoff its `claim_handoff` step records. There:
+    - the execution summary of record is the implement step's output
+      (`execution_summary` in the run's implement checkpoint); the handoff
+      carries it to the owner. Never read or write the owner's task record
+      for it, and never treat an unreachable owner task store as a failed
+      implementation;
+    - only repair-and-retry applies. Direct delivery and job resume are not
+      available: never move the task to review, never resume, never merge.
+      The owner accepts only the pipeline's own typed handoff.
+
     Use this decision procedure:
 
     1. Inspect the input, the current run and pipeline checkpoints, the task, and
@@ -177,7 +190,9 @@ spec:
        - every task claimed by the run is attributable to its checkpoints;
        - every claimed task has a non-empty persisted execution_summary and its
          implement checkpoint shows successful completion, not merely an
-         attempted or failed implementation; and
+         attempted or failed implementation (in a claimed leaf, see below,
+         that summary is the implement checkpoint's own `execution_summary`
+         output, not the owner's task record); and
        - failed_step_id is a delivery-tail step: commit, prepare_branch,
          sync_base, push, or pr_open (including their corresponding activity
          names).

@@ -1630,8 +1630,22 @@ fn default_jobs_template_only_declared_agent_loop_handoffs() {
         })
         .collect::<BTreeSet<_>>();
     // No shipped job templates an agent step's output directly: every agent
-    // handoff passes through a deterministic step that bounds it.
-    let allowed_handoffs: BTreeSet<(&str, &str, &str)> = BTreeSet::new();
+    // handoff passes through a deterministic step that bounds it. The claimed
+    // leaves hand their implementer's output to `claim_handoff`, which reads
+    // only its summary fields, bounds them, and refuses a failed outcome
+    // before anything reaches the owner.
+    let allowed_handoffs: BTreeSet<(&str, &str, &str)> = BTreeSet::from([
+        (
+            "task_claimed_local_pipeline",
+            "implement_one",
+            "steps.implement_one.output",
+        ),
+        (
+            "task_claimed_pr_pipeline",
+            "implement_one",
+            "steps.implement_one.output",
+        ),
+    ]);
 
     for (job_name, yaml) in DEFAULT_JOB_FILES {
         let asset = load_job_asset(yaml)
