@@ -54,6 +54,23 @@ spec:
     std::fs::write(path, yaml).expect("write job yaml");
 }
 
+fn write_activity_ref_job(path: &Path, name: &str, activity: &str) {
+    let yaml = format!(
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  max_active_runs: 1\n  steps:\n    - id: marker\n      target: activity:{activity}\n"
+    );
+    std::fs::create_dir_all(path.parent().expect("job path has parent")).expect("create job dir");
+    std::fs::write(path, yaml).expect("write job yaml");
+}
+
+fn write_activity(path: &Path, name: &str) {
+    let yaml = format!(
+        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: {name}\nspec:\n  type: agent_loop\n  description: Marker activity.\n  prompt: Mark this step.\n  input_schema_json:\n    type: object\n  allowed_tools: []\n"
+    );
+    std::fs::create_dir_all(path.parent().expect("activity path has parent"))
+        .expect("create activity dir");
+    std::fs::write(path, yaml).expect("write activity yaml");
+}
+
 fn write_empty_job(path: &Path, name: &str) {
     let yaml = format!(
         r#"schemaVersion: 2
@@ -1964,6 +1981,85 @@ fn job_execution_prefers_global_over_workspace() {
         .load_v2_job_asset_by_name("task_auto_pipeline")
         .expect("load default catalog");
     assert_eq!(default.0, global_dir.join("task_auto_pipeline.yaml"));
+}
+
+#[test]
+fn catalog_reference_layers_use_named_execution_definition() {
+    for job_name in ["custom", "task_auto_pipeline"] {
+        let (_root, runtime, global_root, workspace_root) = test_runtime();
+        let global_job = global_root.join(format!("resources/jobs/{job_name}.yaml"));
+        let workspace_job = workspace_root.join(format!("resources/jobs/{job_name}.yaml"));
+        let global_activity = global_root.join("resources/activities/global_marker.yaml");
+        let workspace_activity = workspace_root.join("resources/activities/workspace_marker.yaml");
+        write_activity_ref_job(&global_job, job_name, "global_marker");
+        write_activity_ref_job(&workspace_job, job_name, "workspace_marker");
+        write_activity(&global_activity, "global_marker");
+        write_activity(&workspace_activity, "workspace_marker");
+
+        let (selected_path, selected_job) = runtime
+            .load_v2_job_asset_by_name(job_name)
+            .expect("named execution job");
+        assert_eq!(selected_path, global_job);
+        let [selected_step] = selected_job.steps.as_slice() else {
+            panic!("fixture must have one activity reference");
+        };
+        let JobV2StepBody::TargetRef(selected_target) = &selected_step.body else {
+            panic!("selected job must retain its activity reference");
+        };
+        assert_eq!(selected_target.target, "activity:global_marker");
+        let rows = runtime
+            .catalog_reference_layers(job_name)
+            .expect("catalog reference layers");
+        assert_eq!(
+            rows.len(),
+            2,
+            "only the execution-selected job's activity is reported"
+        );
+        assert_eq!(rows[0].reference, format!("job:{job_name}"));
+        assert_eq!(rows[0].layer, "shipped");
+        assert_eq!(rows[0].path.as_deref(), Some(global_job.as_path()));
+        assert_eq!(rows[1].reference, "activity:global_marker");
+        assert_eq!(rows[1].layer, "shipped");
+        assert_eq!(rows[1].path.as_deref(), Some(global_activity.as_path()));
+    }
+}
+
+#[test]
+fn explicit_default_named_job_reports_explicit_provenance() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    let job_name = "task_auto_pipeline";
+    let global_job = global_root.join("resources/jobs/task_auto_pipeline.yaml");
+    let workspace_job = workspace_root.join("resources/jobs/task_auto_pipeline.yaml");
+    let explicit_dir = global_root
+        .parent()
+        .expect("global root has parent")
+        .join("overrides");
+    let explicit_job = explicit_dir.join("task_auto_pipeline.yaml");
+    let global_activity = global_root.join("resources/activities/global_marker.yaml");
+    write_activity_ref_job(&global_job, job_name, "global_marker");
+    write_activity_ref_job(&workspace_job, job_name, "workspace_marker");
+    write_activity_ref_job(&explicit_job, job_name, "explicit_marker");
+    write_activity(&global_activity, "global_marker");
+
+    let explicit_dir_value = explicit_dir.to_str().expect("UTF-8 explicit directory");
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_JOB_DIR", Some(explicit_dir_value)),
+        ("ORBIT_V2_JOB_DIR", None),
+    ]);
+    let (selected_path, _) = runtime
+        .load_v2_job_asset_by_name(job_name)
+        .expect("named execution job");
+    assert_eq!(selected_path, explicit_job);
+    let rows = runtime
+        .catalog_reference_layers(job_name)
+        .expect("catalog reference layers");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].reference, format!("job:{job_name}"));
+    assert_eq!(rows[0].layer, "explicit");
+    assert_eq!(rows[0].path.as_deref(), Some(explicit_job.as_path()));
+    assert_eq!(rows[1].reference, "activity:explicit_marker");
+    assert_eq!(rows[1].layer, "unresolved");
+    assert_eq!(rows[1].path, None);
 }
 
 #[test]
