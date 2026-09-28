@@ -80,6 +80,7 @@ const panelOutputs = {
 
 const requested = [];
 const confirmations = [];
+const panelFailures = new Set();
 window.confirm = message => { confirmations.push(message); return true; };
 globalThis.fetch = async (path, options = {}) => {
   const url = String(path);
@@ -94,6 +95,13 @@ globalThis.fetch = async (path, options = {}) => {
     return { ok: true, status: 200, text: async () => JSON.stringify({ plugin }) };
   }
   const panel = /\/api\/plugins\/([^/]+)\/panels\/([^?]+)/.exec(url);
+  if (panel) {
+    const key = `${decodeURIComponent(panel[1])}/${decodeURIComponent(panel[2])}`;
+    if (panelFailures.has(key)) {
+      const error = { error: 'panel source unavailable' };
+      return { ok: false, status: 503, json: async () => error, text: async () => JSON.stringify(error) };
+    }
+  }
   const payload = panel
     ? {
         output: panelOutputs[`${decodeURIComponent(panel[1])}/${decodeURIComponent(panel[2])}`],
@@ -200,5 +208,67 @@ assert(button('graph', 'Enable host'), 'host state refreshes without a page rest
 for (const plugin of plugins) plugin.capabilities = { enable: denied, disable: denied };
 await fetchAndRenderPlugins();
 assert(withClass('plugin-toggle').length === 0, 'non-operator session sees no mutation controls');
+
+// A refresh whose plugin metadata is unchanged keeps the mounted card.
+// Only the panel read changes, and that read has to land in the card the
+// document still shows.
+const mountedPanel = (panelId) => {
+  const section = descendants(body()).find(node => node.dataset && node.dataset.panel === panelId);
+  assert(section, `panel ${panelId} is mounted in the live document`);
+  const panelBody = (section.children || []).find(node => hasClass(node, 'plugin-panel-body'));
+  assert(panelBody, `panel ${panelId} has a body in the live document`);
+  return { section, panelBody };
+};
+const retainedCard = withClass('plugin-card').find(card => card.dataset.key === 'graph');
+const retainedStatus = mountedPanel('graph/status');
+assert(retainedStatus.panelBody.textContent.includes('1284'), `status panel starts from its first read: ${retainedStatus.panelBody.textContent}`);
+
+panelOutputs['graph/status'] = { indexed_files: 2048, last_run: '2026-09-21T02:00:00Z' };
+await fetchAndRenderPlugins();
+await tick();
+await tick();
+
+const refreshedCard = withClass('plugin-card').find(card => card.dataset.key === 'graph');
+const refreshedStatus = mountedPanel('graph/status');
+assert(refreshedCard === retainedCard, 'unchanged plugin metadata retains the plugin card');
+assert(refreshedStatus.section === retainedStatus.section, 'unchanged plugin metadata retains the panel section');
+assert(refreshedStatus.panelBody === retainedStatus.panelBody, 'panel output refreshes in the retained body');
+assert(refreshedStatus.panelBody.textContent.includes('2048'), `live panel shows the new output: ${refreshedStatus.panelBody.textContent}`);
+assert(!refreshedStatus.panelBody.textContent.includes('1284'), `live panel dropped the previous output: ${refreshedStatus.panelBody.textContent}`);
+assert(
+  descendants(body()).find(node => node.dataset && node.dataset.panel === 'graph/files').textContent.includes('src/a.rs'),
+  'a panel whose output did not change stays visible on the retained card',
+);
+
+panelFailures.add('graph/status');
+await fetchAndRenderPlugins();
+await tick();
+await tick();
+const failedStatus = mountedPanel('graph/status');
+assert(failedStatus.panelBody === retainedStatus.panelBody, 'a failed refresh addresses the retained body');
+assert(failedStatus.panelBody.textContent.includes('panel source unavailable'), `live panel shows the refresh failure: ${failedStatus.panelBody.textContent}`);
+assert(!failedStatus.panelBody.textContent.includes('2048'), `the failure replaces the previous output on the live body: ${failedStatus.panelBody.textContent}`);
+
+panelFailures.delete('graph/status');
+panelOutputs['graph/status'] = { indexed_files: 4096, last_run: '2026-09-22T02:00:00Z' };
+await fetchAndRenderPlugins();
+await tick();
+await tick();
+const recoveredStatus = mountedPanel('graph/status');
+assert(recoveredStatus.panelBody === retainedStatus.panelBody, 'recovery paints the same live body');
+assert(recoveredStatus.panelBody.textContent.includes('4096'), `live panel shows the recovered output: ${recoveredStatus.panelBody.textContent}`);
+assert(!recoveredStatus.panelBody.textContent.includes('panel source unavailable'), `recovery clears the failure diagnostic: ${recoveredStatus.panelBody.textContent}`);
+
+const cardBeforeMetadataChange = refreshedCard;
+plugins.find(plugin => plugin.name === 'graph').version = '0.4.2';
+await fetchAndRenderPlugins();
+await tick();
+await tick();
+const cardAfterMetadataChange = withClass('plugin-card').find(card => card.dataset.key === 'graph');
+const replacedStatus = mountedPanel('graph/status');
+assert(cardAfterMetadataChange !== cardBeforeMetadataChange, 'a metadata change replaces the plugin card');
+assert(!descendants(body()).includes(cardBeforeMetadataChange), 'the replaced card leaves the live document');
+assert(replacedStatus.panelBody !== retainedStatus.panelBody, 'a replaced card mounts a new panel body');
+assert(replacedStatus.panelBody.textContent.includes('4096'), `the replacement card shows the current panel output: ${replacedStatus.panelBody.textContent}`);
 
 console.log('dashboard plugins panel assertions passed');
