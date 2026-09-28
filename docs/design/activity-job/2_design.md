@@ -755,6 +755,17 @@ drift from. The prompt contract
 (`render_prompt_with_embedded_envelope`) stays as human-readable guidance; it is
 no longer the enforcement mechanism.
 
+**Background tasks are disabled.** Structured output forces the envelope as
+soon as the agent ends its turn. So a validation gate started with Bash
+`run_in_background` and awaited through `Monitor` is still running when the
+agent must report, and the run fails `validation_incomplete` with finished code
+[ORB-13664]. The claude runtime therefore pins
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` through `AgentInvocationSpec::fixed_env`.
+The orchestrator applies it over the `[execution.env]` allowlist, so an outer
+process cannot re-enable it. It is emitted in code, not in `claude.yaml`, for
+the same no-second-copy reason as `--json-schema`; a `direct_agent` executor's
+`env:` is not applied to the provider child either.
+
 **What the schema cannot say.** The status/error correlation — `failed`
 requiring a non-empty `error.code` — is absent from the schema and stays in
 `parse_json_envelope`'s Rust checks. This is a constraint, not a preference:

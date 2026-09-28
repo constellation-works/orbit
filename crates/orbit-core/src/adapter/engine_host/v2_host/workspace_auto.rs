@@ -510,6 +510,13 @@ pub fn explain_workspace_auto_readiness(
                             Value::String("task_pilot_preparation_required".to_string()),
                         );
                     }
+                    BacklogTaskExclusionReason::DeliveryJobUnavailable => {
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("delivery_job_unavailable".to_string()),
+                        );
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::InheritedOnlyEpicRoot => {
                         object.insert(
                             "reason".to_string(),

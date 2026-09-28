@@ -16,6 +16,18 @@ fn claude_cli_model_arg(model: &str) -> String {
     trimmed.to_string()
 }
 
+/// [ORB-13664] Headless `-p --json-schema` mode forces the StructuredOutput
+/// call as soon as the agent ends its turn, so a validation gate started with
+/// Bash `run_in_background` and awaited through `Monitor` is still running when
+/// the envelope is written (`validation_incomplete` in `jrun-20260928-0259-c1`
+/// and `jrun-20260928-0305-c1`). This switch removes the `run_in_background`
+/// parameter and the `Monitor` tool, so every gate runs in the foreground.
+/// It is an env var rather than a static arg for the same reason
+/// `--json-schema` is emitted here: the installed `claude.yaml` copy is edited
+/// independently of the packaged asset.
+pub(crate) const CLAUDE_CLI_FIXED_ENV: &[(&str, &str)] =
+    &[("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1")];
+
 pub(crate) struct ClaudeCliTransport {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,

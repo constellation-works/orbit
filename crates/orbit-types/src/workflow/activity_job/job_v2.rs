@@ -4,7 +4,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use crate::workflow::JobScheduleState;
+use crate::workflow::{JobScheduleState, ShipMode};
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 
@@ -34,6 +34,12 @@ pub struct JobV2 {
     /// successful delivery. The collector still checks task and Git safety.
     #[serde(default, skip_serializing_if = "is_false")]
     pub owns_task_worktree: bool,
+    /// This job carries the tasks in its `input.task_ids` through delivery.
+    /// A live run holds those tasks' delivery slot, so `orbit run ship`
+    /// refuses to dispatch them again; `modes` says which ship modes a task
+    /// may select the job for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_delivery: Option<JobTaskDelivery>,
     #[serde(default)]
     pub default_input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,6 +61,31 @@ pub struct JobV2 {
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+/// A job's `spec.task_delivery` declaration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobTaskDelivery {
+    /// Ship modes a task may select this job for with a `delivery:<job>` tag.
+    /// Empty for a job that holds the slot without being selectable: the ship
+    /// coordinators, and the claimed leaves a claim binding selects.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<ShipMode>,
+}
+
+impl JobV2 {
+    /// Whether a live run of this job holds its tasks' delivery slot.
+    pub fn holds_task_delivery(&self) -> bool {
+        self.task_delivery.is_some()
+    }
+
+    /// Whether a task may select this job to deliver it in `mode`.
+    pub fn delivers_mode(&self, mode: ShipMode) -> bool {
+        self.task_delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.modes.contains(&mode))
+    }
 }
 
 /// A step in a v2 job. Carries `id`, optional `when` / `retry` modifiers,

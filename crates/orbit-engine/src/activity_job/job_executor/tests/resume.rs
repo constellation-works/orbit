@@ -670,10 +670,13 @@ fn run_through_two_resumes(
 fn resume_restores_fan_in_alias_without_rerunning_workers() {
     let refs = [("results", "{{ steps.results.output }}")];
     let job = job_with_steps(vec![
+        // One worker at a time: the scripted `w` outputs are a FIFO shared by
+        // every item, so parallel workers would race for which item gets
+        // `{"n": 1}` and the expected order would be nondeterministic.
         fanout_step(
             "workers",
             "{{ input.items }}",
-            2,
+            1,
             target_step("worker", "w"),
             JoinMode::All,
             Some("results"),

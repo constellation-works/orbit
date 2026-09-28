@@ -310,14 +310,12 @@ fn resolve_gate_phase(
     )
 }
 
-/// The gate's child is `task_{mode}_pipeline`, so the implementation job name
-/// is not a closed set — anything the gate dispatches that is not another gate
-/// or another wrapper is the implementation it was waiting to start.
+/// The gate's child is `task_{mode}_pipeline` or the delivery job the task
+/// selects (a plugin job has any name), so the implementation job name is not
+/// a closed set — anything the gate dispatches that is not another gate or
+/// another wrapper is the implementation it was waiting to start.
 fn is_implementation_job(job_name: &str) -> bool {
-    job_name != GATE_JOB_NAME
-        && job_name != LEAF_JOB_NAME
-        && job_name.starts_with("task_")
-        && job_name.ends_with("_pipeline")
+    job_name != GATE_JOB_NAME && job_name != LEAF_JOB_NAME
 }
 
 fn resolve_lock_wait(

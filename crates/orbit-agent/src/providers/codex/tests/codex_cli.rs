@@ -9,8 +9,10 @@ const IMPLEMENT_ACTIVITY: &str =
     include_str!("../../../../../orbit-core/assets/activities/agent_implement.yaml");
 const RESPONSE_SCHEMA: &str =
     r#"{"schemaVersion":1,"status":"success|failed|timeout","result":{...},"error":null}"#;
-const BASELINE_IMPLEMENT_BYTES: usize = 11_760;
-const MAX_IMPLEMENT_TOKENS: usize = 2_500;
+// Raised from 11_760 / 2_500 for the claimed-mode section (ORB-13642): the
+// prompt measured 12_129 bytes / 2_688 tokens once that section was condensed.
+const BASELINE_IMPLEMENT_BYTES: usize = 12_250;
+const MAX_IMPLEMENT_TOKENS: usize = 2_750;
 
 #[derive(Deserialize)]
 struct ActivityAsset {

@@ -17,6 +17,10 @@ metadata:
 spec:
   state: enabled
   owns_task_worktree: true
+  # Holds each task's delivery slot while live; a task may also select this
+  # job for local shipping with a `delivery:task_local_pipeline` tag.
+  task_delivery:
+    modes: [local]
   kind: workflow
   max_active_runs: 10
   default_input:

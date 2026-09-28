@@ -19,6 +19,10 @@ metadata:
 spec:
   state: enabled
   owns_task_worktree: true
+  # Holds each task's delivery slot while live; a task may also select this
+  # job for PR shipping with a `delivery:task_pr_pipeline` tag.
+  task_delivery:
+    modes: [pr]
   kind: workflow
   max_active_runs: 10
   # Preserve recoverable work after terminal failures while keeping the

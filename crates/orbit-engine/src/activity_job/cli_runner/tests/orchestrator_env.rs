@@ -132,6 +132,58 @@ fi
     assert_eq!(outcome.output["provider"], "grok");
 }
 
+/// [ORB-13664] The claude provider's pinned env must reach the spawned child:
+/// background tasks let a headless leaf hand off while its gates still run.
+#[test]
+fn run_cli_backend_disables_background_tasks_for_the_claude_child() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("claude");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat > /dev/null
+if [ "$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" = "1" ]; then
+  printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+else
+  printf '%s\n' '{"schemaVersion":1,"status":"failed","error":{"code":"background_tasks_enabled","message":"background task switch was not propagated","details":null}}'
+  exit 1
+fi
+"#,
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-claude-background-env",
+        "claude:opus",
+        sink_for_writer,
+    ));
+    let host = TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: None,
+        task_context: None,
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+    let spec = test_agent_loop_spec_for("claude", Duration::from_secs(5));
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-claude-background-env",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(outcome.success, "{}", outcome.output);
+}
+
 /// [ORB-10917] End-to-end guard for the composed dispatch environment: a
 /// benignly named ambient credential must not survive into the provider child.
 /// The ambient value is set by this test rather than inherited from the

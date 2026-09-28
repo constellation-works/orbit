@@ -24,6 +24,10 @@ pub struct AgentInvocationSpec {
     pub stdin: Vec<u8>,
     pub stdout_schema_json: Option<Value>,
     pub required_env_vars: &'static [&'static str],
+    /// Environment entries the provider pins for every invocation. They are
+    /// applied over the `[execution.env]` allowlist, so an outer process
+    /// cannot forward a different value.
+    pub fixed_env: &'static [(&'static str, &'static str)],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
