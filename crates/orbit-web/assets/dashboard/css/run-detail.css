@@ -212,6 +212,24 @@
 .step-row .duration, .step-row .exit { color: var(--fg-dim); text-align: right; }
 .step-row .exit.fail { color: var(--state-failed); font-weight: 600; }
 
+/* The fixed tracks need ~400px before the target gets any, and the panel
+   clips overflow. On a narrow screen the target takes its own line and
+   wraps, with state, duration and exit code on the line below. */
+@media (max-width: 640px) {
+  .step-row {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "idx target target target"
+      "idx state duration exit";
+    row-gap: 4px;
+  }
+  .step-row .idx { grid-area: idx; align-self: start; }
+  .step-row .target { grid-area: target; white-space: normal; overflow-wrap: anywhere; }
+  .step-row > :has(> .state-label) { grid-area: state; }
+  .step-row .duration { grid-area: duration; }
+  .step-row .exit { grid-area: exit; }
+}
+
 .step-detail {
   padding: 12px 20px;
   background: #050505;
