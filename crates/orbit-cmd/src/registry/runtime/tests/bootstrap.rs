@@ -692,6 +692,10 @@ pub(super) fn read_only_global_registry_supports_mcp_and_cli_workspace_bindings(
     let (mut inactive_workspace, inactive_checkout) =
         registered_workspace(root.path(), "ws_inactive", "inactive", "hm_read_only");
     inactive_workspace.status = WorkspaceStatus::Invalid;
+    // An invalid workspace whose checkout still exists is revalidated to
+    // active, which is a registry write. Delete the checkout so the registry
+    // is already at its validation fixed point and resolution stays read-only.
+    std::fs::remove_dir_all(&inactive_checkout.repo_root).expect("remove inactive checkout");
     save_registry_to(
         &WorkspaceRegistry {
             workspaces: vec![
@@ -760,13 +764,20 @@ pub(super) fn read_only_global_registry_supports_mcp_and_cli_workspace_bindings(
     std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o555))
         .expect("make registry root read-only");
 
+    // libtest filters on the module-qualified name; a bare function name
+    // matches nothing and still exits successfully.
+    let exact_test = format!(
+        "{}::read_only_global_registry_supports_mcp_and_cli_workspace_bindings",
+        module_path!()
+            .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+            .unwrap_or(module_path!())
+    );
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
     command
-        .arg("read_only_global_registry_supports_mcp_and_cli_workspace_bindings")
-        .arg("--exact")
+        .args(["--exact", &exact_test])
         .env(CHILD_MARKER, "1")
         .env(ROOT, root.path())
         .env(GLOBAL_ROOT, &global)
@@ -776,10 +787,16 @@ pub(super) fn read_only_global_registry_supports_mcp_and_cli_workspace_bindings(
         command.gid(65_534).uid(65_534);
     }
     let output = command.output().expect("run unprivileged selector test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "read-only selector child failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
+        "read-only selector child failed\nstdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    // Exit success alone also covers a filter that selected zero tests.
+    assert!(
+        stdout.contains(&format!("test {exact_test} ... ok"))
+            && stdout.contains("test result: ok. 1 passed;"),
+        "read-only selector child must execute exactly the selected test body\nstdout:\n{stdout}"
     );
 }
