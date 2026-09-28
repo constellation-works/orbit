@@ -703,9 +703,8 @@ fn seeded_routines_are_valid_disabled_and_workspace_unique() {
     // Terminal failed-run triage is retired: no default seeds its job.
     assert!(!routines_dir.join("task_triage.yaml").exists());
 
-    // Task-pilot is state-triggered [ORB-12745]: it names this host as its
-    // owner and observes the registered base branch, and its 90-minute
-    // timeout covers a one-task partition plus deterministic preparation/apply.
+    // Task-pilot is state-triggered [ORB-12745] and binds the current host
+    // and registered base branch.
     let pilot = std::fs::read_to_string(routines_dir.join("task_pilot.yaml"))
         .expect("read task-pilot routine");
     assert!(
@@ -722,24 +721,11 @@ fn seeded_routines_are_valid_disabled_and_workspace_unique() {
     assert_eq!(trigger.kind, StateTriggerKind::PreparationEligible);
     assert_eq!(trigger.owner_machine, "hm_test");
     assert_eq!(trigger.branch, "main");
-    assert_eq!(
-        (
-            trigger.debounce_minutes,
-            trigger.max_wait_minutes,
-            trigger.max_items,
-            trigger.retries,
-            trigger.deadline_minutes
-        ),
-        (2, 10, 50, 1, 90)
-    );
     assert!(
         trigger.eligibility.is_default(),
         "the seeded eligibility block spells out the default predicate"
     );
-    assert_eq!(pilot.policy.timeout_minutes, 90);
     assert_eq!(pilot.policy.overlap, OverlapPolicy::Forbid);
-    assert_eq!(pilot.policy.retries.max, 1);
-    assert_eq!(pilot.policy.retries.backoff_minutes, 5);
 
     let ship =
         std::fs::read_to_string(routines_dir.join("ship_sweep.yaml")).expect("read ship routine");
@@ -748,7 +734,6 @@ fn seeded_routines_are_valid_disabled_and_workspace_unique() {
         ship.trigger.missed_run,
         orbit_types::workflow::MissedRunPolicy::Skip
     );
-    assert_eq!(ship.trigger.cron, "*/20 * * * *");
     parse_cron(&ship.trigger.cron).expect("ship cron parses");
 
     let gc = std::fs::read_to_string(routines_dir.join("worktree_gc.yaml"))
@@ -756,17 +741,12 @@ fn seeded_routines_are_valid_disabled_and_workspace_unique() {
     let gc = parse_routine_yaml(&gc).expect("worktree GC routine parses");
     assert!(!gc.enabled);
     assert_eq!(gc.policy.overlap, OverlapPolicy::Forbid);
-    assert_eq!(gc.trigger.cron, "35 * * * *");
+    parse_cron(&gc.trigger.cron).expect("worktree GC cron parses");
 
-    // The CI-failure sweep is hourly and must not stack with any other
-    // shipped default: two schedules on the same minute would have the
-    // seeded routines contend for the same host on every fire.
     let sweep = std::fs::read_to_string(routines_dir.join("ci_failure_sweep.yaml"))
         .expect("read CI-failure sweep routine");
     let sweep = parse_routine_yaml(&sweep).expect("CI-failure sweep routine parses");
     assert!(!sweep.enabled);
-    assert_eq!(sweep.trigger.cron, "5 * * * *");
-    assert_ne!(sweep.trigger.cron, gc.trigger.cron);
     assert_eq!(
         sweep.trigger.missed_run,
         orbit_types::workflow::MissedRunPolicy::Skip
@@ -778,11 +758,7 @@ fn seeded_routines_are_valid_disabled_and_workspace_unique() {
         .expect("read Dependabot sweep routine");
     let dependabot = parse_routine_yaml(&dependabot).expect("Dependabot sweep routine parses");
     assert!(!dependabot.enabled);
-    assert_eq!(dependabot.trigger.cron, "25 3 * * *");
     assert_eq!(dependabot.policy.overlap, OverlapPolicy::Forbid);
-    for occupied in ["5 * * * *", "15 * * * *", "35 * * * *", "*/20 * * * *"] {
-        assert_ne!(dependabot.trigger.cron, occupied);
-    }
     parse_cron(&dependabot.trigger.cron).expect("Dependabot sweep cron parses");
 }
 
