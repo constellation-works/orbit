@@ -27,6 +27,7 @@ struct TestDispatch {
     state_dir: PathBuf,
     minted: AtomicUsize,
     mint_ids: Mutex<Vec<String>>,
+    mint_titles: Mutex<Vec<String>>,
     mint_should_fail: AtomicBool,
     delivery_enabled: AtomicBool,
     delivery_evaluations: AtomicUsize,
@@ -41,6 +42,7 @@ impl TestDispatch {
             state_dir,
             minted: AtomicUsize::new(0),
             mint_ids: Mutex::new(Vec::new()),
+            mint_titles: Mutex::new(Vec::new()),
             mint_should_fail: AtomicBool::new(false),
             delivery_enabled: AtomicBool::new(false),
             delivery_evaluations: AtomicUsize::new(0),
@@ -107,13 +109,17 @@ impl AutoTaskDispatch for TestDispatch {
         }
     }
 
-    fn mint_task(&self, _definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
+    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
         if self.mint_should_fail.load(Ordering::SeqCst) {
             return Err(OrbitError::Execution("injected mint failure".to_string()));
         }
         let n = self.minted.fetch_add(1, Ordering::SeqCst) + 1;
         let id = format!("ORB-{n:05}");
         self.mint_ids.lock().expect("ids").push(id.clone());
+        self.mint_titles
+            .lock()
+            .expect("titles")
+            .push(definition.template.title.clone());
         Ok(id)
     }
 }
@@ -125,22 +131,33 @@ fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
 }
 
 fn write_interval_definition(root: &std::path::Path, name: &str, dedupe: &str) {
+    write_interval_revision(root, name, dedupe, true, &format!("Fixture {name}"))
+        .expect("definition fixture");
+}
+
+fn write_interval_revision(
+    root: &std::path::Path,
+    name: &str,
+    dedupe: &str,
+    enabled: bool,
+    title: &str,
+) -> std::io::Result<()> {
     let definitions = auto_tasks_dir(root);
-    fs::create_dir_all(&definitions).expect("auto-task definitions directory");
+    fs::create_dir_all(&definitions)?;
     fs::write(
         definitions.join(format!("{name}.yaml")),
         format!(
             r#"schemaVersion: 1
 name: {name}
+enabled: {enabled}
 schedule:
   every_minutes: 60
 dedupe: {dedupe}
 template:
-  title: Fixture {name}
+  title: {title}
 "#
         ),
     )
-    .expect("definition fixture");
 }
 
 fn write_delivery_definition(root: &std::path::Path, name: &str) -> PathBuf {
@@ -534,6 +551,135 @@ fn loaded_delivery_deleted_before_admission_is_not_evaluated() {
         assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
         assert_eq!(dispatch.delivery_evaluations.load(Ordering::SeqCst), 0);
     });
+}
+
+/// Run one live pass that pauses after discovery, commit `edit` under the
+/// admission lock the way CRUD does, then let the pass resume admission.
+fn pass_with_edit_after_load(
+    dispatch: &TestDispatch,
+    now: DateTime<Utc>,
+    edit: impl FnOnce() -> std::io::Result<()>,
+) -> crate::auto_tasks::scheduler::AutoTaskSchedulerOutcome {
+    let loaded = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    thread::scope(|scope| {
+        let loaded_for_pass = Arc::clone(&loaded);
+        let resume_for_pass = Arc::clone(&resume);
+        let pass = scope.spawn(move || {
+            set_after_load_barriers(Some((loaded_for_pass, resume_for_pass)));
+            let outcome = run_auto_task_scheduler_at(dispatch, now, SchedulerOptions::default());
+            set_after_load_barriers(None);
+            outcome.expect("scheduler pass")
+        });
+        loaded.wait();
+        let edited = with_cursor_lock(&cursor_state_path(&dispatch.state_dir), |_session| {
+            edit().map_err(|error| OrbitError::Io(error.to_string()))
+        });
+        // Release the pass before checking the edit, so a failed edit
+        // reports instead of stranding the barrier.
+        resume.wait();
+        let outcome = pass.join().expect("scheduler thread");
+        edited.expect("edit under admission lock");
+        outcome
+    })
+}
+
+#[test]
+fn loaded_definition_disabled_before_admission_is_not_minted() {
+    let (_root, dispatch, t0) = due_fixture("chore");
+    let now = t0 + Duration::minutes(65);
+    let state_path = cursor_state_path(&dispatch.state_dir);
+    let cursor_before = fs::read(&state_path).expect("cursor bytes");
+
+    let outcome = pass_with_edit_after_load(&dispatch, now, || {
+        write_interval_revision(
+            &dispatch.definition_root,
+            "chore",
+            "always",
+            false,
+            "Fixture chore",
+        )
+    });
+
+    assert_eq!(outcome.reports.len(), 1, "the enabled revision was loaded");
+    assert_eq!(outcome.reports[0].action, "skipped");
+    assert_eq!(
+        outcome.reports[0].reason.as_deref(),
+        Some("definition_changed")
+    );
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fs::read(&state_path).expect("cursor bytes"),
+        cursor_before,
+        "a stale revision must not claim or consume the slot"
+    );
+
+    let next =
+        run_auto_task_scheduler_at(&dispatch, now, SchedulerOptions::default()).expect("next pass");
+    assert_eq!(next.reports[0].reason.as_deref(), Some("disabled"));
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn loaded_template_edited_before_admission_mints_only_the_new_revision() {
+    let (_root, dispatch, t0) = due_fixture("chore");
+    let now = t0 + Duration::minutes(65);
+
+    let outcome = pass_with_edit_after_load(&dispatch, now, || {
+        write_interval_revision(
+            &dispatch.definition_root,
+            "chore",
+            "always",
+            true,
+            "Edited chore",
+        )
+    });
+
+    assert_eq!(outcome.reports[0].action, "skipped");
+    assert_eq!(
+        outcome.reports[0].reason.as_deref(),
+        Some("definition_changed")
+    );
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
+
+    let next =
+        run_auto_task_scheduler_at(&dispatch, now, SchedulerOptions::default()).expect("next pass");
+    assert_eq!(next.reports[0].action, "fired");
+    assert_eq!(
+        *dispatch.mint_titles.lock().expect("titles"),
+        vec!["Edited chore".to_string()],
+        "the slot is minted from the committed revision only"
+    );
+    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("cursor");
+    assert_eq!(
+        state.definitions["chore"].last_task_id.as_deref(),
+        Some("ORB-00001")
+    );
+}
+
+#[test]
+fn loaded_delivery_disabled_before_admission_is_not_evaluated() {
+    let root = tempdir().expect("temporary root");
+    let definition_root = root.path().join("definitions");
+    let path = write_delivery_definition(&definition_root, "delivery");
+    let dispatch = TestDispatch::new(definition_root, root.path().join("state"));
+
+    let outcome = pass_with_edit_after_load(&dispatch, at(2026, 1, 1, 0, 0), || {
+        let enabled = fs::read_to_string(&path)?;
+        fs::write(
+            &path,
+            enabled.replace("name: delivery\n", "name: delivery\nenabled: false\n"),
+        )
+    });
+
+    assert_eq!(outcome.reports.len(), 1, "delivery definition was loaded");
+    assert_eq!(outcome.reports[0].action, "skipped");
+    assert_eq!(
+        outcome.reports[0].reason.as_deref(),
+        Some("definition_changed")
+    );
+    assert_eq!(dispatch.delivery_evaluations.load(Ordering::SeqCst), 0);
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
 }
 
 #[test]

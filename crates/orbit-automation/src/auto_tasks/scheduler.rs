@@ -1,6 +1,6 @@
 //! Auto-task scheduling policy with an explicit clock and Core lifecycle adapter.
 
-use super::loader::{AutoTaskLoadError, collect_auto_tasks};
+use super::loader::{AutoTaskLoadError, collect_auto_tasks, load_definition_file};
 use super::schedule::{AutoTaskDueDecision, decide_due};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -195,8 +195,9 @@ fn fire_definition(
 
     #[cfg(test)]
     wait_for_admission_overlap();
-    // Discovery happens before admission. A delete may have removed this
-    // definition while the pass waited for the shared cursor lock.
+    // Discovery happens before admission. A delete, edit, or toggle may have
+    // replaced this definition while the pass waited for the shared cursor
+    // lock, so admission revalidates the loaded revision under that lock.
     if matches!(
         definition.schedule,
         orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }
@@ -204,18 +205,35 @@ fn fire_definition(
         // Delivery consumers share deletion's lock but do not use cursor
         // contents. A malformed cursor must not stop an unrelated delivery.
         return with_exclusive_file_lock(state_path, "auto-task cursor", || {
-            if let Some(report) = source_skip(definition, definition_path)? {
+            if let Some(report) = admission_skip(definition, definition_path)? {
                 return Ok(report);
             }
             fire_delivery(host, definition, false, now)
         });
     }
     with_cursor_lock(state_path, |session| {
-        if let Some(report) = source_skip(definition, definition_path)? {
+        if let Some(report) = admission_skip(definition, definition_path)? {
             return Ok(report);
         }
         fire_locked(host, definition, session, now)
     })
+}
+
+/// Admission acts only on the revision discovery loaded. Deletion and the
+/// CRUD edit and toggle paths commit under the same lock, so a file that no
+/// longer parses to that revision here changed after load: the pass skips it
+/// and the next pass admits whatever is current.
+fn admission_skip(
+    definition: &AutoTaskDefinition,
+    definition_path: &Path,
+) -> Result<Option<AutoTaskFireReport>, OrbitError> {
+    if let Some(report) = source_skip(definition, definition_path)? {
+        return Ok(Some(report));
+    }
+    match load_definition_file(definition_path) {
+        Ok(current) if current.definition == *definition => Ok(None),
+        _ => Ok(Some(skipped(definition, "definition_changed"))),
+    }
 }
 
 fn source_skip(
