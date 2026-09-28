@@ -16,6 +16,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, Row};
 
 use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
+use crate::driver::sqlite::connection::{UNICODE_LOWER_SQL, unicode_lower};
 
 /// Columns every record read selects, in decode order.
 const RECORD_COLUMNS: &str = "friction_id, title, model, status, created_at, resolved_at, \
@@ -92,22 +93,25 @@ pub(super) fn build_predicate(workspace_id: &str, filter: &FrictionListFilter) -
         clauses.push(format!("r.created_at <= ?{index}"));
     }
     if let Some(query) = &filter.q {
-        let needle = query.trim().to_lowercase();
+        let needle = unicode_lower(query.trim());
         if !needle.is_empty() {
             let index = bind(&mut params, SqlValue::Text(needle));
             // Mirrors the scan predicate field for field so a saved query keeps
-            // matching the same records after the cutover.
+            // matching the same records after the cutover. Stored text is
+            // lowered by the same Unicode function as the needle; SQLite's own
+            // `lower()` folds ASCII only.
+            let lower = UNICODE_LOWER_SQL;
             clauses.push(format!(
-                "(instr(lower(r.friction_id), ?{index}) > 0 \
-                 OR instr(lower(COALESCE(r.title, '')), ?{index}) > 0 \
-                 OR instr(lower(r.model), ?{index}) > 0 \
+                "(instr({lower}(r.friction_id), ?{index}) > 0 \
+                 OR instr({lower}(COALESCE(r.title, '')), ?{index}) > 0 \
+                 OR instr({lower}(r.model), ?{index}) > 0 \
                  OR instr(r.status, ?{index}) > 0 \
-                 OR instr(lower(COALESCE(r.during_task, '')), ?{index}) > 0 \
-                 OR instr(lower(r.body), ?{index}) > 0 \
+                 OR instr({lower}(COALESCE(r.during_task, '')), ?{index}) > 0 \
+                 OR instr({lower}(r.body), ?{index}) > 0 \
                  OR EXISTS (SELECT 1 FROM friction_record_tags t \
                     WHERE t.workspace_id = r.workspace_id \
                     AND t.friction_id = r.friction_id \
-                    AND instr(lower(t.tag), ?{index}) > 0))"
+                    AND instr({lower}(t.tag), ?{index}) > 0))"
             ));
         }
     }

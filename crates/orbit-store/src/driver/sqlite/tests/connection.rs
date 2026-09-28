@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS;
 
 use crate::Store;
+use crate::driver::sqlite::connection::UNICODE_LOWER_SQL;
 use crate::driver::sqlite::migration::SUPPORTED_SCHEMA_VERSION;
 
 #[test]
@@ -290,6 +291,53 @@ fn file_backed_read_callback_is_query_only() {
         })
         .expect("verify rejected write");
     assert_eq!(table_count, 0);
+}
+
+/// Every connection a Store hands out lowers non-ASCII text the same way, so
+/// a query using the function does not depend on which connection serves it.
+#[test]
+fn every_store_connection_lowers_unicode_text() {
+    fn lowered(conn: &rusqlite::Connection) -> Result<String, OrbitError> {
+        conn.query_row(
+            &format!("SELECT {UNICODE_LOWER_SQL}('ÉCHEC Überlauf ΟΔΟΣ')"),
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+    let expected = "échec überlauf οδοσ";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let file_backed = Store::open(&path).expect("open store");
+    assert_eq!(
+        file_backed
+            .with_transaction(|tx| lowered(tx.connection()))
+            .expect("writer connection"),
+        expected
+    );
+    assert_eq!(
+        file_backed
+            .with_read_connection(lowered)
+            .expect("pooled reader"),
+        expected
+    );
+
+    let in_memory = Store::open_in_memory().expect("open in-memory store");
+    assert_eq!(
+        in_memory
+            .with_read_connection(lowered)
+            .expect("in-memory connection"),
+        expected
+    );
+
+    let observational = Store::open_read_only(&path).expect("open read-only");
+    assert_eq!(
+        observational
+            .with_read_connection(lowered)
+            .expect("read-only connection"),
+        expected
+    );
 }
 
 #[test]

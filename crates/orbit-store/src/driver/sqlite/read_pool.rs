@@ -11,6 +11,8 @@
 //!
 //! Reader connections are pinned read-only via `PRAGMA query_only=ON`, so a
 //! misrouted write fails loudly instead of racing the writer connection.
+//! They carry the same registered SQL functions as the writer, so a query
+//! behaves identically whichever connection serves it.
 //!
 //! In-memory stores have no shareable database file, so [`ReadGuard`] falls
 //! back to the writer connection there (same behavior as before the pool).
@@ -25,6 +27,8 @@ use std::sync::{Mutex, MutexGuard};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::apply_default_pragmas;
 use rusqlite::Connection;
+
+use crate::driver::sqlite::connection::register_sql_functions;
 
 /// Maximum idle reader connections retained by the pool. Checkouts beyond
 /// this never block — they open extra connections that are simply dropped
@@ -97,6 +101,7 @@ impl ReadPool {
         apply_default_pragmas(&conn)?;
         conn.pragma_update(None, "query_only", "ON")
             .map_err(|e| OrbitError::Store(format!("failed to set query_only: {e}")))?;
+        register_sql_functions(&conn)?;
         Ok(conn)
     }
 }

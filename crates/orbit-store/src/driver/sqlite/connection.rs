@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
+use rusqlite::functions::FunctionFlags;
+use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::contracts::ForwardCompatibleOpen;
@@ -16,6 +18,45 @@ thread_local! {
 
 fn record_file_open(path: &Path) {
     FILE_OPEN_PATHS.with(|paths| paths.borrow_mut().push(path.to_path_buf()));
+}
+
+/// SQL name of [`unicode_lower`]. The bundled SQLite `lower()` folds ASCII
+/// only, so a query needle lowered in Rust would never match stored
+/// non-ASCII text lowered in SQL.
+pub(crate) const UNICODE_LOWER_SQL: &str = "orbit_unicode_lower";
+
+/// Lowercase `value` one character at a time.
+///
+/// Per-character mapping (unlike `str::to_lowercase`, which renders a
+/// word-final `Σ` as `ς`) keeps substring matching consistent: lowering a
+/// substring yields a substring of the lowered text. Both the query needle and
+/// the stored columns go through this function.
+pub(crate) fn unicode_lower(value: &str) -> String {
+    value.chars().flat_map(char::to_lowercase).collect()
+}
+
+/// Register Orbit's SQL functions on a freshly opened connection. Every
+/// connection a [`Store`] hands out — writer, pooled reader, in-memory, and
+/// observational — goes through here so SQL can call them on any read path.
+pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError> {
+    conn.create_scalar_function(
+        UNICODE_LOWER_SQL,
+        1,
+        FunctionFlags::SQLITE_UTF8
+            | FunctionFlags::SQLITE_DETERMINISTIC
+            | FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            // Like SQLite's `lower()`, only text changes; NULL and numbers pass
+            // through so `instr` coerces them exactly as before.
+            Ok(match ctx.get_raw(0) {
+                ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
+                    Value::Text(unicode_lower(&String::from_utf8_lossy(bytes)))
+                }
+                other => Value::from(other),
+            })
+        },
+    )
+    .map_err(|error| OrbitError::Store(format!("register {UNICODE_LOWER_SQL}: {error}")))
 }
 
 /// SQLite store handle: one writer connection behind a mutex (WAL permits a
@@ -108,6 +149,7 @@ impl Store {
         let opened = open_private(path)?;
         let conn = opened.connection;
         let read_only = opened.read_only;
+        register_sql_functions(&conn)?;
 
         let mut forward_compatible = None;
         match migration::apply_schema_at_path(&conn, path) {
@@ -211,6 +253,7 @@ impl Store {
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
+        register_sql_functions(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
@@ -221,6 +264,7 @@ impl Store {
     pub fn open_in_memory() -> Result<Self, OrbitError> {
         let conn = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;
         apply_default_pragmas(&conn)?;
+        register_sql_functions(&conn)?;
         migration::apply_schema(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
