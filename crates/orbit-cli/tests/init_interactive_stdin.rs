@@ -22,6 +22,7 @@ use tempfile::{TempDir, tempdir};
 const HANG_DEADLINE: Duration = Duration::from_secs(8);
 const SUCCESS_DEADLINE: Duration = Duration::from_secs(60);
 const CLOSED_STDIN_MESSAGE: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--machine-name or --non-interactive";
+const LINE_TOO_LONG_MESSAGE: &str = "stdin interactive prompt answer is too long";
 
 struct IsolatedHome {
     _temp: TempDir,
@@ -129,6 +130,57 @@ fn silent_open_stdin_pipe_exits_instead_of_hanging() {
         names_identity_flags(&output),
         "expected flags in the error, got stdout={stdout:?} stderr={stderr:?}"
     );
+}
+
+#[test]
+fn drip_writing_without_newline_expires_one_prompt_budget() {
+    let fixture = IsolatedHome::new();
+    let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn orbit init");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let writer = std::thread::spawn(move || {
+        loop {
+            if stdin.write_all(b"x").is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    });
+
+    let status = wait_with_deadline(&mut child, HANG_DEADLINE)
+        .unwrap_or_else(|| panic!("partial input extended the prompt budget until killed"));
+    writer.join().expect("writer thread");
+    let (stdout, stderr) = read_stdio(&mut child);
+    let output = combined_output(&stdout, &stderr);
+    assert!(!status.success(), "drip input must fail: {output}");
+    assert!(names_identity_flags(&output), "{output}");
+}
+
+#[test]
+fn oversized_unterminated_pipe_answer_is_rejected() {
+    let fixture = IsolatedHome::new();
+    let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn orbit init");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&vec![b'x'; 65 * 1024]);
+    });
+
+    let status = wait_with_deadline(&mut child, HANG_DEADLINE)
+        .unwrap_or_else(|| panic!("oversized input blocked orbit init until killed"));
+    writer.join().expect("writer thread");
+    let (stdout, stderr) = read_stdio(&mut child);
+    let output = combined_output(&stdout, &stderr);
+    assert!(!status.success(), "oversized input must fail: {output}");
+    assert!(output.contains(LINE_TOO_LONG_MESSAGE), "{output}");
 }
 
 #[test]
