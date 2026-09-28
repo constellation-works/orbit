@@ -4,7 +4,7 @@ summary: Running log of why Orbit task runs failed or got blocked, one entry per
 incident_date: 2026-09-27
 last_validated: 2026-09-27
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**", "crates/orbit-core/assets/executors/claude.yaml"]
+paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**", "crates/orbit-core/assets/executors/claude.yaml", "crates/orbit-agent/src/providers/claude/**"]
 related_artifacts: [ORB-13663, ORB-13664, ORB-13612, ORB-13463, ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
 ---
 
@@ -58,8 +58,11 @@ you close it out.
   StructuredOutput call, so the agent must report before the gates finish. The
   executor (`crates/orbit-core/assets/executors/claude.yaml`) passes
   `--tools default`, which includes background Bash and Monitor.
-- **Fix:** open (ORB-13664). Disable background execution for the headless claude
-  executor.
+- **Fix:** ORB-13664. The claude provider pins
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` on every child it spawns. Verified on
+  Claude Code 2.1.283 in `-p --json-schema` mode: Bash then rejects
+  `run_in_background`, and `Monitor` is no longer offered, so gates run in the
+  foreground.
 - **Tasks:** ORB-13612 (rescue PR #2895), ORB-13463 (rescue PR #2896).
 
 ## 2026-09-27: Owner and follower minted the same child run ID

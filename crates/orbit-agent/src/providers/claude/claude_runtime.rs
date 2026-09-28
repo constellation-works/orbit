@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::InvocationTrace;
 
 use crate::agent::{AgentConfig, ProviderOptions};
-use crate::providers::claude::claude_cli::ClaudeCliTransport;
+use crate::providers::claude::claude_cli::{CLAUDE_CLI_FIXED_ENV, ClaudeCliTransport};
 use crate::runtime::{AgentRuntime, AgentRuntimeFactory};
 use crate::types::{AgentInvocationSpec, AgentRequest};
 
@@ -75,16 +75,15 @@ impl AgentRuntime for ClaudeRuntime {
         &self,
         req: AgentRequest,
     ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
-        Ok((
-            crate::providers::build_invocation_spec(
-                self.runtime_key,
-                self.required_env_vars,
-                self.command.clone(),
-                self.cli.args(req.verbose),
-                self.cli.stdin(&req.envelope_json),
-            ),
-            InvocationTrace::default(),
-        ))
+        let mut spec = crate::providers::build_invocation_spec(
+            self.runtime_key,
+            self.required_env_vars,
+            self.command.clone(),
+            self.cli.args(req.verbose),
+            self.cli.stdin(&req.envelope_json),
+        );
+        spec.fixed_env = CLAUDE_CLI_FIXED_ENV;
+        Ok((spec, InvocationTrace::default()))
     }
 
     fn model_name(&self) -> Option<&str> {
