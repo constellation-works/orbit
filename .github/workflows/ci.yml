@@ -138,6 +138,20 @@ jobs:
           rm -f "$archive"
           cargo llvm-cov --version
 
+      # [ORB-13655] Coverage runs its tests through nextest, the same pinned
+      # runner as the ci job; see "Collect workspace coverage" below.
+      - name: Install cargo-nextest
+        run: |
+          set -euo pipefail
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          archive="$(mktemp)"
+          mkdir -p "$cargo_bin"
+          curl -LsSf "https://get.nexte.st/${NEXTEST_VERSION}/linux" -o "$archive"
+          echo "${NEXTEST_LINUX_SHA256}  ${archive}" | sha256sum -c -
+          tar zxf "$archive" -C "$cargo_bin"
+          rm -f "$archive"
+          cargo nextest --version
+
       # [ORB-13017] Same pinned-tarball convention as nextest. Only the uv
       # binary comes from the network; the plugin fixture's dependency is a
       # wheel inside the fixture, so the test itself never reaches PyPI.
@@ -155,8 +169,15 @@ jobs:
 
       # --no-report runs the instrumented tests once; the two `report` calls
       # below render lcov + a human-readable summary from the same profdata.
+      # [ORB-13655] Run through nextest with the ci job's target set, so each
+      # test gets its own process and the `.config/nextest.toml` test groups
+      # apply. Under libtest, a binary's tests shared one process: a sibling's
+      # fork could hold a freshly written executable open (ETXTBSY), and the
+      # `web_serve_*` tests raced each other for a `free_port()` port.
       - name: Collect workspace coverage
-        run: cargo llvm-cov --workspace --locked --no-report
+        run: |
+          cargo llvm-cov nextest --workspace --locked --no-report \
+            --no-fail-fast --lib --bins --tests
 
       - name: Render lcov report
         run: cargo llvm-cov report --lcov --output-path lcov.info
