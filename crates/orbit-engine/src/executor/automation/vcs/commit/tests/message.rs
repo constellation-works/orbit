@@ -75,6 +75,31 @@ fn batch_commit_subject_appends_external_refs_in_declaration_order() {
 }
 
 #[test]
+fn batch_commit_subject_omits_orbit_github_pr_refs_and_keeps_ticket_refs() {
+    let mut task = task_with_type(TaskType::Chore, "Wire external refs");
+    task.external_refs = vec![
+        ExternalRef::github_pr("235").expect("github-pr ref fixture is valid"),
+        external_ref("eng", "1234"),
+        ExternalRef::github_pr("242").expect("github-pr ref fixture is valid"),
+        external_ref("jira", "CORE-987"),
+    ];
+    let stored_refs = task.external_refs.clone();
+
+    assert_eq!(
+        batch_commit_message(&task),
+        "chore: Wire external refs [ORB-00107] [ENG-1234] [JIRA-CORE-987]"
+    );
+    assert_eq!(task.external_refs, stored_refs);
+
+    task.external_refs =
+        vec![ExternalRef::github_pr("235").expect("github-pr ref fixture is valid")];
+    assert_eq!(
+        batch_commit_message(&task),
+        "chore: Wire external refs [ORB-00107]"
+    );
+}
+
+#[test]
 fn batch_commit_body_includes_execution_summary_when_present() {
     let mut task = task_with_type(TaskType::Feature, "Summarize the work");
     task.execution_summary =
