@@ -113,7 +113,8 @@ pub struct ReviewAdmission {
 
 impl ReviewAdmission {
     /// Read the snapshot carried by a run input. A present but malformed
-    /// snapshot is an error, never silently ignored.
+    /// snapshot, or one captured under a contract version this build does
+    /// not support, is an error, never silently ignored or reinterpreted.
     pub fn from_run_input(input: &Value) -> Result<Option<Self>, String> {
         let Some(raw) = input.get(REVIEW_ADMISSION_KEY) else {
             return Ok(None);
@@ -121,9 +122,16 @@ impl ReviewAdmission {
         if raw.is_null() {
             return Ok(None);
         }
-        serde_json::from_value(raw.clone())
-            .map(Some)
-            .map_err(|error| format!("invalid `{REVIEW_ADMISSION_KEY}` run input: {error}"))
+        let admission: Self = serde_json::from_value(raw.clone())
+            .map_err(|error| format!("invalid `{REVIEW_ADMISSION_KEY}` run input: {error}"))?;
+        if admission.contract_version != REVIEW_CONTRACT_VERSION {
+            return Err(format!(
+                "unsupported `{REVIEW_ADMISSION_KEY}` run input: contract_version {} is not the \
+                 supported review contract version {REVIEW_CONTRACT_VERSION}",
+                admission.contract_version
+            ));
+        }
+        Ok(Some(admission))
     }
 
     /// Whether this admission holds PR creation for a reviewer.
