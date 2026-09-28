@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
@@ -573,6 +573,44 @@ async fn workspace_selection_errors_are_clean_4xx_json() {
         .await
         .expect("response");
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn artifact_read_uses_selected_workspace_instead_of_server_default() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let (alpha_orbit, alpha_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    let (beta_orbit, beta_repo) = seed_workspace(&global_root, tmp.path(), "beta");
+    let beta_runtime = OrbitRuntime::from_roots(&global_root, &beta_orbit).expect("beta runtime");
+    let task = super::tasks::seed_task_with_artifact(&beta_runtime);
+    let state = DashboardState::global(
+        global_root,
+        vec![
+            workspace_entry("alpha", alpha_repo, alpha_orbit, true),
+            workspace_entry("beta", beta_repo, beta_orbit, true),
+        ],
+        Some("alpha".to_string()),
+    );
+    let route = format!("/tasks/{}/artifacts/subdir/file.json", task.id);
+
+    let default_response = router()
+        .with_state(state.clone())
+        .oneshot(get(&route))
+        .await
+        .expect("default response");
+    assert_eq!(default_response.status(), StatusCode::NOT_FOUND);
+
+    let beta_response = router()
+        .with_state(state)
+        .oneshot(get(&format!("{route}?workspace=beta")))
+        .await
+        .expect("beta response");
+    assert_eq!(beta_response.status(), StatusCode::OK);
+    let bytes = to_bytes(beta_response.into_body(), usize::MAX)
+        .await
+        .expect("artifact body");
+    assert_eq!(&bytes[..], br#"{"ok":true}"#);
 }
 
 /// ORB-10291: a task in one registered workspace depending on a task in

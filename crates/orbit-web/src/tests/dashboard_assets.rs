@@ -1920,6 +1920,108 @@ const saveField = async (title, text, expected) => {
 }
 
 #[test]
+fn dashboard_aggregate_task_actions_target_the_row_workspace() {
+    run_task_detail_harness(
+        r#"
+setMultiWorkspace(true);
+current.workspace_id = "beta";
+render(); expand();
+const detail = detailNode();
+const click = (node) => node.listeners.click({ stopPropagation() {} });
+const action = (name) => find(detail, (node) => node.className === `action ${name}`);
+click(action("approve"));
+await tick();
+click(action("archive"));
+await tick();
+click(action("comment"));
+let form = find(detail, (node) => node.className === "comment-form");
+find(form, (node) => node.tag === "textarea").value = "owner comment";
+click(find(form, (node) => node.className === "action comment"));
+await tick();
+click(find(form, (node) => node.className === "action cancel"));
+click(action("reject"));
+form = find(detail, (node) => node.className === "reject-form");
+find(form, (node) => node.tag === "textarea").value = "owner reason";
+click(find(form, (node) => node.className === "action reject"));
+await tick();
+for (const suffix of ["approve", "archive", "comments", "reject"]) {
+  const write = requests.find((request) => request.method === "POST" && request.path === `/api/tasks/ORB-1/${suffix}?workspace=beta`);
+  if (!write) throw new Error(`${suffix} did not target beta: ${JSON.stringify(requests)}`);
+}
+"#,
+    );
+
+    run_task_detail_harness(
+        r#"
+setMultiWorkspace(true);
+current.status = "backlog";
+context.getActiveStatuses = () => new Set(["backlog"]);
+context.statusOrder = ["backlog"];
+render(); expand();
+const detail = detailNode();
+const quick = find(body, (node) => node.className === "task-quick ship");
+const ship = find(detail, (node) => node.className === "action ship");
+if (!quick.disabled || !ship.disabled) throw new Error("ownerless aggregate Ship controls remained enabled");
+quick.listeners.click({ stopPropagation() {} });
+ship.listeners.click({ stopPropagation() {} });
+await tick();
+if (requests.some((request) => request.method === "POST")) throw new Error(`ownerless row dispatched a mutation: ${JSON.stringify(requests)}`);
+current.workspace_id = "beta";
+render();
+const ownedQuick = find(body, (node) => node.className === "task-quick ship");
+ownedQuick.listeners.click({ stopPropagation() {} });
+await tick();
+if (!requests.some((request) => request.method === "POST" && request.path === "/api/workflows/ship?workspace=beta"))
+  throw new Error(`quick Ship did not target beta: ${JSON.stringify(requests)}`);
+current.status = "proposed";
+context.getActiveStatuses = () => new Set(["proposed"]);
+context.statusOrder = ["proposed"];
+render();
+find(body, (node) => node.className === "task-quick approve").listeners.click({ stopPropagation() {} });
+await tick();
+if (!requests.some((request) => request.method === "POST" && request.path === "/api/tasks/ORB-1/approve?workspace=beta"))
+  throw new Error(`quick Approve did not target beta: ${JSON.stringify(requests)}`);
+"#,
+    );
+
+    run_task_detail_harness(
+        r#"
+setMultiWorkspace(true);
+render(); expand();
+const detail = detailNode();
+const action = (name) => find(detail, (node) => node.className === `action ${name}`);
+for (const name of ["approve", "reject", "archive", "comment"]) {
+  if (!action(name).disabled) throw new Error(`ownerless ${name} was enabled`);
+}
+action("approve").listeners.click({ stopPropagation() {} });
+action("archive").listeners.click({ stopPropagation() {} });
+action("comment").listeners.click({ stopPropagation() {} });
+const form = find(detail, (node) => node.className === "comment-form");
+find(form, (node) => node.tag === "textarea").value = "wrong owner";
+find(form, (node) => node.className === "action comment").listeners.click({ stopPropagation() {} });
+await tick();
+if (requests.some((request) => request.method === "POST"))
+  throw new Error(`ownerless row dispatched a mutation: ${JSON.stringify(requests)}`);
+"#,
+    );
+
+    run_task_detail_harness(
+        r#"
+setMultiWorkspace(true);
+current.workspace_id = "beta";
+current.status = "backlog";
+context.getActiveStatuses = () => new Set(["backlog"]);
+context.statusOrder = ["backlog"];
+render(); expand();
+find(detailNode(), (node) => node.className === "action ship").listeners.click({ stopPropagation() {} });
+await tick();
+if (!requests.some((request) => request.method === "POST" && request.path === "/api/workflows/ship?workspace=beta"))
+  throw new Error(`detail Ship did not target beta: ${JSON.stringify(requests)}`);
+"#,
+    );
+}
+
+#[test]
 fn dashboard_audit_summary_renders_aggregate_and_every_failing_tool() {
     run_dashboard_javascript_test(
         r#"
@@ -2539,6 +2641,34 @@ const md = { path: "notes/summary.md", media_type: "text/markdown", size_bytes: 
 if (byTag(preview, "img")) throw new Error("a text artifact must not render as an image");
 if (!preview.textContent.includes("plain body"))
   throw new Error(`text preview regressed: ${preview.textContent}`);
+
+// The browser's selected workspace and an aggregate row's owner must both
+// reach the workspace extractor, even when the server defaults to alpha.
+const { setWorkspace, setMultiWorkspace } = await import("./js/common.js");
+setMultiWorkspace(true);
+const workspaceArtifact = { path: "notes/owner.txt", media_type: "text/plain", size_bytes: 4 };
+globalThis.fetch = async (path) => {
+  requested.push(String(path));
+  const owner = new URL(String(path), "http://dashboard.test").searchParams.get("workspace") || "alpha";
+  return { ...respondWith(owner, "text/plain"), text: async () => `${owner} artifact` };
+};
+setWorkspace("beta");
+let owned = buildArtifacts({ id: "ORB-00042", artifacts: [workspaceArtifact] });
+await owned.children[0].listeners.click({ stopPropagation() {} });
+if (requested.at(-1) !== "/api/tasks/ORB-00042/artifacts/notes/owner.txt?workspace=beta" ||
+    owned.children[1].textContent !== "beta artifact")
+  throw new Error(`selected beta artifact was not fetched: ${requested.at(-1)}`);
+setWorkspace(null);
+owned = buildArtifacts({ id: "ORB-00042", workspace_id: "beta", artifacts: [workspaceArtifact] });
+await owned.children[0].listeners.click({ stopPropagation() {} });
+if (requested.at(-1) !== "/api/tasks/ORB-00042/artifacts/notes/owner.txt?workspace=beta" ||
+    owned.children[1].textContent !== "beta artifact")
+  throw new Error(`aggregate beta artifact was not fetched: ${requested.at(-1)}`);
+const missingOwner = buildArtifacts({ id: "ORB-00042", artifacts: [workspaceArtifact] });
+const requestCount = requested.length;
+await missingOwner.children[0].listeners.click({ stopPropagation() {} });
+if (requested.length !== requestCount || !missingOwner.children[1].textContent.includes("workspace is unknown"))
+  throw new Error("aggregate artifact without an owner fell back to alpha");
 "#,
     );
 }
