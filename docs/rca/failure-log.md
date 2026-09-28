@@ -42,7 +42,7 @@ you close it out.
   their result to the owner.
 - **Fix:** open (ORB-13663). Settlement must not depend on the admitting
   coordinator being alive, and stop must close admissions instead of cancelling.
-- **Tasks:** the six leaves of drain `jrun-20260928-0242-t1`, including ORB-13622.
+- **Tasks:** the six leaves of drain `jrun-20260928-0242-t1`, including ORB-13622 and ORB-13271 (rescue PR #2929).
 
 ## 2026-09-27: Headless claude crew hands off while its validation gates run in the background
 
@@ -63,7 +63,7 @@ you close it out.
   Claude Code 2.1.283 in `-p --json-schema` mode: Bash then rejects
   `run_in_background`, and `Monitor` is no longer offered, so gates run in the
   foreground.
-- **Tasks:** ORB-13612 (rescue PR #2895), ORB-13463 (rescue PR #2896).
+- **Tasks:** ORB-13612 (rescue PR #2895), ORB-13463 (rescue PR #2896), ORB-13271 (rescue PR #2929).
 
 ## 2026-09-27: Owner and follower minted the same child run ID
 
