@@ -62,6 +62,10 @@ impl MemberHost for Host {
             .unwrap_or(MemberAdmission::Admit))
     }
 
+    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+        Ok(keys.clone())
+    }
+
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {
         Ok(self.actions.borrow().get(&attempt.action_key).cloned())
     }
@@ -143,6 +147,10 @@ impl MemberHost for SchedulerHost {
         }
     }
 
+    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+        Ok(keys.clone())
+    }
+
     fn lookup(&self, _: &MemberAttempt) -> Result<Option<String>, AutomationError> {
         Ok(None)
     }
@@ -163,6 +171,115 @@ impl MemberHost for SchedulerHost {
 
     fn carries_forward(&self, member: &StateMember, _: &MemberAssessment) -> bool {
         self.carried.borrow().contains(&member.key)
+    }
+}
+
+/// A source paged fifty keys at a time in key order, where each key maps to
+/// its current fingerprint and every run settles its members unchanged.
+struct RetentionHost {
+    source: RefCell<BTreeMap<String, String>>,
+    admitted: RefCell<Vec<MemberAttempt>>,
+    observable_queries: RefCell<usize>,
+}
+
+impl RetentionHost {
+    fn new(keys: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            source: RefCell::new(keys.into_iter().map(|key| (key.clone(), key)).collect()),
+            admitted: RefCell::new(Vec::new()),
+            observable_queries: RefCell::new(0),
+        }
+    }
+}
+
+impl MemberHost for RetentionHost {
+    fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
+        Ok(("repo".into(), source()))
+    }
+
+    fn observe(
+        &self,
+        after: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<MemberPage, AutomationError> {
+        let listed = self.source.borrow();
+        let mut rest = listed
+            .iter()
+            .filter(|(key, _)| after.is_none_or(|after| key.as_str() > after));
+        let page = rest.by_ref().take(50).collect::<Vec<_>>();
+        let next = rest
+            .next()
+            .and_then(|_| page.last().map(|(key, _)| (*key).clone()));
+        Ok(MemberPage {
+            candidates: page
+                .into_iter()
+                .map(|(key, fingerprint)| StateMember {
+                    key: key.clone(),
+                    task_ids: vec![key.clone()],
+                    fingerprint: fingerprint.clone(),
+                    source: source(),
+                    evidence: serde_json::json!({}),
+                    first_seen: now,
+                    changed_at: now,
+                    crew: None,
+                })
+                .collect(),
+            withheld: BTreeMap::new(),
+            next,
+        })
+    }
+
+    fn admission(&self, member: &StateMember) -> Result<MemberAdmission, AutomationError> {
+        Ok(
+            if self.source.borrow().get(&member.key) == Some(&member.fingerprint) {
+                MemberAdmission::Admit
+            } else {
+                MemberAdmission::Retire("material_changed".into())
+            },
+        )
+    }
+
+    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+        *self.observable_queries.borrow_mut() += 1;
+        let listed = self.source.borrow();
+        Ok(keys
+            .iter()
+            .filter(|key| listed.contains_key(*key))
+            .cloned()
+            .collect())
+    }
+
+    fn lookup(&self, _: &MemberAttempt) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
+    fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError> {
+        self.admitted.borrow_mut().push(attempt.clone());
+        Ok(format!("run-{}", attempt.id))
+    }
+
+    fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
+        let Some(action_id) = attempt.action_id.clone() else {
+            return Ok(MemberOutcome::Pending);
+        };
+        Ok(MemberOutcome::Settled(MemberBatchEvidence {
+            applied: attempt
+                .members()
+                .iter()
+                .map(|member| MemberEvidence {
+                    action_id: action_id.clone(),
+                    attempt_id: attempt.id.clone(),
+                    member_key: member.key.clone(),
+                    input_fingerprint: member.fingerprint.clone(),
+                    resulting_fingerprint: member.fingerprint.clone(),
+                    ready: true,
+                    result: serde_json::json!({"task_id": member.key}),
+                })
+                .collect(),
+            action_id,
+            attempt_id: attempt.id.clone(),
+            failed: BTreeMap::new(),
+        }))
     }
 }
 
@@ -554,6 +671,49 @@ fn checkpoint_rejects_budget_reset_ack_replacement_and_lost_failure_tombstone() 
     erased.generation += 1;
     erased.members.as_mut().unwrap().failed.clear();
     assert!(store.automation_commit(&failed, &erased, None).is_err());
+}
+
+/// Without a receipt a checkpoint may retire an assessment from working
+/// state, but never add or rewrite one.
+#[test]
+fn checkpoint_retires_but_never_forges_assessments() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = RetentionHost::new(["task".to_string()]);
+    let mut minute = 0;
+    assess_source(store.as_ref(), &host, &mut minute);
+    let state = store
+        .automation_state("host/ws/routine/pilot")
+        .unwrap()
+        .unwrap();
+    let assessment = state.members.as_ref().unwrap().assessed["task"].clone();
+
+    let forged = |key: &str, resulting: &str| {
+        let mut next = state.clone();
+        next.generation += 1;
+        next.members.as_mut().unwrap().assessed.insert(
+            key.into(),
+            MemberAssessment {
+                resulting_fingerprint: resulting.into(),
+                ..assessment.clone()
+            },
+        );
+        next
+    };
+    assert!(
+        store
+            .automation_commit(&state, &forged("other", "task"), None)
+            .is_err()
+    );
+    assert!(
+        store
+            .automation_commit(&state, &forged("task", "rewritten"), None)
+            .is_err()
+    );
+
+    let mut retired = state.clone();
+    retired.generation += 1;
+    retired.members.as_mut().unwrap().assessed.clear();
+    assert!(store.automation_commit(&state, &retired, None).unwrap());
 }
 
 #[test]
@@ -1156,6 +1316,170 @@ fn partial_batch_outcome_records_assessed_and_failed_per_member() {
     assert_eq!(host.admitted.borrow()[1], vec!["task-b".to_string()]);
 }
 
+fn retention_tick(
+    store: &dyn AutomationStoreBackend,
+    host: &RetentionHost,
+    minute: i64,
+) -> AutomationDiagnostic {
+    evaluate(
+        store,
+        host,
+        MemberEvaluation {
+            consumer: "host/ws/routine/pilot",
+            epoch: "epoch",
+            trigger: &StateTrigger {
+                batch_size: Some(50),
+                ..trigger()
+            },
+            enabled: true,
+            dry_run: false,
+            now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
+        },
+    )
+    .unwrap()
+}
+
+fn retained_members(diagnostic: &AutomationDiagnostic) -> MemberState {
+    diagnostic.state.clone().unwrap().members.unwrap()
+}
+
+/// Tick until every source member is assessed and nothing is in flight.
+fn assess_source(store: &dyn AutomationStoreBackend, host: &RetentionHost, minute: &mut i64) {
+    for _ in 0..200 {
+        *minute += 3;
+        let members = retained_members(&retention_tick(store, host, *minute));
+        if members.active.is_none()
+            && members.pending.is_empty()
+            && members.assessed.len() == host.source.borrow().len()
+        {
+            return;
+        }
+    }
+    panic!("the source never settled");
+}
+
+/// Assessments of members that left the source no longer hold the consumer
+/// at capacity: a newly eligible member is observed and admitted, working
+/// state stays bounded, and every receipt stays durable.
+#[test]
+fn departed_assessments_make_room_for_a_newly_eligible_member() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = RetentionHost::new((0..1000).map(|i| format!("m-{i:04}")));
+    let mut minute = 0;
+    assess_source(store.as_ref(), &host, &mut minute);
+    let history = host.admitted.borrow().clone();
+    assert_eq!(
+        history
+            .iter()
+            .map(|attempt| attempt.members().len())
+            .sum::<usize>(),
+        1000
+    );
+
+    // Sorting after every retained key, the new member is on the next page.
+    *host.source.borrow_mut() = BTreeMap::from([("new".to_string(), "new".to_string())]);
+    minute += 3;
+    let observed = retention_tick(store.as_ref(), &host, minute);
+    assert_eq!(observed.reason, "debouncing");
+    let members = retained_members(&observed);
+    assert!(
+        members.assessed.is_empty(),
+        "departed assessments leave working state"
+    );
+    assert_eq!(members.pending.keys().collect::<Vec<_>>(), ["new"]);
+    assert_eq!(*host.observable_queries.borrow(), 1);
+
+    minute += 3;
+    assert_eq!(
+        retention_tick(store.as_ref(), &host, minute).reason,
+        "fired"
+    );
+    assert_eq!(host.admitted.borrow().last().unwrap().task_ids(), ["new"]);
+    for attempt in &history {
+        assert!(
+            store
+                .automation_receipt("host/ws/routine/pilot", &attempt.id)
+                .unwrap()
+                .is_some(),
+            "retiring an assessment keeps its receipt"
+        );
+    }
+}
+
+/// At capacity with every retained member still observed, the scan keeps
+/// cycling, a retained member's fresh fingerprint is still assessed,
+/// unchanged members never refire, and a new member waits visibly for room
+/// that opens once another member leaves the source.
+#[test]
+fn a_full_working_set_keeps_scanning_and_admitting_retained_members() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = RetentionHost::new((0..1000).map(|i| format!("m-{i:04}")));
+    let mut minute = 0;
+    assess_source(store.as_ref(), &host, &mut minute);
+    let assessed = host.admitted.borrow().len();
+
+    // Both share the first page: one retained member edited, one new member.
+    host.source
+        .borrow_mut()
+        .insert("m-0001".into(), "m-0001-edited".into());
+    host.source
+        .borrow_mut()
+        .insert("m-0000+".into(), "m-0000+".into());
+
+    let mut cursors = BTreeSet::new();
+    let mut reasons = BTreeSet::new();
+    for _ in 0..30 {
+        minute += 3;
+        let diagnostic = retention_tick(store.as_ref(), &host, minute);
+        let members = retained_members(&diagnostic);
+        assert!(members.pending.len() + members.assessed.len() + members.withheld.len() <= 1000);
+        assert!(!members.pending.contains_key("m-0000+"));
+        cursors.insert(members.scan_after);
+        reasons.insert(diagnostic.reason);
+    }
+    assert!(
+        cursors.contains(&None) && cursors.len() > 21,
+        "the scan keeps advancing and wraps around"
+    );
+    assert!(reasons.contains("source_backpressure"));
+    {
+        let admitted = host.admitted.borrow();
+        let later = &admitted[assessed..];
+        assert_eq!(later.len(), 1, "only the edited member refires");
+        assert_eq!(later[0].task_ids(), ["m-0001"]);
+        assert_eq!(later[0].member.fingerprint, "m-0001-edited");
+    }
+
+    let departed = host
+        .admitted
+        .borrow()
+        .iter()
+        .find(|attempt| attempt.member_for("m-0999").is_some())
+        .unwrap()
+        .id
+        .clone();
+    host.source.borrow_mut().remove("m-0999");
+    for _ in 0..30 {
+        minute += 3;
+        retention_tick(store.as_ref(), &host, minute);
+        if host.admitted.borrow().len() > assessed + 1 {
+            break;
+        }
+    }
+    assert_eq!(
+        host.admitted.borrow().last().unwrap().task_ids(),
+        ["m-0000+"]
+    );
+    let members = retained_members(&retention_tick(store.as_ref(), &host, minute + 3));
+    assert!(!members.assessed.contains_key("m-0999"));
+    assert!(
+        store
+            .automation_receipt("host/ws/routine/pilot", &departed)
+            .unwrap()
+            .is_some()
+    );
+}
+
 /// [ORB-12746] A member that stopped being admissible before the batch was
 /// acknowledged leaves the attempt; its siblings still fire.
 #[test]
@@ -1229,6 +1553,9 @@ fn fired_state_after_failure(
         }
         fn admission(&self, m: &StateMember) -> Result<MemberAdmission, AutomationError> {
             self.0.admission(m)
+        }
+        fn observable(&self, k: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+            self.0.observable(k)
         }
         fn lookup(&self, a: &MemberAttempt) -> Result<Option<String>, AutomationError> {
             self.0.lookup(a)

@@ -156,7 +156,13 @@ pub(super) fn validate(
         if expected_assessments != new.assessed || !every_member_retired(active, new, &applied) {
             return Err(invalid());
         }
-    } else if old.assessed != new.assessed {
+    } else if new
+        .assessed
+        .iter()
+        .any(|(key, assessment)| old.assessed.get(key) != Some(assessment))
+    {
+        // Without a receipt an assessment may only be retired from working
+        // state, never added or rewritten; its receipt stays durable.
         return Err(invalid());
     }
 

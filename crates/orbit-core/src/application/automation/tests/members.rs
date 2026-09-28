@@ -27,7 +27,7 @@ use orbit_types::{
     },
 };
 use serde_json::json;
-use std::{path::Path, process::Command};
+use std::{collections::BTreeSet, path::Path, process::Command};
 use tempfile::tempdir;
 
 const PIPELINE_JOB: &str = "task_pr_pipeline";
@@ -575,6 +575,66 @@ fn host_observes_admits_and_fingerprints_with_the_triggers_eligibility() {
         )
         .expect("drop the required tag");
     assert_retire(narrowed_host.admission(&member).unwrap(), "task_ineligible");
+}
+
+/// Retirement asks about retained keys by identity rather than by page: a
+/// task key stays while its task holds a status `observe` queries, and an
+/// incident key while the current inventory has it.
+#[test]
+fn observable_answers_retained_keys_by_identity() {
+    let (_root, runtime, repo) = test_runtime();
+    let kept = create_proposed_task(&runtime, &repo, "kept");
+    let left = create_proposed_task(&runtime, &repo, "left");
+    runtime
+        .apply_task_automation_update(
+            &left,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .expect("move the task out of the preparation query");
+
+    let preparation = preparation_trigger();
+    assert_eq!(
+        Host::new(&runtime, "task-pilot", &preparation)
+            .observable(&BTreeSet::from([
+                kept.clone(),
+                left.clone(),
+                "missing".to_string()
+            ]))
+            .unwrap(),
+        BTreeSet::from([kept.clone()])
+    );
+
+    let child_task = create_backlog_task(&runtime, &repo, "child");
+    let child = fail_pipeline_attempt(&runtime, &child_task, None, dead_pid());
+    let parent_task = create_backlog_task(&runtime, &repo, "parent");
+    couple_parent_to_child(&runtime, &parent_task, &child, dead_pid());
+
+    let trigger = trigger();
+    let host = Host::new(&runtime, "task-pilot", &trigger);
+    let incident = host.observe(None, Utc::now()).unwrap().candidates[0]
+        .key
+        .clone();
+    let keys = BTreeSet::from([incident.clone(), child_task.clone(), kept]);
+    assert_eq!(
+        host.observable(&keys).unwrap(),
+        BTreeSet::from([incident, child_task.clone()])
+    );
+
+    for id in [&child_task, &parent_task] {
+        runtime
+            .apply_task_automation_update(
+                id,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Backlog),
+                    ..TaskAutomationUpdate::default()
+                },
+            )
+            .expect("resolve the incident");
+    }
+    assert!(host.observable(&keys).unwrap().is_empty());
 }
 
 #[test]
