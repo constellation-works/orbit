@@ -1615,18 +1615,21 @@ fn marked_worker_command_admits_any_executable_path() {
     }
 
     // An atomic upgrade's deleted-inode path resolves after the marker check.
-    let dir = TempDir::new().expect("tempdir");
-    let installed = dir.path().join("orbit");
-    std::fs::write(&installed, "replacement").expect("write replacement executable");
-    let command = orbit_worker_command_with_permission(
-        true,
-        installed.with_file_name("orbit (deleted)"),
-        Path::new("/registered/workspace"),
-        "jrun-replaced",
-        None,
-    )
-    .expect("the replaced installed binary stays launchable");
-    assert_eq!(command.get_program(), installed.as_os_str());
+    #[cfg(target_os = "linux")]
+    {
+        let dir = TempDir::new().expect("tempdir");
+        let installed = dir.path().join("orbit");
+        std::fs::write(&installed, "replacement").expect("write replacement executable");
+        let command = orbit_worker_command_with_permission(
+            true,
+            installed.with_file_name("orbit (deleted)"),
+            Path::new("/registered/workspace"),
+            "jrun-replaced",
+            None,
+        )
+        .expect("the replaced installed binary stays launchable");
+        assert_eq!(command.get_program(), installed.as_os_str());
+    }
 }
 
 /// ORB-10544: the duplicate-dispatch guard lives in the shared submission path,
