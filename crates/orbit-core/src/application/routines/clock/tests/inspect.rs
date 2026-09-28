@@ -1,7 +1,9 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
@@ -363,4 +365,109 @@ fn live_version_script_is_normalized() {
     );
     assert_eq!(inspection.verdict, ClockUnitVerdict::VersionMismatch);
     assert_eq!(inspection.program_version.as_deref(), Some("0.20.0"));
+}
+
+fn write_version_script(dir: &Path, body: &str) -> PathBuf {
+    let program = dir.join("fake-orbit");
+    fs::write(&program, format!("#!/bin/sh\n{body}")).expect("write script");
+    let mut permissions = fs::metadata(&program).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&program, permissions).expect("chmod");
+    program
+}
+
+fn read_pid(path: &Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("pid file {}: {error}", path.display()))
+        .trim()
+        .to_string()
+}
+
+/// `kill -0` stops finding the process once it is gone and reaped.
+fn assert_gone(pid: &str) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let alive = Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .expect("run kill -0")
+            .success();
+        if !alive {
+            return;
+        }
+        assert!(Instant::now() < deadline, "helper pid {pid} still running");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn probe_returns_within_budget_when_a_descendant_holds_either_pipe() {
+    // Before the fix the probe read both pipes to EOF after the leader exited,
+    // so a lingering helper held it for the helper's whole lifetime.
+    for (label, redirect) in [("stdout", "2>/dev/null"), ("stderr", ">/dev/null")] {
+        let dir = tempdir().expect("dir");
+        let pid_path = dir.path().join("helper.pid");
+        let program = write_version_script(
+            dir.path(),
+            &format!(
+                "echo 'orbit 1.0'\nsleep 120 {redirect} &\necho $! > '{}'\nexit 0\n",
+                pid_path.display()
+            ),
+        );
+
+        let budget = Duration::from_secs(10);
+        let started = Instant::now();
+        let version = probe_program_version_within(&program, budget);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < budget,
+            "{label}: probe took {elapsed:?}, past the {budget:?} budget"
+        );
+        assert_eq!(version.as_deref(), Ok("1.0"), "{label}");
+        assert_gone(&read_pid(&pid_path));
+    }
+}
+
+#[test]
+fn probe_drains_a_version_producer_past_pipe_capacity() {
+    let dir = tempdir().expect("dir");
+    let program = write_version_script(
+        dir.path(),
+        "echo 'orbit 2.5.0'\nhead -c 1048576 /dev/zero\nhead -c 1048576 /dev/zero >&2\n",
+    );
+    assert_eq!(
+        probe_program_version_within(&program, Duration::from_secs(60)).as_deref(),
+        Ok("2.5.0")
+    );
+}
+
+#[test]
+fn probe_reads_a_version_reported_on_stderr() {
+    let dir = tempdir().expect("dir");
+    let program = write_version_script(dir.path(), "echo 'orbit 0.19.0' >&2\n");
+    assert_eq!(
+        probe_program_version_within(&program, Duration::from_secs(60)).as_deref(),
+        Ok("0.19.0")
+    );
+}
+
+#[test]
+fn probe_times_out_a_hung_program_and_its_helpers() {
+    let dir = tempdir().expect("dir");
+    let pid_path = dir.path().join("helper.pid");
+    let program = write_version_script(
+        dir.path(),
+        &format!("sleep 120 &\necho $! > '{}'\nwait\n", pid_path.display()),
+    );
+
+    let budget = Duration::from_secs(2);
+    let started = Instant::now();
+    let error = probe_program_version_within(&program, budget).expect_err("hung program");
+    let elapsed = started.elapsed();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(
+        elapsed < budget + Duration::from_secs(2),
+        "probe took {elapsed:?} for a {budget:?} budget"
+    );
+    assert_gone(&read_pid(&pid_path));
 }

@@ -8,12 +8,12 @@
 //! stops firing silently, so `orbit update` and `orbit clock repair` rewrite it
 //! to the running binary instead of waiting for an operator to notice.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::process::run_bounded_capped;
 
 use super::manager::ClockPlatform;
 use super::program::{
@@ -22,6 +22,8 @@ use super::program::{
 
 /// How long to wait for `<program> --version` before treating it as unrunnable.
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Bytes of each `--version` stream kept; the rest is read and discarded.
+const VERSION_OUTPUT_LIMIT: usize = 16 * 1024;
 
 /// The binary this process is, used as the comparison baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,57 +271,37 @@ pub(crate) fn probe_program_version_within(
         return Err(format!("program does not exist: {}", program.display()));
     }
 
-    let mut child = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("could not start {}: {error}", program.display()))?;
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = String::new();
-                let mut stderr = String::new();
-                if let Some(mut pipe) = child.stdout.take() {
-                    let _ = pipe.read_to_string(&mut stdout);
-                }
-                if let Some(mut pipe) = child.stderr.take() {
-                    let _ = pipe.read_to_string(&mut stderr);
-                }
-                if !status.success() {
-                    let detail = first_line(&stderr).or_else(|| first_line(&stdout));
-                    return Err(match detail {
-                        Some(detail) => format!("exited {status}: {detail}"),
-                        None => format!("exited {status}"),
-                    });
-                }
-                let output = if stdout.trim().is_empty() {
-                    stderr
-                } else {
-                    stdout
-                };
-                let version = normalize_version(&output);
-                if version.is_empty() {
-                    return Err("empty --version output".to_string());
-                }
-                return Ok(version);
-            }
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("--version timed out after {}s", timeout.as_secs()));
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("wait for --version failed: {error}"));
-            }
+    // The shared helper owns the whole lifecycle: it drains both pipes while
+    // the program runs, keeps only a prefix of each, and tears down the process
+    // group so a descendant holding a pipe cannot outlive the budget.
+    let mut command = Command::new(program);
+    command.arg("--version");
+    let output = match run_bounded_capped(&mut command, timeout, VERSION_OUTPUT_LIMIT) {
+        Ok(output) => output,
+        Err(OrbitError::ProcessTimeout { .. }) => {
+            return Err(format!("--version timed out after {}s", timeout.as_secs()));
         }
+        Err(error) => {
+            return Err(format!("could not run {}: {error}", program.display()));
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let detail = first_line(&stderr).or_else(|| first_line(&stdout));
+        return Err(match detail {
+            Some(detail) => format!("exited {}: {detail}", output.status),
+            None => format!("exited {}", output.status),
+        });
     }
+    let text = if stdout.trim().is_empty() {
+        stderr
+    } else {
+        stdout
+    };
+    let version = normalize_version(&text);
+    if version.is_empty() {
+        return Err("empty --version output".to_string());
+    }
+    Ok(version)
 }
