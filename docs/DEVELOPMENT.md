@@ -108,7 +108,9 @@ CI collects workspace test coverage with
 [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on every PR
 (the `Coverage (informational)` job in `.github/workflows/ci.yml`) and
 uploads an lcov report as the `coverage-lcov` workflow artifact. The job is
-**informational only — it never gates a merge**.
+**informational only — it never gates a merge**. It runs the tests through
+`cargo llvm-cov nextest`, so each test gets its own process and the
+`.config/nextest.toml` test groups apply, as in the `Check / Clippy / Test` job.
 
 Per-crate line-coverage **targets** — goals to steer test investment, not
 gates that fail CI:
@@ -120,7 +122,7 @@ gates that fail CI:
 | `orbit-exec` | > 70% | Process spawning/sandboxing is platform-conditional, so some paths are unreachable on any single CI runner. |
 
 When touching those crates, check the coverage summary in the CI job log (or
-run `cargo llvm-cov -p <crate> --summary-only` locally) and prefer adding
+run `cargo llvm-cov nextest -p <crate> --summary-only` locally) and prefer adding
 tests that close the gap toward the target.
 
 ### Tests that depend on host process visibility

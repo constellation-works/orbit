@@ -775,9 +775,12 @@ fn read_only_foreign_digest_refuses_when_store_schema_differs() {
         .expect("bump schema");
     drop(connection);
     let candidate = distinct_candidate(&workspace);
-    let output = McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
-        .args(["task", "list", "--json"])
-        .output()
+    let mut command =
+        McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home);
+    command.args(["task", "list", "--json"]);
+    // The candidate was just written, so a sibling test's fork can still hold
+    // it open for writing; see `orbit_common::test_process`.
+    let output = orbit_common::test_process::retry_executable_busy(|| command.output())
         .expect("schema-mismatch candidate");
     assert_refused(&output);
     let stderr = String::from_utf8_lossy(&output.stderr);
