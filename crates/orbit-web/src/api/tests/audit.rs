@@ -47,46 +47,66 @@ fn seed_audit_event_with_scope(
     scope: Option<(&str, Option<&str>)>,
 ) {
     runtime
-        .record_audit_event(&AuditEventInsertParams {
-            execution_id: execution_id.to_string(),
-            command: "tool".to_string(),
-            subcommand: Some("run".to_string()),
-            tool_name: Some(tool_name.to_string()),
-            target_type: Some("task".to_string()),
-            target_id: Some("T00000000-000000".to_string()),
-            role: role.to_string(),
+        .record_audit_event(&audit_event_params(
+            execution_id,
+            tool_name,
             status,
-            exit_code: match status {
-                AuditEventStatus::Success => 0,
-                _ => 1,
-            },
-            duration_ms: 5,
-            working_directory: "/tmp/fixture".to_string(),
-            arguments_json: None,
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: error_message.map(str::to_string),
-            host: None,
-            pid: std::process::id(),
-            session_id: None,
-            workspace_id: Some("ws-orbit".to_string()),
-            caller_machine_id: Some("hm-caller".to_string()),
-            caller_machine_name: Some("caller.local".to_string()),
-            process_machine_id: Some("hm-process".to_string()),
-            process_machine_name: Some("process.local".to_string()),
-            transport: Some(McpTransport::Local),
-            effective_capabilities: [McpCapability::Agent, McpCapability::Runner]
-                .into_iter()
-                .collect(),
-            origin_session_id: Some("mcp-session".to_string()),
-            mcp_call_id: Some("mcall".to_string()),
-            lease_id: Some("lease".to_string()),
-            task_id: scope.and_then(|(_, task_id)| task_id).map(str::to_string),
-            job_run_id: scope.map(|(run_id, _)| run_id.to_string()),
-            activity_id: None,
-            step_index: None,
-        })
+            role,
+            error_message,
+            scope,
+        ))
         .expect("seed audit event");
+}
+
+/// Tool-call params carrying the fixed trusted-provenance values the filter
+/// tests query for.
+fn audit_event_params(
+    execution_id: &str,
+    tool_name: &str,
+    status: AuditEventStatus,
+    role: &str,
+    error_message: Option<&str>,
+    scope: Option<(&str, Option<&str>)>,
+) -> AuditEventInsertParams {
+    AuditEventInsertParams {
+        execution_id: execution_id.to_string(),
+        command: "tool".to_string(),
+        subcommand: Some("run".to_string()),
+        tool_name: Some(tool_name.to_string()),
+        target_type: Some("task".to_string()),
+        target_id: Some("T00000000-000000".to_string()),
+        role: role.to_string(),
+        status,
+        exit_code: match status {
+            AuditEventStatus::Success => 0,
+            _ => 1,
+        },
+        duration_ms: 5,
+        working_directory: "/tmp/fixture".to_string(),
+        arguments_json: None,
+        stdout_truncated: None,
+        stderr_truncated: None,
+        error_message: error_message.map(str::to_string),
+        host: None,
+        pid: std::process::id(),
+        session_id: None,
+        workspace_id: Some("ws-orbit".to_string()),
+        caller_machine_id: Some("hm-caller".to_string()),
+        caller_machine_name: Some("caller.local".to_string()),
+        process_machine_id: Some("hm-process".to_string()),
+        process_machine_name: Some("process.local".to_string()),
+        transport: Some(McpTransport::Local),
+        effective_capabilities: [McpCapability::Agent, McpCapability::Runner]
+            .into_iter()
+            .collect(),
+        origin_session_id: Some("mcp-session".to_string()),
+        mcp_call_id: Some("mcall".to_string()),
+        lease_id: Some("lease".to_string()),
+        task_id: scope.and_then(|(_, task_id)| task_id).map(str::to_string),
+        job_run_id: scope.map(|(run_id, _)| run_id.to_string()),
+        activity_id: None,
+        step_index: None,
+    }
 }
 
 fn seed_fourteen_named_diagnostic_rows(runtime: &OrbitRuntime) {
@@ -292,17 +312,70 @@ async fn audit_lists_seeded_events_newest_first_with_projected_fields() {
     );
 }
 
-#[tokio::test]
-async fn audit_filters_all_trusted_mcp_provenance_fields() {
-    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+/// One decoy per provenance query parameter, each differing from the
+/// matching row in only that field. Values share no substring with the
+/// matching ones, so a decoy is excluded only by the predicate under test.
+type ProvenanceDecoy = (&'static str, &'static str, fn(&mut AuditEventInsertParams));
+
+const PROVENANCE_DECOYS: [ProvenanceDecoy; 9] = [
+    ("workspace_id", "ws-orbit", |p| {
+        p.workspace_id = Some("zz-decoy".to_string())
+    }),
+    ("caller_machine", "hm-caller", |p| {
+        p.caller_machine_id = Some("zz-decoy".to_string())
+    }),
+    ("process_machine", "hm-process", |p| {
+        p.process_machine_id = Some("zz-decoy".to_string())
+    }),
+    ("transport", "local", |p| {
+        p.transport = Some(McpTransport::SshMcp)
+    }),
+    ("capability", "runner", |p| {
+        p.effective_capabilities = [McpCapability::Agent].into_iter().collect()
+    }),
+    ("origin_session", "mcp-session", |p| {
+        p.origin_session_id = Some("zz-decoy".to_string())
+    }),
+    ("mcp_call", "mcall", |p| {
+        p.mcp_call_id = Some("zz-decoy".to_string())
+    }),
+    ("job_run_id", "jrun", |p| {
+        p.job_run_id = Some("zz-decoy".to_string())
+    }),
+    ("lease", "lease", |p| {
+        p.lease_id = Some("zz-decoy".to_string())
+    }),
+];
+
+fn seed_provenance_decoys(runtime: &OrbitRuntime) {
     seed_audit_event(
-        &runtime,
+        runtime,
         "exec-trusted",
         "orbit.task.list",
         AuditEventStatus::Success,
         "unverified",
         None,
     );
+    for (param, _, mismatch) in PROVENANCE_DECOYS {
+        let mut params = audit_event_params(
+            &format!("exec-decoy-{param}"),
+            "orbit.task.list",
+            AuditEventStatus::Success,
+            "unverified",
+            None,
+            Some(("jrun", None)),
+        );
+        mismatch(&mut params);
+        runtime
+            .record_audit_event(&params)
+            .expect("seed provenance decoy");
+    }
+}
+
+#[tokio::test]
+async fn audit_filters_all_trusted_mcp_provenance_fields() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_provenance_decoys(&runtime);
 
     let response = request_audit(
         runtime,
@@ -317,6 +390,36 @@ async fn audit_filters_all_trusted_mcp_provenance_fields() {
     let body = body_json(response).await;
     let rows = body.as_array().expect("trusted provenance filtered rows");
     assert_eq!(execution_ids(rows), vec!["exec-trusted"]);
+}
+
+/// Each provenance parameter alone must drop exactly its own decoy and keep
+/// the matching row plus every other decoy, so an ignored or miswired
+/// query-to-filter assignment changes the returned set.
+#[tokio::test]
+async fn audit_each_trusted_mcp_provenance_param_filters_independently() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_provenance_decoys(&runtime);
+
+    for (param, value, _) in PROVENANCE_DECOYS {
+        let response = request_audit(runtime.clone(), &format!("/audit?{param}={value}")).await;
+        assert_eq!(response.status(), StatusCode::OK, "{param}");
+        let body = body_json(response).await;
+        let rows = body.as_array().expect("provenance filtered rows");
+        let mut returned = execution_ids(rows);
+        returned.sort_unstable();
+        let excluded = format!("exec-decoy-{param}");
+        let mut expected: Vec<String> = PROVENANCE_DECOYS
+            .iter()
+            .map(|(other, _, _)| format!("exec-decoy-{other}"))
+            .filter(|id| *id != excluded)
+            .chain(["exec-trusted".to_string()])
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(
+            returned, expected,
+            "`{param}` must exclude only its mismatching decoy"
+        );
+    }
 }
 
 /// The page window is pushed into SQL, so paging is not capped at the first
