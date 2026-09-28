@@ -41,12 +41,12 @@ records in a second store merely to get past a connection error.
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
-| Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
-| Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
+| Observe/resume workflows | `orbit_workflow_run_show/list/resume/workers` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; job replay/resume |
+| Auto-tasks | `orbit_auto_task_add/list/update/toggle/delete/mint` | Those six are also CLI commands. `show`, `restore`, `recover`, and `reset` are CLI-only (`orbit auto-task`) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
 | Distributed drain | `orbit_drain_probe`, `orbit_drain_receipt_lookup` (read only); `orbit_task_pull`, `orbit_drain_claim_bind`, `orbit_drain_claim_settle` (owner-served lifecycle) | All require an identified caller (`agent` or `operator`), so a non-interactive caller runs under an agent envelope or sets `ORBIT_OPERATOR=1`. The lifecycle tools are what a replica's `orbit run auto --pull` drain calls; do not call them by hand — a pull is a real admission, and bind/settle are fenced to the claim's machine and run. The probe and lookup create no claim and grant no execution authority. `orbit tool run orbit.drain.claims` lists execution claims; it is off the MCP surface and governed to operator authority. Handoff approval, revocation and recovery are owner-dashboard actions, not tools. Setup, the pull drain and manual recovery: [distributed-drain.md](setup/distributed-drain.md) |
-| Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
+| Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
 Provider/gateway prefixes are transport wrappers around these names. A connected
 server may expose additional discovery such as crews; use its advertised schema

@@ -51,6 +51,11 @@ assuming a value.
 | `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). Shipped `crew: system` steps resolve onto it. |
 | `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
 | `workflow.auto_ship` | Opt-in for unattended ship dispatch via the scheduler. |
+| `operation.review_policy` | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. |
+| `operation.review_crew` | Crew for before-PR automatic review. After-landing review uses the delivery auto-task's template crew. |
+| `operation.review_reviewer_starts` | Fresh reviewer invocations per delivery candidate lineage, including retries and invalidations (1..=10, default 2). |
+| `operation.review_repair_cycles` | Repair/validation cycles per delivery candidate lineage (0..=10, default 2). |
+| `operation.review_minutes` | Aggregate before-PR reviewer, repair, and final-validation minutes per lineage (1..=1440, default 30). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
