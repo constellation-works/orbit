@@ -100,3 +100,63 @@ fn pin_picks_up_registry_rewrite_on_the_next_request() {
         "changed mtime/len must reload"
     );
 }
+
+/// The eager startup read may race a native atomic registry replacement.
+#[test]
+fn startup_rewrite_after_read_is_seen_by_the_next_pin() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    write_registry(&global_root, &["alpha", "beta"]);
+    let source = RegistrySource::new(global_root.join("workspaces.json"), None, None);
+    let rewrite_root = global_root.clone();
+    source.set_post_read_hook(move || write_registry(&rewrite_root, &["alpha"]));
+
+    let state = DashboardState::from_registry(global_root, source).expect("from_registry");
+    assert_eq!(
+        state.entries().len(),
+        2,
+        "startup snapshot was read before the injected removal"
+    );
+    assert_eq!(listed_ids(&state), vec!["alpha".to_string()]);
+    assert_eq!(state.registry_load_count(), 2);
+    assert_eq!(listed_ids(&state), vec!["alpha".to_string()]);
+    assert_eq!(state.registry_load_count(), 2, "now-current fast path");
+}
+
+/// A forced refresh can race a native write after its registry read.
+#[test]
+fn refresh_rewrite_after_read_is_seen_by_the_next_pin() {
+    let (_tmp, state) = registry_state(&["alpha", "beta"]);
+    let rewrite_root = state.global_root().to_path_buf();
+    state
+        .set_registry_post_read_hook(move || write_registry(&rewrite_root, &["alpha"]))
+        .expect("registry-backed state");
+
+    state.refresh();
+    assert_eq!(
+        state.entries().len(),
+        2,
+        "refresh published the snapshot read before the injected removal"
+    );
+    assert_eq!(state.registry_load_count(), 2);
+    assert_eq!(listed_ids(&state), vec!["alpha".to_string()]);
+    assert_eq!(state.registry_load_count(), 3);
+    assert_eq!(listed_ids(&state), vec!["alpha".to_string()]);
+    assert_eq!(state.registry_load_count(), 3, "now-current fast path");
+}
+
+#[test]
+fn malformed_registry_keeps_last_valid_snapshot_and_retries() {
+    let (_tmp, state) = registry_state(&["alpha"]);
+    std::fs::write(state.global_root().join("workspaces.json"), b"{malformed")
+        .expect("write malformed registry");
+
+    assert_eq!(listed_ids(&state), vec!["alpha".to_string()]);
+    assert_eq!(listed_ids(&state), vec!["alpha".to_string()]);
+    assert_eq!(state.registry_load_count(), 3, "failed loads must retry");
+
+    write_registry(state.global_root(), &["beta"]);
+    assert_eq!(listed_ids(&state), vec!["beta".to_string()]);
+    assert_eq!(state.registry_load_count(), 4);
+}

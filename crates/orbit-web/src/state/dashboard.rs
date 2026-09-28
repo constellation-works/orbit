@@ -29,8 +29,9 @@ pub(super) struct StateInner {
     /// construction. The request-path fast path (`pin` with unchanged registry
     /// and checkout fingerprints) does not take this lock.
     refresh_lock: Mutex<()>,
-    /// Last successfully loaded `workspaces.json` mtime+len. Compared on `pin`
-    /// without `refresh_lock`; updated only after a successful snapshot swap.
+    /// `workspaces.json` mtime+len sampled before the last successful load.
+    /// Compared on `pin` without `refresh_lock`; updated only after a
+    /// successful snapshot swap.
     last_fingerprint: Mutex<Option<RegistryFingerprint>>,
     /// Last successfully observed filesystem state for the registered
     /// checkouts in the current snapshot. Compared on `pin` without
@@ -302,6 +303,7 @@ impl DashboardState {
             },
             runtimes,
             None,
+            None,
         )
     }
 
@@ -324,6 +326,7 @@ impl DashboardState {
             },
             HashMap::new(),
             None,
+            None,
         )
     }
 
@@ -341,12 +344,13 @@ impl DashboardState {
         global_root: PathBuf,
         source: RegistrySource,
     ) -> Result<Self, OrbitError> {
-        let snapshot = source.load()?;
+        let loaded = source.load()?;
         Ok(Self::from_parts(
             global_root,
-            snapshot,
+            loaded.data,
             HashMap::new(),
             Some(source),
+            loaded.fingerprint,
         ))
     }
 
@@ -355,6 +359,7 @@ impl DashboardState {
         snapshot: SnapshotData,
         runtimes: HashMap<String, CachedRuntime>,
         source: Option<RegistrySource>,
+        last_fingerprint: Option<RegistryFingerprint>,
     ) -> Self {
         let checkout_fingerprints = checkout_fingerprints(&snapshot.entries);
         let initial = Snapshot {
@@ -362,7 +367,6 @@ impl DashboardState {
             entries: snapshot.entries,
             default_workspace: snapshot.default_workspace,
         };
-        let last_fingerprint = source.as_ref().and_then(RegistrySource::fingerprint);
         Self {
             inner: Arc::new(StateInner {
                 global_root,
@@ -529,8 +533,8 @@ impl DashboardState {
         if !force && self.registry_is_current(source) {
             return;
         }
-        let data = match source.load() {
-            Ok(data) => data,
+        let loaded = match source.load() {
+            Ok(loaded) => loaded,
             Err(error) => {
                 // A malformed or partially-written registry must never replace
                 // a good in-memory snapshot. The diagnostic names the registry
@@ -546,7 +550,7 @@ impl DashboardState {
         // Publish a generation-stamped snapshot. Newer generation than any cache
         // entry built before this point, so `publish_runtime` treats an
         // in-flight older build as stale.
-        let snapshot = self.inner.publish_snapshot(data);
+        let snapshot = self.inner.publish_snapshot(loaded.data);
         // Bindings still servable after the swap; used to evict runtimes whose
         // workspace was removed, went inactive, or was rebound.
         let checkout_fingerprint_state = checkout_fingerprints(&snapshot.entries);
@@ -573,10 +577,10 @@ impl DashboardState {
                 })
             });
         }
-        // Record the post-load fingerprint so the next pin can skip. Done after
-        // the snapshot swap so a concurrent pin cannot observe a new
-        // fingerprint against the old snapshot.
-        self.store_fingerprint(source.fingerprint());
+        // This fingerprint was sampled before the registry read. A rewrite
+        // during load or publication therefore forces the next pin to reload
+        // instead of caching newer file metadata beside older snapshot data.
+        self.store_fingerprint(loaded.fingerprint);
         self.store_checkout_fingerprints(checkout_fingerprint_state);
     }
 
@@ -636,7 +640,7 @@ impl DashboardState {
         self
     }
 
-    /// Successful registry `load` calls, including the eager `from_registry`
+    /// Registry `load` attempts, including the eager `from_registry`
     /// construction. Single/global modes that have no source report 0.
     #[cfg(test)]
     pub(crate) fn registry_load_count(&self) -> u64 {
@@ -645,6 +649,15 @@ impl DashboardState {
             .as_ref()
             .map(|source| source.load_count.load(Ordering::Relaxed))
             .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_registry_post_read_hook(
+        &self,
+        hook: impl FnOnce() + Send + 'static,
+    ) -> Option<()> {
+        self.inner.source.as_ref()?.set_post_read_hook(hook);
+        Some(())
     }
 
     /// Acquire `refresh_lock` so a test can prove `pin` does not wait on it

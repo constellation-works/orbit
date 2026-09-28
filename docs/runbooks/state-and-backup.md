@@ -90,12 +90,14 @@ the retired links until it is restarted.
 > and routable through the workspace-scoped API on the next request after that write; a
 > removed workspace's cached runtime is evicted without disturbing the others. Unchanged
 > requests do not re-read or re-validate the file and do not serialize on the refresh
-> lock. **Operator recovery semantics:** a checkout path that disappears after a registry
+> lock. The server samples the registry fingerprint before each load; if a native
+> write lands during startup or refresh, the next request reloads the newer file.
+> **Operator recovery semantics:** a checkout path that disappears after a registry
 > write that `orbit web` reloads is reported `invalid` (inactive) rather than deleted —
-> restore or re-point the path *and rewrite `workspaces.json`* (for example `orbit
-> workspace` init/remove/rebind) so the next request re-activates it; restoring the
-> directory alone does not change the registry fingerprint. A malformed or half-written
-> `workspaces.json` (e.g. an editor mid-save) never replaces the last good in-memory set:
+> restoring the path changes its checkout fingerprint, so the next request can
+> re-activate it; re-pointing a binding requires rewriting `workspaces.json`.
+> A malformed or half-written `workspaces.json` (e.g. an editor mid-save) never
+> replaces the last good in-memory set:
 > the server keeps serving the previous workspaces and logs a credential-safe diagnostic
 > (the registry path plus the parse error, never the file contents) until the file parses
 > again. A malformed registry present *at server startup* is still fatal — fix the file

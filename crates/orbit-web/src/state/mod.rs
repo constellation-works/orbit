@@ -30,7 +30,9 @@
 //! never old metadata spliced onto a newer runtime. `pin` reloads the registry
 //! file only when its mtime or length, or a registered checkout's filesystem
 //! fingerprint, has changed; the steady state is a set of `stat` calls plus
-//! an `Arc` clone, not a serialized `load`.
+//! an `Arc` clone, not a serialized `load`. The fingerprint saved with each
+//! snapshot is sampled before its registry read, so a rewrite during startup
+//! or refresh makes the next `pin` reload instead of treating old data as current.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
