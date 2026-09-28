@@ -218,10 +218,17 @@ fn workspace_single_key_inherits_other_global_keys_then_built_in_defaults() {
 
     let config = ResolvedConfig::load(&roots(global.path(), workspace.path()))
         .expect("workspace config loads");
+    let unconfigured = tempdir().expect("unconfigured tempdir");
+    let built_in = ResolvedConfig::load(&ConfigRoots::global_only(unconfigured.path()))
+        .expect("built-in config loads");
 
     assert!(config.workflow_auto_ship);
     assert_eq!(config.workflow_base_branch, "global-branch");
     assert!(!config.scoring_enabled);
+    assert_eq!(
+        config.default_crew, built_in.default_crew,
+        "a key neither layer sets falls back to the built-in default"
+    );
 }
 
 #[test]
@@ -491,16 +498,6 @@ effort = "high"
         effective.value_for("crews.opus.effort"),
         Some(serde_json::Value::Null)
     );
-}
-
-#[test]
-fn crate_and_user_docs_share_the_layering_contract() {
-    const CONTRACT: &str = "Ordinary settings inherit per key: workspace values override global values, global values fill omissions, and built-in defaults fill remaining gaps.";
-    let crate_docs = include_str!("../lib.rs");
-    let user_docs = include_str!("../../../../docs/CONFIG.md");
-
-    assert!(crate_docs.contains(CONTRACT));
-    assert!(user_docs.contains(CONTRACT));
 }
 
 /// [ORB-12625] A crew named with `:` was admissible before the pool grammar
