@@ -22,7 +22,7 @@ use crate::application::managed_assets::{
     ManagedAssetOutcome, ManagedAssetReconcileMode, ManagedAssetReconciliation,
     ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION, RoutineAssetProvenance,
     encode_managed_asset_manifest, load_managed_asset_manifest, preserve_modified_retired_asset,
-    retired_preservation_path,
+    record_managed_manifest_write, retired_preservation_path,
 };
 
 /// Seed every entry in [`DEFAULT_ROUTINE_FILES`] under `routines_dir`,
@@ -608,12 +608,27 @@ pub(crate) fn reconcile_default_routines(
     };
     if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&next) {
         let encoded = encode_managed_asset_manifest(&next)?;
-        atomic_write_text(&manifest_path, &encoded).map_err(|error| {
-            OrbitError::Io(format!(
-                "write managed routine asset manifest '{}': {error}",
-                manifest_path.display()
-            ))
-        })?;
+        let recorded = record_managed_manifest_write(
+            &manifest_path,
+            "routine",
+            atomic_write_text(&manifest_path, &encoded),
+            &mut result.warnings,
+        )?;
+        if !recorded {
+            // Same contract as the other catalogs: a denied manifest write is
+            // reported through `result.warnings`, and no adoption claims
+            // provenance that never landed.
+            for action in result
+                .actions
+                .iter_mut()
+                .filter(|action| action.outcome == ManagedAssetOutcome::Migrated)
+            {
+                action.detail = Some(
+                    "adopted in place; its provenance was not recorded because the manifest write was denied"
+                        .to_string(),
+                );
+            }
+        }
     }
     Ok(result)
 }
