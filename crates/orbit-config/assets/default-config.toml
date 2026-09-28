@@ -39,6 +39,18 @@ base_branch = "main"
 # Without those keys Orbit uses the built-in crew registry: `opus` for tasks
 # and its built-in `system` crew for system work.
 
+# [workflow.task_pilot_freshness]
+# Which changes make an accepted task-pilot assessment stale, so the task is
+# piloted again. The built-in defaults below apply when a key is omitted; a
+# routine's `trigger.state.freshness` overrides them.
+# `material_fields` names at least one of: title, description, criteria, plan,
+# selectors, tags, crew, tools, type, complexity, relations, dependencies,
+# instructions. `source_sensitivity` is one of: ignore (a branch-head move
+# invalidates nothing), context_files (only when the head changed a path the
+# task's selectors name), any (every head move).
+# material_fields = ["title", "description", "criteria", "plan", "selectors"]
+# source_sensitivity = "ignore"
+
 [runtime]
 # Rotation + retention for the global JSONL log (~/.orbit/state/logs/orbit.jsonl).
 # Applied opportunistically at process start. All optional; the conservative
