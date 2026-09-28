@@ -253,6 +253,35 @@ impl OrbitRuntime {
         )
     }
 
+    /// The tasks run `run_id` bound on the machine that executes it.
+    ///
+    /// A run id is unique only within one machine's store, so the owner's own
+    /// drain and a follower's claimed leaf can mint the same id in the same
+    /// minute [ORB-13649]. A binding records the machine its run executed on,
+    /// and that pair is what identifies the run. A claimed leaf asks the owner,
+    /// which scopes the read to the leaf's trusted execution machine; a local
+    /// run is scoped to the machine its own record names.
+    pub fn list_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.list_tasks_filtered(None, None, None, Some(run_id), None, None);
+        }
+        let executed_on = self
+            .get_job_run_backend(run_id)?
+            .and_then(|run| run.executed_on);
+        let mut tasks = self.list_tasks_filtered(None, None, None, Some(run_id), None, None)?;
+        tasks.retain(|task| match &task.job_run_machine {
+            Some(bound) => executed_on
+                .as_ref()
+                .is_some_and(|local| local.machine_id == bound.machine_id),
+            // Only a claim binds a task for another machine, and a claim always
+            // records that machine. An unrecorded location is a local binding
+            // made by a run without a machine identity or before locations
+            // were recorded.
+            None => true,
+        });
+        Ok(tasks)
+    }
+
     pub fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
             return self.search_tasks_filtered(query, &[]);

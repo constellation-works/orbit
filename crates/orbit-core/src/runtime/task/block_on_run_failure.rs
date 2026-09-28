@@ -234,7 +234,7 @@ impl OrbitRuntime {
         } else {
             blocked_workflow_failure_update
         };
-        let tasks = self.list_tasks_filtered(None, None, None, Some(run_id), None, None)?;
+        let tasks = self.list_run_tasks(run_id)?;
         for task in tasks {
             if !task_is_blockable_on_run_failure(task.status) {
                 continue;

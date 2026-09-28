@@ -1,13 +1,13 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry]
@@ -505,10 +505,58 @@ claim-scoped handoff approval instead of the refused status write.
   policy and then fenced by withdrawing it cannot be re-approved by an operator (one
   authorization per handoff); restore the key, or revoke and recover the claim.
 
+## A run is its id plus the machine that executes it
+
+**Recorded:** 2026-09-28 · [ORB-13649], after the owner's drain and a follower leaf both minted
+`jrun-20260928-0230-c1` and both commit steps failed.
+**Code anchors:** `crates/orbit-core/src/application/task/query.rs::list_run_tasks`,
+`crates/orbit-core/src/adapter/tool_host/worker_tools.rs` (`filtered` owner read),
+`crates/orbit-engine/src/context/hosts.rs::RuntimeHost::list_run_tasks`
+
+### Context
+
+A run id (`jrun-<YYYYmmdd-HHMM>-<role><n>`) is minted from one machine's store, so it is unique
+only there. The owner's store holds bindings from its own runs and from every follower's leaves, and
+the run-keyed task lookups in the commit, merge, failure-blocking and resume paths matched on
+`job_run_id` alone. Two machines starting a run in the same minute bound two tasks to one id, and
+`commit_batch_changes` refused both runs (`expected exactly one task ..., got 2`).
+
+### Decision
+
+Scope every run-keyed task lookup to the pair (`job_run_id`, executing machine), option (a) in the
+task. Run ids stay as they are.
+
+- A local run is scoped to the machine its own run record names (`executed_on`). A binding with no
+  recorded machine is local: only a claim binds a task for another machine, and a claim always
+  records it.
+- A claimed leaf's lookup goes to the owner, which keeps only bindings made by the leaf's trusted
+  execution machine (`WorkerInvocation.execution`). The follower cannot name another machine.
+- Automation reaches this through `RuntimeHost::list_run_tasks`: `git_commit` (all three scopes),
+  `git_merge`, `merge_batch_pr`, blocking tasks when a run fails, and resume reclaiming a lineage's
+  tasks.
+- Checks that already hold a task id and compare its `job_run_id` with a run are not lookups. A
+  colliding run could only pass them for a task it was handed, and a claimed task accepts only
+  claim-scoped mutations. They are unchanged.
+
+A machine marker in the run id (option b) would change a format that worktree paths, branch names,
+role parsing and every stored run already depend on, and it would still leave the lookups matching
+on a string. Refusing a colliding bind (option c) turns the collision into a failed claim instead of
+removing it, and it cannot stop the owner's own drain binding an id a follower already used.
+
+### Consequences
+
+- The collision is harmless rather than rare: an id shared across machines resolves to each
+  machine's own task.
+- A runtime host that records no execution locations keeps the id-only lookup, which is correct for
+  a single store.
+- Cost: every run-keyed lookup reads the run record once more, and an owner running an older build
+  still answers a follower's run-keyed read without the scope.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
 - [ORB-13625] — opened follower pull: owner mutation tools, routed peer, `orbit run auto --pull`.
 - [ORB-13637] — added the owner completion policy ([An owner completion policy lands accepted handoffs without per-task approval](#an-owner-completion-policy-lands-accepted-handoffs-without-per-task-approval)).
+- [ORB-13649] — scoped run-keyed task lookups to the executing machine ([A run is its id plus the machine that executes it](#a-run-is-its-id-plus-the-machine-that-executes-it)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -128,10 +128,7 @@ pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "git_merge")?;
-    if host
-        .list_tasks_filtered(None, None, None, Some(batch_id), None, None)?
-        .is_empty()
-    {
+    if host.list_run_tasks(batch_id)?.is_empty() {
         return Ok(json!({}));
     }
 
@@ -154,7 +151,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "merge_batch_pr")?;
 
-    let batch_tasks = host.list_tasks_filtered(None, None, None, Some(batch_id), None, None)?;
+    let batch_tasks = host.list_run_tasks(batch_id)?;
     if batch_tasks.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "merge_batch_pr: no tasks found for job_run_id '{batch_id}'"

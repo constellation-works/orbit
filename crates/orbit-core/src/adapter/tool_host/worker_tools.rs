@@ -70,14 +70,28 @@ pub(crate) fn execute(
                     &optional_field::<Vec<String>>(input, "tags")?.unwrap_or_default(),
                 )?,
             ),
-            "filtered" => serde_json::to_value(runtime.list_tasks_filtered(
-                optional_field(input, "status")?,
-                optional_field(input, "priority")?,
-                input.get("parent_id").and_then(Value::as_str),
-                input.get("job_run_id").and_then(Value::as_str),
-                optional_field(input, "external_ref")?.as_ref(),
-                input.get("has_external_ref_system").and_then(Value::as_str),
-            )?),
+            "filtered" => {
+                let job_run_id = input.get("job_run_id").and_then(Value::as_str);
+                let mut tasks = runtime.list_tasks_filtered(
+                    optional_field(input, "status")?,
+                    optional_field(input, "priority")?,
+                    input.get("parent_id").and_then(Value::as_str),
+                    job_run_id,
+                    optional_field(input, "external_ref")?.as_ref(),
+                    input.get("has_external_ref_system").and_then(Value::as_str),
+                )?;
+                // A leaf's run id is unique only on its own machine; the owner's
+                // drain can bind the same id [ORB-13649]. Only bindings this
+                // leaf's machine made belong to its run.
+                if job_run_id.is_some() {
+                    tasks.retain(|task| {
+                        task.job_run_machine
+                            .as_ref()
+                            .is_some_and(|bound| bound.machine_id == binding.execution.machine_id)
+                    });
+                }
+                serde_json::to_value(tasks)
+            }
             "tasks" => serde_json::to_value(runtime.list_tasks()?),
             "status_index" => serde_json::to_value(runtime.task_status_index()?),
             "completion_by_complexity" => serde_json::to_value(

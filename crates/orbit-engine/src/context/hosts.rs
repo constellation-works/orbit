@@ -372,6 +372,15 @@ pub trait RuntimeHost: Send + Sync {
         );
         Err(unsupported_runtime_capability("list_tasks_filtered"))
     }
+    /// The tasks run `run_id` bound on the machine that executes it.
+    ///
+    /// A run id is unique only within one machine's store, so two machines'
+    /// runs can share one [ORB-13649]. A runtime that records where each
+    /// binding executed scopes this lookup to the executing machine; the
+    /// default reads by run id alone.
+    fn list_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, OrbitError> {
+        self.list_tasks_filtered(None, None, None, Some(run_id), None, None)
+    }
 
     fn start_task(
         &self,
