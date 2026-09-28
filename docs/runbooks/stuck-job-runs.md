@@ -134,6 +134,8 @@ $ orbit run history --limit 1
 `ROLE` reads the run id itself. A directly submitted run and another run's child land in the
 same minute stem, so the marked sequence — `-t2` for the second top-level submission of that
 minute, `-c2` for a second child — is what keeps sibling runs from reading as one run tree.
+A sequence is never handed out twice: archiving or deleting a run keeps its id reserved, so an
+automation key, audit row, or parent dispatch that still names it never resolves to a later run.
 Ids minted before role markers existed report `unmarked`; use `orbit run show <parent>`, which
 names each child it dispatched, to establish their lineage.
 

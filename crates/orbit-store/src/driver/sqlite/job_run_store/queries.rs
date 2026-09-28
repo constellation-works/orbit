@@ -9,7 +9,6 @@ use orbit_types::workflow::{
     JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState, RunIdRole, run_id_candidate,
     run_id_minute_stem,
 };
-use rusqlite::OptionalExtension;
 
 use crate::contracts::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
@@ -253,6 +252,13 @@ pub(super) fn upsert_job_run_for_workspace_conn(
         ],
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
+    // Reserve the id for good: deleting the row must not free it for
+    // `next_run_id_conn` while other records still name it.
+    conn.execute(
+        "INSERT OR IGNORE INTO job_run_id_allocations(workspace_id, run_id) VALUES (?1, ?2)",
+        rusqlite::params![workspace_id, run.run_id],
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(())
 }
 
@@ -267,6 +273,11 @@ const MAX_RUN_ID_SEQUENCE: u32 = 1023;
 /// shape [ORB-12111]. Call this inside the same transaction that inserts the
 /// run: the probe below is only as good as the write it commits with.
 ///
+/// A candidate is free only if no run holds it now and none ever did. Archive
+/// and delete remove the row, but automation keys, audit rows and a parent's
+/// child dispatches keep naming the id, so handing it out again would resolve
+/// those references to unrelated work.
+///
 /// Exhausting the sequence is an error rather than a fallback id. Roughly a
 /// thousand runs of one role in one workspace inside one minute is already
 /// pathological, and any id returned without a free-slot probe behind it would
@@ -280,16 +291,16 @@ pub(super) fn next_run_id_conn(
     let stem = run_id_minute_stem(submitted_at);
     for sequence in 1..=MAX_RUN_ID_SEQUENCE {
         let candidate = run_id_candidate(&stem, role, sequence);
-        let exists = conn
+        let taken: bool = conn
             .query_row(
-                "SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
+                "SELECT EXISTS(SELECT 1 FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2)
+                     OR EXISTS(SELECT 1 FROM job_run_id_allocations
+                               WHERE workspace_id = ?1 AND run_id = ?2)",
                 rusqlite::params![workspace_id, candidate],
-                |_| Ok(()),
+                |row| row.get(0),
             )
-            .optional()
-            .map_err(|error| OrbitError::Store(error.to_string()))?
-            .is_some();
-        if !exists {
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        if !taken {
             return Ok(candidate);
         }
     }
