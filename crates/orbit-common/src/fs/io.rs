@@ -763,7 +763,7 @@ fn apply_read_only_no_follow(_options: &mut OpenOptions) {}
 #[cfg(not(unix))]
 fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
-fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
+pub(crate) fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -825,16 +825,77 @@ fn apply_private_file_mode(options: &mut OpenOptions) {
 #[cfg(not(unix))]
 fn apply_private_file_mode(_options: &mut OpenOptions) {}
 
-#[cfg(all(unix, feature = "sqlite"))]
+/// Restrict an existing regular file to owner-only access without following
+/// a symlink at its final component.
+///
+/// A symlink or other irregular file is refused and its target left untouched.
+/// The permission change goes through a descriptor opened with `O_NOFOLLOW`
+/// and type-checked after the open, so a final component swapped after the
+/// check cannot redirect it to another file. A file already at the private
+/// mode is not opened at all: closing any descriptor to a file releases this
+/// process's POSIX record locks on it, which SQLite connections already open
+/// on the same database hold.
+#[cfg(feature = "sqlite")]
 pub(crate) fn set_private_file_permissions(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    ensure_regular_private_file(path, &metadata)?;
+    if has_private_file_mode(&metadata) {
+        return Ok(());
+    }
+    let file = open_regular_file_no_follow(path)?;
+    set_private_file_permissions_for_open_file(&file)
+}
+
+/// Open an existing file for reading without following its final component,
+/// and refuse the descriptor unless it is a regular file.
+///
+/// Unlike [`open_read_only_no_follow`] this performs no pathname check first:
+/// the open itself refuses a final-component symlink, and the type check runs
+/// on the opened descriptor, so the result is safe against a swap between any
+/// earlier check and this open.
+#[cfg(feature = "sqlite")]
+pub(crate) fn open_regular_file_no_follow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    apply_read_only_no_follow(&mut options);
+    let file = options.open(path)?;
+    ensure_regular_private_file(path, &file.metadata()?)?;
+    Ok(file)
+}
+
+#[cfg(feature = "sqlite")]
+fn ensure_regular_private_file(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private file path must not be a symlink: {}",
+                path.display()
+            ),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private file path must be a regular file: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, feature = "sqlite"))]
+fn has_private_file_mode(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+    metadata.permissions().mode() & 0o7777 == PRIVATE_FILE_MODE
 }
 
 #[cfg(all(not(unix), feature = "sqlite"))]
-pub(crate) fn set_private_file_permissions(_path: &Path) -> io::Result<()> {
-    Ok(())
+fn has_private_file_mode(_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 /// Attributable write-access failure, or `None` when `err` is some other I/O.
