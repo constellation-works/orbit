@@ -19,7 +19,7 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 thread_local! {
@@ -390,6 +390,40 @@ impl MemberHost for Host<'_> {
         }
 
         Ok(MemberAdmission::Admit)
+    }
+
+    fn observable(&self, keys: &BTreeSet<String>) -> Result<BTreeSet<String>, AutomationError> {
+        // Hidden task reads say nothing about membership; retire nothing.
+        if !self.runtime.coordination_task_reads_visible() {
+            return Ok(keys.clone());
+        }
+
+        // Task-keyed entries stay while their task holds a status `observe`
+        // queries; an incident key stays while the current inventory has it.
+        let statuses = match self.trigger.kind {
+            StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
+            StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
+        };
+        let indexed = self.runtime.task_status_index_for(keys)?;
+        let incidents = match self.trigger.kind {
+            StateTriggerKind::ExecutionFailed => {
+                Some(self.incidents.borrow_mut().inventory(self.runtime)?)
+            }
+            StateTriggerKind::PreparationEligible => None,
+        };
+
+        Ok(keys
+            .iter()
+            .filter(|key| {
+                indexed
+                    .get(*key)
+                    .is_some_and(|status| statuses.contains(status))
+                    || incidents
+                        .as_ref()
+                        .is_some_and(|inventory| inventory.contains_key(*key))
+            })
+            .cloned()
+            .collect())
     }
 
     fn lookup(&self, attempt: &MemberAttempt) -> Result<Option<String>, AutomationError> {

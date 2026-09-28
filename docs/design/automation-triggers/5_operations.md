@@ -638,6 +638,16 @@ step evidence is read independently of wrapper status. Pilot fan-in accepts any
 successful partition so apply can retain valid results before the final guard
 reports missing or invalid partitions.
 
+A consumer retains at most 1,000 pending, assessed and withheld entries. When an
+observation page does not fit, the evaluator asks the source by identity, not by
+page, which retained keys it still observes — a task while its status is one the
+consumer queries, an incident while the current inventory has it — and retires
+the working state of the rest. Their receipts stay durable, and a member that
+returns is assessed afresh. At capacity, a retained member's fresh fingerprint
+replaces its superseded assessment; a new member waits for room and the pass
+reports `source_backpressure`. The scan still advances, and due members are
+still admitted.
+
 `orbit routine show --json`, routine status and the dashboard expose the shared
 state projection: pending fingerprints, fresh/unready assessments, withheld
 reasons, consumed attempts, absolute deadlines, continuation and immutable
