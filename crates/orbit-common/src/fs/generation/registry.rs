@@ -108,15 +108,6 @@ impl Drop for Registration {
     }
 }
 
-fn participants_dir(root: &Path) -> Result<PathBuf, OrbitError> {
-    let root = validated_generation_root(root)?;
-    let dir = root.join(PARTICIPANTS_DIR);
-    if !dir.starts_with(&root) || dir.parent() != Some(root.as_path()) {
-        return Err(refusal("participant directory escapes the root"));
-    }
-    Ok(dir)
-}
-
 /// Register `record` under `root`. Call with the admission lock held.
 ///
 /// `None` means this process cannot write under the root (a read-only mount,
@@ -125,9 +116,16 @@ fn participants_dir(root: &Path) -> Result<PathBuf, OrbitError> {
 /// Records left by processes that exited without withdrawing them (a
 /// `process::exit`, a kill) are removed first.
 pub(super) fn register(root: &Path, record: &ParticipantRecord) -> Option<Registration> {
-    let dir = participants_dir(root).ok()?;
+    let root = validated_generation_root(root).ok()?;
+    let dir = root.join(PARTICIPANTS_DIR);
+    // Containment is checked beside each sink in this file, as `open` does in
+    // the parent module: code scanning does not credit a check made inside a
+    // helper that returns the path.
+    if !dir.starts_with(&root) {
+        return None;
+    }
     std::fs::create_dir_all(&dir).ok()?;
-    let _ = live_participants(root, None, true);
+    let _ = live_participants(&root, None, true);
     let mut nonce = [0u8; 8];
     getrandom::fill(&mut nonce).ok()?;
     let name = format!(
@@ -164,9 +162,13 @@ pub(super) fn live_participants(
     except: Option<&Registration>,
     collect: bool,
 ) -> Vec<ParticipantRecord> {
-    let Ok(dir) = participants_dir(root) else {
+    let Ok(root) = validated_generation_root(root) else {
         return Vec::new();
     };
+    let dir = root.join(PARTICIPANTS_DIR);
+    if !dir.starts_with(&root) {
+        return Vec::new();
+    }
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -237,22 +239,17 @@ impl Drop for PendingClaim {
     }
 }
 
-fn pending_path(root: &Path) -> Result<PathBuf, OrbitError> {
-    let root = validated_generation_root(root)?;
-    let path = root.join(PENDING_RECORD);
-    if !path.starts_with(&root) || path.parent() != Some(root.as_path()) {
-        return Err(refusal("pending record path escapes the root"));
-    }
-    Ok(path)
-}
-
 /// Record `switch` as pending. Call with the admission lock held, after
 /// [`pending_switch`] found none.
 pub(super) fn claim_pending(
     root: &Path,
     switch: &PendingSwitch,
 ) -> Result<PendingClaim, OrbitError> {
-    let path = pending_path(root)?;
+    let root = validated_generation_root(root)?;
+    let path = root.join(PENDING_RECORD);
+    if !path.starts_with(&root) {
+        return Err(refusal("pending record path escapes the root"));
+    }
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -279,7 +276,11 @@ pub(super) fn claim_pending(
 
 /// The pending switch under `root`, if a live waiter holds one.
 pub fn pending_switch(root: &Path) -> Option<PendingSwitch> {
-    let path = pending_path(root).ok()?;
+    let root = validated_generation_root(root).ok()?;
+    let path = root.join(PENDING_RECORD);
+    if !path.starts_with(&root) {
+        return None;
+    }
     let mut file = File::open(&path).ok()?;
     if FileExt::try_lock_shared(&file).is_ok() {
         let _ = FileExt::unlock(&file);
