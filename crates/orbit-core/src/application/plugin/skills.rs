@@ -8,11 +8,13 @@
 //! beside itself rather than mutating the invoking user's home. The namespace
 //! keeps plugin links disjoint from shipped skills, and linking refuses to
 //! replace a same-named link owned outside the plugin's install family.
-//! Disable removes exactly the links that point into that plugin's root, and
-//! `orbit plugin doctor` reports a link whose target is gone.
+//! Disable removes exactly the links that resolve inside that plugin's root,
+//! and `orbit plugin doctor` reports a link whose target is gone. A target is
+//! owned only after existing ancestors, `..`, and symlinks are resolved; a
+//! missing tail that can still escape through `..` is not owned.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{create_dir_symlink, remove_path_if_exists};
@@ -137,17 +139,14 @@ fn ensure_plugin_skill_link(
     // A version upgrade may leave this namespace's discovery link pointing
     // at the previous installed version. That target is safe to replace; a
     // link into shipped skills, another plugin, or user content is not.
+    // The same physical ownership check guards unlink and doctor.
     let install_family = plugin_root.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "plugin root '{}' has no install-family directory",
             plugin_root.display()
         ))
     })?;
-    let existing_is_plugin_owned = existing
-        .canonicalize()
-        .is_ok_and(|resolved| resolved.starts_with(install_family))
-        || (!existing.exists() && existing.starts_with(install_family));
-    if !existing_is_plugin_owned {
+    if !link_target_is_within(&existing, install_family) {
         return Err(OrbitError::InvalidInput(format!(
             "refusing to replace discovery link '{}' because it points outside plugin '{}'",
             link.display(),
@@ -169,7 +168,7 @@ fn resolve_link_target(link: &Path) -> Result<PathBuf, OrbitError> {
     }
 }
 
-/// Remove the links that point into `install_path`, whatever they are named.
+/// Remove the links that resolve inside `install_path`, whatever they are named.
 ///
 /// The install path rather than the manifest's skill list is the selector, so
 /// a disable still cleans up after a manifest that changed between enable and
@@ -189,7 +188,7 @@ pub fn unlink_plugin_skills_from(
     let mut removed = Vec::new();
     for root in roots {
         for (link, target) in links_under(root) {
-            if !target.starts_with(install_path) {
+            if !link_target_is_within(&target, install_path) {
                 continue;
             }
             remove_path_if_exists(&link)?;
@@ -201,8 +200,8 @@ pub fn unlink_plugin_skills_from(
 }
 
 /// Links in the discovery roots whose target no longer exists, paired with the
-/// target they name. Only links pointing into `plugin_root` are reported: a
-/// dangling link to anything else belongs to the skill catalog's own doctor.
+/// target they name. Only links that resolve inside `plugin_root` are reported:
+/// a dangling link to anything else belongs to the skill catalog's own doctor.
 pub(crate) fn dangling_plugin_skill_links(
     global_root: &Path,
     plugin_root: &Path,
@@ -218,7 +217,7 @@ pub fn dangling_plugin_skill_links_in(
     let mut dangling = Vec::new();
     for root in roots {
         for (link, target) in links_under(root) {
-            if target.starts_with(plugin_root) && !target.exists() {
+            if link_target_is_within(&target, plugin_root) && !target.exists() {
                 dangling.push((link, target));
             }
         }
@@ -242,15 +241,109 @@ fn links_under(root: &Path) -> Vec<(PathBuf, PathBuf)> {
         if !metadata.file_type().is_symlink() {
             continue;
         }
-        let Ok(target) = std::fs::read_link(&path) else {
+        let Ok(target) = resolve_link_target(&path) else {
             continue;
-        };
-        let target = if target.is_absolute() {
-            target
-        } else {
-            root.join(target)
         };
         links.push((path, target));
     }
     links
+}
+
+/// Kernel `ELOOP` bound. A longer chain, including a cycle, has no physical
+/// target this process can prove, so the link is not owned.
+const MAX_OWNERSHIP_SYMLINK_FOLLOWS: usize = 40;
+
+/// Whether `target` lies inside `boundary` after physical resolution.
+///
+/// Existing ancestors are resolved and `..` is applied there. A missing tail
+/// is kept only when it cannot escape; `..` in that tail is ambiguous,
+/// because the missing component may later be a symlink, and the link is not
+/// owned. Unreadable components and symlink cycles are not owned either.
+fn link_target_is_within(target: &Path, boundary: &Path) -> bool {
+    match (
+        resolve_ownership_path(target, 0),
+        resolve_ownership_path(boundary, 0),
+    ) {
+        (Some(resolved_target), Some(resolved_boundary)) => {
+            resolved_target.starts_with(resolved_boundary)
+        }
+        _ => false,
+    }
+}
+
+fn resolve_ownership_path(path: &Path, follows: usize) -> Option<PathBuf> {
+    if follows > MAX_OWNERSHIP_SYMLINK_FOLLOWS {
+        return None;
+    }
+    let mut resolved = PathBuf::new();
+    let components: Vec<Component<'_>> = path.components().collect();
+    let mut index = 0;
+    while index < components.len() {
+        match components[index] {
+            Component::Prefix(prefix) => {
+                resolved.push(prefix.as_os_str());
+            }
+            Component::RootDir => {
+                resolved.push(Component::RootDir.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !pop_resolved_normal(&mut resolved) {
+                    return None;
+                }
+            }
+            Component::Normal(name) => {
+                let candidate = resolved.join(name);
+                match fs::symlink_metadata(&candidate) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        let link_target = fs::read_link(&candidate).ok()?;
+                        let mut rest = if link_target.is_absolute() {
+                            link_target
+                        } else {
+                            resolved.join(link_target)
+                        };
+                        for component in components.iter().skip(index + 1) {
+                            rest.push(component.as_os_str());
+                        }
+                        return resolve_ownership_path(&rest, follows + 1);
+                    }
+                    Ok(metadata) if metadata.file_type().is_dir() => {
+                        resolved = candidate;
+                    }
+                    Ok(_) => {
+                        resolved = candidate;
+                        return append_unresolved_tail(&resolved, &components[index + 1..]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        resolved.push(name);
+                        return append_unresolved_tail(&resolved, &components[index + 1..]);
+                    }
+                    Err(_) => return None,
+                }
+            }
+        }
+        index += 1;
+    }
+    Some(resolved)
+}
+
+/// Keep the not-yet-existing suffix. `..` here does not have one parent: the
+/// missing component might be created as a directory or as a symlink.
+fn append_unresolved_tail(resolved: &Path, rest: &[Component<'_>]) -> Option<PathBuf> {
+    let mut resolved = resolved.to_path_buf();
+    for component in rest {
+        match component {
+            Component::Normal(name) => resolved.push(name),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(resolved)
+}
+
+fn pop_resolved_normal(path: &mut PathBuf) -> bool {
+    if path.file_name().is_none() {
+        return false;
+    }
+    path.pop()
 }
