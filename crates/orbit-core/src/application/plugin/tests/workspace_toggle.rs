@@ -320,6 +320,7 @@ fn sync_applies_a_disabled_pin_to_this_workspace_only() {
     ws.fixture.write_pin_file(&pin(&ws.source, false));
 
     let planned = sync_plugins(&ws.fixture.runtime, true, &[]).expect("dry run");
+    assert_eq!(planned[0].status, PluginStatus::Active);
     assert!(
         planned[0]
             .message
@@ -343,9 +344,46 @@ fn sync_applies_a_disabled_pin_to_this_workspace_only() {
     let outcomes = sync_plugins(&ws.runtime_a(), false, &[]).expect("sync A again");
     assert_eq!(outcomes[0].status, PluginStatus::Active, "{outcomes:?}");
     assert_eq!(workspace_toggle(&ws.fixture.workspace_root), Some(true));
+    assert_eq!(workspace_toggle(&ws.workspace_b), None, "B is untouched");
     ws.runtime_a()
         .show_tool("graph.hello")
         .expect("A serves the tool again");
+}
+
+#[test]
+fn sync_reopens_a_disabled_host_and_workspace_to_the_final_effective_status() {
+    let ws = TwoWorkspaces::new();
+    disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable A workspace");
+    disable_plugin(&ws.fixture.runtime, "graph").expect("disable host");
+    ws.fixture.write_pin_file(&pin(&ws.source, true));
+
+    let planned = sync_plugins(&ws.fixture.runtime, true, &[]).expect("dry run");
+    assert_eq!(planned[0].status, PluginStatus::Disabled);
+    assert_eq!(workspace_toggle(&ws.fixture.workspace_root), Some(false));
+    assert_eq!(workspace_toggle(&ws.workspace_b), None);
+
+    let outcomes = sync_plugins(&ws.fixture.runtime, false, &[]).expect("sync A");
+    let fresh = show_plugin(&ws.runtime_a(), "graph").expect("fresh A status");
+    assert_eq!(fresh.status, PluginStatus::Active);
+    assert_eq!(outcomes[0].status, fresh.status, "{outcomes:?}");
+    assert!(
+        outcomes[0]
+            .message
+            .contains("switched back on in this workspace")
+    );
+    assert!(ws.host_enabled());
+    assert_eq!(workspace_toggle(&ws.fixture.workspace_root), Some(true));
+    assert_eq!(
+        workspace_toggle(&ws.workspace_b),
+        None,
+        "B toggle is untouched"
+    );
+    assert_eq!(
+        show_plugin(&ws.runtime_b(), "graph")
+            .expect("fresh B status")
+            .status,
+        PluginStatus::Active
+    );
 }
 
 #[test]

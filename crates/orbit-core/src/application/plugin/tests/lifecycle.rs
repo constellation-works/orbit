@@ -240,6 +240,50 @@ fn sync_does_not_enable_a_grant_requesting_plugin_without_consent() {
 }
 
 #[test]
+fn sync_and_dry_run_report_the_loader_refusal_for_enabled_plugins() {
+    for (name, spec) in [
+        (
+            "ungranted",
+            PluginSpecFixture::new("ungranted", "ungranted").requesting_fs_write(),
+        ),
+        (
+            "future",
+            PluginSpecFixture {
+                requires_orbit: Some(">=99.0.0"),
+                ..PluginSpecFixture::new("future", "future")
+            },
+        ),
+    ] {
+        let fixture = PluginFixture::new();
+        let source = fixture.write_plugin(spec);
+        install_plugin(
+            &fixture.runtime,
+            source.to_str().expect("utf8 path"),
+            &PluginAddOptions {
+                enable: true,
+                ..PluginAddOptions::default()
+            },
+        )
+        .expect("install enabled plugin");
+        fixture.write_pin_file(&format!(
+            "schemaVersion: 1\nplugins:\n  - name: {name}\n    enabled: true\n"
+        ));
+        let freshly_loaded = show_plugin(&fixture.reopen(), name).expect("fresh status");
+        assert_eq!(freshly_loaded.status, PluginStatus::Inactive);
+        let refusal = freshly_loaded.diagnostic.expect("loader refusal");
+
+        for dry_run in [true, false] {
+            let outcomes = sync_plugins(&fixture.runtime, dry_run, &[]).expect("sync outcome");
+            assert_eq!(outcomes[0].status, PluginStatus::Inactive, "{outcomes:?}");
+            assert!(
+                outcomes[0].message.contains(&refusal),
+                "sync must include the loader's refusal: {outcomes:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn doctor_reports_seeded_definitions_older_than_the_installed_plugin() {
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);

@@ -19,9 +19,10 @@ use orbit_types::plugin::{
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
+use crate::runtime::plugin::cache::load_installed_plugin;
 use crate::runtime::plugin::grants::{
     forget_authorized_grants, record_authorization, recorded_program_paths, verify_install_path,
-    witnessed_program_paths,
+    verify_recorded_grants, witnessed_program_paths,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir, read_pin_file};
@@ -1023,12 +1024,66 @@ pub fn sync_plugins(
             }
         }
     }
+    // This runtime predates the writes above. Project from the final stored
+    // host row and workspace config, using the loader's eligibility decision
+    // rather than the success of seeding or a pre-toggle enable summary.
+    for outcome in &mut outcomes {
+        let Some(installed) = runtime.stores().plugins().get_plugin(&outcome.name)? else {
+            continue;
+        };
+        let (status, diagnostic) = sync_effective_status(runtime, &installed)?;
+        outcome.status = status;
+        if let Some(diagnostic) = diagnostic {
+            outcome.message.push_str("; ");
+            outcome.message.push_str(&diagnostic);
+        }
+    }
     Ok(outcomes)
 }
 
+/// Read the final state as the next workspace load will see it. The loader
+/// verifies an enabled row before applying the workspace toggle, then checks
+/// the loaded manifest against the effective plugin config.
+fn sync_effective_status(
+    runtime: &OrbitRuntime,
+    installed: &InstalledPlugin,
+) -> Result<(PluginStatus, Option<String>), OrbitError> {
+    if !installed.enabled {
+        return Ok((PluginStatus::Disabled, None));
+    }
+    let global_root = runtime.global_root();
+    if let Err(diagnostic) = verify_recorded_grants(&global_root, installed) {
+        return Ok((PluginStatus::Inactive, Some(diagnostic)));
+    }
+    if let Err(diagnostic) = verify_install_path(&global_root, installed) {
+        return Ok((PluginStatus::Inactive, Some(diagnostic)));
+    }
+    if workspace_plugin_toggles(runtime)?.get(&installed.name) == Some(&false) {
+        return Ok((PluginStatus::Disabled, None));
+    }
+    let plugin = match load_installed_plugin(installed) {
+        Ok(plugin) => plugin,
+        Err(error) => {
+            return Ok((
+                PluginStatus::Inactive,
+                Some(format!(
+                    "plugin '{}' no longer loads from {}: {error}; reinstall it with `orbit plugin add`",
+                    installed.name, installed.install_path
+                )),
+            ));
+        }
+    };
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        global_root,
+        runtime.shared_root(),
+    ))?;
+    let projection = projected_status(installed, &plugin, &runtime.global_root(), &config.plugins);
+    Ok((projection.status, projection.diagnostic))
+}
+
 /// After sync enabled the host row for a pin that says `enabled: true`, clear
-/// a `false` workspace toggle too, so the pin's intent holds here. Returns the
-/// status as this workspace sees it and a note for the outcome message.
+/// a `false` workspace toggle too, so the pin's intent holds here. The status
+/// is provisional until sync projects the final stored state for all pins.
 fn reopen_workspace_toggle(
     runtime: &OrbitRuntime,
     name: &str,
