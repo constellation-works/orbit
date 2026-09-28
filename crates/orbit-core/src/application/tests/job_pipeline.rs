@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,6 +45,7 @@ fn test_runtime() -> (TempDir, OrbitRuntime) {
 struct FixtureWaitClock {
     elapsed: Cell<Duration>,
     sleeps: Cell<u32>,
+    sleep_durations: RefCell<Vec<Duration>>,
 }
 
 impl FixtureWaitClock {
@@ -52,6 +53,7 @@ impl FixtureWaitClock {
         Self {
             elapsed: Cell::new(Duration::ZERO),
             sleeps: Cell::new(0),
+            sleep_durations: RefCell::new(Vec::new()),
         }
     }
 }
@@ -62,8 +64,8 @@ impl PipelineWaitClock for FixtureWaitClock {
     }
 
     fn sleep(&self, duration: Duration) {
-        assert!(self.sleeps.get() < 2, "wait fixture exceeded its deadline");
         self.sleeps.set(self.sleeps.get() + 1);
+        self.sleep_durations.borrow_mut().push(duration);
         self.elapsed.set(self.elapsed.get() + duration);
     }
 }
@@ -189,6 +191,10 @@ fn pipeline_wait_deadline_keeps_active_run_distinct_from_durable_timeout() {
         .expect("caller deadline returns a wait result");
     let entry = &waited.results[0];
     assert_eq!(clock.sleeps.get(), 2);
+    assert_eq!(
+        clock.sleep_durations.borrow().as_slice(),
+        &[Duration::from_secs(1), Duration::from_secs(1)]
+    );
     assert_eq!(entry.status, "timeout");
     assert_eq!(entry.finished_at, None);
     assert_eq!(entry.duration_ms, None);
@@ -198,6 +204,93 @@ fn pipeline_wait_deadline_keeps_active_run_distinct_from_durable_timeout() {
         runtime.show_job_run(&run.run_id).expect("read run").state,
         JobRunState::Running
     );
+}
+
+#[test]
+fn pipeline_wait_caps_sleep_at_deadline_and_skips_sleep_for_zero_timeout() {
+    let (_root, runtime) = test_runtime();
+    let long_poll_run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("wait_fixture", 1, Utc::now(), None, None)
+        .expect("insert long poll run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&long_poll_run.run_id, Utc::now(), std::process::id())
+        .expect("start long poll run");
+
+    let long_poll_clock = FixtureWaitClock::new();
+    let long_poll_wait = runtime
+        .wait_pipeline_runs_with_clock(
+            std::slice::from_ref(&long_poll_run.run_id),
+            1,
+            3600,
+            None,
+            &long_poll_clock,
+        )
+        .expect("caller deadline returns a wait result");
+    assert_eq!(long_poll_clock.sleeps.get(), 1);
+    assert_eq!(
+        long_poll_clock.sleep_durations.borrow().as_slice(),
+        &[Duration::from_secs(1)]
+    );
+    assert_eq!(long_poll_wait.results[0].status, "timeout");
+
+    let zero_timeout_run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("wait_fixture", 1, Utc::now(), None, None)
+        .expect("insert zero timeout run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&zero_timeout_run.run_id, Utc::now(), std::process::id())
+        .expect("start zero timeout run");
+
+    let zero_timeout_clock = FixtureWaitClock::new();
+    let zero_timeout_wait = runtime
+        .wait_pipeline_runs_with_clock(
+            std::slice::from_ref(&zero_timeout_run.run_id),
+            0,
+            3600,
+            None,
+            &zero_timeout_clock,
+        )
+        .expect("zero timeout returns a wait result");
+    assert_eq!(zero_timeout_clock.sleeps.get(), 0);
+    assert_eq!(zero_timeout_wait.results[0].status, "timeout");
+}
+
+#[test]
+fn pipeline_wait_caps_non_divisible_poll_budget_at_deadline() {
+    let (_root, runtime) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("wait_fixture", 1, Utc::now(), None, None)
+        .expect("insert non-divisible budget run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start non-divisible budget run");
+
+    let clock = FixtureWaitClock::new();
+    let waited = runtime
+        .wait_pipeline_runs_with_clock(std::slice::from_ref(&run.run_id), 5, 2, None, &clock)
+        .expect("caller deadline returns a wait result");
+
+    assert_eq!(
+        clock.sleep_durations.borrow().as_slice(),
+        &[
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            Duration::from_secs(1)
+        ]
+    );
+    assert_eq!(clock.elapsed.get(), Duration::from_secs(5));
+    assert_eq!(waited.results[0].status, "timeout");
 }
 
 fn test_runtime_with_named_crews() -> (TempDir, OrbitRuntime) {
