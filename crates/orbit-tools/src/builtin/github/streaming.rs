@@ -62,6 +62,11 @@ pub struct StreamedLog {
 /// Incrementally retain the head/tail excerpt and checkout evidence from a
 /// potentially large log. `scan_limit` makes incomplete identity explicit
 /// instead of retaining an unbounded source stream.
+///
+/// A truncated excerpt drops a whitespace-delimited token split by either
+/// retained boundary before redaction. A raw cut would otherwise keep a
+/// credential prefix or suffix that `redact_all` cannot match. Only the two
+/// windows, plus one byte beside each cut, are retained.
 pub struct StreamedLogCollector {
     max_bytes: usize,
     /// How much of the budget the head window may keep; the rest is the tail.
@@ -69,6 +74,12 @@ pub struct StreamedLogCollector {
     head: Vec<u8>,
     tail: Vec<u8>,
     total_bytes: usize,
+    /// First byte after `head` once that window is full. Absent when the
+    /// head was never cut.
+    head_following: Option<u8>,
+    /// Last byte discarded ahead of the retained tail. Absent until the tail
+    /// ring overflows.
+    tail_preceding: Option<u8>,
     evidence: CheckoutEvidenceCollector,
     diagnostic: diagnostic::DiagnosticCollector,
 }
@@ -98,6 +109,8 @@ impl StreamedLogCollector {
             head: Vec::with_capacity(head_bytes),
             tail: Vec::with_capacity(max_bytes.saturating_sub(head_bytes)),
             total_bytes: 0,
+            head_following: None,
+            tail_preceding: None,
             diagnostic: diagnostic::DiagnosticCollector::default(),
             evidence: CheckoutEvidenceCollector::new(
                 max_evidence_lines,
@@ -114,10 +127,21 @@ impl StreamedLogCollector {
         let head_limit = self.head_bytes;
         let head_take = head_limit.saturating_sub(self.head.len()).min(chunk.len());
         self.head.extend_from_slice(&chunk[..head_take]);
+        if self.head_following.is_none()
+            && head_limit > 0
+            && self.head.len() == head_limit
+            && head_take < chunk.len()
+        {
+            self.head_following = Some(chunk[head_take]);
+        }
         let tail_limit = self.max_bytes.saturating_sub(head_limit);
         self.tail.extend_from_slice(&chunk[head_take..]);
         if self.tail.len() > tail_limit {
-            self.tail.drain(..self.tail.len() - tail_limit);
+            let drain_end = self.tail.len() - tail_limit;
+            if tail_limit > 0 {
+                self.tail_preceding = Some(self.tail[drain_end - 1]);
+            }
+            self.tail.drain(..drain_end);
         }
     }
 
@@ -128,10 +152,15 @@ impl StreamedLogCollector {
             let omitted = self
                 .total_bytes
                 .saturating_sub(self.head.len() + self.tail.len());
+            // Redact only after the cut token is gone. Joining the windows
+            // would keep the omitted middle, which this collector must not
+            // buffer; one adjacent byte is enough to see the split.
+            let head = excerpt_without_partial_suffix(&self.head, self.head_following);
+            let tail = excerpt_without_partial_prefix(&self.tail, self.tail_preceding);
             format!(
                 "{}\n[... {omitted} bytes omitted; raise the byte budget for more ...]\n{}",
-                redact_all(&String::from_utf8_lossy(&self.head)),
-                redact_all(&String::from_utf8_lossy(&self.tail)),
+                redact_all(&head),
+                redact_all(&tail),
             )
         } else {
             // When the source is short, all bytes are in `tail` except the
@@ -151,6 +180,46 @@ impl StreamedLogCollector {
             diagnostic,
             failure_regions,
         }
+    }
+}
+
+/// Whether `adjacent` belongs to the same whitespace-delimited token as the
+/// excerpt byte on the other side of the cut.
+fn cut_continues_token(adjacent: Option<u8>) -> bool {
+    adjacent.is_some_and(|byte| byte.is_ascii() && !byte.is_ascii_whitespace())
+}
+
+/// Drop a token split by the end of the retained head.
+///
+/// Pattern redaction matches a whole credential (`ghp_` plus 36 token
+/// characters, and the other fixed shapes). The head cut keeps a prefix of
+/// that credential and the tail cut keeps the suffix without its prefix, so
+/// neither window matches. Removing the partial token leaves every complete
+/// token in the window for `redact_all`.
+fn excerpt_without_partial_suffix(bytes: &[u8], following: Option<u8>) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if !cut_continues_token(following) {
+        return text.into_owned();
+    }
+    match text.rfind(char::is_whitespace) {
+        Some(index) => {
+            let len = text[index..].chars().next().map_or(0, char::len_utf8);
+            text[..index + len].to_string()
+        }
+        None => String::new(),
+    }
+}
+
+/// Drop a token split by the start of the retained tail. See
+/// [`excerpt_without_partial_suffix`].
+fn excerpt_without_partial_prefix(bytes: &[u8], preceding: Option<u8>) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if !cut_continues_token(preceding) {
+        return text.into_owned();
+    }
+    match text.find(char::is_whitespace) {
+        Some(index) => text[index..].to_string(),
+        None => String::new(),
     }
 }
 
