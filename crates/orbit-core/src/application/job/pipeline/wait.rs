@@ -113,7 +113,8 @@ impl OrbitRuntime {
                 return Ok(result);
             }
 
-            if clock.elapsed() >= timeout {
+            let elapsed = clock.elapsed();
+            if elapsed >= timeout {
                 let result = PipelineWaitResult {
                     results: self.collect_pipeline_wait_entries(run_ids, true)?,
                 };
@@ -121,7 +122,7 @@ impl OrbitRuntime {
                 return Ok(result);
             }
 
-            clock.sleep(poll);
+            clock.sleep(poll.min(timeout.saturating_sub(elapsed)));
         }
     }
     pub fn normalize_pipeline_wait_timeout(raw: Option<u64>) -> Result<u64, OrbitError> {
