@@ -126,10 +126,13 @@ plainly when proposing a plugin: enabling it does not start anything.
 
 An upgrade re-seeds a file that still matches what the plugin wrote. A file
 edited since is preserved with a warning until `orbit plugin enable <ns>
---force` takes the plugin's version. Disabling or removing the plugin leaves
-the files where they are and skips them with a reason naming the plugin, which
-`orbit routine list` and `orbit auto-task list` show; tasks minted from a
-plugin auto-task carry `plugin:<ns>`.
+--force` takes the plugin's version. Disabling or removing the plugin (on the
+host, or `--scope workspace`) leaves the files where they are and skips them.
+`orbit routine list`, `orbit auto-task list`, MCP `orbit.auto_task.list` and
+the dashboard hide them; `--all` (MCP `include_inactive_plugins`, the
+dashboard's "Show hidden") lists them as inactive with a reason naming the
+plugin, and `show <name>` still resolves them. Re-enabling brings them back
+with no re-seed. Tasks minted from a plugin auto-task carry `plugin:<ns>`.
 
 Configure a plugin the ordinary way — `orbit config set plugins.<ns>.<key>
 <value>` accepts only keys the plugin declares, and `orbit config show` prints

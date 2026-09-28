@@ -22,6 +22,10 @@ let unsubscribeWorkspace = null;
 // The operator's unapplied cadence choice, held outside the rebuilt <select>
 // so a background refresh cannot revert it. Host-scoped, like the clock itself.
 let pendingCadenceSeconds = null;
+// Definitions a plugin seeded stay hidden while that plugin is off where they
+// live: they never fire. The operator can list them again, marked inactive,
+// to find or delete the file the reason names.
+let showInactivePlugins = false;
 
 export function initOperations(nextContext) {
   context = nextContext;
@@ -406,6 +410,50 @@ function setRailSubtabCount(id, text) {
   if (node) node.textContent = text || "";
 }
 
+function withInactivePlugins(path) {
+  return showInactivePlugins ? `${path}?include_inactive_plugins=true` : path;
+}
+
+// Offered only when something is hidden (or already shown). Flipping it
+// refetches every Operations panel, so routines and auto-tasks agree.
+function inactivePluginToggle(hiddenCount) {
+  if (!showInactivePlugins && !hiddenCount) return null;
+  const button = el("button", {
+    class: "operation-button secondary operation-inactive-toggle",
+    text: showInactivePlugins ? "Hide plugin-off definitions" : `Show ${hiddenCount} hidden · plugin off`,
+    title: "Definitions seeded by a plugin that is switched off here never fire.",
+  });
+  button.type = "button";
+  button.setAttribute("aria-pressed", showInactivePlugins ? "true" : "false");
+  button.addEventListener("click", () => {
+    showInactivePlugins = !showInactivePlugins;
+    return fetchAndRenderOperations();
+  });
+  return el("p", { class: "operation-control-note operation-inactive-note" }, [button]);
+}
+
+// Listed on request only, outside every count, timeline and next-fire
+// summary: the row is the name, what it would run, and the skip reason.
+function inactivePluginGroup(entries, noun) {
+  const group = operationGroup("", "Plugin off", entries.length, `seeded by a plugin that is switched off here · never ${noun}`);
+  group.className += " inactive-plugin-group";
+  for (const entry of entries) {
+    group.appendChild(el("article", { class: "operation-card operation-row inactive-plugin-card" }, [
+      el("div", { class: "operation-row-head" }, [
+        operationCell("Definition", [
+          el("div", { class: "operation-identity" }, [
+            el("strong", { text: entry.name }),
+            el("span", { class: "operation-state inactive", text: "inactive" }),
+          ]),
+          entry.detail ? el("span", { class: "operation-cell-sub mono", text: entry.detail }) : null,
+        ], "operation-cell-identity"),
+        operationCell("Why", [el("span", { class: "operation-cell-main muted", text: entry.reason || "" })]),
+      ]),
+    ]));
+  }
+  return group;
+}
+
 // ---------------------------------------------------------------------------
 // Routines
 
@@ -578,14 +626,17 @@ function renderOperations(payload) {
   const routines = workspace
     ? (payload.routines || []).filter((routine) => routine.source === workspace)
     : [];
+  const inactive = workspace
+    ? (payload.retired || []).filter((routine) => routine.plugin_inactive && routine.source === workspace)
+    : [];
   const body = $("routines-body");
   body.textContent = "";
   if (!workspace) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this machine is already resolved as ${payload.machine_name}.` }));
   }
-  if (routines.length === 0) {
+  if (routines.length === 0 && inactive.length === 0) {
     body.appendChild(el("div", { class: "empty-state", text: workspace ? "No routines are defined by this workspace." : "Select a workspace to list its routines." }));
-  } else {
+  } else if (routines.length) {
     body.appendChild(routineTimeline(routines));
     const active = routines.filter((routine) => routine.enabled);
     const paused = routines.filter((routine) => !routine.enabled);
@@ -602,6 +653,13 @@ function renderOperations(payload) {
       for (const routine of paused) group.appendChild(routineRow(payload, routine, workspaceId));
       body.appendChild(group);
     }
+  }
+  if (inactive.length) {
+    body.appendChild(inactivePluginGroup(inactive.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason })), "fires"));
+  }
+  if (workspace) {
+    const toggle = inactivePluginToggle(payload.inactive_plugin_counts?.[workspace] || 0);
+    if (toggle) body.appendChild(toggle);
   }
   const activeCount = routines.filter((routine) => routine.enabled).length;
   $("routines-count").textContent = workspace ? `${activeCount} active of ${routines.length} · ${workspace}` : "read-only";
@@ -939,16 +997,18 @@ function renderAutoTasks(payload) {
   const workspaceReason = workspaceReadOnlyReason();
   const reason = workspaceReason || payload.read_only_reason || "";
   const workspace = selectedWorkspace();
-  const definitions = workspace && !workspaceReason ? (payload.definitions || []) : [];
+  const listed = workspace && !workspaceReason ? (payload.definitions || []) : [];
+  const definitions = listed.filter((definition) => !definition.plugin_inactive);
+  const inactive = listed.filter((definition) => definition.plugin_inactive);
   if (reason) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: reason }));
   }
-  if (definitions.length === 0) {
+  if (definitions.length === 0 && inactive.length === 0) {
     body.appendChild(el("div", {
       class: "empty-state",
       text: workspace && !workspaceReason ? "No auto-task definitions are defined by this workspace." : "Select a workspace to list its auto-task definitions.",
     }));
-  } else {
+  } else if (definitions.length) {
     const enabled = definitions.filter((definition) => definition.enabled);
     const duplicates = definitions.filter((definition) => definition.open_duplicate).length;
     const nextMint = enabled
@@ -977,6 +1037,13 @@ function renderAutoTasks(payload) {
       for (const definition of members) group.appendChild(autoTaskRow(payload, definition, workspace.id));
       body.appendChild(group);
     }
+  }
+  if (inactive.length) {
+    body.appendChild(inactivePluginGroup(inactive.map((definition) => ({ name: definition.name, detail: definition.schedule_summary, reason: definition.skipped_reason })), "minted"));
+  }
+  if (workspace && !workspaceReason) {
+    const toggle = inactivePluginToggle(payload.inactive_plugin_count || 0);
+    if (toggle) body.appendChild(toggle);
   }
   syncAutoTaskSchedulerNote();
   const count = $("auto-tasks-count");
@@ -1199,7 +1266,7 @@ function loadOperationPanel(bodyId, path, render) {
 }
 
 function fetchAndRenderAutoTasks() {
-  return loadOperationPanel("auto-tasks-body", "/api/auto-tasks", renderAutoTasks);
+  return loadOperationPanel("auto-tasks-body", withInactivePlugins("/api/auto-tasks"), renderAutoTasks);
 }
 
 // ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
@@ -1710,7 +1777,7 @@ function throwFirstPanelError(results) {
 }
 
 export async function fetchAndRenderOperations() {
-  const routines = fetchJson("/api/routines");
+  const routines = fetchJson(withInactivePlugins("/api/routines"));
   throwFirstPanelError(await Promise.allSettled([
     requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
     requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),

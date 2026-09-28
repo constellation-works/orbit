@@ -706,3 +706,79 @@ async fn routine_request(
         .await
         .expect("response")
 }
+
+fn parked(
+    name: &str,
+    source: &str,
+    skipped: bool,
+) -> orbit_core::application::routines::RetiredRoutine {
+    orbit_core::application::routines::RetiredRoutine {
+        name: name.to_string(),
+        origin: orbit_core::application::routines::RoutineOrigin::Workspace,
+        source_workspace: source.to_string(),
+        path: std::path::PathBuf::from(format!("/ws/{source}/.orbit/routines/{name}.yaml")),
+        job: "graph_refresh_pipeline".to_string(),
+        reason: if skipped {
+            "seeded by plugin:graph@1.0.0, which is switched off in workspace 'alpha'".to_string()
+        } else {
+            "targets a retired job".to_string()
+        },
+        skipped,
+    }
+}
+
+/// A routine whose plugin is off where it lives is omitted by default and
+/// counted per workspace; the opt-in lists it marked inactive. A routine
+/// targeting a retired job is listed either way.
+#[test]
+fn report_hides_inactive_plugin_routines_unless_asked_and_counts_them_per_workspace() {
+    let report = orbit_core::application::routines::RoutineStatusReport {
+        machine_name: "dashboard-test".to_string(),
+        machine_id: "hm_test".to_string(),
+        statuses: Vec::new(),
+        retired: vec![
+            parked("graph-refresh", "alpha", true),
+            parked("old-scheduler", "alpha", false),
+        ],
+        load_errors: Vec::new(),
+    };
+    let names = |json: &serde_json::Value| {
+        json["retired"]
+            .as_array()
+            .expect("retired")
+            .iter()
+            .map(|routine| routine["name"].as_str().expect("name").to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let hidden = super::super::routines::report_json(
+        &report,
+        clock_json(&clock_status(true)),
+        chrono::Utc::now(),
+        false,
+        false,
+    );
+    assert_eq!(names(&hidden), vec!["old-scheduler"]);
+    assert_eq!(hidden["inactive_plugin_counts"]["alpha"], 1);
+
+    let shown = super::super::routines::report_json(
+        &report,
+        clock_json(&clock_status(true)),
+        chrono::Utc::now(),
+        false,
+        true,
+    );
+    assert_eq!(names(&shown), vec!["graph-refresh", "old-scheduler"]);
+    assert_eq!(shown["retired"][0]["plugin_inactive"], true);
+    assert_eq!(shown["retired"][1]["plugin_inactive"], false);
+}
+
+#[tokio::test]
+async fn routines_endpoint_accepts_the_inactive_plugin_opt_in() {
+    let (_temp, state) = empty_host_state();
+    let state = with_clock_status(state, clock_status(true));
+    let response = routine_request(state, "/routines?include_inactive_plugins=true", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["inactive_plugin_counts"], serde_json::json!({}));
+}

@@ -10,4 +10,5 @@ mod plugin_config;
 mod secrets;
 mod seed;
 mod skills;
+mod visibility;
 mod workspace_toggle;

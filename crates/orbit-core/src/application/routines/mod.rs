@@ -33,8 +33,8 @@ pub use clock::{
 };
 pub use due::{DueDecision, due_decision, parse_cron};
 pub use loader::{
-    DiscoveredWorkspaces, LoadedRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin,
-    RoutineWorkspaceProvider, collect_routines,
+    DiscoveredWorkspaces, LoadedRoutine, RetiredRoutine, RoutineCollection, RoutineLoadError,
+    RoutineOrigin, RoutineWorkspaceProvider, collect_routines,
 };
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{

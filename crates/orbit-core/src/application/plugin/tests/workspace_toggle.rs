@@ -8,8 +8,9 @@ use orbit_types::plugin::{PluginDisabledLayer, PluginStatus};
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
 use super::super::{
-    PluginAddOptions, disable_plugin, disable_plugin_in_workspace, enable_plugin_in_workspace,
-    install_plugin, plugin_doctor, show_plugin, sync_plugins,
+    InactivePluginScope, PluginAddOptions, PluginEnableOptions, disable_plugin,
+    disable_plugin_in_workspace, enable_plugin, enable_plugin_in_workspace, install_plugin,
+    plugin_doctor, show_plugin, sync_plugins,
 };
 use super::definition_fixture::DefinitionPlugin;
 use super::fixture::PluginFixture;
@@ -95,6 +96,52 @@ fn skip_reason(runtime: &OrbitRuntime) -> Option<String> {
         .expect("show auto-task")
         .expect("the seeded auto-task");
     runtime.auto_task_skip_reason(&definition)
+}
+
+/// Auto-task names a default listing (or, with `include`, an opt-in one) shows.
+fn listed_auto_tasks(runtime: &OrbitRuntime, include: bool) -> Vec<String> {
+    runtime
+        .auto_task_listing(include)
+        .expect("list auto-tasks")
+        .into_iter()
+        .map(|listed| listed.definition.name)
+        .collect()
+}
+
+/// Routine status as `routine list` reads it for A and B in one pass.
+fn routine_report(ws: &TwoWorkspaces) -> crate::application::routines::RoutineStatusReport {
+    let collection = crate::application::routines::collect_routines(&[
+        (workspace_record("alpha"), ws.runtime_a()),
+        (workspace_record("beta"), ws.runtime_b()),
+    ]);
+    crate::application::routines::RoutineStatusReport {
+        machine_name: "host".to_string(),
+        machine_id: "hm_test".to_string(),
+        statuses: Vec::new(),
+        retired: collection.retired,
+        load_errors: collection.errors,
+    }
+}
+
+/// Which workspaces' copies of the seeded routine a listing shows as
+/// inactive, and which load as live routines.
+fn routine_sources(ws: &TwoWorkspaces, include: bool) -> (Vec<String>, Vec<String>) {
+    let collection = crate::application::routines::collect_routines(&[
+        (workspace_record("alpha"), ws.runtime_a()),
+        (workspace_record("beta"), ws.runtime_b()),
+    ]);
+    let live = collection
+        .routines
+        .iter()
+        .filter(|routine| routine.definition.name == "graph-refresh")
+        .map(|routine| routine.source_workspace.clone())
+        .collect();
+    let inactive = routine_report(ws)
+        .listed_retired(include)
+        .filter(|routine| routine.name == "graph-refresh" && routine.skipped)
+        .map(|routine| routine.source_workspace.clone())
+        .collect();
+    (inactive, live)
 }
 
 fn workspace_record(name: &str) -> Workspace {
@@ -195,6 +242,117 @@ fn disabling_in_one_workspace_takes_its_whole_surface_off_there_and_leaves_the_o
     ));
     b.plugin_panel_refresh_ms("graph", "status")
         .expect("B still serves the panel");
+}
+
+#[test]
+fn listings_hide_a_workspace_disabled_plugins_definitions_there_until_it_is_re_enabled() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "listings_hide_a_workspace_disabled_plugins_definitions_there_until_it_is_re_enabled",
+    ) {
+        return;
+    }
+    let ws = TwoWorkspaces::new();
+    disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable in A");
+    let a = ws.runtime_a();
+
+    assert!(!listed_auto_tasks(&a, false).contains(&"graph-reindex".to_string()));
+    assert!(listed_auto_tasks(&ws.runtime_b(), false).contains(&"graph-reindex".to_string()));
+    let shown = a
+        .auto_task_listing(true)
+        .expect("opt-in listing")
+        .into_iter()
+        .find(|listed| listed.definition.name == "graph-reindex")
+        .expect("the opt-in lists the hidden definition");
+    assert_eq!(
+        shown.inactive_plugin.map(|inactive| inactive.scope),
+        Some(InactivePluginScope::Workspace)
+    );
+    assert_eq!(
+        shown.skipped_reason,
+        skip_reason(&a),
+        "one reason everywhere"
+    );
+
+    let (inactive, live) = routine_sources(&ws, false);
+    assert!(inactive.is_empty(), "hidden by default: {inactive:?}");
+    assert_eq!(live, vec!["beta".to_string()]);
+    let (inactive, _) = routine_sources(&ws, true);
+    assert_eq!(inactive, vec!["alpha".to_string()]);
+
+    // Re-enabling needs no re-seed: the files never moved.
+    enable_plugin_in_workspace(&ws.runtime_a(), "graph", false).expect("enable in A");
+    assert!(listed_auto_tasks(&ws.runtime_a(), false).contains(&"graph-reindex".to_string()));
+    assert_no_routine_parked(&ws);
+}
+
+/// Neither copy of the seeded routine is parked for its plugin any more. (Two
+/// live copies of one name then collide, which is the loader's ordinary
+/// host-wide uniqueness rule, not a plugin state.)
+fn assert_no_routine_parked(ws: &TwoWorkspaces) {
+    let parked = routine_report(ws)
+        .inactive_plugin_routines()
+        .map(|routine| routine.source_workspace.clone())
+        .collect::<Vec<_>>();
+    assert!(parked.is_empty(), "{parked:?}");
+}
+
+#[test]
+fn a_host_disable_hides_the_definitions_in_every_workspace_until_re_enabled() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_host_disable_hides_the_definitions_in_every_workspace_until_re_enabled",
+    ) {
+        return;
+    }
+    let ws = TwoWorkspaces::new();
+    let seeded = crate::application::auto_tasks::definition_path(
+        &ws.fixture.runtime.paths().local_dir,
+        "graph-reindex",
+    );
+    let before = std::fs::read_to_string(&seeded).expect("seeded auto-task");
+    disable_plugin(&ws.fixture.runtime, "graph").expect("host disable");
+
+    for runtime in [ws.runtime_a(), ws.runtime_b()] {
+        assert!(!listed_auto_tasks(&runtime, false).contains(&"graph-reindex".to_string()));
+        let shown = runtime
+            .auto_task_listing(true)
+            .expect("opt-in listing")
+            .into_iter()
+            .find(|listed| listed.definition.name == "graph-reindex")
+            .expect("listed on request");
+        assert_eq!(
+            shown.inactive_plugin.map(|inactive| inactive.scope),
+            Some(InactivePluginScope::Host)
+        );
+    }
+    let (inactive, live) = routine_sources(&ws, false);
+    assert!(
+        inactive.is_empty() && live.is_empty(),
+        "{inactive:?} {live:?}"
+    );
+    let (inactive, _) = routine_sources(&ws, true);
+    assert_eq!(
+        inactive.len(),
+        2,
+        "both copies listed on request: {inactive:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&seeded).expect("file kept"),
+        before,
+        "a disable leaves the seeded file exactly where it is"
+    );
+
+    enable_plugin(
+        &ws.fixture.reopen(),
+        "graph",
+        &PluginEnableOptions::default(),
+    )
+    .expect("host enable");
+    for runtime in [ws.runtime_a(), ws.runtime_b()] {
+        assert!(listed_auto_tasks(&runtime, false).contains(&"graph-reindex".to_string()));
+    }
+    assert_no_routine_parked(&ws);
 }
 
 #[test]

@@ -12,6 +12,19 @@ use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
 use std::path::PathBuf;
 
+use crate::application::plugin::InactivePlugin;
+
+/// One definition as a list surface shows it.
+#[derive(Debug, Clone)]
+pub struct ListedAutoTask {
+    pub definition: AutoTaskDefinition,
+    /// The plugin that parks this definition here; `None` when it is live or
+    /// user-authored.
+    pub inactive_plugin: Option<InactivePlugin>,
+    /// The operator-facing reason, set exactly when `inactive_plugin` is.
+    pub skipped_reason: Option<String>,
+}
+
 impl AutoTaskDispatch for OrbitRuntime {
     fn evaluate_delivery(
         &self,
@@ -63,27 +76,61 @@ impl OrbitRuntime {
     /// mint chores nothing on this host can carry out (design §4.5). The file
     /// is left exactly where it is, edits and all.
     pub fn auto_task_skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
-        let path = crate::application::auto_tasks::definition_path(
-            &self.paths().local_dir,
-            &definition.name,
-        );
-        let (namespace, version) = crate::application::plugin::read_definition_provenance(&path)?;
-        if self.plugin_load().is_active(&namespace) {
-            return None;
+        let path = self.auto_task_definition_path(definition);
+        self.auto_task_inactive_plugin(definition)
+            .map(|inactive| inactive.reason(&path, None))
+    }
+
+    /// The plugin that makes `definition` inactive in this workspace, if any:
+    /// the one rule both the scheduler's skip and every listing's default
+    /// hiding read.
+    pub fn auto_task_inactive_plugin(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Option<InactivePlugin> {
+        crate::application::plugin::inactive_plugin(
+            &self.auto_task_definition_path(definition),
+            self.plugin_load(),
+        )
+    }
+
+    /// Every auto-task definition a list surface shows, in load order.
+    ///
+    /// A definition whose seeding plugin is off in this workspace, or on the
+    /// host, is omitted unless `include_inactive_plugins` asks for it; then
+    /// it is listed with the plugin that parks it.
+    pub fn auto_task_listing(
+        &self,
+        include_inactive_plugins: bool,
+    ) -> Result<Vec<ListedAutoTask>, OrbitError> {
+        Ok(self
+            .auto_task_list()?
+            .into_iter()
+            .map(|definition| self.listed_auto_task(definition))
+            .filter(|listed| {
+                crate::application::plugin::is_listed(
+                    listed.inactive_plugin.is_some(),
+                    include_inactive_plugins,
+                )
+            })
+            .collect())
+    }
+
+    /// Pair one definition with the plugin that makes it inactive, if any.
+    pub fn listed_auto_task(&self, definition: AutoTaskDefinition) -> ListedAutoTask {
+        let inactive_plugin = self.auto_task_inactive_plugin(&definition);
+        let skipped_reason = inactive_plugin
+            .as_ref()
+            .map(|inactive| inactive.reason(&self.auto_task_definition_path(&definition), None));
+        ListedAutoTask {
+            definition,
+            inactive_plugin,
+            skipped_reason,
         }
-        if self.plugin_load().is_disabled_in_workspace(&namespace) {
-            return Some(format!(
-                "seeded by plugin:{namespace}@{version}, which is switched off in this \
-                 workspace; run `orbit plugin enable {namespace} --scope workspace` to fire it \
-                 again, or delete '{}'",
-                path.display()
-            ));
-        }
-        Some(format!(
-            "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
-             `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
-            path.display()
-        ))
+    }
+
+    fn auto_task_definition_path(&self, definition: &AutoTaskDefinition) -> PathBuf {
+        crate::application::auto_tasks::definition_path(&self.paths().local_dir, &definition.name)
     }
 
     /// The id of a still-open instance of `definition`'s prior mints, if any.

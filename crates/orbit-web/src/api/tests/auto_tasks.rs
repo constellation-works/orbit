@@ -1075,3 +1075,70 @@ async fn list_reports_no_open_duplicate_when_only_instance_is_someday() {
     assert_eq!(item["may_create_open_duplicate"], true);
     assert_eq!(item["last_minted_task_status"], "backlog");
 }
+
+/// A definition seeded by a plugin this host never enabled is hidden from the
+/// panel and its counts; the opt-in lists it marked inactive with the reason.
+#[tokio::test]
+async fn list_hides_an_inactive_plugins_definition_unless_asked() {
+    let runtime = runtime();
+    runtime.auto_task_add(chore_params("nightly")).expect("add");
+    runtime
+        .auto_task_add(chore_params("ghost-reindex"))
+        .expect("add");
+    let path = orbit_core::application::auto_tasks::definition_path(
+        &runtime.paths().local_dir,
+        "ghost-reindex",
+    );
+    let body = std::fs::read_to_string(&path).expect("read");
+    std::fs::write(&path, format!("# provenance: plugin:ghost@1.0.0\n{body}"))
+        .expect("seed provenance");
+    let (state, _) = state(runtime);
+
+    let json = body_json(
+        send(
+            state.clone(),
+            Method::GET,
+            "/auto-tasks?workspace=default",
+            None,
+        )
+        .await,
+    )
+    .await;
+    let names: Vec<&str> = json["definitions"]
+        .as_array()
+        .expect("definitions")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["nightly"], "{json}");
+    assert_eq!(json["inactive_plugin_count"], 1);
+
+    let json = body_json(
+        send(
+            state,
+            Method::GET,
+            "/auto-tasks?workspace=default&include_inactive_plugins=true",
+            None,
+        )
+        .await,
+    )
+    .await;
+    let definitions = json["definitions"].as_array().expect("definitions");
+    let ghost = definitions
+        .iter()
+        .find(|item| item["name"] == "ghost-reindex")
+        .expect("listed on request");
+    assert_eq!(ghost["plugin_inactive"], true);
+    assert_eq!(ghost["inactive_plugin"]["namespace"], "ghost");
+    assert!(
+        ghost["skipped_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("orbit plugin enable ghost")),
+        "{ghost}"
+    );
+    let nightly = definitions
+        .iter()
+        .find(|item| item["name"] == "nightly")
+        .expect("live definition");
+    assert_eq!(nightly["plugin_inactive"], false);
+}

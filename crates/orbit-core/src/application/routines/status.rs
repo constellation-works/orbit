@@ -121,10 +121,30 @@ pub struct RoutineStatusReport {
     pub machine_id: String,
     /// Per-routine status rows, in discovery order.
     pub statuses: Vec<RoutineStatus>,
-    /// Definitions targeting a retired job: listed, never scheduled.
+    /// Definitions targeting a retired job, or seeded by a plugin that is not
+    /// active where they live ([`RetiredRoutine::skipped`]): never scheduled.
+    /// List surfaces go through [`Self::listed_retired`].
     pub retired: Vec<RetiredRoutine>,
     /// Fail-closed load failures (these routines are absent).
     pub load_errors: Vec<RoutineLoadError>,
+}
+
+impl RoutineStatusReport {
+    /// The unscheduled definitions a list surface shows: every retired one,
+    /// and a plugin-parked one only when `include_inactive_plugins` asks.
+    pub fn listed_retired(
+        &self,
+        include_inactive_plugins: bool,
+    ) -> impl Iterator<Item = &RetiredRoutine> {
+        self.retired.iter().filter(move |routine| {
+            crate::application::plugin::is_listed(routine.skipped, include_inactive_plugins)
+        })
+    }
+
+    /// The plugin-parked definitions a default listing hides.
+    pub fn inactive_plugin_routines(&self) -> impl Iterator<Item = &RetiredRoutine> {
+        self.retired.iter().filter(|routine| routine.skipped)
+    }
 }
 
 /// Collect routine status from a caller-supplied workspace provider. Registry

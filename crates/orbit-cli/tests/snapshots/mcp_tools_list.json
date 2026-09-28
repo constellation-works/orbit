@@ -140,10 +140,14 @@
     "name": "orbit_auto_task_delete"
   },
   {
-    "description": "List every auto-task definition in this workspace.",
+    "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
+        "include_inactive_plugins": {
+          "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
+          "type": "boolean"
+        },
         "workspace": {
           "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
           "type": "string"

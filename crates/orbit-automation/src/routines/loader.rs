@@ -135,6 +135,11 @@ pub struct RetiredRoutine {
     /// owning managed-routine provenance narrows it — see
     /// [`retired_routine_reason`].
     pub reason: String,
+    /// Set when the caller's [`RoutineSkipRule`] parked the definition rather
+    /// than its target job being retired. Core's only rule is a plugin that
+    /// is not active where the file lives, which list surfaces hide unless
+    /// asked.
+    pub skipped: bool,
 }
 
 /// One fail-closed load failure, kept for reporting: the routine (or source)
@@ -165,7 +170,8 @@ pub struct RoutineCatalogLookup {
 pub struct RoutineCollection {
     /// Valid routines, in stable (workspace, filename) order.
     pub routines: Vec<LoadedRoutine>,
-    /// Definitions targeting a retired job, skipped without an error.
+    /// Definitions targeting a retired job, or parked by the caller's skip
+    /// rule ([`RetiredRoutine::skipped`]), skipped without an error.
     pub retired: Vec<RetiredRoutine>,
     /// Routine/source load failures and catalog diagnostics reported during
     /// discovery.
@@ -520,6 +526,7 @@ fn load_routine_file(
                 path: path.to_path_buf(),
                 job: definition.target.job_name().to_string(),
                 reason,
+                skipped: true,
             }),
             catalog_error: None,
         });
@@ -547,6 +554,7 @@ fn load_routine_file(
                     reason,
                     &sync_retirement_advice(&source.workspace),
                 ),
+                skipped: false,
             }),
             catalog_error: None,
         });

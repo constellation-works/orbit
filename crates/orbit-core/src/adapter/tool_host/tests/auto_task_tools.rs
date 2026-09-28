@@ -294,3 +294,76 @@ fn delete_refuses_an_open_mint_then_forces_and_reports_through_the_tool_surface(
     assert_eq!(deleted["open_tasks"], json!([minted.id]));
     assert!(runtime.auto_task_show("chore").expect("show").is_none());
 }
+
+/// Mark a definition as seeded by `plugin:ghost`, a plugin this host never
+/// installed, so its plugin is off on the host.
+fn seed_as_ghost_plugin(runtime: &OrbitRuntime, name: &str) {
+    let path = crate::application::auto_tasks::definition_path(&runtime.paths().local_dir, name);
+    let body = std::fs::read_to_string(&path).expect("read definition");
+    std::fs::write(&path, format!("# provenance: plugin:ghost@1.0.0\n{body}"))
+        .expect("write provenance header");
+}
+
+#[test]
+fn list_omits_an_inactive_plugins_definition_unless_asked_and_then_marks_it() {
+    let (_temp, runtime) = with_definition("chore");
+    runtime
+        .auto_task_add(params("ghost-reindex"))
+        .expect("add seeded");
+    seed_as_ghost_plugin(&runtime, "ghost-reindex");
+
+    let listed = run_tool_as_operator(&runtime, "orbit.auto_task.list", json!({})).expect("list");
+    let names: Vec<&str> = listed
+        .as_array()
+        .expect("array")
+        .iter()
+        .filter_map(|definition| definition["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["chore"], "the inactive definition is hidden");
+
+    let all = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.list",
+        json!({"include_inactive_plugins": true}),
+    )
+    .expect("list all");
+    let all = all.as_array().expect("array");
+    let ghost = all
+        .iter()
+        .find(|definition| definition["name"] == json!("ghost-reindex"))
+        .expect("listed on request");
+    assert_eq!(ghost["plugin_inactive"], json!(true));
+    assert_eq!(ghost["inactive_plugin"]["namespace"], json!("ghost"));
+    assert_eq!(ghost["inactive_plugin"]["scope"], json!("host"));
+    assert!(
+        ghost["skipped_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("orbit plugin enable ghost")),
+        "{ghost}"
+    );
+    let chore = all
+        .iter()
+        .find(|definition| definition["name"] == json!("chore"))
+        .expect("live definition");
+    assert!(
+        chore.get("plugin_inactive").is_none(),
+        "a live definition is the bare record"
+    );
+}
+
+#[test]
+fn show_resolves_a_hidden_definition_and_reports_it_inactive() {
+    let (_temp, runtime) = with_definition("ghost-reindex");
+    seed_as_ghost_plugin(&runtime, "ghost-reindex");
+
+    let shown = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.show",
+        json!({"name": "ghost-reindex"}),
+    )
+    .expect("show a hidden definition");
+
+    assert_eq!(shown["name"], json!("ghost-reindex"));
+    assert_eq!(shown["plugin_inactive"], json!(true));
+    assert!(shown["skipped_reason"].as_str().is_some(), "{shown}");
+}
