@@ -138,6 +138,11 @@ fn make_writable(path: &Path) {
 #[cfg(unix)]
 #[test]
 fn skill_split_retires_old_paths_preserves_edits_and_seeds_new_routers() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &skill_split_retires_old_paths_preserves_edits_and_seeds_new_routers,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let skills = root.path().join("skills");
     let seed = || {
@@ -190,6 +195,11 @@ fn skill_split_retires_old_paths_preserves_edits_and_seeds_new_routers() {
 
 #[test]
 fn steady_state_reconcile_skips_asset_and_manifest_writes() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &steady_state_reconcile_skips_asset_and_manifest_writes,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     init_global(&global_root);
@@ -219,6 +229,11 @@ fn steady_state_reconcile_skips_asset_and_manifest_writes() {
 #[cfg(unix)]
 #[test]
 fn runtime_bootstrap_reads_seeded_global_assets_without_write_access() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &runtime_bootstrap_reads_seeded_global_assets_without_write_access,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -240,6 +255,11 @@ fn runtime_bootstrap_reads_seeded_global_assets_without_write_access() {
 
 #[test]
 fn refresh_writes_asset_and_manifest_when_embedded_digest_changed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &refresh_writes_asset_and_manifest_when_embedded_digest_changed,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     init_global(&global_root);
@@ -276,6 +296,11 @@ fn refresh_writes_asset_and_manifest_when_embedded_digest_changed() {
 
 #[test]
 fn runtime_bootstrap_refreshes_orbit_written_stale_activity_before_catalog_load() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &runtime_bootstrap_refreshes_orbit_written_stale_activity_before_catalog_load,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -309,6 +334,11 @@ fn runtime_bootstrap_refreshes_orbit_written_stale_activity_before_catalog_load(
 
 #[test]
 fn runtime_bootstrap_preserves_locally_modified_stale_managed_activity() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &runtime_bootstrap_preserves_locally_modified_stale_managed_activity,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -339,6 +369,11 @@ fn runtime_bootstrap_preserves_locally_modified_stale_managed_activity() {
 
 #[test]
 fn refresh_retires_managed_activity_and_job_assets_and_is_idempotent() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &refresh_retires_managed_activity_and_job_assets_and_is_idempotent,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -489,6 +524,11 @@ mod artifacts {
     /// Criterion: all five kinds record digest provenance after seeding.
     #[test]
     fn every_artifact_kind_records_digest_provenance_after_init() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &every_artifact_kind_records_digest_provenance_after_init,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
 
@@ -545,6 +585,11 @@ mod artifacts {
     /// A freshly initialized workspace is clean on every artifact kind.
     #[test]
     fn freshly_initialized_workspace_reports_no_artifact_findings() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &freshly_initialized_workspace_reports_no_artifact_findings,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let runtime =
@@ -571,6 +616,11 @@ mod artifacts {
     /// of Orbit authorship.
     #[test]
     fn skill_residue_is_reported_and_fix_preserves_unproven_content() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &skill_residue_is_reported_and_fix_preserves_unproven_content,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let skills_dir = global_root.join("skills");
@@ -669,6 +719,11 @@ mod artifacts {
     /// preserves a locally modified one instead of deleting it.
     #[test]
     fn fix_removes_orbit_written_deprecated_artifacts_and_preserves_modified_ones() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &fix_removes_orbit_written_deprecated_artifacts_and_preserves_modified_ones,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
 
@@ -758,6 +813,11 @@ mod artifacts {
 
     #[test]
     fn previous_release_auto_task_scheduler_routine_is_deprecated_and_retired() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &previous_release_auto_task_scheduler_routine_is_deprecated_and_retired,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let routines_dir = workspace_root.join("routines");
@@ -802,6 +862,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// and the workspace never converges.
     #[test]
     fn lifecycle_edited_retired_routine_is_orbit_written_to_doctor_too() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &lifecycle_edited_retired_routine_is_orbit_written_to_doctor_too,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let routines_dir = workspace_root.join("routines");
@@ -872,6 +937,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// remediation is synchronization, not the repair flag.
     #[test]
     fn untracked_retired_routine_is_deprecated_rather_than_a_healthy_catalog() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &untracked_retired_routine_is_deprecated_rather_than_a_healthy_catalog,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let routines_dir = workspace_root.join("routines");
@@ -954,6 +1024,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// removed or rewritten by the fix flag.
     #[test]
     fn faulty_user_authored_artifacts_are_reported_and_never_touched() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &faulty_user_authored_artifacts_are_reported_and_never_touched,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
 
@@ -999,6 +1074,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// is the one artifact fault that escalates to an Error row.
     #[test]
     fn unloadable_shipped_default_is_distinguished_from_a_user_authored_fault() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &unloadable_shipped_default_is_distinguished_from_a_user_authored_fault,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
 
@@ -1035,6 +1115,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// repair, and the fix flag deliberately leaves it alone.
     #[test]
     fn drifted_orbit_written_default_is_stale_and_not_removed_by_the_fix_flag() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &drifted_orbit_written_default_is_stale_and_not_removed_by_the_fix_flag,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
 
@@ -1085,6 +1170,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// being installed — reported as stale, and never deleted.
     #[test]
     fn untracked_collision_with_a_bundled_default_is_reported_as_stale() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &untracked_collision_with_a_bundled_default_is_reported_as_stale,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
 
@@ -1145,6 +1235,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
     /// and never follows a symlink at the boundary.
     #[test]
     fn removal_rejects_escaping_paths_and_does_not_follow_symlinks() {
+        if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+            &removal_rejects_escaping_paths_and_does_not_follow_symlinks,
+        )) {
+            return;
+        }
         let root = tempdir().expect("create tempdir");
         let (global_root, workspace_root) = init_workspace(root.path());
         let auto_tasks_dir = workspace_root.join("auto_tasks");
@@ -1228,6 +1323,11 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
 
 #[test]
 fn first_manifest_preserves_user_assets_and_warns_about_ambiguous_legacy_yaml() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &first_manifest_preserves_user_assets_and_warns_about_ambiguous_legacy_yaml,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -1364,6 +1464,11 @@ fn outcomes(
 #[cfg(unix)]
 #[test]
 fn reconcile_never_writes_through_linked_final_or_intermediate_paths() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &reconcile_never_writes_through_linked_final_or_intermediate_paths,
+    )) {
+        return;
+    }
     use super::super::managed_assets::ManagedAssetOutcome::{Created, Preserved, Refreshed};
     use super::super::managed_assets::ManagedAssetReconcileMode::{Apply, Check};
     use std::os::unix::fs::symlink;
@@ -1503,6 +1608,11 @@ fn reconcile_never_writes_through_linked_final_or_intermediate_paths() {
 #[cfg(unix)]
 #[test]
 fn retirement_through_redirected_directories_preserves_external_bytes() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &retirement_through_redirected_directories_preserves_external_bytes,
+    )) {
+        return;
+    }
     use super::super::managed_assets::ManagedAssetOutcome::{Preserved, Retired};
     use super::super::managed_assets::ManagedAssetReconcileMode::{Apply, Check};
     use std::os::unix::fs::symlink;
@@ -1632,6 +1742,11 @@ fn retirement_through_redirected_directories_preserves_external_bytes() {
 #[cfg(unix)]
 #[test]
 fn activity_and_job_seeding_refuse_linked_catalog_entries() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &activity_and_job_seeding_refuse_linked_catalog_entries,
+    )) {
+        return;
+    }
     use super::super::managed_assets::ManagedAssetOutcome;
     use std::os::unix::fs::symlink;
 

@@ -17,6 +17,11 @@ use crate::application::task::{TaskAddParams, TaskUpdateParams};
 /// the published candidate after the real merge step fails.
 #[test]
 fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &completion_merge_failure_routes_to_review_recovery_without_republishing,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let (task, run_id, job) = published_completion_pipeline(&runtime, &repo_root);
@@ -66,6 +71,11 @@ fn completion_merge_failure_routes_to_review_recovery_without_republishing() {
 /// the half of the answer that looks delivered.
 #[test]
 fn an_open_pull_request_reported_as_merged_never_completes_the_pipeline() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_open_pull_request_reported_as_merged_never_completes_the_pipeline,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let (task, run_id, job) = published_completion_pipeline(&runtime, &repo_root);

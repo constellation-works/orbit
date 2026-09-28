@@ -59,6 +59,11 @@ fn assert_invalid_input(error: OrbitError, needles: &[&str]) {
 #[cfg(unix)]
 #[test]
 fn needed_manifest_write_on_readonly_dir_warns_and_continues() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &needed_manifest_write_on_readonly_dir_warns_and_continues,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     init_global(&global_root);
@@ -95,6 +100,11 @@ fn needed_manifest_write_on_readonly_dir_warns_and_continues() {
 
 #[test]
 fn malformed_manifest_fails_closed_with_repair_message() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &malformed_manifest_fails_closed_with_repair_message,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     init_global(&global_root);
@@ -119,6 +129,11 @@ fn malformed_manifest_fails_closed_with_repair_message() {
 
 #[test]
 fn unexpected_manifest_asset_kind_fails_closed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &unexpected_manifest_asset_kind_fails_closed,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     init_global(&global_root);
@@ -145,6 +160,11 @@ fn unexpected_manifest_asset_kind_fails_closed() {
 #[cfg(unix)]
 #[test]
 fn stubbed_erofs_and_eacces_are_skippable() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &stubbed_erofs_and_eacces_are_skippable,
+    )) {
+        return;
+    }
     for errno in [libc::EROFS, libc::EACCES] {
         let error = io::Error::from_raw_os_error(errno);
         assert!(
@@ -172,6 +192,11 @@ fn stubbed_erofs_and_eacces_are_skippable() {
 #[cfg(unix)]
 #[test]
 fn stubbed_enospc_and_eio_fail_closed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &stubbed_enospc_and_eio_fail_closed,
+    )) {
+        return;
+    }
     for errno in [libc::ENOSPC, libc::EIO] {
         let error = io::Error::from_raw_os_error(errno);
         assert!(
@@ -201,6 +226,11 @@ fn stubbed_enospc_and_eio_fail_closed() {
 
 #[test]
 fn constructed_storage_full_and_other_errors_fail_closed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &constructed_storage_full_and_other_errors_fail_closed,
+    )) {
+        return;
+    }
     for error in [
         io::Error::new(io::ErrorKind::StorageFull, "no space left"),
         io::Error::other("input/output error"),

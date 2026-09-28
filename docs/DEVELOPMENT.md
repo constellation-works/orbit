@@ -40,6 +40,12 @@ fn fixture_orbit(work: &Path, home: &Path) -> Command {
 }
 ```
 
+The same authority list also clears `ORBIT_WORKER_CONTEXT_REQUIRED`, which
+would otherwise demand a worker binding from an empty fixture registry. Orbit
+core's mutable libtest fixtures use the shared
+`application::tests::run_isolated_test` launcher to re-execute an exact test
+with this isolation and verify one test passed in the child.
+
 The pattern above is already used by
 [`crates/orbit-cli/tests/tool_list.rs`](../crates/orbit-cli/tests/tool_list.rs).
 For a complete disposable fixture, create absolute temporary paths, initialize

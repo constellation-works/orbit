@@ -95,6 +95,11 @@ fn write_job_file(dir: &Path, name: &str, contents: &str) -> std::path::PathBuf 
 
 #[test]
 fn catalog_submission_persists_a_pending_run_and_returns_before_completion() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &catalog_submission_persists_a_pending_run_and_returns_before_completion,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_ok", 1);
     let _worker = WorkerOverride::shell(IDLE_WORKER);
@@ -120,6 +125,11 @@ fn catalog_submission_persists_a_pending_run_and_returns_before_completion() {
 
 #[test]
 fn submission_reports_queued_when_the_job_is_at_its_active_run_limit() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &submission_reports_queued_when_the_job_is_at_its_active_run_limit,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_queued", 1);
     runtime
@@ -141,6 +151,11 @@ fn submission_reports_queued_when_the_job_is_at_its_active_run_limit() {
 
 #[test]
 fn test_submission_requires_an_explicit_worker_override_before_spawning() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &test_submission_requires_an_explicit_worker_override_before_spawning,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_missing_override", 1);
 
@@ -174,6 +189,11 @@ fn test_submission_requires_an_explicit_worker_override_before_spawning() {
 /// pending forever.
 #[test]
 fn worker_startup_failure_fails_the_submission_and_terminalizes_the_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &worker_startup_failure_fails_the_submission_and_terminalizes_the_run,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_no_worker", 1);
     let _worker = WorkerOverride::missing_program();
@@ -202,6 +222,11 @@ fn worker_startup_failure_fails_the_submission_and_terminalizes_the_run() {
 
 #[test]
 fn strict_config_refuses_unavailable_scope_without_starting_a_worker() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &strict_config_refuses_unavailable_scope_without_starting_a_worker,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -257,6 +282,11 @@ fn strict_config_refuses_unavailable_scope_without_starting_a_worker() {
 
 #[test]
 fn strict_cli_override_refuses_unavailable_auto_coordinator() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &strict_cli_override_refuses_unavailable_auto_coordinator,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     write_job_file(
         &runtime.paths().global_dir.join("resources/jobs"),
@@ -306,6 +336,11 @@ fn strict_cli_override_refuses_unavailable_auto_coordinator() {
 
 #[test]
 fn strict_cli_override_rejects_disabled_containment_before_run_creation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &strict_cli_override_rejects_disabled_containment_before_run_creation,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let global_root = root.path().join("global");
     let workspace_root = root.path().join("repo/.orbit");
@@ -349,6 +384,11 @@ fn strict_cli_override_rejects_disabled_containment_before_run_creation() {
 /// submission — which had already succeeded.
 #[test]
 fn waiting_surfaces_a_terminal_state_the_submission_could_not_know() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &waiting_surfaces_a_terminal_state_the_submission_could_not_know,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_async_fail", 1);
     let _worker = WorkerOverride::shell("echo 'worker gave up' >&2; exit 23");
@@ -379,6 +419,11 @@ fn waiting_surfaces_a_terminal_state_the_submission_could_not_know() {
 /// before submission returns — later edits and deletions cannot reach it.
 #[test]
 fn direct_path_submission_pins_the_validated_definition_against_later_edits() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &direct_path_submission_pins_the_validated_definition_against_later_edits,
+    )) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let source = write_job_file(
         &root.path().join("loose"),
@@ -421,6 +466,11 @@ fn direct_path_submission_pins_the_validated_definition_against_later_edits() {
 /// worker could not finish is refused before any run exists to inspect.
 #[test]
 fn direct_path_submission_refuses_a_retired_declaration_before_persisting_a_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &direct_path_submission_refuses_a_retired_declaration_before_persisting_a_run,
+    )) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let source = write_job_file(
         &root.path().join("loose"),
@@ -467,6 +517,11 @@ spec:
 /// is refused identically whichever one an operator typed.
 #[test]
 fn submission_refuses_a_subroutine_job() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &submission_refuses_a_subroutine_job,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let jobs_dir = runtime.paths().jobs_dir.clone();
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -490,6 +545,11 @@ fn submission_refuses_a_subroutine_job() {
 /// worker is still alive.
 #[test]
 fn submission_returns_while_its_worker_is_still_running() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &submission_returns_while_its_worker_is_still_running,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_nonblocking", 1);
     let _worker = WorkerOverride::shell(IDLE_WORKER);
@@ -507,6 +567,11 @@ fn submission_returns_while_its_worker_is_still_running() {
 
 #[test]
 fn auto_complexity_pool_is_captured_at_submission_and_retained_by_real_resume() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &auto_complexity_pool_is_captured_at_submission_and_retained_by_real_resume,
+    )) {
+        return;
+    }
     use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
     use crate::application::task::TaskAddParams;
     use orbit_config::ComplexityCrewPools;

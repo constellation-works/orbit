@@ -228,6 +228,11 @@ fn assert_denied(error: OrbitError, expectation: &str) {
 
 #[test]
 fn a_local_operator_session_keeps_the_existing_admission_path() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_local_operator_session_keeps_the_existing_admission_path,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let authorizer = runtime
         .admit_agent_invoke(&operator_session())
@@ -239,6 +244,11 @@ fn a_local_operator_session_keeps_the_existing_admission_path() {
 
 #[test]
 fn an_agent_session_cannot_admit_an_invocation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_agent_session_cannot_admit_an_invocation,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let session = agent_session();
     let error = runtime
@@ -250,6 +260,11 @@ fn an_agent_session_cannot_admit_an_invocation() {
 
 #[test]
 fn a_runs_own_runner_grant_cannot_admit_an_invocation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_runs_own_runner_grant_cannot_admit_an_invocation,
+    )) {
+        return;
+    }
     // The mode exists to leave the sandbox a managed run executes inside, so a
     // run that could admit itself would be a sandbox escape wearing an
     // authorization. Every other run-reachable governed operation lists
@@ -268,6 +283,11 @@ fn a_runs_own_runner_grant_cannot_admit_an_invocation() {
 /// already holds an SSH login here, which lets it start any process it likes.
 #[test]
 fn a_remote_operator_session_admits_an_invocation_and_keeps_the_caller_label() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_remote_operator_session_admits_an_invocation_and_keeps_the_caller_label,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let session = remote_operator_session();
 
@@ -288,6 +308,11 @@ fn a_remote_operator_session_admits_an_invocation_and_keeps_the_caller_label() {
 /// agent is.
 #[test]
 fn a_remote_agent_session_cannot_admit_an_invocation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_remote_agent_session_cannot_admit_an_invocation,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let session = ToolSessionContext {
         effective_capabilities: [McpCapability::Agent].into_iter().collect(),
@@ -306,6 +331,11 @@ fn a_remote_agent_session_cannot_admit_an_invocation() {
 
 #[test]
 fn an_unidentified_caller_cannot_admit_an_invocation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_unidentified_caller_cannot_admit_an_invocation,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let session = ToolSessionContext::default();
     // The process running these tests is neither an interactive terminal nor
@@ -335,6 +365,11 @@ fn assert_no_run_created(runtime: &OrbitRuntime) {
 
 #[test]
 fn a_cwd_outside_the_workspace_checkout_is_refused() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_cwd_outside_the_workspace_checkout_is_refused,
+    )) {
+        return;
+    }
     let (root, runtime, _repo_root) = test_runtime();
     let outside = root.path().join("elsewhere");
     std::fs::create_dir_all(&outside).expect("create outside dir");
@@ -353,6 +388,11 @@ fn a_cwd_outside_the_workspace_checkout_is_refused() {
 
 #[test]
 fn a_relative_or_missing_cwd_is_refused() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_relative_or_missing_cwd_is_refused,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let session = operator_session();
     for (cwd, expected) in [("crates", "must be an absolute path"), ("", "is required")] {
@@ -376,6 +416,11 @@ fn a_relative_or_missing_cwd_is_refused() {
 
 #[test]
 fn an_empty_prompt_is_refused() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_empty_prompt_is_refused,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let session = operator_session();
     let cwd = repo_root.display().to_string();
@@ -392,6 +437,11 @@ fn an_empty_prompt_is_refused() {
 
 #[test]
 fn a_timeout_beyond_the_ceiling_is_refused_rather_than_clamped() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_timeout_beyond_the_ceiling_is_refused_rather_than_clamped,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime();
     let session = operator_session();
     let cwd = repo_root.display().to_string();
@@ -412,6 +462,11 @@ fn a_timeout_beyond_the_ceiling_is_refused_rather_than_clamped() {
 
 #[test]
 fn ordinary_job_input_cannot_carry_a_trusted_host_admission() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ordinary_job_input_cannot_carry_a_trusted_host_admission,
+    )) {
+        return;
+    }
     // The reserved key is refused on the single path every submission surface
     // funnels through, so this covers `orbit run job`, a tool call, and an
     // automation key alike.
@@ -445,6 +500,11 @@ fn ordinary_job_input_cannot_carry_a_trusted_host_admission() {
 
 #[test]
 fn a_foreground_job_run_cannot_carry_a_trusted_host_admission() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_foreground_job_run_cannot_carry_a_trusted_host_admission,
+    )) {
+        return;
+    }
     let (root, runtime, _repo_root) = test_runtime();
     let job_path = root.path().join("forged.yaml");
     std::fs::write(
@@ -504,6 +564,11 @@ fn finished_run(state: JobRunState, output: Value) -> (JobRun, BTreeMap<u32, Val
 
 #[test]
 fn a_provider_that_exits_zero_without_finishing_is_not_a_successful_investigation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_provider_that_exits_zero_without_finishing_is_not_a_successful_investigation,
+    )) {
+        return;
+    }
     // The whole point of the projection: the exit code is present and zero, and
     // the answer to "did this succeed" is still no, because the run recorded a
     // failure when the envelope never terminated.
@@ -530,6 +595,11 @@ fn a_provider_that_exits_zero_without_finishing_is_not_a_successful_investigatio
 
 #[test]
 fn a_timeout_and_a_cancellation_read_differently() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_timeout_and_a_cancellation_read_differently,
+    )) {
+        return;
+    }
     let (timed_out, outputs) = finished_run(
         JobRunState::Timeout,
         json!({ "timed_out": true, "exit_code": Value::Null }),
@@ -548,6 +618,11 @@ fn a_timeout_and_a_cancellation_read_differently() {
 
 #[test]
 fn the_preview_is_bounded_and_names_where_the_rest_lives() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &the_preview_is_bounded_and_names_where_the_rest_lives,
+    )) {
+        return;
+    }
     let long = "x".repeat(10_000);
     let (run, outputs) = finished_run(
         JobRunState::Success,
@@ -574,6 +649,11 @@ fn the_preview_is_bounded_and_names_where_the_rest_lives() {
 
 #[test]
 fn an_unrelated_run_has_no_agent_invocation_projection() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_unrelated_run_has_no_agent_invocation_projection,
+    )) {
+        return;
+    }
     let (mut run, outputs) = finished_run(JobRunState::Success, json!({}));
     run.job_id = "task_auto_pipeline".to_string();
     assert!(agent_invoke_result(&run, Some(&outputs)).is_none());
@@ -581,6 +661,11 @@ fn an_unrelated_run_has_no_agent_invocation_projection() {
 
 #[test]
 fn run_show_projects_the_persisted_provider_sandbox() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &run_show_projects_the_persisted_provider_sandbox,
+    )) {
+        return;
+    }
     let (mut run, outputs) = finished_run(JobRunState::Success, json!({}));
     run.input = Some(json!({
         "provider_sandbox": "codex:danger-full-access",
@@ -598,6 +683,11 @@ fn run_show_projects_the_persisted_provider_sandbox() {
 /// invocation, and a resume would carry it into a run nobody authorized now.
 #[test]
 fn an_admitted_run_cannot_be_resumed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_admitted_run_cannot_be_resumed,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     let admitted_input = json!({
         "prompt": "why",
@@ -657,6 +747,11 @@ fn an_admitted_run_cannot_be_resumed() {
 /// finished should hand back the original result, not re-run the investigation.
 #[test]
 fn a_repeated_idempotency_key_resolves_the_original_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_repeated_idempotency_key_resolves_the_original_run,
+    )) {
+        return;
+    }
     let (root, runtime, _repo_root) = test_runtime_with_codex_crew("workspace-write");
     let spawns = SpawnLog::install(root.path());
     let first = runtime
@@ -699,6 +794,11 @@ fn a_repeated_idempotency_key_resolves_the_original_run() {
 /// key is a different invocation.
 #[test]
 fn a_retry_after_a_lost_response_returns_the_original_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_retry_after_a_lost_response_returns_the_original_run,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let spawns = SpawnLog::install(root.path());
     let session = operator_session();
@@ -736,6 +836,11 @@ fn a_retry_after_a_lost_response_returns_the_original_run() {
 
 #[test]
 fn a_changed_keyed_retry_reports_the_original_security_settings() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_changed_keyed_retry_reports_the_original_security_settings,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let spawns = SpawnLog::install(root.path());
     let local = operator_session();
@@ -779,6 +884,11 @@ fn a_changed_keyed_retry_reports_the_original_security_settings() {
 
 #[test]
 fn a_retry_after_the_default_sandbox_changes_reports_the_persisted_mode() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_retry_after_the_default_sandbox_changes_reports_the_persisted_mode,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root) = test_runtime_with_codex_crew("danger-full-access");
     let spawns = SpawnLog::install(root.path());
     let session = operator_session();
@@ -822,6 +932,11 @@ fn a_retry_after_the_default_sandbox_changes_reports_the_persisted_mode() {
 /// every caller is handed that run.
 #[test]
 fn concurrent_submissions_of_one_key_admit_one_run_and_one_worker() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &concurrent_submissions_of_one_key_admit_one_run_and_one_worker,
+    )) {
+        return;
+    }
     const RACERS: usize = 6;
     let (root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let spawn_dir = SpawnLog::dir(root.path());
@@ -885,6 +1000,11 @@ fn concurrent_submissions_of_one_key_admit_one_run_and_one_worker() {
 /// names a key leaves no run behind that a later operator retry would resolve.
 #[test]
 fn an_unauthorized_keyed_submission_claims_nothing() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_unauthorized_keyed_submission_claims_nothing,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let session = agent_session();
     let cwd = repo_root.display().to_string();
@@ -901,6 +1021,11 @@ fn an_unauthorized_keyed_submission_claims_nothing() {
 /// A blank key is no key: it must not collide with every other blank one.
 #[test]
 fn a_blank_idempotency_key_is_treated_as_absent() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_blank_idempotency_key_is_treated_as_absent,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root) = test_runtime();
     runtime
         .stores()
@@ -934,6 +1059,11 @@ fn a_blank_idempotency_key_is_treated_as_absent() {
 
 #[test]
 fn a_danger_full_access_codex_invocation_warns_and_records_provider_sandbox() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_danger_full_access_codex_invocation_warns_and_records_provider_sandbox,
+    )) {
+        return;
+    }
     let _worker = IdleWorker::install();
     let (_root, runtime, repo_root) = test_runtime_with_codex_crew("danger-full-access");
     let session = operator_session();
@@ -974,6 +1104,11 @@ fn a_danger_full_access_codex_invocation_warns_and_records_provider_sandbox() {
 
 #[test]
 fn a_codex_read_only_override_is_honoured_and_does_not_warn() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_codex_read_only_override_is_honoured_and_does_not_warn,
+    )) {
+        return;
+    }
     let _worker = IdleWorker::install();
     let (_root, runtime, repo_root) = test_runtime_with_codex_crew("danger-full-access");
     let session = operator_session();
@@ -1003,6 +1138,11 @@ fn a_codex_read_only_override_is_honoured_and_does_not_warn() {
 
 #[test]
 fn an_unsupported_provider_sandbox_override_is_refused() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_unsupported_provider_sandbox_override_is_refused,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let session = operator_session();
     let cwd = repo_root.display().to_string();
@@ -1024,6 +1164,11 @@ fn an_unsupported_provider_sandbox_override_is_refused() {
 
 #[test]
 fn a_codex_sandbox_mode_is_refused_for_claude() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_codex_sandbox_mode_is_refused_for_claude,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
     let session = operator_session();
     let cwd = repo_root.display().to_string();

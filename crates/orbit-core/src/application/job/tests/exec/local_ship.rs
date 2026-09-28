@@ -245,6 +245,11 @@ fn started_activities(runtime: &OrbitRuntime, run_id: &str) -> Vec<String> {
 
 #[test]
 fn gated_local_ship_without_a_remote_never_pushes_or_recovers() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &gated_local_ship_without_a_remote_never_pushes_or_recovers,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     stub_agent_implement(&global_root);
@@ -299,6 +304,11 @@ fn gated_local_ship_without_a_remote_never_pushes_or_recovers() {
 /// not git's publication behavior.
 #[test]
 fn gated_local_ship_still_pushes_when_the_caller_asks_for_it() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &gated_local_ship_still_pushes_when_the_caller_asks_for_it,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     stub_agent_implement(&global_root);

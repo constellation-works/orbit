@@ -180,6 +180,11 @@ fn seed_checkpointed_delivery_run(
 
 #[test]
 fn resume_readmits_blocked_task_and_realigns_ownership_to_the_checkpointed_batch() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_readmits_blocked_task_and_realigns_ownership_to_the_checkpointed_batch,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -259,6 +264,11 @@ fn resume_readmits_blocked_task_and_realigns_ownership_to_the_checkpointed_batch
 /// exactly as it does for a failed source.
 #[test]
 fn resume_readmits_a_task_blocked_by_an_interrupted_source() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_readmits_a_task_blocked_by_an_interrupted_source,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -319,6 +329,11 @@ fn resume_readmits_a_task_blocked_by_an_interrupted_source() {
 
 #[test]
 fn resume_reconciliation_is_idempotent_and_scoped_to_the_retry_lineage() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_reconciliation_is_idempotent_and_scoped_to_the_retry_lineage,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -362,6 +377,11 @@ fn resume_reconciliation_is_idempotent_and_scoped_to_the_retry_lineage() {
 
 #[test]
 fn resume_leaves_tasks_claimed_by_a_live_run_in_the_same_lineage_alone() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_leaves_tasks_claimed_by_a_live_run_in_the_same_lineage_alone,
+    )) {
+        return;
+    }
     // An earlier resume of the same source may still be executing. Its claim on
     // the bundle is live, so a second resume must not steal ownership out from
     // under it — the downstream handoff check stays the arbiter instead.
@@ -408,6 +428,11 @@ fn resume_leaves_tasks_claimed_by_a_live_run_in_the_same_lineage_alone() {
 
 #[test]
 fn pipeline_worker_resumes_from_the_runs_own_checkpoints() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_resumes_from_the_runs_own_checkpoints,
+    )) {
+        return;
+    }
     // The submission path persists the resumed run and hands it to a detached
     // worker, so the worker — not the caller — must honor the checkpoints. The
     // same path makes a worker restart idempotent: already-successful steps are
@@ -487,6 +512,11 @@ fn pipeline_worker_resumes_from_the_runs_own_checkpoints() {
 
 #[test]
 fn resume_submission_rejects_a_non_terminal_run_before_persisting_anything() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_submission_rejects_a_non_terminal_run_before_persisting_anything,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -522,6 +552,11 @@ fn resume_submission_rejects_a_non_terminal_run_before_persisting_anything() {
 #[cfg(unix)]
 #[test]
 fn resume_refuses_an_interrupted_run_whose_worker_is_still_alive() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_refuses_an_interrupted_run_whose_worker_is_still_alive,
+    )) {
+        return;
+    }
     use orbit_common::process::identity::process_start_identity_token;
 
     let (_root, runtime, _repo_root, global_root) = test_runtime();
@@ -575,6 +610,11 @@ fn resume_refuses_an_interrupted_run_whose_worker_is_still_alive() {
 
 #[test]
 fn claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work,
+    )) {
+        return;
+    }
     use orbit_store::contracts::*;
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     let (_root, runtime, repo, global) = test_runtime();
@@ -702,6 +742,11 @@ fn claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work() {
 /// leave the marker for an unrelated task command to clear.
 #[test]
 fn resume_recovers_a_pending_commit_marker_instead_of_refusing_claim_inspection() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_recovers_a_pending_commit_marker_instead_of_refusing_claim_inspection,
+    )) {
+        return;
+    }
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     let (_root, runtime, _repo, global) = test_runtime();
     let jobs_dir = global.join("resources/jobs");
@@ -809,6 +854,11 @@ fn live_resume_of(error: OrbitError) -> (String, String) {
 /// everywhere; a terminal first resume re-opens the source.
 #[test]
 fn a_second_resume_is_refused_while_the_first_is_live_and_allowed_once_it_is_cancelled() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_second_resume_is_refused_while_the_first_is_live_and_allowed_once_it_is_cancelled,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -857,6 +907,11 @@ fn a_second_resume_is_refused_while_the_first_is_live_and_allowed_once_it_is_can
 /// over one workspace — admit exactly one run; the loser names the winner.
 #[test]
 fn concurrent_resumes_of_one_source_create_exactly_one_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &concurrent_resumes_of_one_source_create_exactly_one_run,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -1054,6 +1109,11 @@ fn assert_effect_not_replayed(runtime: &OrbitRuntime, run_id: &str) {
 /// after the source file is gone and the name is absent from the catalog.
 #[test]
 fn direct_yaml_resume_uses_the_pinned_definition_after_the_source_file_is_removed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &direct_yaml_resume_uses_the_pinned_definition_after_the_source_file_is_removed,
+    )) {
+        return;
+    }
     let (root, runtime, _repo_root, _global_root) = test_runtime();
     let _worker = HeldWorker::install();
     let name = "qa_direct_resume";
@@ -1089,6 +1149,11 @@ fn direct_yaml_resume_uses_the_pinned_definition_after_the_source_file_is_remove
 /// replace the snapshot, including when the resumed run itself is resumed.
 #[test]
 fn a_same_name_catalog_definition_cannot_replace_the_snapshot_on_a_second_resume() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_same_name_catalog_definition_cannot_replace_the_snapshot_on_a_second_resume,
+    )) {
+        return;
+    }
     let (root, runtime, _repo_root, _global_root) = test_runtime();
     let _worker = HeldWorker::install();
     let name = "qa_direct_resume_again";
@@ -1155,6 +1220,11 @@ fn a_same_name_catalog_definition_cannot_replace_the_snapshot_on_a_second_resume
 /// steps the source already completed.
 #[test]
 fn catalog_backed_resume_still_resolves_the_catalog_and_skips_completed_steps() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &catalog_backed_resume_still_resolves_the_catalog_and_skips_completed_steps,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let _worker = HeldWorker::install();
     let jobs_dir = global_root.join("resources/jobs");

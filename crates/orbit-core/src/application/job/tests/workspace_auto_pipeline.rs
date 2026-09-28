@@ -252,6 +252,11 @@ impl RuntimeHost for ScriptedWorkspaceAutoHost<'_> {
 /// finished.
 #[test]
 fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::KeepsDispatching)
@@ -377,6 +382,11 @@ fn workspace_auto_keeps_dispatching_while_earlier_leaves_are_still_running() {
 /// detached leaf.
 #[test]
 fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::DispatchFailure);
@@ -407,6 +417,11 @@ fn workspace_auto_fails_promptly_when_leaf_dispatch_has_no_durable_child() {
 
 #[test]
 fn workspace_auto_preserves_concrete_workspace_step_failure() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_auto_preserves_concrete_workspace_step_failure,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::ClassifierFailure);
@@ -443,6 +458,11 @@ fn workspace_auto_preserves_concrete_workspace_step_failure() {
 /// job declares, not a Rust helper.
 #[test]
 fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_auto_forwards_its_crew_allowlist_to_every_detached_child,
+    )) {
+        return;
+    }
     let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::SingleLeaf);
@@ -521,6 +541,11 @@ fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
 /// the way down to the persisted run.
 #[test]
 fn workspace_auto_run_input_records_only_the_options_the_operator_passed() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_auto_run_input_records_only_the_options_the_operator_passed,
+    )) {
+        return;
+    }
     use crate::application::workflow::CompletionPolicy;
 
     let bare = workspace_auto_run_input(None, None, CompletionPolicy::Review, &[])
@@ -555,6 +580,11 @@ fn workspace_auto_run_input_records_only_the_options_the_operator_passed() {
 /// than a live drain that quietly admits less than the operator asked for.
 #[test]
 fn auto_drain_crew_allowlist_is_validated_and_canonicalized_at_submission() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &auto_drain_crew_allowlist_is_validated_and_canonicalized_at_submission,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
 
     assert!(

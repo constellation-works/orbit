@@ -173,6 +173,11 @@ fn assert_job_resolves_branch(config_branch: &str, input: Value, expected_branch
 
 #[test]
 fn shipped_task_pilot_job_renders_omitted_and_empty_workspace_branch_inputs() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &shipped_task_pilot_job_renders_omitted_and_empty_workspace_branch_inputs,
+    )) {
+        return;
+    }
     for (config_branch, input) in [
         ("main", json!({})),
         ("main", json!({ "base_branch": String::new() })),
@@ -185,6 +190,11 @@ fn shipped_task_pilot_job_renders_omitted_and_empty_workspace_branch_inputs() {
 
 #[test]
 fn shipped_task_pilot_job_honors_an_explicit_alternate_branch() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &shipped_task_pilot_job_honors_an_explicit_alternate_branch,
+    )) {
+        return;
+    }
     let alternate_branch = format!("alternate-{}", std::process::id());
 
     assert_job_resolves_branch(
@@ -196,6 +206,11 @@ fn shipped_task_pilot_job_honors_an_explicit_alternate_branch() {
 
 #[test]
 fn shipped_task_pilot_job_rejects_an_unavailable_explicit_branch() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &shipped_task_pilot_job_rejects_an_unavailable_explicit_branch,
+    )) {
+        return;
+    }
     let fixture = task_pilot_job_fixture("main", "main");
     let run_id = fixture
         ._root
@@ -307,6 +322,11 @@ impl RuntimeHost for ScriptedPilotHost<'_> {
 
 #[test]
 fn shipped_pipeline_repairs_only_invalid_task_and_preserves_partial_progress() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &shipped_pipeline_repairs_only_invalid_task_and_preserves_partial_progress,
+    )) {
+        return;
+    }
     let fixture = task_pilot_job_fixture("agent-main", "agent-main");
     fs::write(
         fixture
@@ -484,6 +504,11 @@ fn install_store_replacing_provider(fixture: &TaskPilotJobFixture, stdout: &str)
 #[cfg(unix)]
 #[test]
 fn real_cli_task_pilot_worker_persists_apply_and_terminal_completion_audit() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &real_cli_task_pilot_worker_persists_apply_and_terminal_completion_audit,
+    )) {
+        return;
+    }
     let fixture = task_pilot_job_fixture("agent-main", "agent-main");
     let task = fixture
         .runtime

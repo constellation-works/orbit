@@ -311,6 +311,11 @@ impl RuntimeHost for FailureHandoffHost<'_> {
 /// authoritative.
 #[test]
 fn failed_pr_pipeline_dispatches_the_failure_handoff_and_keeps_the_original_error() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &failed_pr_pipeline_dispatches_the_failure_handoff_and_keeps_the_original_error,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let run_input = json!({
@@ -610,6 +615,11 @@ pub(super) fn v2_events(
 
 #[test]
 fn task_gate_noops_when_task_reaches_review_after_reservation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_gate_noops_when_task_reaches_review_after_reservation,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let task_id = seed_gate_task(&runtime, &repo_root, TaskStatus::Backlog);
@@ -664,6 +674,11 @@ fn task_gate_noops_when_task_reaches_review_after_reservation() {
 
 #[test]
 fn task_gate_noops_done_task_and_releases_reservation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_gate_noops_done_task_and_releases_reservation,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let task_id = seed_gate_task(&runtime, &repo_root, TaskStatus::Done);
@@ -710,6 +725,11 @@ fn task_gate_noops_done_task_and_releases_reservation() {
 
 #[test]
 fn task_gate_dispatches_child_for_admissible_task() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_gate_dispatches_child_for_admissible_task,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedGateHost::new(&runtime, "succeeded");
@@ -742,6 +762,11 @@ fn task_gate_dispatches_child_for_admissible_task() {
 
 #[test]
 fn task_gate_child_failure_still_fails_success_guard() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_gate_child_failure_still_fails_success_guard,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
     let host = ScriptedGateHost::new(&runtime, "failed");
@@ -843,6 +868,11 @@ fn write_fake_cli_response(path: &Path, stdout: &str) {
 
 #[test]
 fn direct_yaml_run_persists_history_and_run_state() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &direct_yaml_run_persists_history_and_run_state,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, _global_root) = test_runtime();
     let yaml_path = repo_root.join("qa_sleep.yaml");
     write_job(&yaml_path, "qa_sleep", "sleep");
@@ -885,6 +915,11 @@ fn direct_yaml_run_persists_history_and_run_state() {
 
 #[test]
 fn direct_catalog_run_is_visible_in_history() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &direct_catalog_run_is_visible_in_history,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -913,6 +948,11 @@ fn direct_catalog_run_is_visible_in_history() {
 
 #[test]
 fn replay_job_run_records_lineage_and_preserves_source_bundle() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &replay_job_run_records_lineage_and_preserves_source_bundle,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -973,6 +1013,11 @@ fn replay_job_run_records_lineage_and_preserves_source_bundle() {
 /// `success` token and `duration_ms` as `run show`.
 #[test]
 fn worker_path_persists_steps_and_wait_agrees_on_state_and_duration() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &worker_path_persists_steps_and_wait_agrees_on_state_and_duration,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -1093,6 +1138,11 @@ fn running_wait_fixture(runtime: &OrbitRuntime, job_name: &str) -> String {
 /// delivery tail.
 #[test]
 fn nested_pipeline_wait_budgets_keep_healthy_long_running_children_successful() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &nested_pipeline_wait_budgets_keep_healthy_long_running_children_successful,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
     let scenarios = [
         ("task_gate_pipeline", 3_590 + 7_200, 21_600),
@@ -1121,6 +1171,11 @@ fn nested_pipeline_wait_budgets_keep_healthy_long_running_children_successful() 
 
 #[test]
 fn configured_pipeline_wait_deadline_reports_link_and_leaves_child_running() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configured_pipeline_wait_deadline_reports_link_and_leaves_child_running,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
     let run_id = running_wait_fixture(&runtime, "task_pr_pipeline");
     let clock = FastPipelineWaitClock::new(&runtime, &run_id, None);
@@ -1150,6 +1205,11 @@ fn configured_pipeline_wait_deadline_reports_link_and_leaves_child_running() {
 
 #[test]
 fn pipeline_wait_reconciles_once_per_poll_tick_not_once_per_awaited_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_wait_reconciles_once_per_poll_tick_not_once_per_awaited_run,
+    )) {
+        return;
+    }
     use crate::application::job::run::reconcile_pass_counter;
 
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
@@ -1199,6 +1259,11 @@ fn pipeline_wait_reconciles_once_per_poll_tick_not_once_per_awaited_run() {
 
 #[test]
 fn pipeline_wait_keeps_a_bounded_generic_default_and_validates_the_ceiling() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_wait_keeps_a_bounded_generic_default_and_validates_the_ceiling,
+    )) {
+        return;
+    }
     assert_eq!(
         OrbitRuntime::normalize_pipeline_wait_timeout(None).expect("default wait timeout"),
         3_600
@@ -1223,6 +1288,11 @@ fn pipeline_wait_keeps_a_bounded_generic_default_and_validates_the_ceiling() {
 /// and uses `routine:<name>` on `run.started`.
 #[test]
 fn routine_submit_records_trigger_and_audit_prefix() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &routine_submit_records_trigger_and_audit_prefix,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -1285,6 +1355,11 @@ fn routine_submit_records_trigger_and_audit_prefix() {
 #[cfg(unix)]
 #[test]
 fn v2_cli_agent_loop_persists_invocation_metrics() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &v2_cli_agent_loop_persists_invocation_metrics,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, _global_root) = test_runtime();
     let fake_bin = repo_root.join("codex");
     write_fake_codex(&fake_bin);
@@ -1380,6 +1455,11 @@ fn v2_cli_agent_loop_persists_invocation_metrics() {
 #[cfg(unix)]
 #[test]
 fn v2_claude_fable_alias_persists_provider_reported_model_and_cost() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &v2_claude_fable_alias_persists_provider_reported_model_and_cost,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, _global_root) = test_runtime();
     let fake_bin = repo_root.join("claude");
     write_fake_cli_response(
@@ -1467,6 +1547,11 @@ spec:
 /// the output into `pipeline[step_id]`; the payload is one step's output.
 #[test]
 fn checkpoint_step_records_into_run_state() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &checkpoint_step_records_into_run_state,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
     let run = runtime
         .stores()
@@ -1531,6 +1616,11 @@ fn checkpoint_step_records_into_run_state() {
 /// for mid-run readers. Re-checkpointing the index replaces them.
 #[test]
 fn checkpoint_step_records_compound_outputs_into_run_state() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &checkpoint_step_records_compound_outputs_into_run_state,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
     let run = runtime
         .stores()
@@ -1596,6 +1686,11 @@ fn checkpoint_step_records_compound_outputs_into_run_state() {
 /// silent no-op (direct `execute_job` callers without a run row).
 #[test]
 fn checkpoint_step_without_run_row_is_noop() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &checkpoint_step_without_run_row_is_noop,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
         &runtime,
@@ -1620,6 +1715,11 @@ fn checkpoint_step_without_run_row_is_noop() {
 #[cfg(unix)]
 #[test]
 fn interrupted_run_resumes_skipping_checkpointed_steps() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &interrupted_run_resumes_skipping_checkpointed_steps,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo_root, global_root) = test_runtime();
     let jobs_dir = global_root.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -1754,6 +1854,11 @@ fn interrupted_run_resumes_skipping_checkpointed_steps() {
 /// timed-out.
 #[test]
 fn resume_rejects_successful_runs() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &resume_rejects_successful_runs,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, _global_root) = test_runtime();
     let yaml_path = repo_root.join("qa_resume_guard.yaml");
     write_job(&yaml_path, "qa_resume_guard", "sleep");
@@ -1779,6 +1884,11 @@ fn resume_rejects_successful_runs() {
 /// error, and an `error` run.finished audit event — is unchanged.
 #[test]
 fn failing_direct_run_records_failure_state() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &failing_direct_run_records_failure_state,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, _global_root) = test_runtime();
     let yaml_path = repo_root.join("qa_failing.yaml");
     write_job(&yaml_path, "qa_failing", "missing_action");
