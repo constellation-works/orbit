@@ -1,10 +1,9 @@
-use std::sync::{Mutex, MutexGuard, OnceLock};
-
 use super::super::redaction::{
     PatternRedactor, argv_redactor, credential_safe_location, default_pattern_redactor,
     is_high_confidence_single_token_credential, is_redactable_value, is_sensitive_env_name,
     redact_all, redact_home_dir, redact_sensitive_env_text,
 };
+use crate::test_env::scoped;
 
 #[test]
 fn redact_all_scrubs_key_query_params_case_insensitively() {
@@ -204,14 +203,14 @@ fn http_and_argv_redactors_are_process_cached() {
 
 #[test]
 fn redact_home_dir_ignores_root_home() {
-    let _home = EnvVarGuard::set("HOME", "/");
+    let _home = scoped([("HOME", Some("/"))]);
 
     assert_eq!(redact_home_dir("/tmp/x"), "/tmp/x");
 }
 
 #[test]
 fn redact_home_dir_matches_only_path_boundaries() {
-    let _home = EnvVarGuard::set("HOME", "/Users/a");
+    let _home = scoped([("HOME", Some("/Users/a"))]);
 
     assert_eq!(redact_home_dir("/Users/ab/x"), "/Users/ab/x");
     assert_eq!(redact_home_dir("/Users/a/x"), "~/x");
@@ -401,7 +400,7 @@ fn secret_like_env_values_remain_redactable() {
 
 #[test]
 fn common_word_env_value_is_not_substituted_even_as_a_token_or_substring() {
-    let _env = EnvVarGuard::set("GITHUB_TOKEN", "user");
+    let _env = scoped([("GITHUB_TOKEN", Some("user"))]);
 
     assert_eq!(
         redact_sensitive_env_text("No user-facing CLI behavior should change."),
@@ -415,7 +414,7 @@ fn common_word_env_value_is_not_substituted_even_as_a_token_or_substring() {
 
 #[test]
 fn all_letter_secret_env_value_is_redacted_by_both_entry_points() {
-    let _env = EnvVarGuard::set("GITHUB_TOKEN", "correcthorse");
+    let _env = scoped([("GITHUB_TOKEN", Some("correcthorse"))]);
     let raw = "provider diagnostic: correcthorse";
 
     assert_eq!(
@@ -431,7 +430,7 @@ fn git_author_name_env_value_is_not_substring_replaced() {
     // that `is_sensitive_env_name` used to run, so an ordinary all-letter
     // name (an env var Orbit itself sets for child git processes) must not
     // be scrubbed out of logs, agent transcripts, or blob-stored output.
-    let _env = EnvVarGuard::set("GIT_AUTHOR_NAME", "Daniel");
+    let _env = scoped([("GIT_AUTHOR_NAME", Some("Daniel"))]);
     let raw = "committed by Daniel on behalf of the automation";
 
     assert_eq!(redact_sensitive_env_text(raw), raw);
@@ -450,7 +449,7 @@ fn boolean_and_null_sentinels_are_symmetric_in_the_value_gate() {
         );
     }
 
-    let _enabled = EnvVarGuard::set("ORBIT_AUTH_ENABLED", "false");
+    let _enabled = scoped([("ORBIT_AUTH_ENABLED", Some("false"))]);
     let raw = "retry succeeded: false, fallback: false";
     assert_eq!(redact_sensitive_env_text(raw), raw);
     assert_eq!(redact_all(raw), raw);
@@ -500,18 +499,18 @@ fn auth_family_env_values_are_redacted_while_git_author_names_survive() {
     let github_oauth = "SEC-GHOAUTH-ORB12508-III";
     let author_name = "OrbitAuthorFixture";
     let author_email = "orbit-author-fixture@example.test";
-    let _env = EnvVarGuard::set_many(&[
-        ("AUTHORIZATION", authorization),
-        ("AUTHZ", authz),
-        ("OAUTH", oauth),
-        ("GOOGLE_OAUTH", google_oauth),
-        ("BASIC_AUTHORIZATION", basic_authorization),
-        ("AUTHKEY", authkey),
-        ("AUTHN", authn),
-        ("XAUTH", xauth),
-        ("GITHUB_OAUTH", github_oauth),
-        ("GIT_AUTHOR_NAME", author_name),
-        ("GIT_AUTHOR_EMAIL", author_email),
+    let _env = scoped([
+        ("AUTHORIZATION", Some(authorization)),
+        ("AUTHZ", Some(authz)),
+        ("OAUTH", Some(oauth)),
+        ("GOOGLE_OAUTH", Some(google_oauth)),
+        ("BASIC_AUTHORIZATION", Some(basic_authorization)),
+        ("AUTHKEY", Some(authkey)),
+        ("AUTHN", Some(authn)),
+        ("XAUTH", Some(xauth)),
+        ("GITHUB_OAUTH", Some(github_oauth)),
+        ("GIT_AUTHOR_NAME", Some(author_name)),
+        ("GIT_AUTHOR_EMAIL", Some(author_email)),
     ]);
     let raw = format!(
         "1={authorization} 2={authz} 3={oauth} 4={google_oauth} \
@@ -552,9 +551,9 @@ fn genuine_credential_all_letter_secret_still_redacted_alongside_git_author_name
     // [DANI-10514] Pins that the GIT_AUTHOR_NAME / false / null carve-outs
     // above don't regress the DANI-10471 fix: an all-letter secret in a
     // genuine credential variable must still be scrubbed.
-    let _env = EnvVarGuard::set_many(&[
-        ("GIT_AUTHOR_NAME", "Daniel"),
-        ("GITHUB_TOKEN", "correcthorse"),
+    let _env = scoped([
+        ("GIT_AUTHOR_NAME", Some("Daniel")),
+        ("GITHUB_TOKEN", Some("correcthorse")),
     ]);
     let raw = "committed by Daniel using token correcthorse";
 
@@ -572,59 +571,11 @@ fn secret_shaped_env_value_is_still_replaced_as_a_substring() {
     // Pin: eligible (non-letter-containing) values keep bare substring
     // matching. Mid-word occurrences of a short secret-shaped value are
     // substituted; ordinary words are the other side of the line.
-    let _env = EnvVarGuard::set("GITHUB_TOKEN", "a1b2");
+    let _env = scoped([("GITHUB_TOKEN", Some("a1b2"))]);
 
     assert_eq!(redact_sensitive_env_text("xa1b2y"), "x[REDACTED_ENV]y");
     assert_eq!(
         redact_sensitive_env_text("leaked a1b2 token"),
         "leaked [REDACTED_ENV] token"
     );
-}
-
-struct EnvVarGuard {
-    _lock: MutexGuard<'static, ()>,
-    vars: Vec<(&'static str, Option<String>)>,
-}
-
-impl EnvVarGuard {
-    fn set(name: &'static str, value: &str) -> Self {
-        Self::set_many(&[(name, value)])
-    }
-
-    // A single `Mutex::lock` is not reentrant: acquiring it twice from the
-    // same test (one `set` call per env var) deadlocks. Callers that need
-    // more than one var set at once must go through this instead.
-    fn set_many(pairs: &[(&'static str, &str)]) -> Self {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let lock = LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let vars = pairs
-            .iter()
-            .map(|(name, value)| {
-                let previous = std::env::var(name).ok();
-                // SAFETY: this test guard serializes environment mutation and restores on drop.
-                unsafe {
-                    std::env::set_var(name, value);
-                }
-                (*name, previous)
-            })
-            .collect();
-        Self { _lock: lock, vars }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        // SAFETY: the guard holds the serialization lock for the full mutation window.
-        unsafe {
-            for (name, previous) in &self.vars {
-                match previous {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
 }

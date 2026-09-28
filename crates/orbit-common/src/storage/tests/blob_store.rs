@@ -1,6 +1,5 @@
 #![allow(missing_docs)]
 
-use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,41 +8,13 @@ use tempfile::tempdir;
 
 use super::super::blob_store::BlobStore;
 use crate::security::redaction::{PatternRedactor, redact_all};
-
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let previous = std::env::var_os(key);
-        // SAFETY: this test uses a dedicated variable name and restores the
-        // previous value on drop.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        // SAFETY: see EnvVarGuard::set.
-        unsafe {
-            match &self.previous {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-}
+use crate::test_env::scoped;
 
 #[test]
 fn write_hashes_and_stores_env_redacted_bytes() {
     let temp = tempdir().expect("tempdir");
     let secret = "live-audit-blob-secret-value";
-    let _guard = EnvVarGuard::set("ORBIT_BLOB_STORE_TEST_TOKEN", secret);
+    let _guard = scoped([("ORBIT_BLOB_STORE_TEST_TOKEN", Some(secret))]);
     let store = BlobStore::new(temp.path());
     let raw = format!("stdout contains {secret}\nAuthorization: Bearer pattern-secret-token\n");
 
@@ -62,7 +33,7 @@ fn write_hashes_and_stores_env_redacted_bytes() {
 fn caller_redaction_cannot_weaken_default_redaction() {
     let temp = tempdir().expect("tempdir");
     let secret = "live-audit-blob-empty-redactor-secret";
-    let _guard = EnvVarGuard::set("ORBIT_BLOB_EMPTY_REDACTOR_TOKEN", secret);
+    let _guard = scoped([("ORBIT_BLOB_EMPTY_REDACTOR_TOKEN", Some(secret))]);
     let store = BlobStore::new(temp.path()).with_redaction(PatternRedactor::empty());
     let raw = format!("{secret}\n{{\"api_key\":\"json-secret\"}}\n");
 
