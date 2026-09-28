@@ -185,13 +185,16 @@ function aggregateRefusalTitle(label, action) {
   return `${label} — select a specific workspace to ${action} in aggregate view`;
 }
 
+// A row's owner takes precedence over the page selection. Aggregate rows have
+// no page selection, and selected views may still show a cross-workspace task.
+function taskWorkspacePath(task, path) {
+  if (!task.workspace_id) return withWorkspace(path);
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`;
+}
+
 function taskMutationPath(task, suffix = "") {
-  const base = `/api/tasks/${encodeURIComponent(task.id)}${suffix}`;
-  if (isAggregateView() && task.workspace_id) {
-    const sep = base.includes("?") ? "&" : "?";
-    return `${base}${sep}workspace=${encodeURIComponent(task.workspace_id)}`;
-  }
-  return base;
+  return taskWorkspacePath(task, `/api/tasks/${encodeURIComponent(task.id)}${suffix}`);
 }
 
 function scheduleFeedbackExpiry(map, key, context, delay) {
@@ -345,6 +348,13 @@ function loadTaskDetail(task, context) {
   const existing = taskDetailLoads.get(task.id);
   if (existing && existing.source === task) return existing.promise;
   const load = { source: task, pending: true, error: null, promise: null };
+  if (isAggregateView() && !task.workspace_id) {
+    load.pending = false;
+    load.error = "Task workspace is unknown";
+    load.promise = Promise.reject(new Error(load.error));
+    taskDetailLoads.set(task.id, load);
+    return load.promise;
+  }
   load.promise = fetchJson(taskMutationPath(task)).then(
     (full) => {
       load.pending = false;
@@ -742,12 +752,12 @@ function fmtSize(bytes) {
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
 
-function artifactUrl(taskId, path) {
+function artifactUrl(task, path) {
   const encodedPath = String(path)
     .split("/")
     .map((part) => encodeURIComponent(part))
     .join("/");
-  return `/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodedPath}`;
+  return taskMutationPath(task, `/artifacts/${encodedPath}`);
 }
 
 function artifactMediaType(artifact, response) {
@@ -869,7 +879,8 @@ export function buildArtifacts(task) {
         revealPreview(true);
         preview.textContent = "loading...";
         try {
-          const response = await fetch(artifactUrl(task.id, path));
+          if (isAggregateView() && !task.workspace_id) throw new Error("task workspace is unknown");
+          const response = await fetch(artifactUrl(task, path));
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           preview.replaceChildren(await buildArtifactPreview(artifact, response));
           preview.dataset.loaded = "true";
@@ -1918,6 +1929,7 @@ const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 
 function buildActionsRow(task, detail, context) {
   const actions = el("div", { class: "actions" });
+  const mutable = canMutateTask(task);
   if (SHIP_STATUSES.has(task.status)) {
     const shipped = shipInFlightTaskIds.has(task.id);
     const btn = el("button", {
@@ -1927,7 +1939,7 @@ function buildActionsRow(task, detail, context) {
         ? "A ship run is already in flight for this task"
         : "Dispatch this task through the pipeline with its own crew",
     });
-    btn.disabled = shipped;
+    btn.disabled = shipped || !mutable;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       shipTask(task, detail, btn, context);
@@ -1936,6 +1948,7 @@ function buildActionsRow(task, detail, context) {
   }
   {
     const btn = el("button", { class: "action comment", text: "comment" });
+    btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       showCommentForm(task, detail, actions, context);
@@ -1944,6 +1957,7 @@ function buildActionsRow(task, detail, context) {
   }
   if (APPROVE_STATUSES.has(task.status)) {
     const btn = el("button", { class: "action approve", text: "approve" });
+    btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (task.status === "review") approveReviewTask(task, detail, btn, context);
@@ -1953,6 +1967,7 @@ function buildActionsRow(task, detail, context) {
   }
   if (REJECT_STATUSES.has(task.status)) {
     const btn = el("button", { class: "action reject", text: "reject" });
+    btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       showRejectForm(task, detail, actions, context);
@@ -1961,6 +1976,7 @@ function buildActionsRow(task, detail, context) {
   }
   if (task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
+    btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (window.confirm(`Archive task ${task.id}?`)) {
@@ -2259,6 +2275,7 @@ async function applyTaskCrewChange(task, nextValue, context) {
    no PR/local toggle here. The resulting run id (or the server's error) is
    surfaced so the operator can see the click took effect. */
 async function shipTask(task, detail, btnNode, context) {
+  if (!canMutateTask(task)) return;
   if (shipInFlightTaskIds.has(task.id)) return;
   shipInFlightTaskIds.add(task.id);
   const prior = detail.querySelector(".action-error");
@@ -2267,7 +2284,7 @@ async function shipTask(task, detail, btnNode, context) {
   const oldText = btnNode.textContent;
   btnNode.innerHTML = `<span class="spinner"></span>wait`;
   try {
-    const result = await postJson("/api/workflows/ship", { task_ids: [task.id] });
+    const result = await postJson(taskWorkspacePath(task, "/api/workflows/ship"), { task_ids: [task.id] });
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
     taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
@@ -2328,6 +2345,7 @@ function showCommentForm(task, detail, actions, context) {
   });
   submit.addEventListener("click", async (e) => {
     e.stopPropagation();
+    if (!canMutateTask(task)) return;
     const message = ta.value.trim();
     if (!message) {
       ta.focus();
@@ -2338,7 +2356,7 @@ function showCommentForm(task, detail, actions, context) {
     submit.disabled = true;
     cancel.disabled = true;
     try {
-      await postJson(`/api/tasks/${encodeURIComponent(task.id)}/comments`, { message });
+      await postJson(taskMutationPath(task, "/comments"), { message });
       // The draft is spent: let the next render rebuild the detail so the
       // posted comment appears.
       delete detail.dataset.draft;
@@ -2403,6 +2421,7 @@ function showRejectForm(task, detail, actions, context) {
 }
 
 async function runAction(task, kind, detail, body, btnNode, context, opts = {}) {
+  if (!canMutateTask(task)) return;
   // Disable action controls while in flight to prevent double-clicks.
   for (const b of detail.querySelectorAll(".action")) b.disabled = true;
   let oldText = "";
@@ -2414,7 +2433,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
   try {
-    const res = await fetch(withWorkspace(opts.path || `/api/tasks/${encodeURIComponent(task.id)}/${kind}`), {
+    const res = await fetch(opts.path ? taskWorkspacePath(task, opts.path) : taskMutationPath(task, `/${kind}`), {
       method: opts.method || "POST",
       headers: body ? { "content-type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
@@ -2615,6 +2634,7 @@ function buildQuickActionError(task) {
 }
 
 async function runQuickAction(task, kind, context) {
+  if (!canMutateTask(task)) return;
   if (quickActionState.get(task.id)?.kind === "pending") return;
   if (kind === "ship" && shipInFlightTaskIds.has(task.id)) return;
   quickActionState.set(task.id, { kind: "pending", text: kind });
@@ -2622,7 +2642,7 @@ async function runQuickAction(task, kind, context) {
   renderTasks(taskList(context), context);
   try {
     if (kind === "ship") {
-      const result = await postJson("/api/workflows/ship", { task_ids: [task.id] });
+      const result = await postJson(taskWorkspacePath(task, "/api/workflows/ship"), { task_ids: [task.id] });
       const runId = result && result.run_id ? result.run_id : "(no run id)";
       const state = result && result.state ? result.state : "submitted";
       taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
