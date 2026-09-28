@@ -1,5 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -227,11 +228,64 @@ fn explicit_root_serves_only_that_roots_registry() {
     assert_eq!(beta.global_root(), beta_root.path());
 }
 
-/// Without `--root`, resolution is unchanged: the machine-global root and its
-/// registry path.
+/// Without `--root`, serve reads the registry under the machine-global root.
+/// Run the state constructor in a child so its home and managed-run authority
+/// cannot affect the test runner's registry.
 #[test]
 fn without_root_override_serves_the_global_registry() {
-    let state = build_state(None, None).expect("state for global root");
-    let global_root = orbit_cmd::registry_runtime::global_root_for(None).expect("global root");
+    let home = tempfile::tempdir().expect("disposable home");
+    let mut command = Command::new(std::env::current_exe().expect("test executable"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args([
+            "--ignored",
+            "--exact",
+            "tests::serve::without_root_override_child",
+        ])
+        .current_dir(home.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("ORBIT_WEB_TEST_NO_ROOT_HOME", home.path())
+        .output()
+        .expect("run isolated no-root case");
+    assert!(
+        output.status.success(),
+        "isolated no-root case failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        home.path().join(".orbit/child-case-ran").exists(),
+        "requested no-root child case did not complete"
+    );
+}
+
+/// Invoked only by the wrapper above, with a disposable child-local home.
+#[test]
+#[ignore = "spawned by without_root_override_serves_the_global_registry"]
+fn without_root_override_child() {
+    let home = std::env::var_os("ORBIT_WEB_TEST_NO_ROOT_HOME")
+        .expect("no-root child must be launched by its wrapper");
+    let home = Path::new(&home);
+    let global_root = home.join(".orbit");
+    assert_eq!(
+        orbit_cmd::registry_runtime::global_root_for(None).expect("global root"),
+        global_root,
+        "omitted --root must resolve inside the disposable home"
+    );
+    std::fs::create_dir_all(&global_root).expect("disposable global root");
+    seed_registry(&global_root, "isolated-global");
+
+    let state = build_state(None, None).expect("state for disposable global root");
     assert_eq!(state.global_root(), global_root);
+    assert_eq!(
+        state
+            .entries()
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["isolated-global"]
+    );
+    std::fs::write(global_root.join("child-case-ran"), b"ok").expect("record completed child case");
 }
