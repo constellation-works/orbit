@@ -4,8 +4,8 @@ summary: Running log of why Orbit task runs failed or got blocked, one entry per
 incident_date: 2026-09-27
 last_validated: 2026-09-27
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**"]
-related_artifacts: [ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
+paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**", "crates/orbit-core/assets/executors/claude.yaml"]
+related_artifacts: [ORB-13663, ORB-13664, ORB-13612, ORB-13463, ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
 ---
 
 # Run failure log
@@ -26,6 +26,41 @@ Each entry records:
 
 Newest entries go first. When you rescue a blocked task, add its cause here before
 you close it out.
+
+## 2026-09-28: Stopping a follower drain strands its live leaves
+
+- **Where:** Follower (macOS) drain coordinator (`workspace_pull_pipeline`) and
+  the leaves it admitted.
+- **Symptom:** Drain `jrun-20260928-0242-t1` was stopped (it ended `cancelled`)
+  at 04:14Z. Four leaves that later succeeded stay in local phase `settling` with
+  an AcceptHandoff that was never delivered. Two that failed stay in `launched`
+  with no settlement at all. On the owner, the claims stay `running` and the tasks
+  stay `in-progress`, so neither the PRs nor the tasks reach completion.
+- **Cause:** Only the coordinator that admitted a leaf records and delivers its
+  settlement (`pull_refill` → `reconcile_pending`). Cancelling the coordinator
+  removes the only settlement path. Live leaves keep running, but nothing reports
+  their result to the owner.
+- **Fix:** open (ORB-13663). Settlement must not depend on the admitting
+  coordinator being alive, and stop must close admissions instead of cancelling.
+- **Tasks:** the six leaves of drain `jrun-20260928-0242-t1`, including ORB-13622.
+
+## 2026-09-27: Headless claude crew hands off while its validation gates run in the background
+
+- **Where:** Follower (macOS) distributed leaf, claude crew (resolved opus), in the
+  `implement_one` step.
+- **Symptom:** `cli subprocess reported declared envelope status="failed" despite
+  exit 0: error.code=validation_incomplete` ("make goldens was still running at
+  handoff"). The task goes to `blocked` although the code is complete, and
+  `step_failure_recovery` declines.
+- **Cause:** The agent starts `make ci-fast`, `ci-lint` and `goldens` with Bash
+  `run_in_background`, waits on a `Monitor`, and ends its turn. In
+  `claude -p --json-schema` mode, Claude Code immediately forces the
+  StructuredOutput call, so the agent must report before the gates finish. The
+  executor (`crates/orbit-core/assets/executors/claude.yaml`) passes
+  `--tools default`, which includes background Bash and Monitor.
+- **Fix:** open (ORB-13664). Disable background execution for the headless claude
+  executor.
+- **Tasks:** ORB-13612 (rescue PR #2895), ORB-13463 (rescue PR #2896).
 
 ## 2026-09-27: Owner and follower minted the same child run ID
 
@@ -122,10 +157,6 @@ you close it out.
 - **Stale follower binary.** Follower-side fixes only take effect after the
   follower binary is rebuilt from `agent-main`. A leaf that fails for an already
   fixed cause usually means an old binary.
-- **Cancelled drain strands settlements.** Settlements reach the owner only
-  through a running drain. A cancelled drain leaves its tasks `in-progress` on the
-  owner until the next drain for that owner runs. Stop drains with
-  `orbit run auto --stop`.
 - **Release bump without the follower.** Drain admission requires the exact owner
   version and protocol schema. After a release bump the follower is refused until
   it is upgraded.
