@@ -116,8 +116,12 @@ returns.
   as `--complete` does for owner tasks.
 - The drain keeps settling claims after `--for` expires, until none is left.
   `orbit run auto --stop` closes the window early; live leaves keep running.
-  Do not cancel the drain run: settlements it has not delivered wait for the
-  next drain.
+  Each leaf also delivers its own handoff or failure when it ends, so
+  cancelling the drain (`orbit run cancel`) strands nothing: its unlaunched
+  claims end as failures and live leaves settle themselves. Prefer `--stop`,
+  which wastes nothing. `orbit run auto --stop` also flushes any settlement
+  still recorded on the follower (for example after the owner was
+  unreachable), with or without an active drain.
 - An unreachable or refusing owner is reported in each iteration's output and
   retried. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.
@@ -126,9 +130,9 @@ returns.
   `orbit.task.update` and returns its execution summary as step output;
   `claim_handoff` carries it to the owner's `execution_summary`. Never loosen
   the sandbox to give an agent the owner.
-- A leaf that fails before handing off is settled by the drain: the owner's
-  task moves to `blocked` with the leaf run, failed step and error in its
-  summary. Inspect the run itself on the follower (`orbit run show <run>`).
+- A leaf that fails before handing off settles its claim as a failure: the
+  owner's task moves to `blocked` with the leaf run, failed step and error in
+  its summary. Inspect the run itself on the follower (`orbit run show <run>`).
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live.
 
 ## Read-only owner surface
