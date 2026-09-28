@@ -269,10 +269,22 @@ fn selector_objects(
     selectors: &[String],
 ) -> Result<Value, AutomationError> {
     let mut paths = BTreeSet::new();
+    let mut root_selected = false;
     for selector in selectors {
-        if let Ok(Selector::Dir { path } | Selector::File { path } | Selector::Symbol { path, .. }) =
-            selector.parse::<Selector>()
-            && !path.is_empty()
+        let Ok(parsed) = selector.parse::<Selector>() else {
+            continue;
+        };
+        let path = match parsed {
+            Selector::Dir { path } if path == "." => {
+                root_selected = true;
+                continue;
+            }
+            Selector::Dir { path } | Selector::File { path } | Selector::Symbol { path, .. } => {
+                path
+            }
+            _ => continue,
+        };
+        if !path.is_empty()
             && path != "."
             && !path.starts_with('/')
             && !path.starts_with("../")
@@ -280,6 +292,17 @@ fn selector_objects(
         {
             paths.insert(path);
         }
+    }
+    if root_selected {
+        // The root tree covers every narrower selector, including paths added
+        // after the assessment. Git does not list `.` as an ls-tree path.
+        let tree = Source::new(&runtime.paths().repo_root).git(&[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{revision}^{{tree}}"),
+        ])?;
+        return Ok(json!({".": tree}));
     }
     if paths.len() > 50 {
         return Err(AutomationError::Deferred("selector_scan_budget".into()));

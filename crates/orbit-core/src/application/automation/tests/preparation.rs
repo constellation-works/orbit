@@ -791,6 +791,40 @@ fn source_sensitivity_modes_decide_which_head_moves_readmit() {
     );
 }
 
+#[test]
+fn root_context_selector_readmits_after_a_commit_outside_narrower_selectors() {
+    let ws = workspace(None);
+    let root = scoped_task(&ws.runtime, "root", &["dir:."]);
+    let root_and_file = scoped_task(&ws.runtime, "root and file", &["dir:.", "file:src/lib.rs"]);
+    let trigger = pilot_trigger(FreshnessOverride {
+        source_sensitivity: Some(SourceSensitivity::ContextFiles),
+        ..Default::default()
+    });
+
+    let before_revision = git(&ws.repo, &["rev-parse", "HEAD"]);
+    let before = [
+        observed(&ws.runtime, &trigger, &root),
+        observed(&ws.runtime, &trigger, &root_and_file),
+    ];
+    commit(&ws.repo, "outside.txt", "outside the narrower selector\n");
+    let after_revision = git(&ws.repo, &["rev-parse", "HEAD"]);
+    assert_ne!(
+        before_revision, after_revision,
+        "the fixture uses two commits"
+    );
+
+    assert_ne!(
+        before[0],
+        observed(&ws.runtime, &trigger, &root),
+        "a change anywhere under dir:. invalidates its assessment"
+    );
+    assert_ne!(
+        before[1],
+        observed(&ws.runtime, &trigger, &root_and_file),
+        "dir:. still covers changes outside a narrower selector"
+    );
+}
+
 /// [ORB-13638] Freshness resolves per key routine > `config.toml` > default,
 /// and every consumer of one routine — the scheduling host, and the
 /// prepare/apply/promotion path that re-reads the routine — resolves the same
