@@ -302,19 +302,83 @@ fn open_for_workspace_set_seeds_from_global() {
     let workspace_path = config_path(dir.path());
     let global_dir = tempdir().expect("global tempdir");
     let global_path = config_path(global_dir.path());
-    fs::write(&global_path, "[workflow]\nbase_branch = \"main\"\n").expect("write global config");
+    let global_config = "# global operator note\n[workflow]\nbase_branch = \"trunk\"\n\n[machine]\nid = \"hm_0123456789abcdef\"\nname = \"dk-server-1\"\ntask_prefix = \"DE\"\nworker_tasks_max = 4\n";
+    fs::write(&global_path, global_config).expect("write global config");
 
-    let store = ConfigStore::open_for_workspace_set(
+    let mut store = ConfigStore::open_for_workspace_set(
         &workspace_path,
         &global_path,
         WorkspaceInitMode::SeedFromGlobal,
     )
     .expect("seed from global");
+    store
+        .set_value("scoring.enabled", "false")
+        .expect("set a workspace key");
+    store
+        .validate_for_set("scoring.enabled")
+        .expect("validate the workspace key");
+    store.save().expect("save seeded workspace config");
 
-    let value = store
+    let saved = fs::read_to_string(&workspace_path).expect("read saved workspace config");
+    assert!(!saved.contains("[machine]"), "{saved}");
+    assert!(saved.contains("# global operator note"), "{saved}");
+    assert!(saved.contains("base_branch = \"trunk\""), "{saved}");
+    assert_eq!(
+        fs::read(&global_path).expect("read global config after seeding"),
+        global_config.as_bytes(),
+        "seeding must not modify global machine settings"
+    );
+
+    let reopened = ConfigStore::open(ConfigScope::Workspace, &workspace_path)
+        .expect("reopen workspace config");
+    reopened
+        .validate()
+        .expect("validate saved workspace config");
+    let value = reopened
         .effective_value("workflow.base_branch")
         .expect("get value");
-    assert_eq!(value, serde_json::json!("main"));
+    assert_eq!(value, serde_json::json!("trunk"));
+    assert_eq!(
+        reopened
+            .effective_value("scoring.enabled")
+            .expect("get scoring.enabled"),
+        serde_json::json!(false)
+    );
+}
+
+#[test]
+fn open_for_workspace_set_refuses_an_explicit_machine_table() {
+    let dir = tempdir().expect("tempdir");
+    let workspace_path = config_path(dir.path());
+    let original =
+        "[machine]\nid = \"hm_0123456789abcdef\"\nname = \"dk-server-1\"\ntask_prefix = \"DE\"\n";
+    fs::write(&workspace_path, original).expect("write explicit workspace machine table");
+    let global_dir = tempdir().expect("global tempdir");
+    let global_path = config_path(global_dir.path());
+
+    let mut store = ConfigStore::open_for_workspace_set(
+        &workspace_path,
+        &global_path,
+        WorkspaceInitMode::SeedFromGlobal,
+    )
+    .expect("open existing workspace config");
+    store
+        .set_value("workflow.base_branch", "agent-main")
+        .expect("stage workspace setting");
+    let error = store
+        .validate_for_set("workflow.base_branch")
+        .expect_err("an explicitly supplied workspace machine table must be refused");
+    assert!(
+        error
+            .to_string()
+            .contains("[machine] is not a workspace setting"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read(&workspace_path).expect("read workspace config after refusal"),
+        original.as_bytes(),
+        "a refused workspace machine table must not be persisted"
+    );
 }
 
 #[test]

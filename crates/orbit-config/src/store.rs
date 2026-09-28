@@ -119,6 +119,12 @@ impl ConfigStore {
             WorkspaceInitMode::Fresh => String::new(),
         };
         let mut store = Self::from_content(ConfigScope::Workspace, path, &content)?;
+        if mode == WorkspaceInitMode::SeedFromGlobal {
+            // `[machine]` belongs to this host and is rejected in workspace
+            // configs. Remove it from the parsed document so all other
+            // global settings and their formatting/comments survive seeding.
+            store.doc.remove("machine");
+        }
         if let Some(toggles) = toggles {
             store.doc.insert(PLUGIN_ENABLEMENT_TABLE, toggles);
         }
