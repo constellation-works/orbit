@@ -1,26 +1,99 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::{RecvTimeoutError, sync_channel},
+};
+use std::time::Duration;
+
 use super::scoped;
 
-/// A managed-run child inherits `ORBIT_ROOT`-style ambient state from its
-/// parent process, not from a sibling test in the same binary. This asserts
-/// that two overlapping `scoped` guards never observe each other's values —
-/// the second guard only ever sees what it itself requested.
+/// Two `scoped` guards contending for the same variable must be serialized:
+/// the contender cannot enter while the holder is alive, never observes the
+/// holder's temporary value, and restores the pre-existing value rather than
+/// the holder's. Admission order is proven by a flag the holder sets just
+/// before releasing, not by timing; the bounded waits only keep a regression
+/// (missing exclusion or a lock that is never released) from hanging the run.
 #[test]
-fn scoped_guard_isolates_ambient_value_from_a_concurrent_managed_run() {
-    const VAR: &str = "ORBIT_TEST_ENV_ISOLATION_PROBE";
-    let baseline = std::env::var(VAR).ok();
+fn scoped_guard_excludes_a_contending_guard_until_the_holder_releases() {
+    const VAR: &str = "ORBIT_TEST_ENV_CONTENTION_PROBE";
+    const HOLDER_VALUE: &str = "held-by-first-guard";
+    const CONTENDER_VALUE: &str = "requested-by-contender";
+    // How long the holder keeps the lock after the contender starts
+    // acquiring; an unserialized guard is admitted well within it.
+    const CONTENTION_WINDOW: Duration = Duration::from_millis(250);
+    const BOUND: Duration = Duration::from_secs(10);
 
-    {
-        let _outer = scoped([(VAR, Some("ambient-managed-run"))]);
-        assert_eq!(
-            std::env::var(VAR).ok(),
-            Some("ambient-managed-run".to_string())
-        );
+    #[derive(Debug)]
+    struct Admission {
+        holder_released: bool,
+        observed: Option<String>,
     }
 
+    let baseline = std::env::var(VAR).ok();
+    let holder_released = Arc::new(AtomicBool::new(false));
+    let (attempting_tx, attempting_rx) = sync_channel::<()>(1);
+    let (admitted_tx, admitted_rx) = sync_channel::<Admission>(1);
+
+    let holder = scoped([(VAR, Some(HOLDER_VALUE))]);
+
+    let contender = std::thread::spawn({
+        let holder_released = Arc::clone(&holder_released);
+        move || {
+            attempting_tx
+                .send(())
+                .expect("holder is waiting for the attempt");
+            let guard = scoped([(VAR, Some(CONTENDER_VALUE))]);
+            // Capacity-1 channel with a single send: never blocks while the
+            // guard is held, so the holder cannot deadlock against it.
+            admitted_tx
+                .send(Admission {
+                    holder_released: holder_released.load(Ordering::SeqCst),
+                    observed: std::env::var(VAR).ok(),
+                })
+                .expect("holder is waiting for admission");
+            drop(guard);
+        }
+    });
+
+    attempting_rx
+        .recv_timeout(BOUND)
+        .expect("contender thread never started acquiring its guard");
+    match admitted_rx.recv_timeout(CONTENTION_WINDOW) {
+        Err(RecvTimeoutError::Timeout) => {}
+        Ok(admission) => {
+            panic!("second guard was admitted while the first was still held: {admission:?}")
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            panic!("contender exited without being admitted")
+        }
+    }
+    assert_eq!(
+        std::env::var(VAR).ok().as_deref(),
+        Some(HOLDER_VALUE),
+        "a blocked contender must not overwrite the holder's value"
+    );
+
+    holder_released.store(true, Ordering::SeqCst);
+    drop(holder);
+
+    let admission = admitted_rx
+        .recv_timeout(BOUND)
+        .expect("contender was never admitted after the holder released its guard");
+    assert!(
+        admission.holder_released,
+        "contender was admitted before the holder released its guard"
+    );
+    assert_eq!(
+        admission.observed.as_deref(),
+        Some(CONTENDER_VALUE),
+        "contender must see only the value it requested"
+    );
+
+    contender.join().expect("contender thread panicked");
     assert_eq!(
         std::env::var(VAR).ok(),
         baseline,
-        "guard must restore the pre-existing value on drop"
+        "both guards must restore the pre-existing value, not the holder's temporary one"
     );
 }
 
