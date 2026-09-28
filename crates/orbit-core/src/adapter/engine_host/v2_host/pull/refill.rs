@@ -16,13 +16,13 @@
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{
-    AdmissionRequest, AdmissionRunContext, AdmissionShipContract, ClaimMutation,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, LocalPullPhase, PullDestination,
+    AdmissionRequest, AdmissionRunContext, AdmissionShipContract,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, PullDestination,
 };
 use serde_json::{Value, json};
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::PullDrain;
+use super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain};
 use crate::OrbitRuntime;
 use crate::application::distributed::owner_binary_version;
 
@@ -33,16 +33,6 @@ pub(crate) const PULL_DRAIN_JOB_NAME: &str = "workspace_pull_pipeline";
 const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
 const DEFAULT_POLL_SLEEP_SECONDS: u64 = 30;
 const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
-
-/// Consecutive claims this drain settled as failures, with no handoff between
-/// them, after which it stops requesting new work.
-///
-/// A leaf that fails fast frees its slot within seconds, so without a breaker
-/// a systemic executor fault — a missing credential, a broken toolchain, an
-/// incompatible owner — would claim and block the owner's backlog one task per
-/// poll. Settlement of work already running is unaffected, and an operator
-/// resets the breaker by starting a new drain.
-pub(crate) const CONSECUTIVE_FAILURE_BREAKER: usize = 3;
 
 /// What the owner's probe said about admitting this executor now.
 struct ProbeVerdict {
@@ -101,10 +91,13 @@ pub(crate) fn pull_refill(
     let mut admitted = 0;
     let mut refusal = None;
     let mut error = None;
-    let consecutive_failures = consecutive_failed_settlements(runtime, &destination, &run_id)
-        .map_err(|failure| failed(failure.to_string()))?;
-    let breaker_open = consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER;
-    let admitting = !window_expired && host_shutdown.is_none() && !breaker_open;
+    // An already open breaker skips the probe; `refill` rechecks it after
+    // reconciling, since settling a newly failed leaf can open it mid-pass.
+    let breaker_open = drain
+        .consecutive_failed_settlements(&destination, &run_id)
+        .map_err(|failure| failed(failure.to_string()))?
+        >= CONSECUTIVE_FAILURE_BREAKER;
+    let mut admitting = !window_expired && host_shutdown.is_none() && !breaker_open;
     if admitting {
         match probe(runtime, &transport, &destination) {
             Ok(ProbeVerdict {
@@ -146,6 +139,13 @@ pub(crate) fn pull_refill(
     {
         error.get_or_insert(failure.to_string());
     }
+    // Count after this pass's settlements, so a breaker that opened during it
+    // is reported now rather than on the next poll.
+    let consecutive_failures = drain
+        .consecutive_failed_settlements(&destination, &run_id)
+        .map_err(|failure| failed(failure.to_string()))?;
+    let breaker_open = consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER;
+    admitting &= !breaker_open;
     let unsettled = drain
         .unsettled(&destination)
         .map_err(|failure| failed(failure.to_string()))?;
@@ -246,30 +246,6 @@ fn probe(
         ship,
         refusal: None,
     })
-}
-
-/// How many of this drain's most recent settled claims failed in a row.
-///
-/// Reads only admissions this run made, in admission order, so an earlier
-/// drain's history never trips a new one.
-pub(crate) fn consecutive_failed_settlements(
-    runtime: &OrbitRuntime,
-    destination: &PullDestination,
-    run_id: &str,
-) -> Result<usize, OrbitError> {
-    Ok(runtime
-        .stores()
-        .jobs()
-        .local_pull_admissions()?
-        .iter()
-        .filter(|record| {
-            record.destination == *destination
-                && record.request.run_context.run_id == run_id
-                && record.phase == LocalPullPhase::Settled
-        })
-        .rev()
-        .take_while(|record| matches!(record.settlement, Some(ClaimMutation::Fail(_))))
-        .count())
 }
 
 /// A boolean templated into activity input, which renders as a string.

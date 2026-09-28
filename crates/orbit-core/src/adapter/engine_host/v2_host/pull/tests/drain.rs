@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::*;
 use orbit_types::workflow::PipelineState;
 
-use super::super::drain::{PullDrain, PullLauncher, PullPeer};
+use super::super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, PullLauncher, PullPeer};
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
 
 #[derive(Default)]
@@ -626,7 +626,6 @@ fn pull_breaker_counts_this_drains_consecutive_failed_settlements() {
     ) {
         return;
     }
-    use super::super::refill::{CONSECUTIVE_FAILURE_BREAKER, consecutive_failed_settlements};
     let (_temp, runtime, _repo) = runtime_with_workspace_layout();
     let jobs = runtime.stores().jobs();
     let (destination, template) = request(jobs);
@@ -642,14 +641,92 @@ fn pull_breaker_counts_this_drains_consecutive_failed_settlements() {
     for expected in 1..=CONSECUTIVE_FAILURE_BREAKER {
         assert!(drain.refill(&destination, &template, 1).is_err());
         assert_eq!(
-            consecutive_failed_settlements(&runtime, &destination, &run_id).expect("count"),
+            drain
+                .consecutive_failed_settlements(&destination, &run_id)
+                .expect("count"),
             expected
         );
     }
     // Another drain's history never trips this one.
     assert_eq!(
-        consecutive_failed_settlements(&runtime, &destination, "another-drain").expect("count"),
+        drain
+            .consecutive_failed_settlements(&destination, "another-drain")
+            .expect("count"),
         0
+    );
+}
+
+/// [ORB-13646] Settling a newly failed leaf can open the breaker mid-pass.
+/// With two failures already recorded and a third leaf that has just failed
+/// while still launched locally, the pass that settles it delivers that
+/// settlement and requests no replacement claims.
+#[test]
+fn pull_breaker_opened_by_this_pass_settlement_requests_no_new_claims() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_breaker_opened_by_this_pass_settlement_requests_no_new_claims",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let run_id = template.run_context.run_id.clone();
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    launcher.fail.set(true);
+    for _ in 1..CONSECUTIVE_FAILURE_BREAKER {
+        assert!(drain.refill(&destination, &template, 1).is_err());
+    }
+    launcher.fail.set(false);
+    assert_eq!(drain.refill(&destination, &template, 1).expect("admit"), 1);
+    let last = jobs.local_pull_admissions().expect("records").remove(2);
+    assert_eq!(last.phase, LocalPullPhase::Launched);
+    // The leaf ends without a handoff, so its settlement is a failure.
+    jobs.finalize_job_run(
+        last.leaf_run_id.as_deref().expect("leaf"),
+        orbit_types::workflow::JobRunState::Cancelled,
+        Utc::now(),
+        None,
+    )
+    .expect("leaf ended");
+    assert_eq!(
+        drain
+            .consecutive_failed_settlements(&destination, &run_id)
+            .expect("count"),
+        CONSECUTIVE_FAILURE_BREAKER - 1,
+        "the third failure is not settled yet"
+    );
+    let requests = peer.requests.get();
+    let settlements = peer.settlements.get();
+
+    assert_eq!(
+        drain.refill(&destination, &template, 5).expect("pass"),
+        0,
+        "the pass that opens the breaker admits nothing"
+    );
+    assert_eq!(
+        peer.requests.get(),
+        requests,
+        "no new owner claim requested"
+    );
+    assert_eq!(
+        peer.settlements.get(),
+        settlements + 1,
+        "the failure that opened the breaker still reached the owner"
+    );
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), CONSECUTIVE_FAILURE_BREAKER);
+    assert_eq!(records[2].phase, LocalPullPhase::Settled);
+    assert_eq!(
+        drain
+            .consecutive_failed_settlements(&destination, &run_id)
+            .expect("count"),
+        CONSECUTIVE_FAILURE_BREAKER
     );
 }
 
