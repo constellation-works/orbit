@@ -137,8 +137,8 @@ super::gh_tool! {
         super::tool_param("run", "Numeric workflow-run ID", "string", true),
         super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
     ];
-    request: |_ctx, input| {
-        build_exec_request(input)
+    request: |ctx, input| {
+        build_exec_request(input).map(|request| super::in_tool_workspace(request, ctx))
     }
     response: |_ctx, _input, result| {
         check_exec_result(result, "gh run view")?;

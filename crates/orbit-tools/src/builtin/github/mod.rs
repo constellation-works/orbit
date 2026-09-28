@@ -7,7 +7,7 @@ use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::{ToolRegistry, require_str};
+use crate::{ToolContext, ToolRegistry, require_str};
 
 mod common;
 mod streaming;

@@ -11,7 +11,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+use crate::ToolContext;
 use crate::builtin::github::logs::{LogReadBounds, RunLogRead, RunLogRequests, read_run_log};
+use crate::builtin::github::run_logs::GithubRunLogsTool;
 
 const RUN_ID: &str = "34060485218";
 const FAILED_JOB_ID: u64 = 101560010340;
@@ -65,8 +67,9 @@ fn run_view(run_url: &str) -> Value {
     })
 }
 
-/// A scripted `gh`: a shell dispatcher over argv, plus the argv log every test
-/// reads back to prove which queries actually ran.
+/// A scripted `gh`: a shell dispatcher over argv, plus the argv and working
+/// directory logs every test reads back to prove which queries actually ran,
+/// and where.
 struct FakeGh {
     dir: TempDir,
     program: String,
@@ -115,6 +118,7 @@ impl FakeGh {
             "#!/usr/bin/env bash\n\
              case \"$*\" in --warmup) exit 0 ;; esac\n\
              printf '%s\\n' \"$*\" >> {calls}\n\
+             pwd -P >> {cwds}\n\
              case \"$*\" in\n\
              {cases}{run_log_case}  \
              *\"--json\"*) cat {view} ; exit 0 ;;\n  \
@@ -123,6 +127,7 @@ impl FakeGh {
              printf 'unscripted gh call: %s\\n' \"$*\" >&2\n\
              exit 1\n",
             calls = path("calls.txt"),
+            cwds = path("cwds.txt"),
             view = path("run_view.json"),
             token = "a".repeat(36),
         );
@@ -140,7 +145,12 @@ impl FakeGh {
     /// Requests pointed at the scripted CLI. Everything else — argv, timeouts,
     /// bounds — is what production builds.
     fn requests(&self, input: Value) -> RunLogRequests {
-        let mut requests = RunLogRequests::from_input(&input).expect("requests");
+        self.scripted(RunLogRequests::from_input(&input).expect("requests"))
+    }
+
+    /// Point already-built requests at the scripted CLI, leaving everything
+    /// else as the caller built it.
+    fn scripted(&self, mut requests: RunLogRequests) -> RunLogRequests {
         requests.run_log.program.clone_from(&self.program);
         requests.run_view.program.clone_from(&self.program);
         requests
@@ -151,7 +161,16 @@ impl FakeGh {
     }
 
     fn calls(&self) -> Vec<String> {
-        fs::read_to_string(self.dir.path().join("calls.txt"))
+        self.log_lines("calls.txt")
+    }
+
+    /// The working directory of every call, in the same order as [`Self::calls`].
+    fn cwds(&self) -> Vec<String> {
+        self.log_lines("cwds.txt")
+    }
+
+    fn log_lines(&self, name: &str) -> Vec<String> {
+        fs::read_to_string(self.dir.path().join(name))
             .unwrap_or_default()
             .lines()
             .map(ToOwned::to_owned)
@@ -160,7 +179,7 @@ impl FakeGh {
 }
 
 #[cfg(unix)]
-fn set_executable(path: &Path) {
+pub(super) fn set_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod fake gh");
@@ -173,7 +192,7 @@ fn set_executable(path: &Path) {
 /// descriptor is close-on-exec, so the window is short — but it has to close
 /// before the read under test runs, or a transient spawn failure would be
 /// mistaken for the fallback finding no evidence.
-fn wait_until_executable(program: &Path) {
+pub(super) fn wait_until_executable(program: &Path) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         match std::process::Command::new(program).arg("--warmup").status() {
@@ -571,6 +590,69 @@ fn the_job_log_endpoint_is_a_read_of_this_repository_only() {
 }
 
 #[test]
+fn the_registered_tool_reads_every_log_request_in_the_selected_workspace() {
+    let workspace = TempDir::new().expect("selected workspace");
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.path().to_path_buf()),
+        ..ToolContext::default()
+    };
+    let log = job_log();
+    let gh = FakeGh::new(
+        &run_view(&run_url(RUN_ID)),
+        &[(FAILED_JOB_ID, log.as_str())],
+    );
+
+    for input in [
+        failed_scope(RUN_ID),
+        json!({"run": RUN_ID, "repo": "acme/orbit"}),
+    ] {
+        let requests = GithubRunLogsTool
+            .requests(&ctx, &input)
+            .expect("tool requests");
+        let read = read_run_log(&gh.scripted(requests), LogReadBounds::new(16_384), None)
+            .expect("log read");
+        assert_eq!(read.source, "job_api_log", "the fallback must have run");
+    }
+
+    let selected = fs::canonicalize(workspace.path())
+        .expect("canonical workspace")
+        .display()
+        .to_string();
+    let process_cwd = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .expect("process cwd");
+    assert_ne!(Path::new(&selected), process_cwd);
+    let cwds = gh.cwds();
+    // Run log, run view, and one job-log read, for each input.
+    assert_eq!(cwds.len(), 6, "calls: {:?}", gh.calls());
+    assert!(
+        cwds.iter().all(|cwd| *cwd == selected),
+        "every read, fallback included, must run in the selected workspace \
+         rather than the host's own cwd: {cwds:?}"
+    );
+
+    let calls = gh.calls();
+    assert!(
+        calls[..3].iter().all(|call| !call.contains("--repo")),
+        "an omitted repo must be resolved from the workspace: {calls:?}"
+    );
+    assert_eq!(
+        calls[2],
+        format!("api --method GET repos/{{owner}}/{{repo}}/actions/jobs/{FAILED_JOB_ID}/logs")
+    );
+    assert!(
+        calls[3..5]
+            .iter()
+            .all(|call| call.contains("--repo acme/orbit")),
+        "an explicit repo must still select that repository: {calls:?}"
+    );
+    assert_eq!(
+        calls[5],
+        format!("api --method GET repos/acme/orbit/actions/jobs/{FAILED_JOB_ID}/logs")
+    );
+}
+
+#[test]
 fn a_repository_that_could_traverse_the_endpoint_is_rejected() {
     let rejected =
         RunLogRequests::from_input(&json!({"run": RUN_ID, "repo": "acme/orbit?per_page=9"}))
@@ -586,7 +668,7 @@ fn a_repository_that_could_traverse_the_endpoint_is_rejected() {
 
 /// Only a unix host gates execution on the permission bit.
 #[cfg(not(unix))]
-fn set_executable(_path: &Path) {}
+pub(super) fn set_executable(_path: &Path) {}
 
 #[test]
 fn source_read_limit_defers_without_retrying_or_returning_a_partial_unit() {
