@@ -281,6 +281,9 @@ pub(crate) fn rewrite_enabled_line(raw: &str, enabled: bool) -> Result<String, O
         } else {
             rendered.push_str(line);
             if !has_enabled && !replaced && content.starts_with("name:") {
+                if ending.is_empty() {
+                    rendered.push_str(newline);
+                }
                 rendered.push_str(&format!("enabled: {enabled}{newline}"));
                 replaced = true;
             }

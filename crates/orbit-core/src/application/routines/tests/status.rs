@@ -24,24 +24,47 @@ fn loaded(path: std::path::PathBuf) -> LoadedRoutine {
 }
 
 #[test]
-fn routine_toggle_preserves_comments_and_every_field_but_enabled() {
+fn routine_toggle_replaces_enabled_for_lf_and_crlf_preserving_comments_and_fields() {
     let root = tempdir().expect("temp root");
-    let path = root.path().join("nightly.yaml");
-    fs::write(
-        &path,
-        "schemaVersion: 1\nname: nightly\ndescription: keep this text\nenabled: true # reviewed\ntrigger:\n  cron: '0 2 * * *'\ntarget: job:nightly\n",
-    )
-    .expect("write fixture");
-    let routine = loaded(path.clone());
+    for (index, newline) in ["\n", "\r\n"].into_iter().enumerate() {
+        let path = root.path().join(format!("replace-{index}.yaml"));
+        let raw = [
+            "schemaVersion: 1",
+            "# Keep this comment",
+            "name: nightly",
+            "description: keep this text",
+            "enabled: true # reviewed",
+            "trigger:",
+            "  cron: '0 2 * * *'",
+            "target: job:nightly",
+            "",
+        ]
+        .join(newline);
+        fs::write(&path, &raw).expect("write fixture");
+        let before = loaded(path.clone()).definition;
+        let routine = loaded(path.clone());
 
-    assert_eq!(
-        set_routine_enabled(&routine, true, false).expect("disable"),
-        RoutineToggleOutcome::Changed
-    );
-    let changed = fs::read_to_string(&path).expect("read changed fixture");
-    assert!(changed.contains("enabled: false # reviewed"));
-    assert!(changed.contains("description: keep this text"));
-    assert!(!parse_routine_yaml(&changed).expect("parse changed").enabled);
+        assert_eq!(
+            set_routine_enabled(&routine, true, false).expect("disable"),
+            RoutineToggleOutcome::Changed
+        );
+        let changed = fs::read_to_string(&path).expect("read changed fixture");
+        let mut expected = before;
+        expected.enabled = false;
+        assert_eq!(
+            parse_routine_yaml(&changed).expect("parse changed"),
+            expected
+        );
+        assert!(changed.contains("# Keep this comment"));
+        assert!(changed.contains("enabled: false # reviewed"));
+        assert!(changed.contains("description: keep this text"));
+        assert!(changed.contains(&format!("{newline}target: job:nightly{newline}")));
+        if newline == "\n" {
+            assert!(!changed.contains('\r'));
+        } else {
+            assert!(!changed.replace("\r\n", "").contains('\n'));
+        }
+    }
 }
 
 #[test]
@@ -71,6 +94,45 @@ fn routine_toggle_inserts_missing_default_and_rejects_stale_duplicate() {
         after_first,
         "stale duplicate must not rewrite the definition"
     );
+}
+
+#[test]
+fn routine_toggle_inserts_enabled_after_final_name_without_eof_newline() {
+    let root = tempdir().expect("temp root");
+    for (index, newline) in ["\n", "\r\n"].into_iter().enumerate() {
+        let path = root.path().join(format!("final-name-{index}.yaml"));
+        let raw = [
+            "schemaVersion: 1",
+            "# Preserve this comment",
+            "description: keep this text",
+            "trigger: { cron: '* * * * *' } # preserve trigger comment",
+            "target: job:nightly",
+            "name: nightly",
+        ]
+        .join(newline);
+        fs::write(&path, &raw).expect("write fixture without EOF newline");
+        let before = loaded(path.clone()).definition;
+        let routine = loaded(path.clone());
+
+        assert_eq!(
+            set_routine_enabled(&routine, true, false).expect("disable final-name routine"),
+            RoutineToggleOutcome::Changed
+        );
+        let changed = fs::read_to_string(&path).expect("read changed fixture");
+        let mut expected = before;
+        expected.enabled = false;
+        assert_eq!(
+            parse_routine_yaml(&changed).expect("parse changed"),
+            expected
+        );
+        assert_eq!(
+            changed,
+            format!("{raw}{newline}enabled: false{newline}"),
+            "inserting enabled must keep a line boundary and the input newline style"
+        );
+        assert!(changed.contains("# Preserve this comment"));
+        assert!(changed.contains("# preserve trigger comment"));
+    }
 }
 
 #[test]
