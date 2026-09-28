@@ -67,12 +67,13 @@ impl SqliteJobRunStore {
     }
 }
 
-/// Upper bound on `retry_source_run_id` hops walked from a resume source to its
-/// lineage root, so a corrupted cycle cannot make the probe unbounded.
-const RESUME_LINEAGE_MAX_HOPS: i64 = 64;
-
 /// The oldest non-terminal run in `source_run_id`'s retry lineage: its
 /// ancestors plus every run descended from any of them.
+///
+/// Both walks are unbounded in depth, because a truncated ancestor walk would
+/// miss a live sibling of an older ancestor. Each recursive row carries only
+/// the run's own columns, so `UNION` discards a revisited run and a corrupted
+/// `retry_source_run_id` cycle terminates after visiting each run once.
 fn live_lineage_run_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
@@ -80,13 +81,13 @@ fn live_lineage_run_conn(
 ) -> Result<Option<String>, OrbitError> {
     conn.query_row(
         "WITH RECURSIVE \
-           ancestors(run_id, parent, depth) AS ( \
-             SELECT run_id, retry_source_run_id, 0 FROM job_runs \
+           ancestors(run_id, parent) AS ( \
+             SELECT run_id, retry_source_run_id FROM job_runs \
               WHERE workspace_id = ?1 AND run_id = ?2 \
              UNION \
-             SELECT j.run_id, j.retry_source_run_id, a.depth + 1 \
+             SELECT j.run_id, j.retry_source_run_id \
                FROM job_runs j JOIN ancestors a ON j.run_id = a.parent \
-              WHERE j.workspace_id = ?1 AND a.depth < ?3 \
+              WHERE j.workspace_id = ?1 \
            ), \
            lineage(run_id) AS ( \
              SELECT run_id FROM ancestors \
@@ -97,7 +98,7 @@ fn live_lineage_run_conn(
          SELECT j.run_id FROM job_runs j JOIN lineage l ON j.run_id = l.run_id \
           WHERE j.workspace_id = ?1 AND j.state IN ('pending', 'running', 'retrying') \
           ORDER BY j.created_at, j.run_id LIMIT 1",
-        rusqlite::params![workspace_id, source_run_id, RESUME_LINEAGE_MAX_HOPS],
+        rusqlite::params![workspace_id, source_run_id],
         |row| row.get::<_, String>(0),
     )
     .optional()
