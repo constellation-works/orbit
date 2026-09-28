@@ -409,6 +409,23 @@ impl PullLauncher for LeafPullLauncher<'_> {
             .ok_or_else(|| refused("bound runtime lost its worker invocation"))?;
         bound.spawn_claimed_leaf_worker(&run_id)
     }
+
+    /// Cancel a cancelled drain's queued leaf through the ordinary run
+    /// cancellation, so it is audited like any other and its terminalization
+    /// records the claim's failure settlement [ORB-13663].
+    fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        let run_id = admission
+            .leaf_run_id
+            .as_deref()
+            .ok_or_else(|| refused("cancelling a queued leaf requires a created leaf run"))?;
+        self.runtime.cancel_job_run_with_reason(
+            run_id,
+            "pull_drain",
+            "pull_drain_abandon",
+            Some("its follower drain is no longer running and never launched it"),
+        )?;
+        Ok(())
+    }
 }
 
 /// Owner transport for a drain whose owner is this process.

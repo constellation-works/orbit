@@ -190,6 +190,9 @@ struct InProcessLauncher<'a> {
 }
 
 impl PullLauncher for InProcessLauncher<'_> {
+    fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        self.real.cancel_queued(admission)
+    }
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         let bound = self.real.bound_runtime(admission)?;
         let binding = bound.worker_invocation().expect("bound").clone();
@@ -914,6 +917,9 @@ struct BindingOnlyLauncher<'a> {
 }
 
 impl PullLauncher for BindingOnlyLauncher<'_> {
+    fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        self.real.cancel_queued(admission)
+    }
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         let bound = self.real.bound_runtime(admission)?;
         let binding = bound.worker_invocation().expect("bound").clone();
@@ -1146,6 +1152,9 @@ struct KillingLauncher<'a> {
 }
 
 impl PullLauncher for KillingLauncher<'_> {
+    fn cancel_queued(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        self.real.cancel_queued(admission)
+    }
     fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         let _bound = self.real.bound_runtime(admission)?;
         panic!("fixture kills the launching process");
@@ -1442,6 +1451,11 @@ fn a_published_pr_claim_observes_the_remote_base_when_local_lags() {
 /// but never-executed claimed leaf.
 struct RefusingLauncher;
 impl PullLauncher for RefusingLauncher {
+    fn cancel_queued(&self, _admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        Err(OrbitError::Execution(
+            "fixture withholds cancellation".into(),
+        ))
+    }
     fn launch(&self, _admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         Err(OrbitError::Execution("fixture withholds the launch".into()))
     }

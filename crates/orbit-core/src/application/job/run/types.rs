@@ -34,4 +34,10 @@ pub struct JobRunCancelResult {
     pub source: String,
     pub signal_attempted: bool,
     pub signal_outcome: Option<String>,
+    /// [ORB-13663] Pull settlements this cancellation carried: for a follower
+    /// pull drain, every admission a settle-only pass touched (the drain's
+    /// unlaunched claims are ended as failures; live leaves keep running and
+    /// settle themselves); for a claimed leaf, its own settlement. Empty for
+    /// every other run.
+    pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
 }

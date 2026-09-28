@@ -62,6 +62,11 @@ pub struct DrainAdmissionsStopResult {
     /// when only queued never-started coordinators were removed.
     pub outcome: &'static str,
     pub coordinators: Vec<DrainAdmissionsStopChange>,
+    /// [ORB-13663] Pull settlements the stop's settle-only pass carried, for
+    /// every owner this replica pulls from: recorded settlements delivered,
+    /// and the unlaunched admissions of drains that are no longer running
+    /// ended. Empty on a workspace that never pulled.
+    pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
 }
 
 impl OrbitRuntime {
@@ -83,7 +88,9 @@ impl OrbitRuntime {
             .list_pending_or_running_job_runs(drain_job_id)?;
         // [ORB-13625] A replica's pull drain is this workspace's coordinator
         // too; stopping it closes its window while its leaves keep running
-        // and it keeps settling them with the owner.
+        // and it keeps settling them with the owner. [ORB-13663] The stop
+        // then runs a settle-only pass of its own, so settlements a cancelled
+        // drain left behind reach the owner without starting another drain.
         coordinators.extend(
             self.stores().jobs().list_pending_or_running_job_runs(
                 crate::application::distributed::PULL_DRAIN_JOB,
@@ -103,6 +110,7 @@ impl OrbitRuntime {
             return Ok(DrainAdmissionsStopResult {
                 outcome: "idle",
                 coordinators: Vec::new(),
+                pull_settlements: self.settle_pending_pulls(),
             });
         }
 
@@ -157,6 +165,7 @@ impl OrbitRuntime {
         Ok(DrainAdmissionsStopResult {
             outcome,
             coordinators: changes,
+            pull_settlements: self.settle_pending_pulls(),
         })
     }
 

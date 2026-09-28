@@ -52,6 +52,12 @@ impl OrbitRuntime {
 
     /// Cancel a run and preserve the requesting surface and optional reason in
     /// its v2 audit trail and any coupled task's blocked history note.
+    ///
+    /// [ORB-13663] Cancelling a follower pull drain, or a claimed leaf, also
+    /// runs a settle-only pass, so nothing the cancelled run was carrying is
+    /// left holding an owner claim with no process responsible for it. This
+    /// runs on `already_terminal` too: cancelling a drain that already ended
+    /// delivers whatever it left behind.
     pub fn cancel_job_run_with_reason(
         &self,
         run_id: &str,
@@ -59,7 +65,36 @@ impl OrbitRuntime {
         source: &str,
         reason: Option<&str>,
     ) -> Result<JobRunCancelResult, OrbitError> {
-        self.cancel_job_run_cascading(run_id, actor, source, reason, signal_run_owner_process, 0)
+        let mut result = self.cancel_job_run_cascading(
+            run_id,
+            actor,
+            source,
+            reason,
+            signal_run_owner_process,
+            0,
+        )?;
+        result.pull_settlements = self.pull_settlements_after_cancel(run_id);
+        Ok(result)
+    }
+
+    /// The settle-only pass a cancellation owes: every pending settlement
+    /// when a pull drain was cancelled, the leaf's own when a claimed leaf
+    /// was. A run that is neither reads nothing from the owner.
+    fn pull_settlements_after_cancel(
+        &self,
+        run_id: &str,
+    ) -> Vec<crate::application::distributed::PullSettlementEntry> {
+        let is_pull_drain = self
+            .get_job_run_backend(run_id)
+            .ok()
+            .flatten()
+            .is_some_and(|run| run.job_id == crate::application::distributed::PULL_DRAIN_JOB);
+        if is_pull_drain {
+            return self.settle_pending_pulls();
+        }
+        self.deliver_claimed_leaf_settlement(run_id)
+            .into_iter()
+            .collect()
     }
 
     /// Internal cancellation seam so tests can model a failed post-signal
@@ -630,6 +665,7 @@ fn cancellation_result(
         source: source.to_string(),
         signal_attempted,
         signal_outcome,
+        pull_settlements: Vec::new(),
     }
 }
 

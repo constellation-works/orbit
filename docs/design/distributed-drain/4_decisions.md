@@ -7,7 +7,7 @@ status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
+summary: Pull-based admission, durable request and attempt identity, machine-scoped run lookups, record-owned settlement, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry]
@@ -552,11 +552,83 @@ removing it, and it cannot stop the owner's own drain binding an id a follower a
 - Cost: every run-keyed lookup reads the run record once more, and an owner running an older build
   still answers a follower's run-keyed read without the scope.
 
+## Settlement belongs to the admission record, not to the drain that admitted it
+
+**Recorded:** 2026-09-28 · [ORB-13663], after the Mac follower's drain `jrun-20260928-0242-t1`
+was cancelled at 04:14Z and its six live leaves finished with four handoffs recorded but
+undelivered, two failures recorded nowhere, and every owner claim left `running`.
+**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/pull/settle.rs`
+(`OrbitRuntime::best_effort_settle_terminal_claimed_leaf`, `OrbitRuntime::settle_pending_pulls`),
+`crates/orbit-core/src/adapter/engine_host/v2_host/pull/drain.rs::PullDrain::carry_settlement`,
+`crates/orbit-core/src/runtime/task/reservation_cleanup.rs::finalize_job_run_with_cleanup_after_prior_read`,
+`crates/orbit-core/src/application/job/run/actions.rs::cancel_job_run_with_reason`
+
+### Context
+
+Only the coordinator that admitted a claim settled it: its `pull_refill` loop saw the leaf
+terminate, recorded the settlement and delivered it. `orbit run auto --stop` kept that loop alive,
+but a *cancelled* coordinator — the dashboard's cancel and `orbit run cancel`, which is how every
+recent Mac drain ended — took the only settlement path with it. The leaf itself could not simply
+call the owner either: the agent inside it runs under the macOS sandbox, which denies `~/.ssh`
+(the reason claimed leaves hand off through step output, [ORB-13642]).
+
+### Decision
+
+A follower's settlement does not depend on any one process staying alive. The admission record is
+the outbox, and any unsandboxed follower process carries it, idempotently:
+
+- **The leaf records its own settlement as it terminalizes.** Run finalization, in whichever
+  process terminalizes the leaf, records the failure a terminal leaf implies (success already
+  recorded its typed handoff in `claim_handoff`). The leaf's own worker then delivers it. The
+  worker is an ordinary Orbit process with the host's federated route; only the agent subprocess
+  is sandboxed, and nothing runs in the agent.
+- **Any settle-only pass delivers what is recorded.** `orbit run cancel` and `orbit run auto
+  --stop`, and the dashboard's cancel and stop, run one over every owner. A settle-only pass never
+  requests work or launches a leaf. For an admission no live drain will carry it also ends what
+  was never launched — a claim with no leaf, a queued leaf (cancelled first) — as a failure, so
+  the owner never holds a claim no follower process is responsible for. An admission a live drain
+  for the same owner will carry is left to it.
+- **A new drain carries every earlier admission for its owner**, whichever drain made it.
+- **Cancellation does not kill live leaves.** They finish and settle themselves; a cancelled
+  drain's work is not wasted, and nothing is stranded.
+
+The rule for future follower-side work: anything that must eventually reach the owner is recorded
+durably first, and its delivery is an idempotent operation any follower process may repeat. Never
+make delivery the private job of a long-lived coordinator, and never put it inside the sandboxed
+agent.
+
+The alternatives were narrower. Mapping the dashboard's cancel of a pull drain onto "stop
+admissions" would keep today's coordinator alive but leave a killed, crashed or rebooted
+coordinator stranding its leaves exactly as before. Cancelling every child and settling it as a
+failure would strand nothing but would throw away finished work, and a leaf would still need
+somewhere to deliver from. Delivering from a sweep alone would depend on the scheduler clock, which
+is off on the Mac by design.
+
+### Consequences
+
+- Leaves deliver seconds after they end, whether or not a drain is watching, and `orbit run auto
+  --stop` is the one command that flushes anything left, including settlements an older binary
+  stranded.
+- Two processes may deliver the same settlement at once — a leaf's worker and a live drain pass.
+  The owner's per-claim mutation IDs make the second a replay, and a recorded settlement is
+  immutable locally, so whichever process records first is the value both deliver.
+- A `Created` admission (bind possibly lost) is bound before it is settled, because the owner
+  fences a failure that names a leaf against the claim's binding.
+- Cost: a settlement whose delivery fails while no drain is running waits for the next follower
+  process to reconcile — a drain, a cancel or a stop. Nothing retries on a timer, and orphan
+  reconciliation only records, since it runs while a workspace opens and must not wait on the
+  owner.
+- Cost: cancelling a pull drain or running `--stop` now makes owner calls, one delivery timeout at
+  most per unreachable owner per pass, so the command can take seconds when the owner is down.
+- Cost: a cancelled drain's unlaunched claims end as `blocked` with evidence rather than returning
+  to the backlog; returning work to the backlog stays an owner-operator recovery.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
 - [ORB-13625] — opened follower pull: owner mutation tools, routed peer, `orbit run auto --pull`.
 - [ORB-13637] — added the owner completion policy ([An owner completion policy lands accepted handoffs without per-task approval](#an-owner-completion-policy-lands-accepted-handoffs-without-per-task-approval)).
 - [ORB-13649] — scoped run-keyed task lookups to the executing machine ([A run is its id plus the machine that executes it](#a-run-is-its-id-plus-the-machine-that-executes-it)).
+- [ORB-13663] — moved settlement from the admitting drain to the admission record ([Settlement belongs to the admission record, not to the drain that admitted it](#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

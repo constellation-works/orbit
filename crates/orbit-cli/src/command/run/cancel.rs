@@ -14,7 +14,12 @@ owner process of a running run (TERM then KILL), releases the run's task \
 reservations, and finalizes the run as `cancelled`. The primary remediation \
 for a stuck `pending` run with no live worker (orphan reconciliation also \
 clears those on workspace open). A run that already finished returns a stable \
-`already_terminal` result without replacing its outcome.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+`already_terminal` result without replacing its outcome.\n\n\
+Cancelling a follower pull drain (`workspace_pull_pipeline`) also settles what \
+it was carrying with the owner: recorded handoffs and failures are delivered, \
+claims it had not launched yet are ended as failures, and leaves already \
+running keep running and settle themselves when they finish. Cancelling a \
+drain that already ended delivers whatever it left behind.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel
@@ -49,6 +54,7 @@ impl Execute for RunCancelArgs {
             "final_state": result.final_state,
             "signal_attempted": result.signal_attempted,
             "signal_outcome": result.signal_outcome,
+            "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
         });
         let mut lines = Vec::new();
         if result.outcome == "already_terminal" {
@@ -65,6 +71,9 @@ impl Execute for RunCancelArgs {
         if let Some(outcome) = &result.signal_outcome {
             lines.push(format!("owner process signal outcome: {outcome}"));
         }
+        lines.extend(super::support::pull_settlement_lines(
+            &result.pull_settlements,
+        ));
         Ok(Payload::detail(doc, lines.join("\n")).into())
     }
 }

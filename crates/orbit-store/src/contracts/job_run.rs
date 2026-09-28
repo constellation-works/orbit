@@ -35,6 +35,14 @@ pub trait JobRunStoreBackend: Send + Sync {
         ))
     }
 
+    /// Admissions that still hold a slot — not idle, refused or settled — in
+    /// admission order, read without creating the feature schema, so a
+    /// workspace that never pulled reads none [ORB-13663]. Any follower
+    /// process uses this to deliver settlements a cancelled drain left behind.
+    fn unsettled_local_pull_admissions(&self) -> Result<Vec<LocalPullAdmission>, OrbitError> {
+        Ok(Vec::new())
+    }
+
     /// How much leaf capacity both admission paths are already using
     /// [ORB-12617].
     ///

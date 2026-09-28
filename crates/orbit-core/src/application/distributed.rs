@@ -53,9 +53,11 @@ use crate::runtime::host_signal::{HOST_SHUTDOWN_SCHEDULED, ScheduledShutdown};
 
 mod follower;
 mod serve;
+mod settlement;
 
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub use serve::TaskPullResponse;
+pub use settlement::PullSettlementEntry;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.

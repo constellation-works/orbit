@@ -178,3 +178,39 @@ pub(super) fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Ve
 fn single_line(value: &str) -> String {
     value.replace(['\n', '\r'], " ")
 }
+
+/// Human lines for the pull settlements a cancel or stop carried
+/// [ORB-13663]. Empty when the pass touched nothing.
+pub(super) fn pull_settlement_lines(entries: &[orbit_core::PullSettlementEntry]) -> Vec<String> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "Pull settlements ({} admission{}):",
+        entries.len(),
+        if entries.len() == 1 { "" } else { "s" }
+    )];
+    lines.extend(
+        entries
+            .iter()
+            .map(|entry| format!("  {}", entry.describe())),
+    );
+    if entries.iter().any(|entry| {
+        matches!(
+            entry.outcome.as_str(),
+            "pending_delivery" | "owner_unreachable" | "pending"
+        )
+    }) {
+        lines.push(
+            "Undelivered settlements stay recorded; rerun `orbit run auto --stop` once the owner \
+             is reachable."
+                .to_string(),
+        );
+    }
+    lines
+}
+
+/// The JSON form of [`pull_settlement_lines`].
+pub(super) fn pull_settlements_json(entries: &[orbit_core::PullSettlementEntry]) -> Value {
+    serde_json::to_value(entries).unwrap_or_else(|_| Value::Array(Vec::new()))
+}

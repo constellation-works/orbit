@@ -2,7 +2,7 @@
 type: context
 summary: Running log of why Orbit task runs failed or got blocked, one entry per distinct cause, with the fix that closed it.
 incident_date: 2026-09-27
-last_validated: 2026-09-27
+last_validated: 2026-09-28
 tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**", "crates/orbit-core/assets/executors/claude.yaml", "crates/orbit-agent/src/providers/claude/**"]
 related_artifacts: [ORB-13663, ORB-13664, ORB-13612, ORB-13463, ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
@@ -40,9 +40,21 @@ you close it out.
   settlement (`pull_refill` → `reconcile_pending`). Cancelling the coordinator
   removes the only settlement path. Live leaves keep running, but nothing reports
   their result to the owner.
-- **Fix:** open (ORB-13663). Settlement must not depend on the admitting
-  coordinator being alive, and stop must close admissions instead of cancelling.
-- **Tasks:** the six leaves of drain `jrun-20260928-0242-t1`, including ORB-13622 and ORB-13271 (rescue PR #2929).
+- **Fix:** ORB-13663 (#2932). Settlement no longer belongs to the
+  admitting coordinator: the admission record is the outbox, each leaf's worker
+  records and delivers its own handoff or failure as it terminalizes, and
+  `orbit run cancel` / `orbit run auto --stop` (and their dashboard buttons) run
+  a settle-only pass that delivers anything still recorded and ends a dead
+  drain's unlaunched claims as failures. Cancelling a drain no longer kills or
+  strands its live leaves. See the design decision "Settlement belongs to the
+  admission record, not to the drain that admitted it".
+- **Rescue:** after the follower runs a build with the fix, run
+  `orbit run auto --stop` in its replica checkout. It delivers the four recorded
+  handoffs (tasks to `review`) and records and delivers the two failures (tasks
+  to `blocked`). Claims the owner already revoked close locally as
+  `closed_obsolete`.
+- **Tasks:** the six leaves of drain `jrun-20260928-0242-t1`: ORB-13636,
+  ORB-13658, ORB-13655, ORB-13657 (handed off), ORB-13271 and ORB-13622 (failed).
 
 ## 2026-09-27: Headless claude crew hands off while its validation gates run in the background
 
