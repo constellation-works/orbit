@@ -58,26 +58,16 @@ spec:
 
     Claimed mode
 
-    - When `input.claimed` is true, this run is a claimed leaf: another
-      machine owns the task, and the pipeline hands your result to it at the
-      end. The injected task envelope is the task. The claim is the authority
-      to work on it, and the owner refuses stale work when the claim settles,
-      so there is nothing to re-read.
-    - Do not call `orbit.task.show` or `orbit.task.update`; neither is granted
-      in claimed mode. Every step below that says to read or persist task
-      state through them is replaced by your final output:
-      - `execution_summary` (REQUIRED): the full summary item 12 describes.
-        The pipeline's handoff carries it into the owner's
-        `execution_summary`.
-      - `context_files_added`: each exact selector you would have appended
-        (item 4 and item 11). The claim's footprint is frozen, so they are
-        reported to the owner, not applied; prefer staying inside it.
-      - `comment`: anything you would have posted as a task comment,
-        including a blocker (item 8) or leftovers (item 11).
-    - Other owner-routed tools (`orbit.task.*`, `orbit.friction.*`) may be
-      unreachable from this sandbox. An unreachable owner is never a task
-      failure or blocker: put what you would have recorded in `comment` and
-      finish. Report `failed` only for the work itself.
+    - When `input.claimed` is true, another machine owns the task and the
+      pipeline hands your output to it. The injected task is authoritative;
+      `orbit.task.show` and `orbit.task.update` are not granted. Return what
+      you would have written as output fields instead:
+      - `execution_summary` (REQUIRED): the item 12 summary.
+      - `context_files_added`: selectors from items 4 and 11 (reported, not
+        applied; the claim's footprint is frozen, so prefer staying inside it).
+      - `comment`: any task comment, blocker (item 8) or leftovers (item 11).
+    - Other owner-routed tools may be unreachable; that is never a failure or
+      blocker. Record it in `comment`; report `failed` only for the work.
 
     Terminal-task guard
 
