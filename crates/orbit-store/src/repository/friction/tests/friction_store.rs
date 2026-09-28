@@ -267,6 +267,116 @@ fn the_query_filter_matches_a_stored_title() {
     assert_eq!(matched.len(), 1);
 }
 
+/// SQLite's built-in `lower()` folds ASCII only; the query must lower stored
+/// non-ASCII text the same way it lowers the needle, in either direction.
+#[test]
+fn the_query_filter_matches_non_ascii_text_case_insensitively() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let shared = store(temp.path());
+    let one = FrictionStore::open(shared.clone(), "ws_one", temp.path().join("ws_one"))
+        .expect("first workspace");
+    let two = FrictionStore::open(shared, "ws_two", temp.path().join("ws_two"))
+        .expect("second workspace");
+
+    let mut upper_body = add_params(TEST_CODEX_MODEL, at(1, 0), &["tooling"]);
+    upper_body.body = "Le build a signalé ÉCHEC".to_string();
+    let upper_body = one.add(upper_body).expect("upper-case body");
+    let mut lower_title = add_params(TEST_CODEX_MODEL, at(1, 1), &["tooling"]);
+    lower_title.title = Some("Puffer überlauf beim Import".to_string());
+    let lower_title = one.add(lower_title).expect("lower-case title");
+    let mut ascii = add_params(TEST_CODEX_MODEL, at(1, 2), &["tooling"]);
+    ascii.body = "Plain echec and uberlauf without accents".to_string();
+    one.add(ascii).expect("ascii decoy");
+    let mut foreign = add_params(TEST_CODEX_MODEL, at(1, 3), &["tooling"]);
+    foreign.body = "ÉCHEC und ÜBERLAUF elsewhere".to_string();
+    two.add(foreign).expect("other workspace");
+
+    let ids_for = |q: &str| {
+        one.list(&FrictionListFilter {
+            q: Some(q.to_string()),
+            ..FrictionListFilter::default()
+        })
+        .expect("query")
+        .into_iter()
+        .map(|stored| stored.record.id)
+        .collect::<Vec<_>>()
+    };
+    for q in ["ÉCHEC", "échec", "Échec"] {
+        assert_eq!(ids_for(q), vec![upper_body.record.id.clone()], "q={q}");
+    }
+    for q in ["überlauf", "ÜBERLAUF", "Überlauf"] {
+        assert_eq!(ids_for(q), vec![lower_title.record.id.clone()], "q={q}");
+    }
+}
+
+/// Unicode matching stays inside SQL: the page window is applied to matching
+/// rows only, and only the requested rows are decoded.
+#[test]
+fn a_non_ascii_query_pages_in_sql_and_decodes_only_the_page() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let shared = store(temp.path());
+    let one = FrictionStore::open(shared.clone(), "ws_one", temp.path().join("ws_one"))
+        .expect("first workspace");
+    let two = FrictionStore::open(shared, "ws_two", temp.path().join("ws_two"))
+        .expect("second workspace");
+
+    let mut matching = Vec::new();
+    for index in 0..40 {
+        let mut params = add_params(TEST_CODEX_MODEL, at(1, 0), &["tooling"]);
+        params.body = if index % 3 == 0 {
+            format!("Run {index} ended in ÉCHEC")
+        } else {
+            format!("Run {index} succeeded")
+        };
+        let stored = one.add(params).expect("seed record");
+        if index % 3 == 0 {
+            matching.push(stored.record.id);
+        }
+    }
+    for _ in 0..10 {
+        let mut params = add_params(TEST_CODEX_MODEL, at(1, 0), &["tooling"]);
+        params.body = "Foreign échec".to_string();
+        two.add(params).expect("seed foreign record");
+    }
+    assert_eq!(matching.len(), 14);
+
+    DECODED_RECORDS.with(|count| count.set(0));
+    let page = one
+        .list(&FrictionListFilter {
+            q: Some("échec".to_string()),
+            limit: Some(4),
+            offset: 4,
+            ..FrictionListFilter::default()
+        })
+        .expect("bounded page");
+
+    assert_eq!(
+        page.iter()
+            .map(|stored| stored.record.id.clone())
+            .collect::<Vec<_>>(),
+        matching[4..8].to_vec()
+    );
+    assert_eq!(
+        DECODED_RECORDS.with(|count| count.get()),
+        4,
+        "a 4-row page must not decode the other matching or non-matching records"
+    );
+
+    let tail = one
+        .list(&FrictionListFilter {
+            q: Some("ÉCHEC".to_string()),
+            offset: 12,
+            ..FrictionListFilter::default()
+        })
+        .expect("unbounded tail");
+    assert_eq!(
+        tail.into_iter()
+            .map(|stored| stored.record.id)
+            .collect::<Vec<_>>(),
+        matching[12..].to_vec()
+    );
+}
+
 #[test]
 fn list_pages_with_limit_and_offset() {
     let temp = tempfile::tempdir().expect("tempdir");
