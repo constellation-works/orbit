@@ -4,8 +4,8 @@ summary: Running log of why Orbit task runs failed or got blocked, one entry per
 incident_date: 2026-09-27
 last_validated: 2026-09-27
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**"]
-related_artifacts: [ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
+paths: ["scripts/test-validate-codex-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**"]
+related_artifacts: [ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
 ---
 
 # Run failure log
@@ -26,6 +26,41 @@ Each entry records:
 
 Newest entries go first. When you rescue a blocked task, add its cause here before
 you close it out.
+
+## 2026-09-27: Owner and follower minted the same child run ID
+
+- **Where:** Follower (macOS) distributed leaf and the owner's own local drain,
+  in the `commit` step (`git_commit`).
+- **Symptom:** `commit_batch_changes expected exactly one task for job_run_id
+  'jrun-20260928-0230-c1', got 2`.
+- **Cause:** Run IDs (`jrun-<YYYYmmdd-HHMM>-c<n>`) are unique only within one
+  machine's store. The owner's drain and a Mac leaf both created
+  `jrun-20260928-0230-c1` in the same minute, so the owner's task store bound two
+  tasks to that ID. `commit_batch_changes` looks tasks up by run ID alone, not by
+  run ID plus the machine that ran them, so both runs failed at commit.
+  ORB-13599 (#2871) stops reuse within one store only.
+- **Fix:** open. Look tasks up by run ID plus machine in `commit_batch_changes`,
+  `commit_finalize_artifact_changes` and the other batch lookups. Alternatively,
+  make leaf run IDs unique across machines, or have the owner refuse a claim whose
+  run ID is already bound to another active task.
+- **Tasks:** ORB-13605 (rescue PR #2879), ORB-13604.
+
+## 2026-09-27: Codex plugin validator test raced on fixed temp paths
+
+- **Where:** Follower (macOS) distributed leaf, in the `claim_validate` step
+  (`make ci-fast` → `scripts/test-validate-codex-plugin.sh`).
+- **Symptom:** `shutil.Error: [... "[Errno 17] File exists:
+  '/var/folders/.../T/codex-stale-latest-pin/plugin'"]`, then
+  `make: *** [ci-fast] Error 1`.
+- **Cause:** `clone_fixture()` writes each test case to
+  `base_fixture.parent / name`, a fixed name in the shared `$TMPDIR`, outside the
+  per-run `mktemp` directory. It checks whether the folder exists, deletes it,
+  then copies, and never cleans the folder up afterwards. Concurrent leaves on one
+  host raced on the same path, and the leftover folders stay behind.
+- **Fix:** open. Create the case folders inside `fixture_root` so the existing
+  cleanup removes them.
+- **Tasks:** ORB-13606. Its change had already landed via #2867 before validation
+  failed.
 
 ## 2026-09-27: Claimed Mac leaves could not reach the owner's task tools
 
