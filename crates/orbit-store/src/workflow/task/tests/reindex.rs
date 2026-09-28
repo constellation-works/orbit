@@ -11,7 +11,7 @@ use crate::contracts::TaskHistoryUpdateParams;
 use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::repository::task::TaskV2Store;
 use crate::workflow::task::reindex::{
-    clear_after_reindex_snapshot_hook, clear_before_reindex_publication_hook,
+    REINDEX_LOCK_BATCH, clear_after_reindex_snapshot_hook, clear_before_reindex_publication_hook,
     set_after_reindex_snapshot_hook, set_before_reindex_publication_hook,
 };
 
@@ -27,9 +27,11 @@ impl Drop for AfterSnapshotGuard {
 }
 
 /// Attempt the same bundle lock ordinary mutations need while reindex is in
-/// its final read-to-publication window. The timeout proves that the worker
-/// reached that window instead of relying on a sleep or scheduler timing.
+/// the final read-to-publication window of the batch holding `task_id`. The
+/// timeout proves that the worker reached that window instead of relying on a
+/// sleep or scheduler timing.
 fn assert_final_window_blocks_mutation(
+    task_id: &str,
     lock_target: std::path::PathBuf,
     mutate: impl FnOnce() + Send + 'static,
 ) -> std::thread::JoinHandle<()> {
@@ -51,7 +53,7 @@ fn assert_final_window_blocks_mutation(
             .expect("report lock contention");
         mutate();
     });
-    set_before_reindex_publication_hook(move || {
+    set_before_reindex_publication_hook(task_id, move || {
         start_tx.send(()).expect("start mutation worker");
         assert!(
             probe_rx
@@ -76,7 +78,7 @@ fn final_read_to_publication_update_waits_then_keeps_committed_status_and_versio
     let _guard = AfterSnapshotGuard;
     let target = bundle_lock_target(&store.bundle_path("ORB-00000").unwrap());
     let updater = TaskV2Store::new(registry.clone(), ws.to_string());
-    let worker = assert_final_window_blocks_mutation(target, move || {
+    let worker = assert_final_window_blocks_mutation("ORB-00000", target, move || {
         updater
             .update_task_history(
                 "ORB-00000",
@@ -143,7 +145,7 @@ fn final_read_to_publication_delete_cannot_resurrect_binding_or_index() {
     let _guard = AfterSnapshotGuard;
     let target = bundle_lock_target(&store.bundle_path("ORB-00000").unwrap());
     let deleting_store = bundle_store(&registry, &binding);
-    let worker = assert_final_window_blocks_mutation(target, move || {
+    let worker = assert_final_window_blocks_mutation("ORB-00000", target, move || {
         deleting_store
             .delete_bundle("ORB-00000")
             .expect("delete after reindex publication");
@@ -177,6 +179,206 @@ fn final_read_to_publication_delete_cannot_resurrect_binding_or_index() {
             .unwrap(),
         vec!["ORB-00002"]
     );
+}
+
+/// Seed one plain bundle per id in `numbers` and return the ids.
+fn seed_range(
+    store: &TaskBundleStoreV2,
+    registry: &TaskRegistryStore,
+    ws: &str,
+    numbers: std::ops::Range<usize>,
+) -> Vec<String> {
+    numbers
+        .map(|number| {
+            let id = format!("ORB-{number:05}");
+            seed(store, registry, ws, &make_bundle(&id, &id, Vec::new()));
+            id
+        })
+        .collect()
+}
+
+/// Every id still on disk is bound and indexed at its on-disk version; every
+/// id gone from disk has neither a binding nor an index row.
+fn assert_index_matches_disk(
+    store: &TaskBundleStoreV2,
+    registry: &TaskRegistryStore,
+    ws: &str,
+    ids: &[String],
+) {
+    let versions = registry.indexed_task_versions_for_workspace(ws).unwrap();
+    let bound = registry
+        .tasks_for_workspace(ws)
+        .unwrap()
+        .into_iter()
+        .map(|binding| binding.task_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    for id in ids {
+        if store.bundle_path(id).unwrap().exists() {
+            let envelope = store.read_bundle(id).unwrap().envelope;
+            assert!(bound.contains(id), "{id} must stay bound");
+            assert_eq!(
+                versions.get(id).map(String::as_str),
+                Some(envelope.updated_at.to_rfc3339().as_str()),
+                "{id} index row must match its canonical bundle"
+            );
+        } else {
+            assert!(!bound.contains(id), "{id} binding must not be resurrected");
+            assert!(
+                !versions.contains_key(id),
+                "{id} index row must not be resurrected"
+            );
+        }
+    }
+}
+
+#[test]
+fn later_batch_final_window_update_keeps_committed_version() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_batched_update";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let ids = seed_range(&store, &registry, ws, 0..2 * REINDEX_LOCK_BATCH + 1);
+    let late = ids.last().unwrap().clone();
+    let _guard = AfterSnapshotGuard;
+    let target = bundle_lock_target(&store.bundle_path(&late).unwrap());
+    let updater = TaskV2Store::new(registry.clone(), ws.to_string());
+    let updated = late.clone();
+    let worker = assert_final_window_blocks_mutation(&late, target, move || {
+        updater
+            .update_task_history(
+                &updated,
+                &TaskHistoryUpdateParams {
+                    actor: "codex".to_string(),
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .expect("update after reindex publication");
+    });
+
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, ids.len());
+    worker.join().expect("mutation worker");
+    let statuses = TaskV2Store::new(registry.clone(), ws.to_string())
+        .task_status_index()
+        .unwrap();
+    assert_eq!(statuses.get(&late), Some(&TaskStatus::InProgress));
+    assert_index_matches_disk(&store, &registry, ws, &ids);
+}
+
+#[test]
+fn later_batch_final_window_delete_cannot_resurrect_binding_or_index() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_batched_delete";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let ids = seed_range(&store, &registry, ws, 0..2 * REINDEX_LOCK_BATCH + 1);
+    let doomed = ids[REINDEX_LOCK_BATCH].clone();
+    let _guard = AfterSnapshotGuard;
+    let target = bundle_lock_target(&store.bundle_path(&doomed).unwrap());
+    let deleting_store = bundle_store(&registry, &binding);
+    let deleted = doomed.clone();
+    let worker = assert_final_window_blocks_mutation(&doomed, target, move || {
+        deleting_store
+            .delete_bundle(&deleted)
+            .expect("delete after reindex publication");
+    });
+
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, ids.len());
+    worker.join().expect("deletion worker");
+    assert!(!store.bundle_path(&doomed).unwrap().exists());
+    assert_index_matches_disk(&store, &registry, ws, &ids);
+}
+
+const REINDEX_FD_LIMIT_CHILD_TEST: &str =
+    "workflow::task::tests::reindex::reindex_under_descriptor_limit_child";
+const REINDEX_FD_LIMIT_ROOT_ENV: &str = "ORBIT_TEST_REINDEX_FD_LIMIT_ROOT";
+const REINDEX_FD_LIMIT_WS: &str = "ws_fd_limit";
+/// Soft descriptor limit for the child: room for one lock batch plus the
+/// registry and test harness, and fewer descriptors than the fixture has
+/// bundles.
+const REINDEX_CHILD_NOFILE: usize = 128;
+const REINDEX_FD_LIMIT_BUNDLES: usize = 3 * REINDEX_LOCK_BATCH;
+const _: () = assert!(
+    REINDEX_FD_LIMIT_BUNDLES > REINDEX_CHILD_NOFILE,
+    "fixture must hold more bundles than the child may open descriptors"
+);
+
+#[cfg(unix)]
+#[test]
+fn reindex_indexes_more_bundles_than_the_open_file_limit() {
+    let temp = TempDir::new().unwrap();
+    let ws = REINDEX_FD_LIMIT_WS;
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let mut ids = seed_range(&store, &registry, ws, 1..REINDEX_FD_LIMIT_BUNDLES);
+    let last = ids.last().unwrap().clone();
+    // The first batch names a task in the last one whose binding drifted
+    // away, so every binding must land before any batch validates relations.
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "first", vec![child_of(&last)]),
+    );
+    ids.insert(0, "ORB-00000".to_string());
+    for id in ids.iter().step_by(7).chain([&last]) {
+        registry.unregister_task_bundle(id, ws).unwrap();
+    }
+
+    let output = Command::new(std::env::current_exe().expect("test binary path"))
+        .args(["--exact", REINDEX_FD_LIMIT_CHILD_TEST, "--ignored"])
+        .env(REINDEX_FD_LIMIT_ROOT_ENV, temp.path())
+        .output()
+        .expect("spawn descriptor-limited reindex");
+    assert!(
+        output.status.success(),
+        "descriptor-limited reindex failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_index_matches_disk(&store, &registry, ws, &ids);
+    assert_eq!(
+        registry.tasks_for_workspace(ws).unwrap().len(),
+        REINDEX_FD_LIMIT_BUNDLES
+    );
+    assert_eq!(
+        registry
+            .indexed_relation_targets(ws, "ORB-00000", TaskRelationType::ChildOf)
+            .unwrap(),
+        vec![last]
+    );
+}
+
+/// Runs only when spawned by
+/// `reindex_indexes_more_bundles_than_the_open_file_limit`.
+#[cfg(unix)]
+#[test]
+#[ignore = "spawned with a lowered descriptor limit by its parent test"]
+fn reindex_under_descriptor_limit_child() {
+    let Some(root) = std::env::var_os(REINDEX_FD_LIMIT_ROOT_ENV) else {
+        return;
+    };
+    let registry = open_registry(Path::new(&root));
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: both calls only read or write the local `limit` struct.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    limit.rlim_cur = limit.rlim_max.min(REINDEX_CHILD_NOFILE as libc::rlim_t);
+    // SAFETY: as above.
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
+
+    let outcome = reindex_workspace(&registry, REINDEX_FD_LIMIT_WS)
+        .expect("reindex under the lowered descriptor limit");
+    assert_eq!(outcome.indexed, REINDEX_FD_LIMIT_BUNDLES);
 }
 
 /// A concurrent update after the first envelope read must not publish the

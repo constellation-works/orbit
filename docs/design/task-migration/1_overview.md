@@ -195,10 +195,12 @@ These lock files must not be removed while Orbit processes run. Writers recheck
 the envelope after acquiring the lock, so a queued update cannot recreate a
 deleted bundle. Upgrades changing this lock location require restarting all
 writers together; older processes use the former in-bundle lock.
-Reindex acquires readable candidate bundle locks in task-ID order and holds
-them from its final envelope reads through registry binding and index
-publication. An ordinary update or deletion waits for publication, then
-commits its own state.
+Reindex works in bounded, task-ID-ordered batches of bundles, so the locks
+it holds at once — and their open descriptors — stay bounded however large the
+workspace grows. It first registers every readable bundle's binding batch by
+batch, then, for each batch, holds its locks from the final envelope reads
+through index publication. An ordinary update or deletion of a task in that
+batch waits for publication, then commits its own state.
 
 Deletion atomically renames `<task-id>/` to `<task-id>.deleted/` and syncs its
 parent before removing registry entries, then removes the
