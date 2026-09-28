@@ -129,10 +129,11 @@ fn erofs_bundle_publish_names_path_and_hints_sandbox() {
     );
 }
 
-/// `write_yaml_atomic_with` is bound to durable `atomic_write_text`, so both
+/// `write_yaml_durable_with` is bound to durable `atomic_write_text`, so both
 /// bundle create and envelope rewrite fsync the `task.yaml` temp file before
-/// rename. When `strace` is available this asserts the syscall order; a
-/// sandbox denial is not a product failure.
+/// rename. When `strace` is available this asserts that each temp rename
+/// follows a successful fsync of that exact file by the renaming thread; a
+/// sandbox denial or missing `strace` is not a product failure.
 #[test]
 fn task_yaml_temp_is_fsynced_before_rename_on_create_and_rewrite() {
     exercise_task_yaml_create_and_rewrite();
@@ -206,37 +207,333 @@ fn trace_task_yaml_fsync_before_rename() {
     if trace.is_empty() {
         return;
     }
-    assert_task_yaml_tmp_fsynced_before_rename(&trace);
+    if let Err(violation) = check_task_yaml_tmp_fsynced_before_rename(&trace) {
+        panic!("task.yaml durability trace rejected: {violation:?}\n{trace}");
+    }
 }
 
-#[cfg(target_os = "linux")]
-fn assert_task_yaml_tmp_fsynced_before_rename(trace: &str) {
-    let mut last_rename_line = 0usize;
-    let mut last_fsync_line = 0usize;
+/// Why an `strace -f -y` log fails to prove that every `task.yaml` temp file
+/// was durably flushed before it was renamed into place.
+#[derive(Debug, PartialEq, Eq)]
+enum TaskYamlTraceViolation {
+    /// A successful `task.yaml` temp rename (1-based trace line) had no earlier
+    /// successful fsync of that exact temp file by the renaming thread.
+    UnsyncedRename { line: usize },
+    /// Fewer than the create and rewrite renames completed in the trace.
+    MissingRenames { found: usize },
+}
+
+/// A traced syscall that has started but whose result is on a later
+/// `<... resumed>` line, keyed by the thread that issued it.
+enum PendingCall {
+    Sync {
+        path: Option<String>,
+    },
+    Rename {
+        source: String,
+        destination: String,
+        synced: bool,
+        line: usize,
+    },
+}
+
+/// Returns the number of successful `task.yaml` temp renames when each one
+/// follows a successful fsync/fdatasync of the same temp file, as named by the
+/// `-y` descriptor path, completed earlier by the same thread.
+fn check_task_yaml_tmp_fsynced_before_rename(trace: &str) -> Result<usize, TaskYamlTraceViolation> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut synced: HashSet<(Option<&str>, String)> = HashSet::new();
+    let mut pending: HashMap<Option<&str>, PendingCall> = HashMap::new();
     let mut renames = 0usize;
     for (index, line) in trace.lines().enumerate() {
         let number = index + 1;
-        if (line.contains("fsync") || line.contains("fdatasync")) && !line.contains("unfinished") {
-            last_fsync_line = number;
+        let (pid, body) = split_trace_pid(line);
+        let (call, result) = if let Some(resumed) = body.strip_prefix("<... ") {
+            let Some(call) = pending.remove(&pid) else {
+                continue;
+            };
+            let Some(result) = syscall_result(resumed) else {
+                continue;
+            };
+            (call, result)
+        } else {
+            let Some((name, rest)) = body.split_once('(') else {
+                continue;
+            };
+            let (args, result) = match rest.strip_suffix(" <unfinished ...>") {
+                Some(args) => (args, None),
+                None => match rest.rsplit_once(") = ") {
+                    Some((args, result)) => (args, Some(result)),
+                    None => continue,
+                },
+            };
+            let call = match name {
+                "fsync" | "fdatasync" => PendingCall::Sync {
+                    path: descriptor_path(args),
+                },
+                "rename" | "renameat" | "renameat2" => {
+                    let Some((source, destination)) = rename_paths(args) else {
+                        continue;
+                    };
+                    let synced = synced.contains(&(pid, source.clone()));
+                    PendingCall::Rename {
+                        source,
+                        destination,
+                        synced,
+                        line: number,
+                    }
+                }
+                _ => continue,
+            };
+            let Some(result) = result else {
+                pending.insert(pid, call);
+                continue;
+            };
+            (call, result)
+        };
+        if !syscall_succeeded(result) {
+            continue;
         }
-        if is_task_yaml_tmp_rename(line) {
-            assert!(
-                last_fsync_line > last_rename_line,
-                "task.yaml temp rename without a preceding fsync (rename line {number}): {line}\n{trace}"
-            );
-            last_rename_line = number;
-            renames += 1;
+        match call {
+            PendingCall::Sync { path: Some(path) } => {
+                synced.insert((pid, path));
+            }
+            PendingCall::Sync { path: None } => {}
+            PendingCall::Rename {
+                source,
+                destination,
+                synced: was_synced,
+                line,
+            } => {
+                if !is_task_yaml_tmp_rename(&source, &destination) {
+                    continue;
+                }
+                if !was_synced {
+                    return Err(TaskYamlTraceViolation::UnsyncedRename { line });
+                }
+                synced.remove(&(pid, source));
+                renames += 1;
+            }
         }
     }
-    assert!(
-        renames >= 2,
-        "expected fsynced create and rewrite renames of task.yaml, found {renames}:\n{trace}"
+    if renames < 2 {
+        return Err(TaskYamlTraceViolation::MissingRenames { found: renames });
+    }
+    Ok(renames)
+}
+
+/// Splits the `strace -f` thread prefix (`1234 ` in `-o` logs, `[pid 1234] `
+/// on stderr) from the syscall text.
+fn split_trace_pid(line: &str) -> (Option<&str>, &str) {
+    let line = line.trim_start();
+    if let Some(rest) = line.strip_prefix("[pid")
+        && let Some((pid, body)) = rest.split_once(']')
+    {
+        return (Some(pid.trim()), body.trim_start());
+    }
+    match line.split_once(' ') {
+        Some((pid, body)) if !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) => {
+            (Some(pid), body.trim_start())
+        }
+        _ => (None, line),
+    }
+}
+
+fn syscall_result(resumed: &str) -> Option<&str> {
+    resumed.rsplit_once(") = ").map(|(_, result)| result)
+}
+
+fn syscall_succeeded(result: &str) -> bool {
+    result.split_whitespace().next() == Some("0")
+}
+
+/// The `-y` path of a single descriptor argument such as `3</dir/file>`.
+fn descriptor_path(args: &str) -> Option<String> {
+    let start = args.find('<')?;
+    let end = args.rfind('>')?;
+    (end > start).then(|| args[start + 1..end].to_string())
+}
+
+/// Source and destination of `rename`, `renameat`, or `renameat2`, resolving a
+/// relative path against its `-y` directory-descriptor annotation.
+fn rename_paths(args: &str) -> Option<(String, String)> {
+    let mut paths = Vec::new();
+    let mut directory: Option<String> = None;
+    let mut chars = args.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '<' => directory = Some(chars.by_ref().take_while(|&c| c != '>').collect()),
+            '"' => {
+                let mut path = String::new();
+                while let Some(ch) = chars.next() {
+                    match ch {
+                        '"' => break,
+                        '\\' => path.extend(chars.next()),
+                        _ => path.push(ch),
+                    }
+                }
+                let path = match directory.take() {
+                    Some(dir) if !path.starts_with('/') => format!("{dir}/{path}"),
+                    _ => path,
+                };
+                paths.push(path);
+            }
+            _ => {}
+        }
+    }
+    let mut paths = paths.into_iter();
+    Some((paths.next()?, paths.next()?))
+}
+
+fn is_task_yaml_tmp_rename(source: &str, destination: &str) -> bool {
+    let file_name = |path: &str| {
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned)
+    };
+    let (Some(source), Some(destination)) = (file_name(source), file_name(destination)) else {
+        return false;
+    };
+    source.starts_with(".task.yaml.") && source.ends_with(".tmp") && destination == "task.yaml"
+}
+
+const CREATE_TMP: &str = "/work/tasks/ORB-00000.staging/.task.yaml.11.0.tmp";
+const CREATE_DST: &str = "/work/tasks/ORB-00000.staging/task.yaml";
+const REWRITE_TMP: &str = "/work/tasks/ORB-00000/.task.yaml.22.1.tmp";
+const REWRITE_DST: &str = "/work/tasks/ORB-00000/task.yaml";
+
+fn fsync_line(pid: u32, path: &str, result: &str) -> String {
+    format!("{pid} fsync(3<{path}>) = {result}")
+}
+
+fn rename_line(pid: u32, source: &str, destination: &str) -> String {
+    format!("{pid} rename(\"{source}\", \"{destination}\") = 0")
+}
+
+fn trace(lines: &[String]) -> String {
+    lines.join("\n")
+}
+
+#[test]
+fn fsync_trace_accepts_synced_create_and_rewrite_renames() {
+    let log = trace(&[
+        "4100 fsync(5</work/unrelated.log>) = 0".to_string(),
+        fsync_line(4101, CREATE_TMP, "0"),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+        "4101 fsync(4</work/tasks/ORB-00000.staging>) = 0".to_string(),
+        format!("4101 fdatasync(3<{REWRITE_TMP}>) = 0"),
+        format!(
+            "4101 renameat2(AT_FDCWD</work>, \"{REWRITE_TMP}\", AT_FDCWD</work>, \"{REWRITE_DST}\", 0) = 0"
+        ),
+        "4101 +++ exited with 0 +++".to_string(),
+    ]);
+    assert_eq!(check_task_yaml_tmp_fsynced_before_rename(&log), Ok(2));
+}
+
+#[test]
+fn fsync_trace_accepts_resumed_sync_and_relative_renameat_amid_other_threads() {
+    let log = trace(&[
+        format!("4101 fsync(3<{CREATE_TMP}> <unfinished ...>"),
+        "4102 fsync(7</work/other.db>) = 0".to_string(),
+        "4101 <... fsync resumed>) = 0".to_string(),
+        format!("4101 rename(\"{CREATE_TMP}\", \"{CREATE_DST}\" <unfinished ...>"),
+        "4102 fsync(7</work/other.db>) = 0".to_string(),
+        "4101 <... rename resumed>) = 0".to_string(),
+        fsync_line(4101, REWRITE_TMP, "0"),
+        "4101 renameat(6</work/tasks/ORB-00000>, \".task.yaml.22.1.tmp\", 6</work/tasks/ORB-00000>, \"task.yaml\") = 0".to_string(),
+    ]);
+    assert_eq!(check_task_yaml_tmp_fsynced_before_rename(&log), Ok(2));
+}
+
+#[test]
+fn fsync_trace_rejects_rename_after_only_unrelated_file_fsync() {
+    let log = trace(&[
+        fsync_line(4101, "/work/tasks/ORB-00000.staging/events.jsonl", "0"),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+        fsync_line(4101, REWRITE_TMP, "0"),
+        rename_line(4101, REWRITE_TMP, REWRITE_DST),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&log),
+        Err(TaskYamlTraceViolation::UnsyncedRename { line: 2 })
     );
 }
 
-#[cfg(target_os = "linux")]
-fn is_task_yaml_tmp_rename(line: &str) -> bool {
-    let is_rename =
-        line.contains("rename(") || line.contains("renameat(") || line.contains("renameat2(");
-    is_rename && line.contains(".task.yaml.") && line.contains(".tmp") && line.contains("task.yaml")
+#[test]
+fn fsync_trace_rejects_rename_after_failed_fsync() {
+    let log = trace(&[
+        fsync_line(4101, CREATE_TMP, "0"),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+        fsync_line(4101, REWRITE_TMP, "-1 EIO (Input/output error)"),
+        rename_line(4101, REWRITE_TMP, REWRITE_DST),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&log),
+        Err(TaskYamlTraceViolation::UnsyncedRename { line: 4 })
+    );
+}
+
+#[test]
+fn fsync_trace_rejects_fsync_after_matching_rename() {
+    let log = trace(&[
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+        fsync_line(4101, CREATE_TMP, "0"),
+        fsync_line(4101, REWRITE_TMP, "0"),
+        rename_line(4101, REWRITE_TMP, REWRITE_DST),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&log),
+        Err(TaskYamlTraceViolation::UnsyncedRename { line: 1 })
+    );
+}
+
+#[test]
+fn fsync_trace_rejects_interleaved_sync_by_another_thread_or_resumed_after_rename() {
+    let other_thread = trace(&[
+        fsync_line(4102, CREATE_TMP, "0"),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+        fsync_line(4101, REWRITE_TMP, "0"),
+        rename_line(4101, REWRITE_TMP, REWRITE_DST),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&other_thread),
+        Err(TaskYamlTraceViolation::UnsyncedRename { line: 2 })
+    );
+
+    let resumed_late = trace(&[
+        fsync_line(4101, CREATE_TMP, "0"),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+        format!("4102 fsync(3<{REWRITE_TMP}> <unfinished ...>"),
+        rename_line(4101, REWRITE_TMP, REWRITE_DST),
+        "4102 <... fsync resumed>) = 0".to_string(),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&resumed_late),
+        Err(TaskYamlTraceViolation::UnsyncedRename { line: 4 })
+    );
+
+    let resumed_failed = trace(&[
+        format!("4101 fsync(3<{CREATE_TMP}> <unfinished ...>"),
+        "4102 fsync(7</work/other.db>) = 0".to_string(),
+        "4101 <... fsync resumed>) = -1 EIO (Input/output error)".to_string(),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&resumed_failed),
+        Err(TaskYamlTraceViolation::UnsyncedRename { line: 4 })
+    );
+}
+
+#[test]
+fn fsync_trace_requires_both_create_and_rewrite_renames() {
+    let log = trace(&[
+        fsync_line(4101, CREATE_TMP, "0"),
+        rename_line(4101, CREATE_TMP, CREATE_DST),
+    ]);
+    assert_eq!(
+        check_task_yaml_tmp_fsynced_before_rename(&log),
+        Err(TaskYamlTraceViolation::MissingRenames { found: 1 })
+    );
 }
