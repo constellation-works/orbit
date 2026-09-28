@@ -52,7 +52,7 @@ impl OwnerCoordinator for Owner {
     }
 }
 
-fn isolated_child() -> bool {
+fn isolated_child(test: &str) -> bool {
     if std::env::var_os("ORBIT_WORKER_FIXTURE_CHILD").is_some() {
         return false;
     }
@@ -61,8 +61,14 @@ fn isolated_child() -> bool {
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
     });
-    let output = command.args(["--exact", "runtime::tests::worker_coordination::owner_routing_fences_generic_writes_across_separate_stores", "--nocapture"])
-        .env("ORBIT_WORKER_FIXTURE_CHILD", "1").env("HOME", home.path()).env("USERPROFILE", home.path()).output().expect("isolated fixture");
+    let test = format!("runtime::tests::worker_coordination::{test}");
+    let output = command
+        .args(["--exact", test.as_str(), "--nocapture"])
+        .env("ORBIT_WORKER_FIXTURE_CHILD", "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .output()
+        .expect("isolated fixture");
     assert!(
         output.status.success(),
         "{}\n{}",
@@ -74,7 +80,7 @@ fn isolated_child() -> bool {
 
 #[test]
 fn owner_routing_fences_generic_writes_across_separate_stores() {
-    if isolated_child() {
+    if isolated_child("owner_routing_fences_generic_writes_across_separate_stores") {
         return;
     }
     let (_owner_root, owner_runtime, repo) = test_runtime();
@@ -664,4 +670,216 @@ fn owner_reads_decode_bare_values_and_the_mcp_envelope() {
     let error = decode_owner_read::<Vec<String>>(json!({"items": 3, "other": 1}))
         .expect_err("not an envelope");
     assert!(error.to_string().contains("owner read response"), "{error}");
+}
+
+/// Commit the current tree of a fresh repository on a named branch, leaving
+/// Orbit's own `.orbit/` data out of every commit.
+fn init_git_checkout(repo: &std::path::Path) {
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(repo)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+            ])
+            .args(["-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--initial-branch=agent-main"]);
+    std::fs::write(repo.join(".gitignore"), ".orbit/\n").expect("gitignore");
+    git(&["add", ".gitignore"]);
+    git(&["commit", "-m", "initial"]);
+}
+
+/// [ORB-13649] The owner's own drain and a follower's claimed leaf each
+/// minted `jrun-20260928-0230-c1`, so the owner's store held two tasks bound
+/// to one run id and both commit steps failed with "expected exactly one task
+/// for job_run_id ..., got 2". A run is its id plus the machine it executes
+/// on: each side's commit step must find and commit only its own task.
+#[test]
+fn owner_and_follower_runs_sharing_a_run_id_each_commit_their_own_task() {
+    if isolated_child("owner_and_follower_runs_sharing_a_run_id_each_commit_their_own_task") {
+        return;
+    }
+    let (_owner_root, owner_runtime, repo) = test_runtime();
+    let (_follower_root, follower, follower_repo) = test_runtime();
+    init_git_checkout(&repo);
+    init_git_checkout(&follower_repo);
+    // The owner's drain already admitted its task; only the other is left for
+    // the follower's pull.
+    let owner_task = create_context_task(
+        &owner_runtime,
+        &repo,
+        TaskStatus::InProgress,
+        &["file:src/owner.rs"],
+    );
+    let claimed_task = create_context_task(
+        &owner_runtime,
+        &repo,
+        TaskStatus::Backlog,
+        &["file:src/follower.rs"],
+    );
+    for task in [&owner_task, &claimed_task] {
+        owner_runtime
+            .stores()
+            .task_documents()
+            .update_task_document(
+                &task.id,
+                TaskDocumentUpdateParams {
+                    actor: "fixture".into(),
+                    plan: Some("Implement and validate.".into()),
+                    execution_summary: Some("Implemented and validated.".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("plan and summary");
+    }
+
+    // The owner's drain mints a local run and binds its task to it.
+    let owner_location = ExecutionLocation {
+        machine_id: "owner".into(),
+        machine_name: None,
+    };
+    let run_id = owner_runtime
+        .stores()
+        .jobs()
+        .with_execution_location(Some(owner_location.clone()))
+        .insert_job_run("task_pr_pipeline", 1, chrono::Utc::now(), None, None)
+        .expect("owner run")
+        .run_id;
+    use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+    RuntimeHost::apply_task_automation_update(
+        &owner_runtime,
+        &owner_task.id,
+        TaskAutomationUpdate {
+            job_run_id: Some(run_id.clone()),
+            ..Default::default()
+        },
+    )
+    .expect("owner binding");
+
+    // The follower's leaf minted the same id on its own machine and binds its
+    // claim to it.
+    let boundary = TaskCommitBoundary::new(
+        owner_runtime.sqlite_store().expect("store"),
+        TaskRegistryStore::open(&task_registry_path(&owner_runtime.global_root()))
+            .expect("registry"),
+        owner_runtime.workspace_id().expect("workspace"),
+    )
+    .expect("boundary");
+    let request = AdmissionRequest {
+        request_id: "request".into(),
+        caller_version: "fixture".into(),
+        caller_schema: 1,
+        caller_review_policy: "none".into(),
+        run_context: AdmissionRunContext {
+            run_id: "drain".into(),
+            job_name: "auto".into(),
+            machine_name: None,
+        },
+        ship: AdmissionShipContract {
+            mode: "pr".into(),
+            base_branch: "agent-main".into(),
+            landing_branch: "agent-main".into(),
+            review_policy: "none".into(),
+            completion: "review".into(),
+            authorization_reference: None,
+        },
+    };
+    let follower_location = ExecutionLocation {
+        machine_id: "executor".into(),
+        machine_name: None,
+    };
+    let AdmissionLookup::Found { receipt, .. } = boundary
+        .admit_task(
+            &AdmissionIdentity::trusted_remote(follower_location.clone()),
+            &request,
+            "fixture",
+            &repo,
+            &owner_runtime.data_root(),
+        )
+        .expect("admit")
+    else {
+        panic!("receipt")
+    };
+    let claim = receipt.claim.expect("claim");
+    assert_eq!(
+        claim.task_id, claimed_task.id,
+        "admission picks the backlog task"
+    );
+    boundary
+        .mutate_execution_claim(
+            Some(&ClaimInvocation::trusted_worker(
+                claimed_task.id.clone(),
+                claim.claim_id.clone(),
+                "executor".into(),
+                None,
+            )),
+            "bind",
+            &ClaimMutation::Bind {
+                run: ClaimRun {
+                    machine_id: "executor".into(),
+                    run_id: run_id.clone(),
+                },
+                ship: request.ship.clone(),
+            },
+        )
+        .expect("bind");
+    let binding = WorkerInvocation {
+        owner_machine_id: "owner".into(),
+        owner_workspace_id: owner_runtime.workspace_id().expect("workspace"),
+        owner_destination: "owner/workspace".into(),
+        task_id: claimed_task.id.clone(),
+        claim_id: claim.claim_id.clone(),
+        execution: follower_location,
+        bound_run_id: run_id.clone(),
+    };
+    assert_eq!(
+        owner_runtime
+            .list_tasks_filtered(None, None, None, Some(&run_id), None, None)
+            .expect("bindings")
+            .len(),
+        2,
+        "the owner's store binds both tasks to the one run id"
+    );
+    let owner = Arc::new(Owner {
+        runtime: owner_runtime,
+        offline: AtomicBool::new(false),
+    });
+    let worker = follower
+        .with_worker_invocation(binding, owner.clone())
+        .expect("worker");
+
+    let commit = |host: &dyn RuntimeHost, checkout: &std::path::Path| {
+        orbit_engine::execute_deterministic_action(
+            host,
+            "git_commit",
+            &json!({}),
+            &json!({"scope": "all", "job_run_id": run_id, "workspace_path": checkout}),
+            false,
+            &Default::default(),
+            None,
+        )
+    };
+    std::fs::create_dir_all(repo.join("src")).expect("owner src");
+    std::fs::write(repo.join("src/owner.rs"), "// owner\n").expect("owner change");
+    let owner_commit = commit(&owner.runtime, &repo).expect("owner drain commit");
+    assert_eq!(owner_commit["task_id"], json!(owner_task.id));
+    assert_eq!(owner_commit["committed"], json!(true));
+
+    std::fs::create_dir_all(follower_repo.join("src")).expect("follower src");
+    std::fs::write(follower_repo.join("src/follower.rs"), "// follower\n")
+        .expect("follower change");
+    let follower_commit = commit(&worker, &follower_repo).expect("follower leaf commit");
+    assert_eq!(follower_commit["task_id"], json!(claimed_task.id));
+    assert_eq!(follower_commit["committed"], json!(true));
 }

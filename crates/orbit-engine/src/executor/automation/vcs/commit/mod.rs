@@ -60,7 +60,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
     }
 
     let fallback_batch_tasks = if explicit_completed_task_ids.is_none() {
-        Some(host.list_tasks_filtered(None, None, None, Some(batch_id), None, None)?)
+        Some(host.list_run_tasks(batch_id)?)
     } else {
         None
     };
@@ -126,7 +126,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "commit_finalize_artifact_changes")?;
-    let batch_tasks = host.list_tasks_filtered(None, None, None, Some(batch_id), None, None)?;
+    let batch_tasks = host.list_run_tasks(batch_id)?;
     if batch_tasks.is_empty() {
         return Ok(json!({}));
     }
@@ -181,7 +181,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let batch_id = required_job_run_id(input, "commit_batch_changes")?;
-    let batch_tasks = host.list_tasks_filtered(None, None, None, Some(batch_id), None, None)?;
+    let batch_tasks = host.list_run_tasks(batch_id)?;
     let [task] = batch_tasks.as_slice() else {
         return Err(OrbitError::InvalidInput(format!(
             "commit_batch_changes expected exactly one task for job_run_id '{batch_id}', got {}",

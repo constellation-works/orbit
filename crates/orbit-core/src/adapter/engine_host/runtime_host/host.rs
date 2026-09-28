@@ -198,6 +198,10 @@ impl RuntimeHost for OrbitRuntime {
         )
     }
 
+    fn list_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, OrbitError> {
+        OrbitRuntime::list_run_tasks(self, run_id)
+    }
+
     fn start_task(
         &self,
         task_id: &str,

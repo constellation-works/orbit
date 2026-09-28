@@ -310,14 +310,7 @@ impl OrbitRuntime {
                 );
                 continue;
             }
-            let owned = self.list_tasks_filtered(
-                None,
-                None,
-                None,
-                Some(lineage_run_id.as_str()),
-                None,
-                None,
-            )?;
+            let owned = self.list_run_tasks(lineage_run_id)?;
             for task in owned {
                 if !visited.insert(task.id.clone()) {
                     continue;

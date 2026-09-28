@@ -5,7 +5,7 @@ incident_date: 2026-09-27
 last_validated: 2026-09-27
 tags: [incident, rca, operations, distributed-drain, sandbox]
 paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**"]
-related_artifacts: [ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
+related_artifacts: [ORB-13649, ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
 ---
 
 # Run failure log
@@ -39,10 +39,10 @@ you close it out.
   tasks to that ID. `commit_batch_changes` looks tasks up by run ID alone, not by
   run ID plus the machine that ran them, so both runs failed at commit.
   ORB-13599 (#2871) stops reuse within one store only.
-- **Fix:** open (ORB-13649). Look tasks up by run ID plus machine in `commit_batch_changes`,
-  `commit_finalize_artifact_changes` and the other batch lookups. Alternatively,
-  make leaf run IDs unique across machines, or have the owner refuse a claim whose
-  run ID is already bound to another active task.
+- **Fix:** ORB-13649. Every run-keyed task lookup (commit, merge, blocking on
+  run failure, resume) now matches the run ID plus the machine that executed the
+  run, so a shared ID resolves to each machine's own task. Recorded in
+  [distributed-drain decisions](../design/distributed-drain/4_decisions.md#a-run-is-its-id-plus-the-machine-that-executes-it).
 - **Tasks:** ORB-13605 (rescue PR #2879), ORB-13604.
 
 ## 2026-09-27: Codex plugin validator test raced on fixed temp paths

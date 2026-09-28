@@ -483,7 +483,7 @@ audit label, and absent historical identity reads as *unknown*, never as "the ow
 | Record | Field | Set by | Notes |
 |---|---|---|---|
 | Job run | `executed_on` | the runtime that inserts the run | immutable; steps inherit; nullable |
-| Task | `job_run_machine` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; the legacy `job_run_host` name is still read |
+| Task | `job_run_machine` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; run ids are unique per machine, so run-keyed task lookups match both fields; the legacy `job_run_host` name is still read |
 | Task history | `pulled_by` event | `orbit.task.pull` | request and claim identity |
 | Task artifact | `origin` | the owner, at put time | from trusted invocation context; remote labels alone leave it unknown |
 
