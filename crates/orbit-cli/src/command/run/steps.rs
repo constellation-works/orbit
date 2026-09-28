@@ -59,9 +59,7 @@ pub(crate) fn resolve_run(
     read: RunRead,
 ) -> Result<JobRun, OrbitError> {
     if let Some(run_id) = run_id {
-        return read
-            .show(runtime, run_id)
-            .map_err(|_| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()));
+        return read.show(runtime, run_id);
     }
 
     read.list(
