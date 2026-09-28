@@ -3656,3 +3656,15 @@ assert.ok(detailActionError.textContent.includes(detailShipError));
 "##,
     );
 }
+
+/// Run detail, events, and logs stay on the run the operator is looking at
+/// when an earlier fetch resolves or rejects after navigation, including a
+/// workspace change and a return to the run that was left.
+#[test]
+fn dashboard_run_detail_ignores_stale_fetches_after_navigation() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_run_detail_stale.mjs"),
+    ));
+}

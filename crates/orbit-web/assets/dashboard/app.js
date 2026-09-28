@@ -38,6 +38,8 @@ import {
   clearExpandedStepIndices,
   toggleExpandedStepIndex,
   initRunDetail,
+  beginRunDetailFetch,
+  runDetailFetchCurrent,
 } from './js/run-detail.js';
 
 const STATUS_ORDER = [
@@ -1428,26 +1430,34 @@ function fetchAndRenderTaskLocks() {
 }
 
 function fetchAndRenderRunDetail() {
-  if (!getActiveRunId()) return Promise.resolve();
-  return fetchJson(`/api/runs/${encodeURIComponent(getActiveRunId())}`).then((data) => {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("detail");
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}`).then((data) => {
+    if (!runDetailFetchCurrent("detail", token)) return;
     setActiveRunDetail(data);
     renderRunDetailMeta();
     renderRunKnowledge();
     renderRunGantt();
     renderRunSteps();
   }).catch((e) => {
-    renderRunDetailEmpty(`Run not found: ${getActiveRunId()}`);
+    if (!runDetailFetchCurrent("detail", token)) return;
+    renderRunDetailEmpty(`Run not found: ${runId}`);
     throw e;
   });
 }
 
 function fetchAndRenderRunEvents() {
-  if (!getActiveRunId()) return Promise.resolve();
-  return fetchJson(`/api/runs/${encodeURIComponent(getActiveRunId())}/events?limit=${RUN_EVENTS_LIMIT}`).then((events) => {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("events");
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/events?limit=${RUN_EVENTS_LIMIT}`).then((events) => {
+    if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents(events);
     renderRunEvents();
     renderRunGantt();
   }).catch((error) => {
+    if (!runDetailFetchCurrent("events", token)) return;
     setActiveRunEvents([]);
     if (error.status !== 404) setActiveRunEventsError(error.message);
     renderRunEvents();
@@ -1456,11 +1466,15 @@ function fetchAndRenderRunEvents() {
 }
 
 function fetchAndRenderRunLogs() {
-  if (!getActiveRunId()) return Promise.resolve();
-  return fetchJson(`/api/runs/${encodeURIComponent(getActiveRunId())}/logs?limit=${RUN_EVENTS_LIMIT}`).then((logs) => {
+  const runId = getActiveRunId();
+  if (!runId) return Promise.resolve();
+  const token = beginRunDetailFetch("logs");
+  return fetchJson(`/api/runs/${encodeURIComponent(runId)}/logs?limit=${RUN_EVENTS_LIMIT}`).then((logs) => {
+    if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs(logs);
     renderRunSteps();
   }).catch(() => {
+    if (!runDetailFetchCurrent("logs", token)) return;
     setActiveRunLogs([]);
     renderRunSteps();
   });
