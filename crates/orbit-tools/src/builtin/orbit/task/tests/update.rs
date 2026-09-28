@@ -13,27 +13,14 @@ use orbit_common::OrbitError;
 use super::super::update::*;
 use crate::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, Tool, ToolContext};
 
-#[derive(Debug, Clone)]
-struct FakeTask {
-    id: String,
-    source_task_id: Option<String>,
-    updated_at: String,
-    history: Vec<Value>,
-}
-
 struct FakeTaskHost {
-    task: Mutex<FakeTask>,
+    last_input: Mutex<Option<Value>>,
 }
 
 impl FakeTaskHost {
-    fn seeded(source_task_id: Option<&str>) -> Self {
+    fn new() -> Self {
         Self {
-            task: Mutex::new(FakeTask {
-                id: "ORB-00001".to_string(),
-                source_task_id: source_task_id.map(ToOwned::to_owned),
-                updated_at: "2026-05-17T00:00:00Z".to_string(),
-                history: Vec::new(),
-            }),
+            last_input: Mutex::new(None),
         }
     }
 }
@@ -48,31 +35,16 @@ impl OrbitToolHost for FakeTaskHost {
         _reservation_owner: Option<crate::ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         assert_eq!(action, OrbitBuiltinAction::TaskUpdate);
-        let id = input.get("id").and_then(Value::as_str).expect("id");
-        let mut task = self.task.lock().expect("task lock");
-        assert_eq!(id, task.id);
-
-        if let Some(value) = input.get("source_task_id") {
-            let raw = value.as_str().ok_or_else(|| {
-                OrbitError::InvalidInput("`source_task_id` must be a string".to_string())
-            })?;
-            let next_source_task_id = (!raw.is_empty()).then(|| raw.to_string());
-            if task.source_task_id != next_source_task_id {
-                task.updated_at = "2026-05-17T00:00:01Z".to_string();
-                task.history.push(json!({
-                    "event": "updated",
-                    "note": "source_task_id changed",
-                }));
-            }
-            task.source_task_id = next_source_task_id;
-        }
+        let id = input
+            .get("id")
+            .and_then(Value::as_str)
+            .expect("id")
+            .to_string();
+        *self.last_input.lock().expect("host input lock") = Some(input);
 
         Ok(json!({
-            "id": task.id.clone(),
+            "id": id,
             "type": "bug",
-            "source_task_id": task.source_task_id.clone(),
-            "updated_at": task.updated_at.clone(),
-            "history": task.history.clone(),
         }))
     }
 
@@ -156,7 +128,7 @@ fn schema_omits_and_handler_rejects_required_tools() {
     for field in ["required_tools", "requiredTools", "required-tool"] {
         let error = OrbitTaskUpdateTool
             .execute(
-                &update_tool_context(Arc::new(FakeTaskHost::seeded(None))),
+                &update_tool_context(Arc::new(FakeTaskHost::new())),
                 json!({
                     "id": "ORB-00001",
                     "model": "codex",
@@ -180,7 +152,7 @@ fn schema_and_handler_exclude_inline_artifacts() {
 
     let error = OrbitTaskUpdateTool
         .execute(
-            &update_tool_context(Arc::new(FakeTaskHost::seeded(None))),
+            &update_tool_context(Arc::new(FakeTaskHost::new())),
             json!({
                 "id": "ORB-00001",
                 "model": "codex",
@@ -206,7 +178,7 @@ fn schema_omits_and_handler_rejects_force() {
 
     let error = OrbitTaskUpdateTool
         .execute(
-            &update_tool_context(Arc::new(FakeTaskHost::seeded(None))),
+            &update_tool_context(Arc::new(FakeTaskHost::new())),
             json!({
                 "id": "ORB-00001",
                 "model": "codex",
@@ -222,9 +194,9 @@ fn schema_omits_and_handler_rejects_force() {
 }
 
 #[test]
-fn update_handler_persists_source_task_id() {
-    let host = Arc::new(FakeTaskHost::seeded(None));
-    let output = OrbitTaskUpdateTool
+fn update_handler_forwards_source_task_id_to_host() {
+    let host = Arc::new(FakeTaskHost::new());
+    OrbitTaskUpdateTool
         .execute(
             &update_tool_context(Arc::clone(&host)),
             json!({
@@ -235,17 +207,12 @@ fn update_handler_persists_source_task_id() {
         )
         .expect("update succeeds");
 
-    assert_eq!(output.get("type").and_then(Value::as_str), Some("bug"));
+    let last_input = host.last_input.lock().expect("host input lock");
     assert_eq!(
-        output.get("source_task_id").and_then(Value::as_str),
-        Some("ORB-00000")
-    );
-    assert_eq!(
-        host.task
-            .lock()
-            .expect("task lock")
-            .source_task_id
-            .as_deref(),
+        last_input
+            .as_ref()
+            .and_then(|input| input.get("source_task_id"))
+            .and_then(Value::as_str),
         Some("ORB-00000")
     );
 }
