@@ -8,8 +8,8 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-09-27
+related_artifacts: [ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+last_validated: 2026-09-28
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -305,17 +305,21 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
-- A leaf that fails before its handoff is settled by the drain, not by the
-  leaf: the owner moves the task to `blocked` with a summary naming the leaf
-  run, its failed step and that step's error. The full diagnostic stays in
-  the follower's run (`orbit run show <leaf-run>`, and
-  `.orbit/state/logs/<leaf-run>.worker.log` on the follower).
+- Each leaf settles itself when it ends ([ORB-13663]): its worker records
+  the handoff (success) or a failure, then delivers it to the owner. A drain
+  pass, a cancel or `orbit run auto --stop` delivers anything the leaf could
+  not. A leaf that fails before its handoff moves its task to `blocked` on
+  the owner with a summary naming the leaf run, its failed step and that
+  step's error. The full diagnostic stays in the follower's run
+  (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
+  on the follower).
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,
   re-backlog them deliberately, and start a new drain.
 - The run outlives its window until every admission has settled, so a leaf
-  that finishes late still hands off.
+  that finishes late still hands off, and a later drain for the same owner
+  carries anything an earlier drain left behind.
 
 Operate it with the ordinary run commands: `orbit run show <run-id>`,
 `orbit run concurrency <run-id> --set N`, and `orbit run auto --stop` (closes
@@ -429,16 +433,49 @@ On the dashboard, **approve** on a review task that has a handed-off claim
 sends **Approve handoff** for the exact candidate. A plain status write would
 be refused with `active execution claim requires a claim-scoped mutation`.
 
-**Stop a follower drain with `orbit run auto --stop`, not by cancelling the
-run.** The drain delivers every settlement (handoff or failure) to the owner.
-A cancelled drain leaves finished leaves unsettled, their tasks stay
-`in-progress` on the owner, and they wait until the next drain for the same
-owner delivers them.
+**Stopping or cancelling a follower drain** ([ORB-13663]). Both are safe;
+neither strands a claim.
 
-If the owner revokes those claims in the meantime, the next drain cannot
+- `orbit run auto --stop` (or the dashboard's auto **Stop**) closes the
+  window. The drain keeps running until every admission settles, and the stop
+  also runs a settle-only pass of its own.
+- `orbit run cancel <drain-run> --confirm` (or the dashboard's **cancel** on
+  the run) kills the coordinator. Claims it had not launched yet are ended as
+  failures (their tasks go `blocked` with that reason; recover them to
+  `backlog` on the owner to rerun). Leaves already running keep running and
+  deliver their own handoff or failure when they end. The command prints a
+  `Pull settlements` section, one line per admission, and `--json` carries
+  the same list as `pull_settlements`.
+- Prefer `--stop` when you only want no new work: it wastes nothing.
+
+Leaf delivery can still fail — the owner was unreachable when the leaf ended.
+The settlement stays recorded on the follower as `settling`. Flush it with
+`orbit run auto --stop` in the replica checkout once the owner is reachable
+(safe to repeat, and it needs no active drain), or by starting the next
+drain. `orbit run cancel <drain-run> --confirm` on a drain that already ended
+does the same flush. Outcomes other than `settled`, `closed_obsolete` and
+`leaf_running` are explained in the printed line; `launch_uncertain` still
+needs the deliberate recovery below.
+
+**Settlements an older binary stranded.** A binary before [ORB-13663] left a
+cancelled drain's finished leaves `settling` and its failed leaves
+`launched` with no settlement, and their owner claims `running`. After
+upgrading the follower, run `orbit run auto --stop` in its replica checkout.
+Delivered handoffs move their tasks to `review` on the owner, and the
+failures move theirs to `blocked`. Inspect first, read-only:
+
+```bash
+sqlite3 -readonly ~/.orbit/orbit.db "SELECT leaf_run_id,
+  json_extract(record_json,'$.phase'),
+  json_extract(record_json,'$.receipt.claim.task_id')
+  FROM local_pull_admissions
+  WHERE json_extract(record_json,'$.phase') NOT IN ('settled','idle','refused')"
+```
+
+If the owner revokes those claims in the meantime, the next pass cannot
 deliver their settlements. The owner refuses each one as `stale_claim`. The
-drain then looks up the claim on the owner, sees it has ended, and closes the
-record locally. Its `refusal` records why. Those tasks still need an owner-side
+pass then looks up the claim on the owner, sees it has ended, and closes the
+record locally (`closed_obsolete`). Its `refusal` records why. Those tasks still need an owner-side
 status decision: set a task to `done` if its pull request merged, otherwise
 move it back to `backlog`. A refused settlement for a claim the owner still
 holds stays pending and blocks new admissions until it is delivered.
@@ -580,8 +617,8 @@ merged.
 ## Rollback
 
 Stop the follower's drain with `orbit run auto --stop` and let its live
-leaves settle, or cancel them and recover their claims on the owner's
-dashboard. Leave the replica registered but idle. Restore the
+leaves settle, or cancel them (each cancelled leaf settles its claim as a
+failure) and recover their claims on the owner's dashboard. Leave the replica registered but idle. Restore the
 demoted host as an owner only by a deliberate, documented re-init after
 quiescing the current owner — this runbook does not perform that reversal.
 Preserve schedule files; do not bulk-disable routines as cleanup.

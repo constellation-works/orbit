@@ -246,7 +246,8 @@ pub(super) struct AutoDrainStopBody {
 /// `stop_workspace_auto_admissions`: every live coordinator in this concrete
 /// workspace stops admitting, already admitted workers keep running under
 /// their captured completion authority, and a workspace with no coordinator
-/// reports `idle`. This is not cancellation. Ending an unattended delivery
+/// reports `idle`. On a replica it also delivers every recorded pull
+/// settlement [ORB-13663]. This is not cancellation. Ending an unattended delivery
 /// window early is an operator decision, so it is gated like the other
 /// governed dashboard controls (`--operator` session) and refused before any
 /// runtime call.
@@ -281,6 +282,9 @@ fn auto_drain_stop_to_json(result: &DrainAdmissionsStopResult) -> Value {
     json!({
         "workflow": "auto",
         "outcome": result.outcome,
+        // [ORB-13663] The stop's settle-only pass: pull settlements delivered
+        // and cancelled drains' unlaunched claims ended.
+        "pull_settlements": result.pull_settlements,
         "coordinators": result
             .coordinators
             .iter()
@@ -392,6 +396,10 @@ pub(super) async fn cancel_run_action(
             "source": result.source,
             "signal_attempted": result.signal_attempted,
             "signal_outcome": result.signal_outcome,
+            // [ORB-13663] Cancelling a follower pull drain settles what it
+            // carried: unlaunched claims end as failures, recorded
+            // settlements are delivered, and live leaves settle themselves.
+            "pull_settlements": result.pull_settlements,
         }))
         .into_response(),
         Ok(Err(orbit_core::OrbitError::JobValidation(msg)))

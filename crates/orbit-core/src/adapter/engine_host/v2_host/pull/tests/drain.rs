@@ -155,6 +155,11 @@ impl PullLauncher for Launcher {
         }
         Ok(())
     }
+    fn cancel_queued(&self, _record: &LocalPullAdmission) -> Result<(), OrbitError> {
+        Err(OrbitError::Execution(
+            "a live drain never cancels its queued leaves".into(),
+        ))
+    }
 }
 fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest) {
     let parent = jobs
@@ -446,7 +451,7 @@ fn pull_pr_mode_binds_the_claimed_pr_leaf_with_no_completion_authority() {
     assert_eq!(input["base_sync"], "remote");
 }
 
-fn isolated_pull_test(name: &str) -> bool {
+pub(super) fn isolated_pull_test(name: &str) -> bool {
     const CHILD: &str = "ORBIT_TEST_LOCAL_PULL_CHILD";
     if std::env::var(CHILD).ok().as_deref() == Some(name) {
         return false;

@@ -553,6 +553,8 @@ async fn cancel_run_endpoint_cancels_pending_run() {
     assert_eq!(payload["final_state"], "cancelled");
     assert_eq!(payload["signal_attempted"], false);
     assert_eq!(payload["signal_outcome"], Value::Null);
+    // [ORB-13663] Only a pull drain or a claimed leaf carries settlements.
+    assert_eq!(payload["pull_settlements"], json!([]));
     let stored = runtime.show_job_run(&run.run_id).expect("show cancelled");
     assert_eq!(stored.state, JobRunState::Cancelled);
 }
@@ -1438,6 +1440,9 @@ async fn auto_drain_stop_reports_idle_when_no_window_is_live() {
     assert_eq!(payload["workflow"], "auto");
     assert_eq!(payload["outcome"], "idle");
     assert_eq!(payload["coordinators"], json!([]));
+    // [ORB-13663] The stop's settle-only pass is part of the answer; a
+    // workspace that never pulled carries nothing.
+    assert_eq!(payload["pull_settlements"], json!([]));
 }
 
 /// Ending an unattended delivery window early is an operator decision: an

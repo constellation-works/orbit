@@ -9,9 +9,18 @@
 # `for_seconds` gates *requesting* new claims. Unlike the owner drain, the run
 # does not end when the window does: it keeps iterating until every admission
 # it made has settled with the owner (`unsettled == 0`), so a leaf that
-# finishes after the window still has its handoff or failure delivered by the
-# drain that admitted it. `orbit run auto --stop` closes the window early the
-# same way it does for the owner drain; live leaves keep running.
+# finishes after the window still has its handoff or failure delivered.
+# `orbit run auto --stop` closes the window early the same way it does for the
+# owner drain; live leaves keep running.
+#
+# Settlement does not depend on this run being alive [ORB-13663]. The admission
+# record is the outbox: each leaf's own worker records and delivers its handoff
+# or failure as it terminalizes, and `orbit run cancel` / `orbit run auto
+# --stop` (and their dashboard buttons) run a settle-only pass that delivers
+# anything still recorded. Cancelling this run therefore strands nothing: its
+# unlaunched claims are ended as failures, live leaves keep running and settle
+# themselves, and a later drain for the same owner carries any admission it
+# left behind.
 #
 # A breaker stops new requests after three consecutive claims this run
 # admitted settle as failures, so a systemic executor fault cannot block the

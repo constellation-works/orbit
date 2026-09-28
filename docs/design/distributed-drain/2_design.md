@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-13625, ORB-13642, ORB-13663]
 ---
 
 # Distributed Drain — Design
@@ -125,7 +125,8 @@ no origin or PR credentials.
   build output is allowed. An empty owner requirement list fails closed on both sides.
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
-  call, so a disconnect leaves one immutable settlement the next refill retries idempotently.
+  call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable
+  settlement any later settle-only pass or refill retries idempotently ([ORB-13663]).
 
 **Claimed-mode implementation** ([ORB-13642]). The implementer writes no owner task state. Both
 claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
@@ -223,8 +224,11 @@ machine, the owner's workspace id as its probe reports it, selector, execution m
 `workspace_pull_pipeline` run input. A renamed or unavailable destination never falls back to a
 local coordination store. Each `pull_refill` iteration re-probes before allocating, so a changed
 ship contract or version stops new requests without failing the drain. The run keeps iterating
-after its window until every admission has settled, because no leaf terminal hook delivers
-settlement on its own. Admission:
+after its window until every admission has settled. It is no longer the only process that settles
+them ([Settlement belongs to the admission record, not to the drain that admitted
+it](./4_decisions.md#settlement-belongs-to-the-admission-record-not-to-the-drain-that-admitted-it)):
+each leaf delivers its own settlement as it terminalizes, and the drain's pass is one of several
+idempotent deliverers. Admission:
 
 1. Reconcile pending local pull requests and claimed-but-not-launched work first.
 2. Count live leaf runs **and pending admissions without a live run** against local capacity,
@@ -235,7 +239,9 @@ settlement on its own. Admission:
    uniqueness), then bind its host-qualified run ID on the owner. Binding is idempotent and never
    replaces another run for that claim.
 4. Launch only after binding. A crash between steps resumes the same request, claim or
-   not-yet-started run. Stopping the drain stops new admissions, not live children.
+   not-yet-started run. Stopping the drain stops new admissions, not live children. Cancelling it
+   kills only the coordinator: its unlaunched admissions are ended as failures and its live leaves
+   finish and settle themselves (see **Settlement ownership** below).
 
 **Interrupted execution** is left for deliberate recovery. `orbit job resume` refuses claimed
 leaves (`submit_resume_run` creates a new run that cannot inherit the binding). Recovery fences the old
@@ -256,11 +262,34 @@ Settlement is an idempotent owner mutation scoped to that claim's reservation an
 a newer attempt's. A terminal failure before review atomically records evidence, moves the task to
 `blocked`, invalidates execution authority and releases the reservation. That evidence names the
 leaf run, its last failed step and the step's error (bounded), since the owner cannot read the
-executor's run. The leaf's own terminal hook (`block_on_run_failure`) leaves a claimed task alone:
-the drain's settlement is the one failure transition the owner accepts for it, and a generic
-blocked update carries no evidence (`failure settlement requires evidence`). Disconnected, the
-settlement is persisted locally and retried; the owner holds the claim until settlement or
+executor's run. The leaf's generic terminal hook (`block_on_run_failure`) leaves a claimed task
+alone: the claim's failure settlement is the one failure transition the owner accepts for it, and a
+generic blocked update carries no evidence (`failure settlement requires evidence`). Disconnected,
+the settlement is persisted locally and retried; the owner holds the claim until settlement or
 recovery. TTL is not settlement.
+
+**Settlement ownership** ([ORB-13663]). The admission record is the outbox, and no single process
+owns delivery:
+
+- *Recording.* Run finalization (`finalize_job_run_with_cleanup_after_prior_read`), in whichever
+  process terminalizes a claimed leaf — its worker, a cancel, orphan reconciliation — records the
+  failure a terminal `Bound`, `Launching` or `Launched` leaf implies. Success already recorded its
+  handoff. A `Created` admission is left to a pass that binds it first, because the owner fences a
+  failure naming a leaf against the claim's binding.
+- *Delivery.* The leaf's own bound worker delivers right after recording. The worker is an
+  unsandboxed Orbit process with the host's federated route; only the agent subprocess is
+  sandboxed. Everything else is a settle-only pass (`OrbitRuntime::settle_pending_pulls`,
+  `PullDrain::carry_settlement`) run by `orbit run cancel` / the dashboard's cancel (for a pull
+  drain or a claimed leaf, including one already terminal) and by `orbit run auto --stop` / the
+  dashboard's stop. A pass covers every owner, never requests work or launches a leaf, and costs
+  one failed delivery per unreachable owner. A live drain's refill still carries every admission
+  for its owner, whichever drain made it.
+- *Abandonment.* For an admission no live drain will carry — its own drain ended and no live drain
+  pulls from its owner — a pass also ends what was never launched: an unanswered request is reconciled against the owner's receipt, a claim
+  with no leaf is settled as a failure, and a queued leaf is cancelled through ordinary run
+  cancellation, then settled. Live leaves are never cancelled by this.
+- Two processes delivering the same settlement is safe: the first recorded value is immutable
+  locally, and the owner's per-claim mutation IDs make a second delivery a replay.
 
 **Branches** carry attempt identity: the run-derived branch suffices because each claim binds
 one run; `orbit/<task-id>-<claim-id>` is also valid. The follower implements, validates, pushes and
@@ -616,6 +645,7 @@ Acceptance criteria, not reported as passing.
 | Reservation expires during valid execution | No automatic revocation or duplicate admission; status lock remains |
 | Old worker returns after recovery and reassignment | Cannot bind, mutate evidence, promote, settle, or release the new reservation |
 | Failure/cancellation while owner disconnected | Settlement stays pending locally; later idempotent settlement or explicit recovery |
+| Pull drain cancelled while its leaves are live | Each leaf delivers its own handoff or failure when it ends; unlaunched claims settle as failures; no claim is left `running` without a responsible follower process ([ORB-13663]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
@@ -655,6 +685,9 @@ Acceptance criteria, not reported as passing.
   interchangeable.
 - **Coordination requires the owner.** Task reads, evidence writes, settlement and handoff stall
   during partitions; large tasks hold their slots for as long as they run.
+- **Undelivered settlements wait for a follower process.** A leaf whose own delivery fails while
+  no drain is running keeps its settlement recorded until the next drain, cancel or
+  `orbit run auto --stop` on that follower; nothing retries on a timer ([ORB-13663]).
 - **One owner is an operator prerequisite** (§1): two stores can admit overlapping work, so the
   demoted host's drains and coordination routines must be quiesced before replica pull.
 - **Throughput is not guaranteed to scale**: shared CI, provider limits, file conflicts, serial
@@ -674,5 +707,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-12616] — made the owner-local claimed leaf executable.
 - [ORB-12617] — unified capacity accounting and added fault-injection acceptance fixtures.
 - [ORB-13642] — added claimed-mode implementation and evidence-bearing failure settlement.
+- [ORB-13663] — moved settlement ownership from the admitting drain to the admission record.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

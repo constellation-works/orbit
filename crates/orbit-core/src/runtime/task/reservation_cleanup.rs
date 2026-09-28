@@ -287,6 +287,12 @@ impl OrbitRuntime {
             {
                 self.best_effort_block_tasks_for_terminal_run(run_id, state, diagnostic);
             }
+            // [ORB-13663] A claimed leaf's settlement is recorded as it
+            // terminalizes, whichever process terminalizes it, and its own
+            // worker delivers it — no longer only the drain that admitted it.
+            // Not gated on `Finalized`: recording and delivery are idempotent,
+            // and a replay retries a delivery an earlier attempt lost.
+            self.best_effort_settle_terminal_claimed_leaf(run_id, diagnostic);
         }
         Ok(outcome != JobRunFinalization::Missing)
     }

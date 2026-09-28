@@ -42,12 +42,18 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   back to the owner, which keeps landing authority. The selector must name\n\
                   this replica's own owner and workspace, and the owner's probe must admit\n\
                   this executor, before anything is submitted. The drain keeps settling its\n\
-                  claims with the owner after the window closes, until none is left.\n\n\
+                  claims with the owner after the window closes, until none is left. Each\n\
+                  leaf also delivers its own handoff or failure when it ends, so a leaf\n\
+                  still settles if its drain was stopped or cancelled.\n\n\
                   `--stop` ends new admissions for this workspace's active auto coordinator.\n\
                   You do not need a run ID. Already admitted workers keep running under the\n\
                   completion authority they were started with; this is not cancellation.\n\
                   To cancel those workers, `orbit run cancel <RUN_ID> --confirm` each child.\n\
-                  A second `--stop`, or `--stop` with no active coordinator, is a no-op.\n\n\
+                  On a replica, `--stop` also delivers every pull settlement still recorded\n\
+                  for any owner, and ends unlaunched claims that no running pull drain will\n\
+                  carry, so it is also how to flush settlements an earlier, cancelled drain\n\
+                  left behind. Otherwise a second `--stop`, or `--stop` with no active\n\
+                  coordinator, is a no-op.\n\n\
                   Inspect submitted runs with `orbit run history -j workspace_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -223,6 +229,7 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
     })?;
     let doc = json!({
         "outcome": result.outcome,
+        "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
         "coordinators": result.coordinators.iter().map(|change| json!({
             "run_id": change.run_id,
             "job_id": change.job_id,
@@ -235,8 +242,11 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     });
+    let settlement_lines = super::support::pull_settlement_lines(&result.pull_settlements);
     if result.coordinators.is_empty() {
-        return Ok(Payload::detail(doc, "No active auto coordinator in this workspace.").into());
+        let mut lines = vec!["No active auto coordinator in this workspace.".to_string()];
+        lines.extend(settlement_lines);
+        return Ok(Payload::detail(doc, lines.join("\n")).into());
     }
     let mut lines = Vec::new();
     for change in &result.coordinators {
@@ -276,5 +286,6 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
             );
         }
     }
+    lines.extend(settlement_lines);
     Ok(Payload::detail(doc, lines.join("\n")).into())
 }

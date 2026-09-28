@@ -122,6 +122,24 @@ pub(super) fn list(store: &Store, workspace: &str) -> Result<Vec<LocalPullAdmiss
     store.with_read_connection(|conn| records(conn, workspace))
 }
 
+/// Admissions still holding a slot, without creating the feature schema: a
+/// settle-only pass runs from `orbit run cancel` and `orbit run auto --stop`
+/// in workspaces that may never have pulled [ORB-13663].
+pub(super) fn unsettled(
+    store: &Store,
+    workspace: &str,
+) -> Result<Vec<LocalPullAdmission>, OrbitError> {
+    store.with_read_connection(|conn| {
+        if !admissions_table_exists(conn)? {
+            return Ok(Vec::new());
+        }
+        Ok(records(conn, workspace)?
+            .into_iter()
+            .filter(LocalPullAdmission::holds_capacity)
+            .collect())
+    })
+}
+
 /// How far the wrapper lineage walk follows dispatch records. A loop guard for
 /// a malformed or cyclic dispatch chain, not a tuning knob.
 const MAX_WRAPPER_LINEAGE_DEPTH: usize = 64;
