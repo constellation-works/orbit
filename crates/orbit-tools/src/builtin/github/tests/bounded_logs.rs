@@ -632,3 +632,291 @@ fn assertion_prefix_never_leaks_a_secret_cut_at_the_retention_boundary() {
     let regions = log.failure_regions.expect("regions");
     assert!(!regions["text"].as_str().expect("text").contains("ghp_"));
 }
+
+/// Classic GitHub token: `ghp_` plus 36 alphanumeric characters. The body is
+/// `Z9` repeated so every 4-character fragment is absent from ordinary prose
+/// and from the omission marker.
+fn classic_github_token() -> String {
+    format!("ghp_{}", "Z9".repeat(18))
+}
+
+fn assert_no_credential_fragment(text: &str, token: &str) {
+    assert!(!text.contains("ghp_"), "token prefix leaked: {text}");
+    for window in token.as_bytes().windows(4) {
+        let fragment = std::str::from_utf8(window).expect("token is ascii");
+        assert!(
+            !text.contains(fragment),
+            "credential fragment {fragment} leaked: {text}"
+        );
+    }
+}
+
+fn finish_chunked(
+    max_bytes: usize,
+    tail_weighted: bool,
+    raw: &[u8],
+    chunk_size: usize,
+) -> crate::builtin::github::StreamedLog {
+    let mut collector = if tail_weighted {
+        StreamedLogCollector::tail_weighted(max_bytes, 40)
+    } else {
+        StreamedLogCollector::new(max_bytes, 40)
+    };
+    for chunk in raw.chunks(chunk_size) {
+        collector.push(chunk);
+    }
+    collector.finish()
+}
+
+fn boundary_overlaps(window: usize, reserved: usize, token_len: usize) -> Vec<usize> {
+    [4usize, 8, 10, 16, 22, 36, 39]
+        .into_iter()
+        .filter(|overlap| *overlap < token_len && reserved + *overlap <= window)
+        .collect()
+}
+
+/// `overlap` token bytes sit in the head; the rest of the token follows the cut.
+fn head_cut_log(token: &str, head_bytes: usize, overlap: usize) -> String {
+    let lead = "HEAD-MARKER\n";
+    assert!(overlap > 0 && overlap < token.len());
+    assert!(lead.len() + overlap <= head_bytes);
+    let gap = head_bytes - lead.len() - overlap;
+    let raw = format!(
+        "{lead}{}{token}{}\nTAIL-MARKER\n",
+        "n".repeat(gap),
+        "y".repeat(8_000)
+    );
+    let head = &raw.as_bytes()[..head_bytes];
+    assert_eq!(&head[head.len() - overlap..], &token.as_bytes()[..overlap]);
+    assert_eq!(raw.as_bytes()[head_bytes], token.as_bytes()[overlap]);
+    raw
+}
+
+/// `overlap` token bytes sit at the start of the tail, without the `ghp_` prefix.
+fn tail_cut_log(token: &str, tail_bytes: usize, overlap: usize) -> String {
+    let marker = "\nTAIL-MARKER\n";
+    assert!(overlap > 0 && overlap < token.len());
+    assert!(marker.len() + overlap <= tail_bytes);
+    let padding = tail_bytes - marker.len() - overlap;
+    let prefix = &token[..token.len() - overlap];
+    let suffix = &token[token.len() - overlap..];
+    let raw = format!(
+        "HEAD-MARKER\n{}{prefix}{suffix}{}{marker}",
+        "y".repeat(8_000),
+        "n".repeat(padding)
+    );
+    let tail = &raw[raw.len() - tail_bytes..];
+    assert!(
+        tail.starts_with(suffix),
+        "tail started at {tail:?}, wanted suffix {suffix}"
+    );
+    assert!(
+        !tail.contains("ghp_"),
+        "tail fixture included the token prefix: {tail}"
+    );
+    let preceding = raw.as_bytes()[raw.len() - tail_bytes - 1];
+    assert!(
+        preceding.is_ascii() && !preceding.is_ascii_whitespace(),
+        "tail cut did not split the token: {preceding}"
+    );
+    raw
+}
+
+#[test]
+fn credential_straddling_a_retained_boundary_is_not_returned() {
+    let token = classic_github_token();
+    let chunk_sizes = [
+        1usize, 2, 3, 7, 8, 15, 16, 22, 32, 39, 40, 41, 63, 64, 127, 128, 1024, 4096, 8192,
+    ];
+
+    // Reported cut: a 64-byte even split keeps 10 innocuous bytes and 22
+    // bytes of the token. The retained prefix is too short to match.
+    let reported = format!("abcdefghij{token}{}\nTAIL-MARKER\n", "y".repeat(4_000));
+    assert_eq!(
+        &reported.as_bytes()[..32],
+        format!("abcdefghij{}", &token[..22]).as_bytes()
+    );
+    for &chunk_size in &chunk_sizes {
+        let log = finish_chunked(64, false, reported.as_bytes(), chunk_size);
+        assert!(log.truncated);
+        assert_no_credential_fragment(&log.text, &token);
+        assert!(
+            log.text.contains("TAIL-MARKER"),
+            "chunk {chunk_size}: {}",
+            log.text
+        );
+    }
+
+    for &budget in &[64usize, 256, 4_096] {
+        for &tail_weighted in &[false, true] {
+            let head = if tail_weighted {
+                budget / 4
+            } else {
+                budget / 2
+            };
+            let tail = budget - head;
+            let head_logs: Vec<String> =
+                boundary_overlaps(head, "HEAD-MARKER\n".len(), token.len())
+                    .into_iter()
+                    .map(|overlap| head_cut_log(&token, head, overlap))
+                    .collect();
+            let tail_logs: Vec<String> =
+                boundary_overlaps(tail, "\nTAIL-MARKER\n".len(), token.len())
+                    .into_iter()
+                    .map(|overlap| tail_cut_log(&token, tail, overlap))
+                    .collect();
+            assert!(
+                !head_logs.is_empty() && !tail_logs.is_empty(),
+                "budget {budget} weighted {tail_weighted} produced no straddling fixture"
+            );
+            for &chunk_size in &chunk_sizes {
+                for raw in head_logs.iter().chain(tail_logs.iter()) {
+                    let log = finish_chunked(budget, tail_weighted, raw.as_bytes(), chunk_size);
+                    assert!(
+                        log.truncated,
+                        "budget {budget} weighted {tail_weighted} chunk {chunk_size}"
+                    );
+                    assert_no_credential_fragment(&log.text, &token);
+                    assert!(
+                        log.text.contains("HEAD-MARKER"),
+                        "head lost (budget {budget}, weighted {tail_weighted}, chunk {chunk_size}): {}",
+                        log.text
+                    );
+                    assert!(
+                        log.text.contains("TAIL-MARKER"),
+                        "tail lost (budget {budget}, weighted {tail_weighted}, chunk {chunk_size}): {}",
+                        log.text
+                    );
+                    assert!(log.text.len() < raw.len());
+                    assert_eq!(log.total_bytes, raw.len());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_whole_credential_inside_a_window_or_across_the_short_join_is_redacted() {
+    let token = classic_github_token();
+    // Even head is 40 bytes. Twenty innocuous bytes leave the token crossing
+    // the join, and the whole source still fits in the budget.
+    let spanning = format!("{}{token} kept\n", "h".repeat(20));
+    assert!(spanning.len() <= 80);
+    assert!(spanning.len() > 40);
+    let head = &spanning.as_bytes()[..40];
+    assert!(std::str::from_utf8(head).expect("ascii").contains("ghp_"));
+    assert!(!std::str::from_utf8(head).expect("ascii").contains(&token));
+    for &tail_weighted in &[false, true] {
+        for &chunk_size in &[1usize, 7, 20, 40, 80] {
+            let log = finish_chunked(80, tail_weighted, spanning.as_bytes(), chunk_size);
+            assert!(!log.truncated, "{}", spanning.len());
+            assert!(log.text.contains("[REDACTED_SECRET]"), "{}", log.text);
+            assert!(log.text.contains("kept"), "{}", log.text);
+            assert_no_credential_fragment(&log.text, &token);
+        }
+    }
+
+    let raw = format!(
+        "HEAD-MARKER {token}\n{}\nTAIL-MARKER {token}\n",
+        "y".repeat(8_000)
+    );
+    for &tail_weighted in &[false, true] {
+        for &chunk_size in &[1usize, 13, 40, 4096] {
+            let log = finish_chunked(512, tail_weighted, raw.as_bytes(), chunk_size);
+            assert!(log.truncated);
+            assert!(log.text.contains("HEAD-MARKER"), "{}", log.text);
+            assert!(log.text.contains("TAIL-MARKER"), "{}", log.text);
+            assert!(
+                log.text.contains("[REDACTED_SECRET]"),
+                "a whole token inside a window must still redact: {}",
+                log.text
+            );
+            assert_no_credential_fragment(&log.text, &token);
+        }
+    }
+}
+
+#[test]
+fn ordinary_bounded_logs_keep_useful_ends_and_middle_evidence() {
+    let sha = "2d773a649844b168c5cfce4c80feadb8b025bb69";
+    let unit = command_unit();
+    let raw = format!(
+        "HEAD-MARKER cargo test --workspace\n{}\
+         setup\tCheckout\tHEAD is now at {sha} chore\n\
+         {}{unit}{}\
+         TAIL-MARKER assertion `left == right` failed\n",
+        "setup output\n".repeat(400),
+        "build output\n".repeat(400),
+        "cleanup output\n".repeat(400),
+    );
+    for &tail_weighted in &[false, true] {
+        for &chunk_size in &[1usize, 7, 64, 4096] {
+            let log = finish_chunked(2_048, tail_weighted, raw.as_bytes(), chunk_size);
+            assert!(log.truncated);
+            assert!(
+                log.text.contains("HEAD-MARKER cargo test --workspace"),
+                "{}",
+                log.text
+            );
+            assert!(
+                log.text
+                    .contains("TAIL-MARKER assertion `left == right` failed"),
+                "{}",
+                log.text
+            );
+            assert!(log.text.contains("bytes omitted"));
+            assert!(
+                !log.text.contains(sha),
+                "checkout belongs in evidence, not the excerpt"
+            );
+            assert!(!log.text.contains("owner_machine_id"));
+            assert_eq!(log.checkout_evidence.commits, [sha.to_string()]);
+            assert!(log.checkout_evidence.complete);
+            assert_eq!(log.diagnostic.as_deref(), Some(unit.as_str()));
+            assert!(log.text.len() < raw.len());
+            assert_eq!(log.total_bytes, raw.len());
+        }
+    }
+}
+
+#[test]
+fn streamed_excerpt_does_not_grow_with_the_source_log() {
+    let sha = "2d773a649844b168c5cfce4c80feadb8b025bb69";
+    let unit = command_unit();
+    for &tail_weighted in &[false, true] {
+        let mut collector = if tail_weighted {
+            StreamedLogCollector::tail_weighted(1_024, 8)
+        } else {
+            StreamedLogCollector::new(1_024, 8)
+        };
+        collector.push(b"HEAD-MARKER cargo test --workspace\n");
+        // Newline-terminated filler. A single overlong line would be dropped
+        // by the checkout scan and would not show that the excerpt itself
+        // stayed bounded.
+        let blob = "y\n".repeat(4_096);
+        for _ in 0..128 {
+            collector.push(blob.as_bytes());
+        }
+        collector.push(format!("setup\tCheckout\tHEAD is now at {sha} chore\n").as_bytes());
+        collector.push(unit.as_bytes());
+        for _ in 0..128 {
+            collector.push(blob.as_bytes());
+        }
+        collector.push(b"\nTAIL-MARKER assertion failed\n");
+        let log = collector.finish();
+        assert!(log.truncated);
+        assert!(log.total_bytes > 2_000_000, "{}", log.total_bytes);
+        assert!(
+            log.text.len() < 1_024 + 128,
+            "excerpt grew with the source: {}",
+            log.text.len()
+        );
+        assert!(log.text.contains("HEAD-MARKER cargo test --workspace"));
+        assert!(log.text.contains("TAIL-MARKER assertion failed"));
+        assert!(!log.text.contains(sha));
+        assert!(!log.text.contains("owner_machine_id"));
+        assert_eq!(log.checkout_evidence.commits, [sha.to_string()]);
+        assert!(log.checkout_evidence.complete);
+        assert_eq!(log.diagnostic.as_deref(), Some(unit.as_str()));
+    }
+}
