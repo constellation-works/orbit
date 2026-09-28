@@ -52,7 +52,7 @@ pub fn pipeline_wait_status_is_success(status: &str) -> bool {
 
 pub fn pipeline_wait_status_is_settled(status: &str) -> bool {
     pipeline_wait_status_is_success(status)
-        || matches!(status, "failed" | "cancelled" | "interrupted")
+        || matches!(status, "failed" | "timeout" | "cancelled" | "interrupted")
 }
 
 impl OrbitRuntime {
@@ -160,24 +160,27 @@ impl OrbitRuntime {
                     Err(error) => return Err(error),
                 };
 
-                let terminal = match run.state {
-                    JobRunState::Success => Some(JobRunState::Success.to_string()),
-                    JobRunState::Failed => Some(JobRunState::Failed.to_string()),
-                    JobRunState::Cancelled => Some(JobRunState::Cancelled.to_string()),
-                    JobRunState::Interrupted => Some(JobRunState::Interrupted.to_string()),
-                    _ => None,
+                // A caller deadline projects an active run as timeout without
+                // changing its durable state. A durably timed-out run retains
+                // its own terminal evidence even when the deadline has passed.
+                let wait_incomplete = timeout_incomplete && !run.state.is_terminal();
+                let status = if wait_incomplete {
+                    "timeout".to_string()
+                } else {
+                    run.state.to_string()
                 };
-                let status = match (terminal, timeout_incomplete) {
-                    (Some(status), _) => status,
-                    (None, true) => "timeout".to_string(),
-                    (None, false) => run.state.to_string(),
-                };
-                let pipeline = if matches!(status.as_str(), "timeout") {
+                let pipeline = if wait_incomplete {
                     None
                 } else {
                     self.read_run_state(run_id)?.map(|state| state.pipeline)
                 };
-                let error = if matches!(status.as_str(), "failed" | "cancelled" | "interrupted") {
+                let error = if matches!(
+                    run.state,
+                    JobRunState::Failed
+                        | JobRunState::Timeout
+                        | JobRunState::Cancelled
+                        | JobRunState::Interrupted
+                ) {
                     let (code, message) = run
                         .steps
                         .iter()
