@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Lessons Learned While Building Orbit
-last_validated: 2026-09-06
+last_validated: 2026-09-27
 ---
 
 # Lessons Learned While Building Orbit
@@ -67,7 +67,7 @@ run remained alive for about 113 minutes.
 
 The command responsible was not in the compiler-cache operator script. It was
 an owner-process fixture in
-[`job_pipeline.rs`](../crates/orbit-core/src/application/tests/job_pipeline.rs#L326):
+`crates/orbit-core/src/application/tests/job_pipeline.rs` (since removed):
 
 ```sh
 while [ ! -f "$ORBIT_TEST_OWNER_RELEASE" ]; do sleep 0.01; done
