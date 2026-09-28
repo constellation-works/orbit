@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.25.0
+
+### Breaking Changes
+
+- **Plugin source root moved**: plugin sources must live under `.orbit-plugin/`; a top-level `plugin.yaml` is refused by `orbit plugin add`, `validate`, `test`, `sync`, and `upgrade`, with no fallback. Move `plugin.yaml` and its tree into `.orbit-plugin/` → `orbit plugin scaffold` creates the new shape. ([ORB-13626])
+
+### Highlights
+
+- **Follower pull**: `orbit run auto --pull` lets a follower machine pull one owner-admitted task at a time, run it, and hand the result back; the owner keeps landing authority. ([ORB-13625])
+- **Plugin secrets and Python backends**: plugins declare secrets that the host stores, delivers to backends, and rotates, and exec backends can be written in Python. ([ORB-13080])
+- **Brokered plugin calls and per-workspace enablement**: sandboxed agents call plugin tools through a broker, and plugins are enabled per workspace from the CLI or dashboard. ([ORB-13249])
+- **New recurring auto-tasks**: disabled-by-default documentation, run-failure, and backlog-hygiene auto-tasks, plus delete and restore for shipped defaults with a durable opt-out. ([ORB-12930])
+- **Deny-list agent policy**: shipped agent activities now name the operations they deny instead of allow-listing tools; custom allow-list activities keep working, and strict worker containment is opt-in. ([ORB-13315])
+- **Safer upgrades**: upgrade admission checks store and layout compatibility, so an older binary can read but no longer write a store migrated by a newer one. ([ORB-13631])
+
 ## 0.24.0
 
 ### Breaking Changes
