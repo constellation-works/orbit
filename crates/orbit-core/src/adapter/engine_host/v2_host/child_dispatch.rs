@@ -55,8 +55,11 @@ pub(super) fn parent_run_id(input: &Value) -> Option<String> {
 ///
 /// The auto-admission path already wrote the first link atomically with the
 /// child row [ORB-11310]. Re-recording is an idempotent refresh and preserves
-/// the original submission timestamp. Direct callers without trusted parent
-/// context retain this checkpoint as their first parent-state link.
+/// the original submission timestamp. A parent cancelled between admission and
+/// this refresh has already closed the dispatch; the refresh then leaves that
+/// terminal record and its cancellation evidence untouched. Direct callers
+/// without trusted parent context retain this checkpoint as their first
+/// parent-state link.
 ///
 /// A run state that cannot be written is a hard failure of the dispatch step,
 /// not a warning. The alternative — blocking for an hour on a child nobody can
@@ -126,6 +129,12 @@ pub(super) fn checkpoint_submitted_child(
 /// runs the child is already durably linked, so a failed projection update
 /// must not discard a child result the parent did observe. Failures are
 /// traced and the caller continues.
+///
+/// A dispatch that cancellation already closed stays closed: a late `Waiting`
+/// write is dropped, and a late terminal observation only fills in the child
+/// status or error. The persisted parent status is deliberately not consulted,
+/// because cancellation marks the parent terminal before it settles open
+/// dispatches, and closing one here first would skip its cascade.
 pub(super) fn advance_child_phase(
     runtime: &OrbitRuntime,
     parent_run_id: Option<&str>,

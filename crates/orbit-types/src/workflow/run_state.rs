@@ -352,12 +352,17 @@ impl PipelineState {
     /// same dispatch step must not accumulate duplicate rows for one child.
     /// A re-record keeps the original `submitted_at` so the observable
     /// submission instant does not drift.
+    ///
+    /// A dispatch that already terminalized is left untouched: a late refresh
+    /// from a parent that was cancelled mid-dispatch must not reopen the link
+    /// or erase its recorded status, error, or cancellation.
     pub fn record_child_dispatch(&mut self, dispatch: ChildDispatch) {
         match self
             .child_dispatches
             .iter_mut()
             .find(|existing| existing.child_run_id == dispatch.child_run_id)
         {
+            Some(existing) if !existing.phase.is_open() => return,
             Some(existing) => {
                 let submitted_at = existing.submitted_at;
                 *existing = dispatch;
@@ -371,6 +376,11 @@ impl PipelineState {
     /// Advance a recorded child dispatch. Returns false when no dispatch with
     /// that child run id is recorded, so a caller can tell a lost checkpoint
     /// from a successful update instead of silently succeeding.
+    ///
+    /// A terminal dispatch never reopens: a late `Submitted` or `Waiting`
+    /// write is ignored. A late terminal observation only fills in a status or
+    /// error that is still missing, so the parent's view of how the child
+    /// ended survives without overwriting evidence already recorded.
     pub fn advance_child_dispatch(
         &mut self,
         child_run_id: &str,
@@ -385,12 +395,23 @@ impl PipelineState {
         else {
             return false;
         };
-        dispatch.phase = phase;
-        if child_status.is_some() {
-            dispatch.child_status = child_status;
-        }
-        if error.is_some() {
-            dispatch.error = error;
+        if dispatch.phase.is_open() {
+            dispatch.phase = phase;
+            if child_status.is_some() {
+                dispatch.child_status = child_status;
+            }
+            if error.is_some() {
+                dispatch.error = error;
+            }
+        } else if phase.is_open() {
+            return true;
+        } else {
+            if dispatch.child_status.is_none() {
+                dispatch.child_status = child_status;
+            }
+            if dispatch.error.is_none() {
+                dispatch.error = error;
+            }
         }
         dispatch.updated_at = Utc::now();
         self.updated_at = Utc::now();

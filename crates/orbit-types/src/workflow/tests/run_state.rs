@@ -103,6 +103,111 @@ fn a_terminalized_child_is_no_longer_open_but_stays_recorded() {
     );
 }
 
+fn cancelled() -> ChildCancellation {
+    ChildCancellation {
+        policy: ChildCancellationPolicy::Cascade,
+        outcome: "cancelled".to_string(),
+        error: None,
+        at: Utc::now(),
+    }
+}
+
+/// A parent cancelled mid-dispatch: the child was linked, cancellation closed
+/// the link, and the parent's own step has not yet written its late
+/// checkpoints.
+fn cancelled_mid_dispatch() -> (PipelineState, ChildDispatch) {
+    let mut state = state();
+    let mut first = dispatch("jrun-child", true);
+    first.child_status = Some("running".to_string());
+    first.error = Some("slow start".to_string());
+    state.record_child_dispatch(first);
+    assert!(state.terminalize_child_dispatch("jrun-child", cancelled()));
+    let closed = state.child_dispatches[0].clone();
+    (state, closed)
+}
+
+#[test]
+fn a_late_re_record_cannot_reopen_a_cancelled_child() {
+    let (mut state, closed) = cancelled_mid_dispatch();
+
+    let mut late = dispatch("jrun-child", true);
+    late.queued = true;
+    late.submitted_at = Utc::now();
+    state.record_child_dispatch(late);
+
+    assert_eq!(state.open_child_dispatches().count(), 0);
+    assert_eq!(state.child_dispatches.len(), 1);
+    assert_eq!(
+        state.child_dispatches[0], closed,
+        "phase, status, error, cancellation, and submitted_at must all survive"
+    );
+}
+
+#[test]
+fn a_late_waiting_checkpoint_leaves_a_cancelled_child_terminal() {
+    let (mut state, closed) = cancelled_mid_dispatch();
+
+    assert!(state.advance_child_dispatch(
+        "jrun-child",
+        ChildDispatchPhase::Waiting,
+        Some("pending".to_string()),
+        Some("late".to_string()),
+    ));
+
+    assert_eq!(state.open_child_dispatches().count(), 0);
+    assert_eq!(state.child_dispatches[0], closed);
+}
+
+#[test]
+fn a_late_terminal_observation_fills_only_missing_evidence() {
+    let mut state = state();
+    state.record_child_dispatch(dispatch("jrun-child", true));
+    assert!(state.terminalize_child_dispatch("jrun-child", cancelled()));
+
+    assert!(state.advance_child_dispatch(
+        "jrun-child",
+        ChildDispatchPhase::Terminal,
+        Some("cancelled".to_string()),
+        Some("cancelled by parent".to_string()),
+    ));
+    assert!(state.advance_child_dispatch(
+        "jrun-child",
+        ChildDispatchPhase::Terminal,
+        Some("succeeded".to_string()),
+        Some("overwrite".to_string()),
+    ));
+
+    let dispatch = &state.child_dispatches[0];
+    assert_eq!(dispatch.phase, ChildDispatchPhase::Terminal);
+    assert_eq!(dispatch.child_status.as_deref(), Some("cancelled"));
+    assert_eq!(dispatch.error.as_deref(), Some("cancelled by parent"));
+    assert_eq!(
+        dispatch.cancellation.as_ref().map(|c| c.outcome.as_str()),
+        Some("cancelled")
+    );
+}
+
+#[test]
+fn an_uncancelled_child_moves_from_submitted_through_waiting_to_terminal() {
+    let mut state = state();
+    state.record_child_dispatch(dispatch("jrun-child", true));
+
+    assert!(state.advance_child_dispatch("jrun-child", ChildDispatchPhase::Waiting, None, None));
+    assert_eq!(state.child_dispatches[0].phase, ChildDispatchPhase::Waiting);
+    assert!(state.advance_child_dispatch(
+        "jrun-child",
+        ChildDispatchPhase::Terminal,
+        Some("failed".to_string()),
+        Some("exhausted retries".to_string()),
+    ));
+
+    let dispatch = &state.child_dispatches[0];
+    assert_eq!(dispatch.phase, ChildDispatchPhase::Terminal);
+    assert_eq!(dispatch.child_status.as_deref(), Some("failed"));
+    assert_eq!(dispatch.error.as_deref(), Some("exhausted retries"));
+    assert_eq!(dispatch.cancellation, None);
+}
+
 #[test]
 fn a_state_without_children_round_trips_without_the_field() {
     // Existing on-disk `state.json` files predate this field and must keep

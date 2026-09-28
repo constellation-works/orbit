@@ -528,3 +528,81 @@ fn invoke_detached_skips_when_the_parent_has_stopped_admissions() {
         "a skipped invoke must not create a child"
     );
 }
+
+/// Cancellation can land between atomic admission and the action's own late
+/// checkpoints: an in-process parent is not signalled, so its step keeps
+/// running. The late refresh and `Waiting` write go through the same
+/// transactional host path and must leave the cancelled link closed, while
+/// the wait's final observation still records how the child ended.
+#[test]
+fn cancellation_before_the_late_checkpoints_keeps_the_child_link_terminal() {
+    let (runtime, parent) = parent_runtime();
+    let closed_by_cancel = RefCell::new(None);
+
+    let output = invoke_and_wait_with(
+        &runtime,
+        "invoke_and_wait",
+        &ship_leaves_input(&parent),
+        |_| {
+            let admitted = runtime
+                .stores()
+                .jobs()
+                .admit_child_job_run(&atomic_child_admission(&parent, true))
+                .map(admitted_output)?;
+            runtime
+                .cancel_job_run_with_context(&parent, "operator", "cli")
+                .expect("cancel the parent after admission");
+            closed_by_cancel.replace(recorded_dispatches(&runtime, &parent).pop());
+            Ok(admitted)
+        },
+        |args| {
+            let mid_wait = recorded_dispatches(&runtime, &parent);
+            assert_eq!(
+                mid_wait[0].phase,
+                ChildDispatchPhase::Terminal,
+                "the late refresh and Waiting write must not reopen the link"
+            );
+            let child_run_id = args["run_ids"][0].as_str().expect("child run id");
+            Ok(json!({
+                "results": [{ "run_id": child_run_id, "status": "cancelled" }]
+            }))
+        },
+    )
+    .expect("the cancelled child is an observed outcome");
+    assert_eq!(output["status"], "cancelled");
+
+    let closed = closed_by_cancel
+        .into_inner()
+        .expect("cancellation left the link recorded");
+    assert_eq!(closed.phase, ChildDispatchPhase::Terminal);
+    assert_eq!(closed.child_status, None);
+
+    let dispatches = recorded_dispatches(&runtime, &parent);
+    assert_eq!(dispatches.len(), 1);
+    let settled = &dispatches[0];
+    assert_eq!(settled.phase, ChildDispatchPhase::Terminal);
+    assert_eq!(settled.submitted_at, closed.submitted_at);
+    assert_eq!(
+        settled.cancellation, closed.cancellation,
+        "the cancellation evidence must survive the late checkpoints"
+    );
+    assert_eq!(
+        settled
+            .cancellation
+            .as_ref()
+            .map(|cancellation| cancellation.outcome.as_str()),
+        Some("cancelled")
+    );
+    assert_eq!(
+        settled.child_status.as_deref(),
+        Some("cancelled"),
+        "the wait's final observation is still recorded"
+    );
+    assert_eq!(
+        runtime
+            .show_job_run(&settled.child_run_id)
+            .expect("child")
+            .state,
+        JobRunState::Cancelled
+    );
+}
