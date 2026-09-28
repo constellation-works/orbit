@@ -37,6 +37,12 @@ fn permission(summary: &super::super::PluginSummary, grant: PluginGrant) -> (Opt
 
 #[test]
 fn an_ungranted_request_registers_the_tool_inactive_until_it_is_granted() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_ungranted_request_registers_the_tool_inactive_until_it_is_granted",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -86,6 +92,12 @@ fn an_ungranted_request_registers_the_tool_inactive_until_it_is_granted() {
 
 #[test]
 fn an_unknown_grant_name_is_refused_rather_than_recorded() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_unknown_grant_name_is_refused_rather_than_recorded",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, PluginSpecFixture::new("demo", "demo"));
     let runtime = fixture.reopen();
@@ -106,6 +118,12 @@ fn an_unknown_grant_name_is_refused_rather_than_recorded() {
 
 #[test]
 fn add_enable_and_show_share_the_missing_grant_projection() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_enable_and_show_share_the_missing_grant_projection",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source =
         fixture.write_plugin(PluginSpecFixture::new("guarded", "guarded").requesting_fs_write());
@@ -138,6 +156,12 @@ fn add_enable_and_show_share_the_missing_grant_projection() {
 
 #[test]
 fn enable_warns_for_each_grant_the_manifest_does_not_request() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "enable_warns_for_each_grant_the_manifest_does_not_request",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, PluginSpecFixture::new("demo", "demo"));
 
@@ -159,6 +183,12 @@ fn enable_warns_for_each_grant_the_manifest_does_not_request() {
 
 #[test]
 fn sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -226,6 +256,12 @@ fn sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it() {
 /// refused as an unauthorized change the next time it loads.
 #[test]
 fn grant_none_records_an_explicit_empty_set_and_rewrites_the_witness() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "grant_none_records_an_explicit_empty_set_and_rewrites_the_witness",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, PluginSpecFixture::new("demo", "demo"));
 
@@ -264,6 +300,12 @@ fn grant_none_records_an_explicit_empty_set_and_rewrites_the_witness() {
 /// retype each name.
 #[test]
 fn grant_requested_grants_exactly_the_manifests_request() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "grant_requested_grants_exactly_the_manifests_request",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -297,6 +339,12 @@ fn grant_requested_grants_exactly_the_manifests_request() {
 /// a grant does [ORB-12840].
 #[test]
 fn a_path_scoped_fs_grant_records_its_roots_and_moves_the_witness() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_path_scoped_fs_grant_records_its_roots_and_moves_the_witness",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -394,6 +442,12 @@ fn a_path_scoped_fs_grant_records_its_roots_and_moves_the_witness() {
 /// load. That one is a finding.
 #[test]
 fn doctor_names_a_requested_root_the_grant_leaves_out_entirely() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_names_a_requested_root_the_grant_leaves_out_entirely",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -457,6 +511,12 @@ fn grant_options(grants: &[&str]) -> PluginEnableOptions {
 /// finding, expressed through the seam a backend reaches with a writable store.
 #[test]
 fn grants_injected_into_the_store_row_never_become_an_unconfined_plugin() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "grants_injected_into_the_store_row_never_become_an_unconfined_plugin",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -555,6 +615,12 @@ fn grants_injected_into_the_store_row_never_become_an_unconfined_plugin() {
 /// turns the diagnostic's own remediation into an authorization bypass.
 #[test]
 fn enable_with_grants_replaces_an_unauthorized_stored_superset() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "enable_with_grants_replaces_an_unauthorized_stored_superset",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -621,6 +687,12 @@ fn enable_with_grants_replaces_an_unauthorized_stored_superset() {
 
 #[test]
 fn add_and_enable_with_grants_both_replace_the_recorded_set() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_and_enable_with_grants_both_replace_the_recorded_set",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     install_plugin(
@@ -680,6 +752,12 @@ fn add_and_enable_with_grants_both_replace_the_recorded_set() {
 /// operator maintained through the ordinary commands.
 #[test]
 fn the_ordinary_lifecycle_keeps_the_row_authorized() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "the_ordinary_lifecycle_keeps_the_row_authorized",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo").requesting_fs_write());
     install_plugin(
@@ -774,6 +852,12 @@ fn profile_read(fixture: &PluginFixture, name: &str) -> Vec<std::path::PathBuf> 
 #[cfg(unix)]
 #[test]
 fn declared_programs_are_resolved_at_enable_and_a_moved_one_needs_re_consent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "declared_programs_are_resolved_at_enable_and_a_moved_one_needs_re_consent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     // Deliberately outside any `PATH` directory a caller would carry.
     let tool = fixture.sources.join("off-path/bin/tool");

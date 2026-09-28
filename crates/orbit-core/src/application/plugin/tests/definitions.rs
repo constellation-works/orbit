@@ -251,27 +251,13 @@ fn run_plugin_delivery_cases() {
 
 #[test]
 fn plugin_delivery_collects_only_safe_worktrees() {
-    if std::env::var_os("ORBIT_PLUGIN_DELIVERY_CHILD").is_some() {
-        run_plugin_delivery_cases();
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "plugin_delivery_collects_only_safe_worktrees",
+    ) {
         return;
     }
-    let mut child = Command::new(std::env::current_exe().expect("test executable"));
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        child.env_remove(name);
-    });
-    let output = child
-        .arg("plugin_delivery_collects_only_safe_worktrees")
-        .arg("--nocapture")
-        .env_remove("ORBIT_WORKTREE_ROOT")
-        .env("ORBIT_PLUGIN_DELIVERY_CHILD", "1")
-        .output()
-        .expect("run isolated plugin fixture");
-    assert!(
-        output.status.success(),
-        "isolated fixture failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    run_plugin_delivery_cases();
 }
 
 fn install(fixture: &PluginFixture, plugin: &DefinitionPlugin<'_>) {
@@ -298,6 +284,12 @@ fn layer_of(runtime: &OrbitRuntime, job: &str, reference: &str) -> (String, Vec<
 
 #[test]
 fn a_plugins_activities_and_jobs_resolve_from_its_own_catalog_layer() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugins_activities_and_jobs_resolve_from_its_own_catalog_layer",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
 
@@ -322,6 +314,12 @@ fn a_plugins_activities_and_jobs_resolve_from_its_own_catalog_layer() {
 
 #[test]
 fn a_later_plugin_with_the_same_activity_name_is_refused_and_the_first_still_serves() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_later_plugin_with_the_same_activity_name_is_refused_and_the_first_still_serves",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut first = DefinitionPlugin::new("alpha");
     first.activity = "shared_index".to_string();
@@ -353,6 +351,12 @@ fn a_later_plugin_with_the_same_activity_name_is_refused_and_the_first_still_ser
 
 #[test]
 fn a_later_plugin_with_the_same_job_name_is_refused() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_later_plugin_with_the_same_job_name_is_refused",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut first = DefinitionPlugin::new("alpha");
     first.job = "shared_pipeline".to_string();
@@ -379,6 +383,12 @@ fn a_later_plugin_with_the_same_job_name_is_refused() {
 
 #[test]
 fn a_workspace_activity_shadows_the_plugins_and_the_layer_output_says_so() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_workspace_activity_shadows_the_plugins_and_the_layer_output_says_so",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
 
@@ -400,6 +410,12 @@ fn a_workspace_activity_shadows_the_plugins_and_the_layer_output_says_so() {
 
 #[test]
 fn a_cross_plugin_routine_target_refuses_that_plugin_and_leaves_the_others_loading() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_cross_plugin_routine_target_refuses_that_plugin_and_leaves_the_others_loading",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     install(
@@ -426,6 +442,12 @@ fn a_cross_plugin_routine_target_refuses_that_plugin_and_leaves_the_others_loadi
 
 #[test]
 fn a_plugin_job_may_not_reference_another_plugins_activity() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugin_job_may_not_reference_another_plugins_activity",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("alpha"));
 
@@ -466,6 +488,12 @@ fn a_plugin_job_may_not_reference_another_plugins_activity() {
 
 #[test]
 fn a_routine_that_ships_enabled_refuses_the_plugin() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_routine_that_ships_enabled_refuses_the_plugin",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -484,6 +512,12 @@ fn a_routine_that_ships_enabled_refuses_the_plugin() {
 
 #[test]
 fn an_auto_task_that_ships_enabled_refuses_the_plugin() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_auto_task_that_ships_enabled_refuses_the_plugin",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -502,6 +536,12 @@ fn an_auto_task_that_ships_enabled_refuses_the_plugin() {
 
 #[test]
 fn validate_reports_what_enabling_would_seed() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "validate_reports_what_enabling_would_seed",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
 
@@ -518,6 +558,12 @@ fn validate_reports_what_enabling_would_seed() {
 
 #[test]
 fn plugin_tool_call_reaches_a_plugin_tool_and_refuses_anything_else() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "plugin_tool_call_reaches_a_plugin_tool_and_refuses_anything_else",
+    ) {
+        return;
+    }
     use orbit_engine::RuntimeHost;
     use orbit_tools::ToolContext;
     use serde_json::json;
@@ -566,6 +612,12 @@ fn plugin_tool_call_reaches_a_plugin_tool_and_refuses_anything_else() {
 
 #[test]
 fn enabling_records_grants_and_reports_the_definitions_it_seeded() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "enabling_records_grants_and_reports_the_definitions_it_seeded",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
 
@@ -596,6 +648,12 @@ fn enabling_records_grants_and_reports_the_definitions_it_seeded() {
 /// handoff every other job already shares.
 #[test]
 fn a_plugin_job_runs_its_plugin_tool_call_end_to_end() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugin_job_runs_its_plugin_tool_call_end_to_end",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     let runtime = fixture.reopen();
@@ -627,6 +685,12 @@ fn a_plugin_job_runs_its_plugin_tool_call_end_to_end() {
 /// The granted `git` actually runs: the backend reports its output.
 #[test]
 fn a_plugin_job_step_spawns_the_program_its_operator_granted() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugin_job_step_spawns_the_program_its_operator_granted",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -653,6 +717,12 @@ fn a_plugin_job_step_spawns_the_program_its_operator_granted() {
 /// program that did not resolve at enable is still refused, by name.
 #[test]
 fn a_plugin_job_step_is_refused_a_program_that_was_never_granted() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugin_job_step_is_refused_a_program_that_was_never_granted",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let missing = fixture.sources.join("absent/orbit-fixture-missing-program");
     let missing = missing.to_str().expect("utf8 path").to_string();
@@ -681,6 +751,12 @@ fn a_plugin_job_step_is_refused_a_program_that_was_never_granted() {
 /// loaded plugin refuses the step, and a disabled row grants nothing.
 #[test]
 fn a_plugin_job_step_rechecks_the_program_grant_at_call_time() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugin_job_step_rechecks_the_program_grant_at_call_time",
+    ) {
+        return;
+    }
     use std::collections::BTreeMap;
 
     use crate::runtime::plugin::grants::record_authorization;
@@ -728,6 +804,12 @@ fn a_plugin_job_step_rechecks_the_program_grant_at_call_time() {
 /// tool is refused, naming the program.
 #[test]
 fn an_agent_activity_without_the_program_is_still_refused_the_plugin_tool() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_agent_activity_without_the_program_is_still_refused_the_plugin_tool",
+    ) {
+        return;
+    }
     use orbit_engine::RuntimeHost;
 
     let fixture = PluginFixture::new();
@@ -792,6 +874,12 @@ fn an_agent_activity_without_the_program_is_still_refused_the_plugin_tool() {
 #[cfg(unix)]
 #[test]
 fn shipped_agent_activity_admits_granted_uv_plugin_program() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "shipped_agent_activity_admits_granted_uv_plugin_program",
+    ) {
+        return;
+    }
     use orbit_engine::RuntimeHost;
     use orbit_engine::activity_job::load_activity_asset;
     use orbit_types::workflow::ActivityV2Spec;

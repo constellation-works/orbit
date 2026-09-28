@@ -31,6 +31,12 @@ fn roots(fixture: &PluginFixture) -> Vec<PathBuf> {
 
 #[test]
 fn lifecycle_links_beside_the_runtime_global_root() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "lifecycle_links_beside_the_runtime_global_root",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     install_plugin(
@@ -110,6 +116,12 @@ fn lifecycle_links_beside_the_runtime_global_root() {
 
 #[test]
 fn enable_links_each_skill_into_every_discovery_root_and_disable_unlinks_it() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "enable_links_each_skill_into_every_discovery_root_and_disable_unlinks_it",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     std::fs::rename(source.join("skills/graph"), source.join("skills/orbit"))
@@ -169,6 +181,12 @@ fn enable_links_each_skill_into_every_discovery_root_and_disable_unlinks_it() {
 
 #[test]
 fn linking_refuses_to_replace_a_namespaced_link_owned_elsewhere() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "linking_refuses_to_replace_a_namespaced_link_owned_elsewhere",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     let plugin = load_plugin_dir(&source).expect("load plugin");
@@ -208,6 +226,12 @@ fn linking_refuses_to_replace_a_namespaced_link_owned_elsewhere() {
 
 #[test]
 fn linking_replaces_a_dangling_link_into_the_plugin_install_family() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "linking_replaces_a_dangling_link_into_the_plugin_install_family",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     let plugin = load_plugin_dir(&source).expect("load plugin");
@@ -243,6 +267,12 @@ fn linking_replaces_a_dangling_link_into_the_plugin_install_family() {
 
 #[test]
 fn doctor_reports_a_link_whose_plugin_directory_is_gone() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_reports_a_link_whose_plugin_directory_is_gone",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     let plugin = load_plugin_dir(&source).expect("load plugin");
@@ -284,6 +314,12 @@ const PRESERVED_LINKS: &[&str] = &[
 
 #[test]
 fn disabling_preserves_links_that_resolve_outside_the_namespace() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "disabling_preserves_links_that_resolve_outside_the_namespace",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     let plugin = load_plugin_dir(&source).expect("load plugin");
@@ -479,6 +515,12 @@ fn disabling_preserves_links_that_resolve_outside_the_namespace() {
 
 #[test]
 fn replacement_and_doctor_agree_on_physical_link_ownership() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "replacement_and_doctor_agree_on_physical_link_ownership",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     let plugin = load_plugin_dir(&source).expect("load plugin");

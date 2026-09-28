@@ -3,15 +3,125 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
 
+const ISOLATED_CHILD_ENV: &str = "ORBIT_TEST_PLUGIN_FIXTURE_CHILD";
+
+/// Run a mutable plugin test in an exact child of the test binary. The parent
+/// never changes its environment or opens a fixture runtime.
+pub(super) fn enter_isolated_child(module: &str, test: &str) -> bool {
+    let module = module
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module);
+    let exact_test = format!("{module}::{test}");
+    if std::env::var(ISOLATED_CHILD_ENV).ok().as_deref() == Some(&exact_test) {
+        return true;
+    }
+
+    let home = tempfile::tempdir().expect("isolated plugin fixture home");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    clear_child_authority(&mut child);
+    let output = child
+        .args(["--exact", &exact_test, "--nocapture", "--test-threads=1"])
+        .env(ISOLATED_CHILD_ENV, &exact_test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("run isolated plugin fixture");
+    assert_child_passed(&output, &exact_test);
+    false
+}
+
+/// Clear the authority inherited by any re-executed plugin test before its
+/// deliberate fixture variables are set. The worker requirement, plugin
+/// broker socket, and managed scratch path are separate from the shared list.
+pub(super) fn clear_child_authority(child: &mut Command) {
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        child.env_remove(name);
+    });
+    child.env_remove("ORBIT_WORKER_CONTEXT_REQUIRED");
+    child.env_remove("ORBIT_PLUGIN_BROKER");
+    child.env_remove("ORBIT_SCRATCH_DIR");
+}
+
+pub(super) fn assert_child_passed(output: &Output, exact_test: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "isolated plugin test `{exact_test}` failed:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        stdout.contains(&format!("test {exact_test} ... ok"))
+            && stdout.contains("test result: ok. 1 passed;"),
+        "isolated plugin child must execute exactly `{exact_test}`:\n{stdout}\n{stderr}"
+    );
+}
+
+#[test]
+fn child_command_discards_inherited_authority() {
+    let exact_test =
+        "application::plugin::tests::fixture::child_command_discards_inherited_authority";
+    if std::env::var(ISOLATED_CHILD_ENV).ok().as_deref() == Some(exact_test) {
+        for name in orbit_common::test_env::INHERITED_AUTHORITY_ENV {
+            assert!(std::env::var_os(name).is_none(), "child inherited {name}");
+        }
+        for name in [
+            "ORBIT_WORKER_CONTEXT_REQUIRED",
+            "ORBIT_PLUGIN_BROKER",
+            "ORBIT_SCRATCH_DIR",
+        ] {
+            assert!(std::env::var_os(name).is_none(), "child inherited {name}");
+        }
+        return;
+    }
+
+    let home = tempfile::tempdir().expect("isolated plugin fixture home");
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    for name in orbit_common::test_env::INHERITED_AUTHORITY_ENV {
+        child.env(name, "inherited authority sentinel");
+    }
+    child
+        .env("ORBIT_WORKER_CONTEXT_REQUIRED", "1")
+        .env("ORBIT_PLUGIN_BROKER", home.path().join("live-broker"))
+        .env("ORBIT_SCRATCH_DIR", home.path().join("live-scratch"));
+    clear_child_authority(&mut child);
+    let output = child
+        .args(["--exact", exact_test, "--nocapture"])
+        .env(ISOLATED_CHILD_ENV, exact_test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("run authority-clearing child");
+    assert_child_passed(&output, exact_test);
+}
+
+#[test]
+fn child_result_rejects_zero_tests() {
+    let nonexistent = "application::plugin::tests::fixture::no_such_test";
+    let output = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", nonexistent])
+        .output()
+        .expect("run zero-test child");
+    assert!(
+        output.status.success(),
+        "libtest should accept an empty filter"
+    );
+    assert!(
+        std::panic::catch_unwind(|| assert_child_passed(&output, nonexistent)).is_err(),
+        "an empty test selection must be rejected"
+    );
+}
+
 pub(super) struct PluginFixture {
-    // Keep HOME inside the fixture while in-process add/enable/sync tests run.
-    // The guard drops before the temporary tree so HOME is restored first.
+    // Keep HOME inside the disposable child while add/enable/sync tests run.
     _home_env: orbit_common::test_env::ScopedEnv,
     pub(super) _root: TempDir,
     pub(super) global_root: PathBuf,
@@ -24,6 +134,10 @@ pub(super) struct PluginFixture {
 
 impl PluginFixture {
     pub(super) fn new() -> Self {
+        assert!(
+            std::env::var_os(ISOLATED_CHILD_ENV).is_some(),
+            "mutable plugin fixtures must run through enter_isolated_child"
+        );
         let root = tempfile::tempdir().expect("tempdir");
         let home = root.path().join("home");
         std::fs::create_dir_all(&home).expect("create fixture HOME");

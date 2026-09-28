@@ -31,6 +31,12 @@ fn write_config(fixture: &PluginFixture, body: &str) {
 
 #[test]
 fn a_value_the_plugin_schema_rejects_refuses_that_plugin_and_names_the_key() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_value_the_plugin_schema_rejects_refuses_that_plugin_and_names_the_key",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     write_config(&fixture, "[plugins.graph]\ndepth = \"deep\"\n");
@@ -47,6 +53,12 @@ fn a_value_the_plugin_schema_rejects_refuses_that_plugin_and_names_the_key() {
 
 #[test]
 fn a_configured_value_reaches_the_plugin_over_its_manifest_default() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_configured_value_reaches_the_plugin_over_its_manifest_default",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     write_config(&fixture, "[plugins.graph]\nindex_dir = \".custom\"\n");
@@ -76,6 +88,12 @@ fn a_configured_value_reaches_the_plugin_over_its_manifest_default() {
 
 #[test]
 fn an_undeclared_key_is_refused_with_the_keys_that_would_have_worked() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_undeclared_key_is_refused_with_the_keys_that_would_have_worked",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     // Opening the runtime publishes the installed plugins' contracts, which is
@@ -104,6 +122,12 @@ fn an_undeclared_key_is_refused_with_the_keys_that_would_have_worked() {
 
 #[test]
 fn a_section_for_an_uninstalled_plugin_leaves_the_runtime_standing() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_section_for_an_uninstalled_plugin_leaves_the_runtime_standing",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     write_config(

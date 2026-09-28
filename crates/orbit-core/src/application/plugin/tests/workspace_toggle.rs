@@ -120,6 +120,12 @@ fn workspace_toggle(workspace: &Path) -> Option<bool> {
 
 #[test]
 fn disabling_in_one_workspace_takes_its_whole_surface_off_there_and_leaves_the_other_active() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "disabling_in_one_workspace_takes_its_whole_surface_off_there_and_leaves_the_other_active",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
 
     disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable in A");
@@ -193,6 +199,12 @@ fn disabling_in_one_workspace_takes_its_whole_surface_off_there_and_leaves_the_o
 
 #[test]
 fn an_unset_toggle_inherits_the_host_state_and_writes_nothing() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_unset_toggle_inherits_the_host_state_and_writes_nothing",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
 
     for runtime in [ws.runtime_a(), ws.runtime_b()] {
@@ -211,6 +223,12 @@ fn an_unset_toggle_inherits_the_host_state_and_writes_nothing() {
 
 #[test]
 fn a_workspace_enable_while_the_host_is_disabled_is_refused_and_changes_nothing() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_workspace_enable_while_the_host_is_disabled_is_refused_and_changes_nothing",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     disable_plugin(&ws.fixture.runtime, "graph").expect("host disable");
 
@@ -231,6 +249,12 @@ fn a_workspace_enable_while_the_host_is_disabled_is_refused_and_changes_nothing(
 
 #[test]
 fn a_workspace_enable_turns_the_plugin_back_on_there() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_workspace_enable_turns_the_plugin_back_on_there",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable in A");
 
@@ -244,6 +268,12 @@ fn a_workspace_enable_turns_the_plugin_back_on_there() {
 
 #[test]
 fn workspace_toggles_admit_a_pool_member_defined_only_on_the_host() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "workspace_toggles_admit_a_pool_member_defined_only_on_the_host",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     std::fs::write(
         ws.fixture.global_root.join("config.toml"),
@@ -275,6 +305,12 @@ fn workspace_toggles_admit_a_pool_member_defined_only_on_the_host() {
 
 #[test]
 fn workspace_toggles_reject_a_pool_member_missing_from_both_layers_without_writing() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "workspace_toggles_reject_a_pool_member_missing_from_both_layers_without_writing",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     let config_path = ws.fixture.workspace_root.join("config.toml");
     let original = "[workflow]\nlow_complexity_crews = [\"missing-crew:100\"]\n";
@@ -302,6 +338,12 @@ fn workspace_toggles_reject_a_pool_member_missing_from_both_layers_without_writi
 
 #[test]
 fn a_toggle_change_marks_the_cached_runtime_stale() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_toggle_change_marks_the_cached_runtime_stale",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     let a = ws.runtime_a();
     assert!(!a.plugin_state_changed().expect("state"));
@@ -316,6 +358,12 @@ fn a_toggle_change_marks_the_cached_runtime_stale() {
 
 #[test]
 fn sync_applies_a_disabled_pin_to_this_workspace_only() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_applies_a_disabled_pin_to_this_workspace_only",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     ws.fixture.write_pin_file(&pin(&ws.source, false));
 
@@ -352,6 +400,12 @@ fn sync_applies_a_disabled_pin_to_this_workspace_only() {
 
 #[test]
 fn sync_reopens_a_disabled_host_and_workspace_to_the_final_effective_status() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_reopens_a_disabled_host_and_workspace_to_the_final_effective_status",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable A workspace");
     disable_plugin(&ws.fixture.runtime, "graph").expect("disable host");
@@ -388,6 +442,12 @@ fn sync_reopens_a_disabled_host_and_workspace_to_the_final_effective_status() {
 
 #[test]
 fn show_and_doctor_report_the_host_state_and_the_workspace_reason() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "show_and_doctor_report_the_host_state_and_the_workspace_reason",
+    ) {
+        return;
+    }
     let ws = TwoWorkspaces::new();
     disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable in A");
 
