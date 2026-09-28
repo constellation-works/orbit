@@ -3,10 +3,16 @@ use crate::application::task::{TaskAddParams, compute_task_add_warnings};
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskStatus, TaskType};
 
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 
 #[test]
 fn task_add_enters_proposed_and_requires_approval_before_backlog() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_enters_proposed_and_requires_approval_before_backlog",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let task = runtime
@@ -33,6 +39,12 @@ fn task_add_enters_proposed_and_requires_approval_before_backlog() {
 
 #[test]
 fn task_add_records_process_actor_when_no_model_is_supplied() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_records_process_actor_when_no_model_is_supplied",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let runtime = runtime.with_actor(ActorIdentity::human("human:qa"));
 
@@ -51,6 +63,12 @@ fn task_add_records_process_actor_when_no_model_is_supplied() {
 
 #[test]
 fn task_add_normalizes_full_model_string_to_a_canonical_family() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_normalizes_full_model_string_to_a_canonical_family",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let task = runtime
@@ -70,6 +88,9 @@ fn task_add_normalizes_full_model_string_to_a_canonical_family() {
 
 #[test]
 fn task_add_refuses_an_unrecognized_model() {
+    if !enter_isolated_child(module_path!(), "task_add_refuses_an_unrecognized_model") {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let error = runtime
@@ -94,6 +115,12 @@ fn task_add_refuses_an_unrecognized_model() {
 
 #[test]
 fn task_context_selector_round_trips_from_repository_root() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_context_selector_round_trips_from_repository_root",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(repo_root.join("docs")).expect("create docs directory");
@@ -149,6 +176,12 @@ fn task_context_selector_round_trips_from_repository_root() {
 
 #[test]
 fn task_start_event_records_when_start_approves_a_proposal() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_start_event_records_when_start_approves_a_proposal",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let proposed = runtime
@@ -205,6 +238,12 @@ fn task_start_event_records_when_start_approves_a_proposal() {
 
 #[test]
 fn task_add_does_not_scan_unrelated_corrupt_bundles() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_does_not_scan_unrelated_corrupt_bundles",
+    ) {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let task_a = runtime
         .add_task(TaskAddParams {
@@ -323,6 +362,9 @@ fn add_task_warnings_mixed_valid_and_claude_over_only() {
 
 #[test]
 fn task_add_redacts_secrets_in_stored_fields() {
+    if !enter_isolated_child(module_path!(), "task_add_redacts_secrets_in_stored_fields") {
+        return;
+    }
     // [ORB-00417] A pasted key in title/description/plan/acceptance_criteria/
     // comment must be redacted at write time so it never lands in the task
     // registry.
@@ -389,6 +431,12 @@ fn task_add_redacts_secrets_in_stored_fields() {
 
 #[test]
 fn task_add_redacts_authorization_env_value_in_persisted_description() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_redacts_authorization_env_value_in_persisted_description",
+    ) {
+        return;
+    }
     // [ORB-12508] AUTHORIZATION is an AUTH-family credential name, not an
     // author-identity var. A value held there must be scrubbed at the
     // orbit.task.add choke point so it never lands in the task registry.
@@ -422,6 +470,12 @@ fn task_add_redacts_authorization_env_value_in_persisted_description() {
 
 #[test]
 fn task_add_applies_normalized_provenance_title_prefixes() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_applies_normalized_provenance_title_prefixes",
+    ) {
+        return;
+    }
     for (tag, expected_prefix) in [
         (" qa-SWEEP ", "[qa-sweep] "),
         ("security-review", "[security-review] "),
@@ -443,6 +497,12 @@ fn task_add_applies_normalized_provenance_title_prefixes() {
 
 #[test]
 fn task_add_does_not_double_the_applicable_provenance_prefix() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_does_not_double_the_applicable_provenance_prefix",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let task = runtime
@@ -458,6 +518,12 @@ fn task_add_does_not_double_the_applicable_provenance_prefix() {
 
 #[test]
 fn task_add_uses_fixed_provenance_precedence_independent_of_tag_order() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_uses_fixed_provenance_precedence_independent_of_tag_order",
+    ) {
+        return;
+    }
     for tags in [
         vec!["friction-curation", "security-review", "qa-sweep"],
         vec!["qa-sweep", "friction-curation", "security-review"],
@@ -477,6 +543,12 @@ fn task_add_uses_fixed_provenance_precedence_independent_of_tag_order() {
 
 #[test]
 fn task_add_preserves_auto_task_title_prefix_behavior() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_preserves_auto_task_title_prefix_behavior",
+    ) {
+        return;
+    }
     for title in ["Scheduled work", "[auto-task] Scheduled work"] {
         let (_root, runtime) = test_runtime();
         let task = runtime
@@ -497,6 +569,12 @@ fn task_add_preserves_auto_task_title_prefix_behavior() {
 /// instead (CLI `task add`, `orbit.task.add`).
 #[test]
 fn task_add_keeps_context_selectors_that_do_not_exist_yet() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_keeps_context_selectors_that_do_not_exist_yet",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     let task = runtime
@@ -512,6 +590,9 @@ fn task_add_keeps_context_selectors_that_do_not_exist_yet() {
 
 #[test]
 fn task_add_accepts_valid_context_selectors() {
+    if !enter_isolated_child(module_path!(), "task_add_accepts_valid_context_selectors") {
+        return;
+    }
     let (root, runtime) = test_runtime();
     let repo_dir = root.path().join("repo");
     std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
@@ -541,6 +622,12 @@ fn task_add_accepts_valid_context_selectors() {
 
 #[test]
 fn task_add_rejects_a_requirement_agents_can_never_be_granted() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_rejects_a_requirement_agents_can_never_be_granted",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     // Candidate inspection remains admin/human-only, so activity
@@ -571,6 +658,12 @@ fn task_add_rejects_a_requirement_agents_can_never_be_granted() {
 
 #[test]
 fn task_add_keeps_a_disabled_requirement_with_a_warning() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_add_keeps_a_disabled_requirement_with_a_warning",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     runtime
         .disable_tool("github.run.list")

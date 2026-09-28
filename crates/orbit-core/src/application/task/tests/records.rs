@@ -5,7 +5,7 @@ use orbit_types::task::{
 };
 
 use super::super::params::TaskRecordUpdateParams;
-use super::test_runtime;
+use super::{enter_isolated_child, test_runtime};
 
 fn create_params(_runtime: &crate::OrbitRuntime) -> TaskCreateParams {
     TaskCreateParams {
@@ -39,6 +39,12 @@ fn create_params(_runtime: &crate::OrbitRuntime) -> TaskCreateParams {
 
 #[test]
 fn task_records_round_trip_document_history_and_artifact_updates() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_records_round_trip_document_history_and_artifact_updates",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let service = runtime.stores().task_records();
     let task = service
@@ -112,6 +118,12 @@ fn task_records_round_trip_document_history_and_artifact_updates() {
 
 #[test]
 fn task_records_delete_reports_presence_and_removes_persisted_task() {
+    if !enter_isolated_child(
+        module_path!(),
+        "task_records_delete_reports_presence_and_removes_persisted_task",
+    ) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let service = runtime.stores().task_records();
     let task = service
