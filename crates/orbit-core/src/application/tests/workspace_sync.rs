@@ -616,6 +616,91 @@ fn skipped_manifest_write_survives_the_report_without_claiming_provenance() {
     assert!(second.warnings.is_empty(), "{:?}", second.warnings);
 }
 
+/// The routine catalog holds the same skippable-manifest contract as the job
+/// catalog: a denied routine manifest write is a report warning, the other
+/// catalogs still reconcile, and no routine adoption claims provenance.
+#[cfg(unix)]
+#[test]
+fn skipped_routine_manifest_write_keeps_the_rest_of_the_sync() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("create tempdir");
+    let (global, workspace) = initialized_roots(root.path());
+    let routines = workspace.join("routines");
+    let manifest_path = routine_manifest(&workspace);
+    std::fs::remove_file(&manifest_path).expect("drop the routine manifest");
+    let job_manifest = global
+        .join("resources/jobs")
+        .join(MANAGED_ASSET_MANIFEST_FILE);
+    std::fs::remove_file(&job_manifest).expect("drop the job manifest");
+
+    std::fs::set_permissions(&routines, std::fs::Permissions::from_mode(0o555))
+        .expect("make the routine catalog read-only");
+    let report = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    );
+    std::fs::set_permissions(&routines, std::fs::Permissions::from_mode(0o755))
+        .expect("restore routine catalog permissions");
+
+    let report = report.expect("a denied routine manifest write stays tolerant");
+    assert!(!manifest_path.exists(), "the denied write left no manifest");
+    let skipped: Vec<_> = report
+        .warnings
+        .iter()
+        .filter(|warning| {
+            warning.contains("could not write managed routine asset manifest")
+                && warning.contains(MANAGED_ASSET_MANIFEST_FILE)
+        })
+        .collect();
+    assert_eq!(skipped.len(), 1, "{:?}", report.warnings);
+    assert!(
+        job_manifest.exists(),
+        "the job catalog still reconciles and records its manifest"
+    );
+    let migrated: Vec<_> = report
+        .actions
+        .iter()
+        .filter(|action| {
+            action.kind == "routine" && action.outcome == ManagedArtifactOutcome::Migrated
+        })
+        .collect();
+    assert!(!migrated.is_empty(), "exact shipped routines are adopted");
+    for action in migrated {
+        let detail = action.detail.as_deref().unwrap_or_default();
+        assert!(
+            detail.contains("not recorded"),
+            "an adoption without a manifest must not claim recorded provenance: {detail}"
+        );
+    }
+
+    // Once the catalog is writable the same sync records provenance and a
+    // repeat is warning-free and inert.
+    let recorded = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    )
+    .expect("sync a writable catalog");
+    assert!(recorded.warnings.is_empty(), "{:?}", recorded.warnings);
+    assert!(manifest_path.exists());
+    let second = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    )
+    .expect("repeat sync");
+    assert!(!second.has_pending_changes());
+    assert!(second.warnings.is_empty(), "{:?}", second.warnings);
+}
+
 /// Untracked YAML in a manifestless catalog has no action of its own; its
 /// warning must still reach the report, and `--check` writes nothing.
 #[test]
