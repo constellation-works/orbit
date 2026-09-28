@@ -33,8 +33,8 @@ let lastPayload = null;
 let filterText = "";
 let showAllKeys = false;
 // Sections an operator expanded past their collapsed "all unset" summary, and
-// the row (or crew) currently being edited. Both are operator state, so a
-// background refresh must not discard them.
+// the row (or crew) currently being edited with its draft values. Both are
+// operator state, so a background refresh must not discard them.
 const expandedSections = new Set();
 let editing = null;
 let unsubscribeWorkspace = null;
@@ -407,8 +407,13 @@ function displayValue(value) {
 
 // ----------------------------------------------------------------- editing
 
+/// An edit session. `draft` holds what the operator typed, field by field, so
+/// every re-render — a background refresh, a save in flight, a refused write —
+/// rebuilds the editor from the draft rather than the last server payload. The
+/// session is bound to the workspace it was opened in; only a successful save,
+/// Cancel, Reload, or a workspace or sub-tab switch ends it.
 function startEdit(next) {
-  editing = { ...next, error: null, pending: false };
+  editing = { ...next, error: null, pending: false, draft: {}, workspace: getWorkspace() };
   if (lastPayload) render(lastPayload);
 }
 
@@ -435,7 +440,7 @@ function pendingError(node, key) {
 }
 
 function keyEditor(row, payload, node) {
-  const input = valueInput(row);
+  const input = valueInput(row, editing.draft);
   const target = writeScope() === "global" ? payload?.layers?.global?.path : payload?.layers?.workspace?.path;
   const editor = el("div", { class: "config-editor" }, [
     el("div", { class: "config-editor-head" }, [
@@ -506,50 +511,70 @@ function actionButton(label, onClick, kind = "") {
   return button;
 }
 
+/// Seeds `input[prop]` from the draft when the operator already changed this
+/// field, else from the server value, and mirrors every change back into the
+/// draft. The returned `sync` also runs on read, so a save captures the field
+/// even when no input event fired.
+function bindDraft(input, prop, draft, field, initial) {
+  input[prop] = Object.hasOwn(draft, field) ? draft[field] : initial;
+  const sync = () => {
+    draft[field] = input[prop];
+  };
+  input.addEventListener(prop === "checked" ? "change" : "input", sync);
+  return sync;
+}
+
 /// An editor typed by the registry: a choice list for an enum key, a toggle
 /// for a bool, a number field for an integer, a chip list for an array, and a
 /// text field otherwise.
-function valueInput(row) {
+function valueInput(row, draft) {
   const options = row.options || [];
   if (options.length) {
     const select = el("select", { class: "config-input mono" });
     for (const option of options) {
       const node = el("option", { text: option });
       node.value = option;
-      if (option === row.value) node.selected = true;
       select.appendChild(node);
     }
-    return { node: select, read: () => select.value };
+    const current = options.includes(row.value) ? row.value : options[0];
+    const sync = bindDraft(select, "value", draft, "value", current);
+    select.addEventListener("change", sync);
+    return { node: select, read: () => (sync(), select.value) };
   }
   if (row.value_type === "bool") {
     const label = el("label", { class: "config-toggle" });
     const input = el("input", {});
     input.type = "checkbox";
-    input.checked = row.value === true;
+    const sync = bindDraft(input, "checked", draft, "value", row.value === true);
     label.appendChild(input);
     label.appendChild(el("span", { class: "mono", text: "true / false" }));
-    return { node: label, read: () => input.checked };
+    return { node: label, read: () => (sync(), input.checked) };
   }
   if (row.value_type === "integer") {
     const input = el("input", { class: "config-input mono" });
     input.type = "number";
-    input.value = row.value == null ? "" : String(row.value);
+    const sync = bindDraft(input, "value", draft, "value", row.value == null ? "" : String(row.value));
     return {
       node: input,
-      read: () => (input.value.trim() === "" ? null : Number(input.value)),
+      read: () => (sync(), input.value.trim() === "" ? null : Number(input.value)),
     };
   }
   if (String(row.value_type || "").startsWith("array")) {
-    return chipListInput(Array.isArray(row.value) ? row.value : []);
+    return chipListInput(Array.isArray(row.value) ? row.value : [], draft, "value");
   }
   const input = el("input", { class: "config-input mono" });
   input.type = "text";
-  input.value = row.value == null ? "" : String(row.value);
-  return { node: input, read: () => input.value };
+  const sync = bindDraft(input, "value", draft, "value", row.value == null ? "" : String(row.value));
+  return { node: input, read: () => (sync(), input.value) };
 }
 
-function chipListInput(initial) {
-  const entries = [...initial];
+/// The chip list's draft is its entries plus the half-typed entry, so both
+/// survive a re-render.
+function chipListInput(initial, draft, field) {
+  if (!Object.hasOwn(draft, field)) draft[field] = { entries: [...initial], pending: "" };
+  const state = draft[field];
+  const entries = state.entries;
+  let pendingInput = null;
   const node = el("div", { class: "config-chiplist" });
   const draw = () => {
     node.replaceChildren();
@@ -568,22 +593,29 @@ function chipListInput(initial) {
     const input = el("input", { class: "config-input mono" });
     input.type = "text";
     input.placeholder = "add entry, Enter";
+    input.value = state.pending;
+    input.addEventListener("input", () => {
+      state.pending = input.value;
+    });
     input.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       event.preventDefault();
       const value = input.value.trim();
       if (!value) return;
       entries.push(value);
+      state.pending = "";
       draw();
-      node.querySelector("input")?.focus();
+      pendingInput?.focus();
     });
+    pendingInput = input;
     node.appendChild(input);
   };
   draw();
   return {
     node,
     read: () => {
-      const pending = node.querySelector("input")?.value.trim();
+      state.pending = pendingInput?.value ?? state.pending;
+      const pending = state.pending.trim();
       return pending ? [...entries, pending] : [...entries];
     },
   };
@@ -609,22 +641,28 @@ async function submitKeyClear(row) {
 }
 
 /// One save: apply, then re-read the view so the row shows the provenance the
-/// server resolved rather than an optimistic local edit.
+/// server resolved rather than an optimistic local edit. The outcome lands
+/// only on the session that issued it: a workspace switch or Reload while the
+/// write was in flight has already ended that session, and a later edit must
+/// not inherit its error or be closed by its success.
 async function submit(request) {
-  if (!editing) return;
-  editing.pending = true;
-  editing.error = null;
+  const session = editing;
+  if (!session) return;
+  session.pending = true;
+  session.error = null;
   if (lastPayload) render(lastPayload);
   try {
     await request();
-    editing = null;
+    if (editing === session) editing = null;
+    if (session.workspace !== getWorkspace()) return;
     await fetchAndRenderConfig();
   } catch (error) {
     // The admission layer's message is the useful part; it names the key, the
-    // value, and what was expected instead.
-    editing.pending = false;
-    editing.error = error.message || String(error);
-    if (lastPayload) render(lastPayload);
+    // value, and what was expected instead. The draft is untouched, so the
+    // editor re-renders with the values that were refused.
+    session.pending = false;
+    session.error = error.message || String(error);
+    if (editing === session && lastPayload) render(lastPayload);
   }
 }
 
@@ -727,14 +765,16 @@ function providerCell(provider) {
 }
 
 function crewEditor(crew, payload, isNew) {
+  const draft = editing.draft;
   const fields = {};
   const rows = [];
   if (isNew) {
     const name = el("input", { class: "config-input mono" });
     name.type = "text";
     name.placeholder = "crew name";
+    const sync = bindDraft(name, "value", draft, "name", "");
     rows.push(fieldRow("name", name));
-    fields.name = () => name.value.trim();
+    fields.name = () => (sync(), name.value.trim());
   }
   // The field list is the registry's, so a crew field added or retired in
   // `orbit-config` changes this editor without a JS edit.
@@ -745,24 +785,24 @@ function crewEditor(crew, payload, isNew) {
       const toggle = el("input", { class: "config-input" });
       toggle.type = "checkbox";
       const was = current !== false;
-      toggle.checked = was;
+      const sync = bindDraft(toggle, "checked", draft, field, was);
       rows.push(fieldRow(field, toggle));
       // Unchanged state is omitted so saving another field never writes an
       // `enabled` key into a table that relied on the enabled default.
-      fields[field] = () => (toggle.checked === was ? undefined : toggle.checked);
+      fields[field] = () => (sync(), toggle.checked === was ? undefined : toggle.checked);
       continue;
     }
     if (field === "tags") {
-      const list = chipListInput(Array.isArray(current) ? current : []);
+      const list = chipListInput(Array.isArray(current) ? current : [], draft, field);
       rows.push(fieldRow(field, list.node));
       fields[field] = list.read;
       continue;
     }
     const input = el("input", { class: "config-input mono" });
     input.type = "text";
-    input.value = current == null ? "" : String(current);
+    const sync = bindDraft(input, "value", draft, field, current == null ? "" : String(current));
     rows.push(fieldRow(field, input));
-    fields[field] = () => (input.value.trim() === "" ? null : input.value.trim());
+    fields[field] = () => (sync(), input.value.trim() === "" ? null : input.value.trim());
   }
   const editor = el("div", { class: "config-editor" }, [
     el("div", { class: "config-editor-head" }, [
@@ -781,7 +821,7 @@ function crewEditor(crew, payload, isNew) {
       ]),
     ]),
     editing.error ? el("div", { class: "config-row-error", text: editing.error }) : null,
-    ...initChoices(payload, () => submitCrew(crew, fields, isNew, "seed-from-global")),
+    ...initChoices(payload, (init) => submitCrew(crew, fields, isNew, init)),
   ]);
   return editor;
 }

@@ -12,12 +12,14 @@ const button = (id, label) => descendants(panel(id)).find(node => node.textConte
 const requests = [];
 let workspaceBaseBranch = 'agent-main';
 let refusal = null;
+let workspaceFileExists = true;
+let hold = null;
 
 const effective = () => ({
   scope: 'effective',
   config_set: { authorized: true, reason: null },
   crew_fields: ['enabled', 'provider', 'model', 'effort', 'tags', 'description'],
-  workspace_file_exists: true,
+  workspace_file_exists: workspaceFileExists,
   write_scope_default: 'workspace',
   layers: {
     built_in: { label: 'built-in' },
@@ -144,7 +146,12 @@ globalThis.fetch = async (path, options = {}) => {
   const body = options.body ? JSON.parse(options.body) : null;
   requests.push({ path: url.pathname, method: options.method || 'GET', workspace: url.searchParams.get('workspace'), scope: url.searchParams.get('scope'), body });
   if ((options.method || 'GET') !== 'GET') {
+    if (hold) await hold;
     if (refusal) return response({ error: refusal }, 400);
+    if (!workspaceFileExists && !body?.init) {
+      return response({ error: 'no workspace config.toml yet; choose seed-from-global or fresh' }, 400);
+    }
+    if (body?.init) workspaceFileExists = true;
     if (url.pathname.startsWith('/api/config/keys/')) workspaceBaseBranch = body.value;
     return response({ key: 'workflow.base_branch', scope: 'workspace', rows: [] });
   }
@@ -258,6 +265,109 @@ await new Promise(resolve => setTimeout(resolve, 0));
 await new Promise(resolve => setTimeout(resolve, 0));
 const opusWrite = requests.slice(opusBefore).find(request => request.method === 'PUT');
 assert(opusWrite && !('enabled' in opusWrite.body.fields), `an untouched toggle is not written, got ${JSON.stringify(opusWrite && opusWrite.body.fields)}`);
+
+// An open editor keeps what the operator typed through a background refresh,
+// a refused write, and the initialization retry that follows it.
+const settle = async () => {
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => setTimeout(resolve, 0));
+};
+const typeInto = (node, value) => {
+  node.value = value;
+  node.listeners.input?.({});
+};
+const editors = () => withClass('config-body', 'config-editor');
+const keyInput = () => descendants(editors()[0]).find(node => String(node.className || '').includes('config-input'));
+const crewField = label => withClass('config-body', 'config-field')
+  .find(node => node.children[0].textContent === label).children[1];
+const openKeyEditor = () => {
+  const row = withClass('config-body', 'config-row').find(node => node.dataset.key === 'workflow.base_branch');
+  descendants(row).find(node => String(node.className || '').includes('config-pencil')).listeners.click({ stopPropagation() {} });
+};
+
+refusal = null;
+await fetchAndRenderConfig();
+openKeyEditor();
+typeInto(keyInput(), 'release');
+await fetchAndRenderConfig();
+assert(keyInput().value === 'release', `a refresh keeps the typed key draft, got ${keyInput().value}`);
+
+workspaceFileExists = false;
+await fetchAndRenderConfig();
+const serverBranch = workspaceBaseBranch;
+button('config-body', 'Save').listeners.click({ stopPropagation() {} });
+await settle();
+assert(panel('config-body').textContent.includes('no workspace config.toml yet'), 'the missing-file refusal is shown');
+assert(keyInput().value === 'release', `a refused write keeps the submitted value, got ${keyInput().value}`);
+await fetchAndRenderConfig();
+assert(keyInput().value === 'release', 'a refresh after a refusal keeps the submitted value');
+const initBefore = requests.length;
+button('config-body', 'Start empty').listeners.click({ stopPropagation() {} });
+await settle();
+const initWrite = requests.slice(initBefore).find(request => request.method === 'PUT');
+assert(
+  initWrite && initWrite.body.value === 'release' && initWrite.body.init === 'fresh',
+  `the initialization retry writes the submitted value, not ${serverBranch}; got ${JSON.stringify(initWrite && initWrite.body)}`,
+);
+assert(editors().length === 0, 'a successful save closes the editor');
+openKeyEditor();
+assert(keyInput().value === 'release', `a reopened editor starts from the saved server value, got ${keyInput().value}`);
+
+// Cancel discards the draft.
+typeInto(keyInput(), 'discarded');
+button('config-body', 'Cancel').listeners.click({ stopPropagation() {} });
+assert(editors().length === 0, 'Cancel closes the editor');
+openKeyEditor();
+assert(keyInput().value === 'release', `Cancel discards the draft, got ${keyInput().value}`);
+button('config-body', 'Cancel').listeners.click({ stopPropagation() {} });
+
+// A new crew's name and fields survive a refresh and a refusal, and the
+// chosen initialization mode is the one sent with them.
+workspaceFileExists = false;
+await fetchAndRenderConfig();
+button('config-body', '+ Add crew').listeners.click({ stopPropagation() {} });
+typeInto(crewField('name'), 'scout');
+typeInto(crewField('provider'), 'codex');
+typeInto(crewField('tags').children.at(-1), 'fast');
+await fetchAndRenderConfig();
+assert(crewField('name').value === 'scout', 'a refresh keeps the new crew name');
+assert(crewField('provider').value === 'codex', 'a refresh keeps a new crew field');
+assert(crewField('tags').children.at(-1).value === 'fast', 'a refresh keeps a half-typed tag');
+button('config-body', 'Save').listeners.click({ stopPropagation() {} });
+await settle();
+assert(crewField('name').value === 'scout' && crewField('provider').value === 'codex', 'a refused crew write keeps the new crew');
+const crewInitBefore = requests.length;
+button('config-body', 'Start empty').listeners.click({ stopPropagation() {} });
+await settle();
+const crewInit = requests.slice(crewInitBefore).find(request => request.method === 'PUT');
+assert(
+  crewInit && crewInit.path === '/api/config/crews/scout' && crewInit.body.init === 'fresh'
+    && crewInit.body.fields.provider === 'codex' && JSON.stringify(crewInit.body.fields.tags) === '["fast"]',
+  `the crew retry sends the drafted crew with the chosen mode, got ${JSON.stringify(crewInit)}`,
+);
+assert(editors().length === 0, 'a successful crew save closes the editor');
+
+// A workspace switch ends the edit, and a write still in flight from the old
+// workspace neither reopens it nor lands its error on a later edit.
+await fetchAndRenderConfig();
+openKeyEditor();
+typeInto(keyInput(), 'stale');
+let release;
+hold = new Promise(resolve => { release = resolve; });
+refusal = 'refused in workspace one';
+button('config-body', 'Save').listeners.click({ stopPropagation() {} });
+await settle();
+setWorkspace('two');
+await fetchAndRenderConfig();
+openKeyEditor();
+release();
+hold = null;
+await settle();
+assert(keyInput().value === 'release', `an edit in the new workspace starts from its server value, got ${keyInput().value}`);
+assert(!panel('config-body').textContent.includes('refused in workspace one'), 'an old workspace refusal does not land on a new edit');
+setWorkspace('one');
+await fetchAndRenderConfig();
+assert(editors().length === 0, 'switching workspace ends the edit');
 
 // A caller without the operator capability sees the rows, not an editor.
 refusal = null;
