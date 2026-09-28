@@ -199,12 +199,13 @@ fn load_plugin_dir_reports_a_missing_root_as_invalid_input() {
 #[test]
 fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {
     let temp = tempfile::tempdir().expect("tempdir");
-    write_plugin(temp.path());
-    let secret = temp.path().parent().expect("parent").join("secret");
+    let plugin_root = temp.path().join("plugin");
+    write_plugin(&plugin_root);
+    let secret = temp.path().join("secret");
     std::fs::write(&secret, "SECRET-CONTENT-OUTSIDE-PLUGIN-TREE").expect("secret");
-    std::os::unix::fs::symlink(&secret, temp.path().join("env")).expect("symlink");
+    std::os::unix::fs::symlink(&secret, plugin_root.join("env")).expect("symlink");
 
-    let error = load_plugin_dir(temp.path()).expect_err("a planted symlink must refuse load");
+    let error = load_plugin_dir(&plugin_root).expect_err("a planted symlink must refuse load");
     // A symlink refusal is fail-closed security policy (§4.9), not a
     // malformed-manifest problem, so it must surface as `PolicyDenied`
     // rather than `InvalidInput` [ORB-12837].

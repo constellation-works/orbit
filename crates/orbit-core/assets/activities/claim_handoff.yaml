@@ -34,6 +34,11 @@ spec:
           type: object
       execution_summary:
         type: string
+      # The claimed-mode implement step's output. Its `execution_summary`
+      # (else `summary`), `comment` and `context_files_added` compose the
+      # handoff's summary, which acceptance writes as the owner's.
+      implementation:
+        type: [object, "null"]
   output_schema_json:
     type: object
     required: [handed_off, merged]

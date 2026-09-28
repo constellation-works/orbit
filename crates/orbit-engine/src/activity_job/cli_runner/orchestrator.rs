@@ -160,6 +160,42 @@ pub fn activity_tool_policy_env(
     ]
 }
 
+/// Owner task tools a claimed-mode implementer is never granted
+/// (distributed-drain design §3, "Claimed-mode implementation").
+///
+/// A claimed leaf's task belongs to another machine. Its injected envelope is
+/// the task and the claim is the authority, so the agent re-reads nothing, and
+/// it returns its execution summary in its output for `claim_handoff` to carry
+/// instead of writing owner task state. Denying the two tools makes that the
+/// only path, rather than relying on the prompt alone; the sandbox in which
+/// the agent runs cannot reach a remote owner anyway.
+pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.show", "orbit.task.update"];
+
+/// Whether this invocation is a claimed leaf's implementation: the claimed
+/// pipelines pass `claimed: true`. The flag only ever removes tools and asks
+/// for output, so an input that sets it outside a claim narrows that run.
+pub(super) fn claimed_mode(input: &Value) -> bool {
+    input.get("claimed").and_then(Value::as_bool) == Some(true)
+}
+
+/// The activity's deny list, extended with [`CLAIMED_MODE_DENIED_TOOLS`] in
+/// claimed mode. An allowlisted activity keeps `None` here and has the same
+/// tools removed from its resolved allowlist instead.
+pub(super) fn claimed_tool_disallow_list(
+    declared: Option<&[String]>,
+    claimed: bool,
+) -> Option<Vec<String>> {
+    let mut list = declared?.to_vec();
+    if claimed {
+        for tool in CLAIMED_MODE_DENIED_TOOLS {
+            if !list.iter().any(|existing| existing == tool) {
+                list.push((*tool).to_string());
+            }
+        }
+    }
+    Some(list)
+}
+
 pub fn run_cli_backend(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
@@ -229,12 +265,24 @@ pub fn run_cli_backend(
         ));
     }
     let tool_policy = spec.tool_policy_mode();
-    let activity_tools = match spec.tool_disallow_list.as_deref() {
+    let claimed = claimed_mode(input);
+    let tool_disallow_list =
+        claimed_tool_disallow_list(spec.tool_disallow_list.as_deref(), claimed);
+    let mut activity_tools = match tool_disallow_list.as_deref() {
         Some(disallow_list) => {
             host.resolve_activity_tool_denials(&task_ids, activity_name, disallow_list)?
         }
         None => host.resolve_activity_tools(&task_ids, &spec.tools)?,
     };
+    if claimed {
+        // An allowlisted activity gets the same guard as a deny-listed one.
+        for tools in [
+            &mut activity_tools.requested_tools,
+            &mut activity_tools.effective_tools,
+        ] {
+            tools.retain(|tool| !CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()));
+        }
+    }
 
     // §6 allowlist-advisory event — emitted once per invocation before the
     // subprocess starts so a reviewer can see the enforcement gap at a glance.
@@ -246,7 +294,7 @@ pub fn run_cli_backend(
         effective_tools: activity_tools.effective_tools.clone(),
         tools: activity_tools.effective_tools.clone(),
         tool_policy: Some(tool_policy),
-        tool_disallow_list: spec.tool_disallow_list.clone(),
+        tool_disallow_list: tool_disallow_list.clone(),
     });
 
     let task_ctx = host.task_context_for_agent_input(input)?;
@@ -500,7 +548,7 @@ pub fn run_cli_backend(
     dispatch_env.push(("ORBIT_TASK_ACTOR_KIND".to_string(), "agent".to_string()));
     dispatch_env.extend(activity_tool_policy_env(
         activity_name,
-        spec.tool_disallow_list.as_deref(),
+        tool_disallow_list.as_deref(),
         &activity_tools.effective_tools,
     ));
     if let Some(programs) = spec.proc_allowed_programs.as_deref() {
@@ -626,11 +674,11 @@ pub fn run_cli_backend(
             agent_name: tool_ctx.agent_name.clone(),
             model_name: tool_ctx.model_name.clone(),
             workspace: host.orbit_workspace_selector(),
-            allowed_tools: match spec.tool_disallow_list {
+            allowed_tools: match tool_disallow_list {
                 Some(_) => Vec::new(),
                 None => activity_tools.effective_tools.clone(),
             },
-            tool_deny_policy: spec.tool_disallow_list.as_ref().map(|disallow_list| {
+            tool_deny_policy: tool_disallow_list.as_ref().map(|disallow_list| {
                 ActivityToolDenyPolicy {
                     activity: activity_name.to_string(),
                     disallow_list: disallow_list.clone(),

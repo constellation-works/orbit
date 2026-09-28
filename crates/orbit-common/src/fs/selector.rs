@@ -589,9 +589,14 @@ fn normalize_workspace_anchor(
             ),
         });
     }
+    // The workspace itself strips to an empty path, which `dir:` cannot
+    // parse back; spell it `.` like every other relative workspace root.
     let relative = contained
         .strip_prefix(&workspace)
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map(|path| match path.to_string_lossy().replace('\\', "/") {
+            relative if relative.is_empty() => ".".to_string(),
+            relative => relative,
+        })
         .map_err(|_| SelectorParseError {
             input: path.to_string(),
             reason: format!(
@@ -704,8 +709,28 @@ fn is_numeric(input: &str) -> bool {
     !input.is_empty() && input.chars().all(|ch| ch.is_ascii_digit())
 }
 
+/// Whether normalized `parent` strictly contains normalized `child`.
+///
+/// The roots are the two anchors a `/`-boundary prefix cannot express: `.`
+/// contains every relative path that stays inside it, and `/` contains every
+/// other absolute path.
 fn is_path_ancestor(parent: &str, child: &str) -> bool {
-    child
-        .strip_prefix(parent)
-        .is_some_and(|suffix| suffix.starts_with('/'))
+    match parent {
+        "." => child != "." && !child.starts_with('/') && !is_parent_relative(child),
+        "/" => child != "/" && child.starts_with('/'),
+        _ => child
+            .strip_prefix(parent)
+            .is_some_and(|suffix| suffix.starts_with('/')),
+    }
+}
+
+fn is_parent_relative(path: &str) -> bool {
+    path == ".." || path.starts_with("../")
+}
+
+/// The root anchor that contains `path` when `path` is not itself that root:
+/// `/` for absolute paths, `.` for relative paths inside the workspace.
+pub(super) fn root_ancestor(path: &str) -> Option<&'static str> {
+    let root = if path.starts_with('/') { "/" } else { "." };
+    is_path_ancestor(root, path).then_some(root)
 }

@@ -259,10 +259,7 @@ impl PullDrain<'_> {
                     self.update(
                         &record,
                         LocalPullMutation::Settle(Box::new(ClaimMutation::Fail(ClaimEvidence {
-                            summary: Some(format!(
-                                "leaf terminated as {} without acknowledged typed handoff",
-                                run.state
-                            )),
+                            summary: Some(terminal_failure_summary(&run)),
                             ..Default::default()
                         }))),
                     )?
@@ -334,4 +331,53 @@ impl PullDrain<'_> {
         );
         self.update(record, LocalPullMutation::SettleObsolete(reason))
     }
+}
+
+/// Largest failure excerpt a settlement carries. The whole diagnostic stays in
+/// the executor's run record; the owner's reader needs enough to decide.
+const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
+
+/// The evidence a terminal leaf's failure settlement carries: its state and,
+/// when the run recorded one, the error of its most recent failed step.
+///
+/// The owner cannot see an executor's run, and this summary becomes the
+/// blocked task's `execution_summary`, so it names the host-local run and
+/// quotes the failure rather than only saying that a handoff is missing.
+pub(crate) fn terminal_failure_summary(run: &orbit_types::workflow::JobRun) -> String {
+    let mut summary = format!(
+        "Outcome: failed\nClaimed leaf {} terminated as {} without an acknowledged typed handoff.",
+        run.run_id, run.state
+    );
+    let failed_step = run
+        .steps
+        .iter()
+        .rev()
+        .find(|step| step.error_code.is_some() || step.error_message.is_some());
+    if let Some(step) = failed_step {
+        summary.push_str(&format!("\nFailed step: {}", step.target_id));
+        if let Some(code) = step.error_code.as_deref() {
+            summary.push_str(&format!(" ({code})"));
+        }
+        if let Some(message) = step
+            .error_message
+            .as_deref()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            let mut cut = message.len().min(MAX_FAILURE_EXCERPT_BYTES);
+            while cut > 0 && !message.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            summary.push_str("\nError: ");
+            summary.push_str(&message[..cut]);
+            if cut < message.len() {
+                summary.push_str(&format!(" [truncated to {cut} of {} bytes]", message.len()));
+            }
+        }
+    }
+    summary.push_str(&format!(
+        "\nInspect the run on its execution host: `orbit run show {}`.",
+        run.run_id
+    ));
+    summary
 }

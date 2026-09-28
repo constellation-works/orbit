@@ -81,6 +81,8 @@ const panelOutputs = {
 const requested = [];
 const confirmations = [];
 const panelFailures = new Set();
+const deferredPanels = [];
+let deferPanelReads = false;
 window.confirm = message => { confirmations.push(message); return true; };
 globalThis.fetch = async (path, options = {}) => {
   const url = String(path);
@@ -97,20 +99,24 @@ globalThis.fetch = async (path, options = {}) => {
   const panel = /\/api\/plugins\/([^/]+)\/panels\/([^?]+)/.exec(url);
   if (panel) {
     const key = `${decodeURIComponent(panel[1])}/${decodeURIComponent(panel[2])}`;
-    if (panelFailures.has(key)) {
-      const error = { error: 'panel source unavailable' };
-      return { ok: false, status: 503, json: async () => error, text: async () => JSON.stringify(error) };
+    const workspace = new URL(url, 'http://dashboard.test').searchParams.get('workspace');
+    const output = panelOutputs[key];
+    const payload = decodeURIComponent(panel[2]) === 'raw'
+      ? { output, truncated: true, diagnostic: 'Panel output exceeded the response limit.' }
+      : { output };
+    const response = panelFailures.has(key)
+      ? { ok: false, status: 503, json: async () => ({ error: 'panel source unavailable' }), text: async () => JSON.stringify({ error: 'panel source unavailable' }) }
+      : { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+    // Snapshot the payload now. A later workspace's output must not rewrite
+    // a read that is still in flight.
+    if (deferPanelReads) {
+      return new Promise(resolve => {
+        deferredPanels.push({ workspace, key, release: () => resolve(response) });
+      });
     }
+    return response;
   }
-  const payload = panel
-    ? {
-        output: panelOutputs[`${decodeURIComponent(panel[1])}/${decodeURIComponent(panel[2])}`],
-        ...(decodeURIComponent(panel[2]) === 'raw'
-          ? { truncated: true, diagnostic: 'Panel output exceeded the response limit.' }
-          : {}),
-      }
-    : plugins;
-  return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
+  return { ok: true, status: 200, json: async () => plugins, text: async () => JSON.stringify(plugins) };
 };
 
 setWorkspace('ws_one');
@@ -270,5 +276,116 @@ assert(cardAfterMetadataChange !== cardBeforeMetadataChange, 'a metadata change 
 assert(!descendants(body()).includes(cardBeforeMetadataChange), 'the replaced card leaves the live document');
 assert(replacedStatus.panelBody !== retainedStatus.panelBody, 'a replaced card mounts a new panel body');
 assert(replacedStatus.panelBody.textContent.includes('4096'), `the replacement card shows the current panel output: ${replacedStatus.panelBody.textContent}`);
+
+// Workspace identity. The same plugin panel exists in A and B. A's cached
+// read and a response that was already in flight must not appear on B,
+// including while B is still pending or its read fails. A→B→A drops the
+// first visit's response as well.
+const settle = async () => { await tick(); await tick(); };
+const panelText = (panelId) => mountedPanel(panelId).panelBody.textContent;
+const takeDeferred = () => deferredPanels.splice(0);
+const releaseDeferred = (items) => { for (const item of items) item.release(); };
+const graph = plugins.find(plugin => plugin.name === 'graph');
+
+panelOutputs['graph/status'] = { indexed_files: 1111, last_run: 'workspace-a-cache' };
+panelOutputs['graph/files'] = [{ path: 'from-workspace-a.rs', score: 0.11 }];
+await fetchAndRenderPlugins();
+await settle();
+assert(panelText('graph/status').includes('1111'), `workspace A cached its status read: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('from-workspace-a.rs'), `workspace A cached its files read: ${panelText('graph/files')}`);
+
+deferPanelReads = true;
+panelFailures.add('graph/status');
+panelOutputs['graph/status'] = { indexed_files: 3333, last_run: 'workspace-b' };
+panelOutputs['graph/files'] = [{ path: 'from-workspace-b.rs', score: 0.33 }];
+setWorkspace('ws_two');
+await fetchAndRenderPlugins();
+assert(panelText('graph/status').includes('Loading'), `pending B status must wait for its own read: ${panelText('graph/status')}`);
+assert(!panelText('graph/status').includes('1111') && !panelText('graph/status').includes('workspace-a-cache'), `pending B status painted A's cache: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('Loading'), `pending B files must wait for its own read: ${panelText('graph/files')}`);
+assert(!panelText('graph/files').includes('from-workspace-a.rs'), `pending B files painted A's cache: ${panelText('graph/files')}`);
+const heldFailure = takeDeferred();
+assert(heldFailure.some(item => item.workspace === 'ws_two' && item.key === 'graph/status'), 'B status read is the one still in flight');
+releaseDeferred(heldFailure);
+await settle();
+assert(panelText('graph/status').includes('panel source unavailable'), `failed B status shows its own error: ${panelText('graph/status')}`);
+assert(!panelText('graph/status').includes('1111') && !panelText('graph/status').includes('workspace-a-cache') && !panelText('graph/status').includes('3333'), `failed B status kept another workspace's result: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('from-workspace-b.rs'), `B files shows its own read after the sibling status failure: ${panelText('graph/files')}`);
+assert(!panelText('graph/files').includes('from-workspace-a.rs'), `B files kept A's rows: ${panelText('graph/files')}`);
+panelFailures.delete('graph/status');
+
+// Hold A's next read, let B render completely, then deliver A. B's live
+// panel and the cache a remount paints from both stay on B.
+deferPanelReads = true;
+panelOutputs['graph/status'] = { indexed_files: 2222, last_run: 'late-a' };
+panelOutputs['graph/files'] = [{ path: 'late-a.rs', score: 0.22 }];
+setWorkspace('ws_one');
+await fetchAndRenderPlugins();
+const lateA = takeDeferred();
+assert(lateA.some(item => item.workspace === 'ws_one' && item.key === 'graph/status'), 'A status read is held');
+panelOutputs['graph/status'] = { indexed_files: 3333, last_run: 'live-b' };
+panelOutputs['graph/files'] = [{ path: 'live-b.rs', score: 0.33 }];
+deferPanelReads = false;
+setWorkspace('ws_two');
+await fetchAndRenderPlugins();
+await settle();
+assert(panelText('graph/status').includes('3333'), `B rendered its own status: ${panelText('graph/status')}`);
+assert(!panelText('graph/status').includes('2222') && !panelText('graph/status').includes('1111'), `B rendered before A's late read: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('live-b.rs'), `B rendered its own files: ${panelText('graph/files')}`);
+releaseDeferred(lateA);
+await settle();
+assert(panelText('graph/status').includes('3333') && !panelText('graph/status').includes('2222') && !panelText('graph/status').includes('late-a'), `late A did not change B's live status: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('live-b.rs') && !panelText('graph/files').includes('late-a.rs'), `late A did not change B's live files: ${panelText('graph/files')}`);
+graph.version = '0.4.3';
+deferPanelReads = true;
+await fetchAndRenderPlugins();
+assert(panelText('graph/status').includes('3333') && !panelText('graph/status').includes('2222') && !panelText('graph/status').includes('late-a'), `remount paints B's cache, not late A: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('live-b.rs') && !panelText('graph/files').includes('late-a.rs'), `remount paints B's files cache, not late A: ${panelText('graph/files')}`);
+releaseDeferred(takeDeferred());
+await settle();
+
+// A→B→A. The first visit's response is still in flight across both
+// switches and must not fill the return visit, before or after that visit's
+// own read lands.
+deferPanelReads = true;
+panelOutputs['graph/status'] = { indexed_files: 4444, last_run: 'a-first' };
+panelOutputs['graph/files'] = [{ path: 'a-first.rs', score: 0.44 }];
+setWorkspace('ws_one');
+await fetchAndRenderPlugins();
+const aFirst = takeDeferred();
+panelOutputs['graph/status'] = { indexed_files: 5555, last_run: 'b-middle' };
+panelOutputs['graph/files'] = [{ path: 'b-middle.rs', score: 0.55 }];
+setWorkspace('ws_two');
+await fetchAndRenderPlugins();
+const bMiddle = takeDeferred();
+assert(!panelText('graph/status').includes('4444') && !panelText('graph/status').includes('a-first'), `B pending during A→B→A hid A: ${panelText('graph/status')}`);
+releaseDeferred(bMiddle);
+await settle();
+assert(panelText('graph/status').includes('5555'), `middle B rendered: ${panelText('graph/status')}`);
+panelOutputs['graph/status'] = { indexed_files: 6666, last_run: 'a-second' };
+panelOutputs['graph/files'] = [{ path: 'a-second.rs', score: 0.66 }];
+setWorkspace('ws_one');
+await fetchAndRenderPlugins();
+const aSecond = takeDeferred();
+assert(panelText('graph/status').includes('Loading'), `return visit waits for its own status read: ${panelText('graph/status')}`);
+assert(!panelText('graph/status').includes('4444') && !panelText('graph/status').includes('5555'), `return visit hid both earlier reads: ${panelText('graph/status')}`);
+assert(!panelText('graph/files').includes('a-first.rs') && !panelText('graph/files').includes('b-middle.rs'), `return visit hid both earlier file reads: ${panelText('graph/files')}`);
+releaseDeferred(aFirst);
+await settle();
+assert(panelText('graph/status').includes('Loading') && !panelText('graph/status').includes('4444') && !panelText('graph/status').includes('a-first'), `stale A did not paint the return visit: ${panelText('graph/status')}`);
+assert(!panelText('graph/files').includes('a-first.rs'), `stale A did not paint the return visit's files: ${panelText('graph/files')}`);
+graph.version = '0.4.4';
+await fetchAndRenderPlugins();
+assert(panelText('graph/status').includes('Loading') && !panelText('graph/status').includes('4444') && !panelText('graph/status').includes('5555'), `return-visit remount did not revive a stale read: ${panelText('graph/status')}`);
+assert(!panelText('graph/files').includes('a-first.rs') && !panelText('graph/files').includes('b-middle.rs'), `return-visit remount did not revive stale files: ${panelText('graph/files')}`);
+const aReturn = takeDeferred();
+releaseDeferred(aSecond);
+await settle();
+assert(panelText('graph/status').includes('Loading') && !panelText('graph/status').includes('6666'), `superseded return-visit read does not paint over the newer mount: ${panelText('graph/status')}`);
+releaseDeferred(aReturn);
+await settle();
+assert(panelText('graph/status').includes('6666') && !panelText('graph/status').includes('4444') && !panelText('graph/status').includes('5555'), `return visit shows its own status read: ${panelText('graph/status')}`);
+assert(panelText('graph/files').includes('a-second.rs') && !panelText('graph/files').includes('a-first.rs') && !panelText('graph/files').includes('b-middle.rs'), `return visit shows its own files read: ${panelText('graph/files')}`);
+deferPanelReads = false;
 
 console.log('dashboard plugins panel assertions passed');

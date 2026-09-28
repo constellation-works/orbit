@@ -30,10 +30,17 @@ fn corpus() -> Vec<&'static str> {
         "module:orbit::web",
         "command:orbit task",
         "dir:/",
+        "/",
         "file:/etc/hosts",
+        "file:/etc/ssh/config",
         "dir:/etc",
         "dir:.",
+        ".",
+        "file:.",
         "file:./src/lib.rs",
+        "file:README.md",
+        "file:../outside.rs",
+        "dir:..",
         "",
         "   ",
         "symbol:broken",
@@ -134,4 +141,64 @@ fn unparseable_selectors_are_neither_indexed_nor_matched() {
     assert!(!index.is_empty());
     assert!(index.overlapping("").is_empty());
     assert!(index.overlapping("symbol:broken").is_empty());
+}
+
+#[test]
+fn a_root_and_its_descendants_find_each_other() {
+    let descendants = [
+        (
+            "dir:.",
+            ["file:README.md", "file:src/lib.rs", "dir:src/nested/deep"],
+        ),
+        (
+            "dir:/",
+            ["file:/etc", "file:/etc/hosts", "dir:/etc/ssh/keys"],
+        ),
+    ];
+    for (root, children) in descendants {
+        let mut index = OverlapIndex::new();
+        index.insert(root, ());
+        for child in children {
+            let hits = index.overlapping(child);
+            assert_eq!(hits.len(), 1, "`{child}` finds held `{root}`");
+            assert_eq!(hits[0].0, root);
+        }
+
+        let mut index = OverlapIndex::new();
+        for child in children {
+            index.insert(child, ());
+        }
+        let mut hits: Vec<_> = index
+            .overlapping(root)
+            .into_iter()
+            .map(|(selector, _)| selector)
+            .collect();
+        hits.sort_unstable();
+        let mut expected = children.to_vec();
+        expected.sort_unstable();
+        assert_eq!(hits, expected, "`{root}` finds every held descendant");
+    }
+}
+
+#[test]
+fn a_root_reaches_only_its_own_side() {
+    let mut index = OverlapIndex::new();
+    index.insert("file:/etc/hosts", ());
+    index.insert("file:../outside.rs", ());
+    index.insert("file:src/lib.rs", ());
+
+    let hits = index.overlapping("dir:.");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, "file:src/lib.rs");
+
+    let hits = index.overlapping("dir:/");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, "file:/etc/hosts");
+
+    let mut index = OverlapIndex::new();
+    index.insert("dir:.", ());
+    index.insert("dir:src", ());
+    assert_eq!(index.overlapping("file:lib/y.rs").len(), 1);
+    assert!(index.overlapping("file:/etc/hosts").is_empty());
+    assert!(index.overlapping("file:../outside.rs").is_empty());
 }

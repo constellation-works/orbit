@@ -649,13 +649,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             "a typed handoff carries its captured required validation; none was supplied",
         ));
     }
-    let execution_summary = input_string_field(input, "execution_summary").unwrap_or_else(|| {
-        format!(
-            "Claimed execution delivered candidate {} on base {}; required validation passed on \
-             the exact candidate and the owner holds every captured log.",
-            candidate.candidate.commit, candidate.base.commit
-        )
-    });
+    let execution_summary = handoff_execution_summary(input, &candidate)?;
 
     let handoff = TaskHandoff {
         schema_version: 1,
@@ -688,6 +682,115 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             HandoffDelivery::AlreadyLanded { .. } => "already_landed",
         },
     }))
+}
+
+/// Largest implementer summary a handoff carries. The summary is prose for a
+/// reader, and the handoff travels to the owner in one coordination call.
+pub(super) const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
+
+/// The `execution_summary` the typed handoff carries to the owner.
+///
+/// Acceptance writes the handoff's summary over the owner's
+/// `execution_summary`, and an implementer in claimed mode writes no owner
+/// task state itself (distributed-drain design §3, "Claimed-mode
+/// implementation"): it returns its summary in the implement step's output,
+/// which the claimed pipelines pass here as `implementation`. In order:
+///
+/// 1. an explicit `execution_summary` input;
+/// 2. `implementation.execution_summary`, else the step's short
+///    `implementation.summary`;
+/// 3. a generic delivery statement.
+///
+/// An implementer summary keeps its own words, gains the implementer's
+/// `comment` and any `context_files_added` it reported (a claim's footprint
+/// is frozen, so they are recorded for the owner's reader rather than
+/// applied), and ends with a delivery line naming the candidate. One whose
+/// first line reports `Outcome: failed` is refused here, as the owner would
+/// refuse it, so a failed implementation is never handed off as delivered
+/// work.
+pub(super) fn handoff_execution_summary(
+    input: &Value,
+    candidate: &HandoffCandidate,
+) -> Result<String, OrbitError> {
+    let delivered = format!(
+        "Claimed execution delivered candidate {} on base {}; required validation passed on the \
+         exact candidate and the owner holds every captured log.",
+        candidate.candidate.commit, candidate.base.commit
+    );
+    let implementation = input
+        .get("implementation")
+        .filter(|value| value.is_object());
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let recorded = input_string_field(input, "execution_summary")
+        .or_else(|| text(implementation.and_then(|output| output.get("execution_summary"))))
+        .or_else(|| text(implementation.and_then(|output| output.get("summary"))));
+    let Some(summary) = recorded else {
+        return Ok(delivered);
+    };
+    if summary
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        == Some("Outcome: failed")
+    {
+        return Err(refused(
+            "the implementer's execution summary reports `Outcome: failed`; a claimed leaf \
+             hands off only delivered work",
+        ));
+    }
+    let mut composed = bounded_summary(&summary);
+    if let Some(comment) = text(implementation.and_then(|output| output.get("comment"))) {
+        composed.push_str("\n\nImplementer comment:\n");
+        composed.push_str(&bounded_summary(&comment));
+    }
+    let added = implementation
+        .and_then(|output| output.get("context_files_added"))
+        .and_then(Value::as_array)
+        .map(|selectors| {
+            selectors
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|selector| !selector.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !added.is_empty() {
+        composed.push_str(
+            "\n\nContext selectors the implementer reported (not applied: a claim's footprint \
+             is frozen):",
+        );
+        for selector in added {
+            composed.push_str("\n- ");
+            composed.push_str(selector);
+        }
+    }
+    composed.push_str("\n\n");
+    composed.push_str(&delivered);
+    Ok(composed)
+}
+
+/// `text`, cut to [`MAX_HANDOFF_SUMMARY_BYTES`] with the cut reported.
+fn bounded_summary(text: &str) -> String {
+    let text = text.trim();
+    if text.len() <= MAX_HANDOFF_SUMMARY_BYTES {
+        return text.to_string();
+    }
+    let mut cut = MAX_HANDOFF_SUMMARY_BYTES;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!(
+        "{}\n\n[summary truncated to {cut} of {} bytes]",
+        &text[..cut],
+        text.len()
+    )
 }
 
 /// Interleave what the command said, bounded. Truncation is reported inside

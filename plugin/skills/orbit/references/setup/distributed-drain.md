@@ -121,6 +121,14 @@ returns.
 - An unreachable or refusing owner is reported in each iteration's output and
   retried. A request the owner refused and holds no receipt for closes as
   `Refused`; a committed one is carried forward.
+- The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
+  has no route to the owner and needs none. It is denied `orbit.task.show` /
+  `orbit.task.update` and returns its execution summary as step output;
+  `claim_handoff` carries it to the owner's `execution_summary`. Never loosen
+  the sandbox to give an agent the owner.
+- A leaf that fails before handing off is settled by the drain: the owner's
+  task moves to `blocked` with the leaf run, failed step and error in its
+  summary. Inspect the run itself on the follower (`orbit run show <run>`).
 - `orbit run concurrency <run-id> --set N` retunes the slot ceiling live.
 
 ## Read-only owner surface

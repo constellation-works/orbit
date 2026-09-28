@@ -20,6 +20,10 @@ spec:
         type: string
       repo_root:
         type: string
+      # Set by the claimed pipelines only. The runner also denies
+      # `orbit.task.show` and `orbit.task.update` for a claimed invocation.
+      claimed:
+        type: boolean
   output_schema_json:
     type: object
     properties:
@@ -28,6 +32,17 @@ spec:
       diff:
         type: string
       skipped_reason:
+        type: string
+      # Claimed mode: the execution summary the handoff carries to the owner.
+      execution_summary:
+        type: string
+      # Claimed mode: exact selectors the implementer would have appended.
+      context_files_added:
+        type: array
+        items:
+          type: string
+      # Claimed mode: a task comment the implementer would have posted.
+      comment:
         type: string
   instruction: |
     You are carrying out an Orbit task from plan to validated outputs.
@@ -41,13 +56,37 @@ spec:
       input). The CLI has the same gates; never reach an ungranted tool. Tool
       writes are durable; your final response does not replace task updates.
 
+    Claimed mode
+
+    - When `input.claimed` is true, this run is a claimed leaf: another
+      machine owns the task, and the pipeline hands your result to it at the
+      end. The injected task envelope is the task. The claim is the authority
+      to work on it, and the owner refuses stale work when the claim settles,
+      so there is nothing to re-read.
+    - Do not call `orbit.task.show` or `orbit.task.update`; neither is granted
+      in claimed mode. Every step below that says to read or persist task
+      state through them is replaced by your final output:
+      - `execution_summary` (REQUIRED): the full summary item 12 describes.
+        The pipeline's handoff carries it into the owner's
+        `execution_summary`.
+      - `context_files_added`: each exact selector you would have appended
+        (item 4 and item 11). The claim's footprint is frozen, so they are
+        reported to the owner, not applied; prefer staying inside it.
+      - `comment`: anything you would have posted as a task comment,
+        including a blocker (item 8) or leftovers (item 11).
+    - Other owner-routed tools (`orbit.task.*`, `orbit.friction.*`) may be
+      unreachable from this sandbox. An unreachable owner is never a task
+      failure or blocker: put what you would have recorded in `comment` and
+      finish. Report `failed` only for the work itself.
+
     Terminal-task guard
 
     - Before reading anything else, inspect the injected task. If
       `task.terminal` is true, do no investigation, edits, or validation; return
       success with `skipped_reason: "task_terminal"` and name `task.status` in
       the summary.
-    - Re-read status with `orbit.task.show` before the first edit and before validation.
+    - Re-read status with `orbit.task.show` before the first edit and before validation
+      (not in claimed mode, which relies on the injected status).
       Apply the same stop rule if the fresh status refuses writes,
       or if `orbit.task.update` rejects a write because the task became terminal.
       Do not retry, work around it, or file friction for this designed outcome.
@@ -156,8 +195,9 @@ spec:
     12. Workflow admission already set `in-progress`: do not redundantly set
         that status or move the task to `review`; the pipeline owns that
         transition. REQUIRED: persist a meaningful `execution_summary` with
-        `orbit.task.update`. Return a short result summary; include `diff` only
-        when cheap and accurate.
+        `orbit.task.update` (in claimed mode, return it as the output's
+        `execution_summary` instead). Return a short result summary; include
+        `diff` only when cheap and accurate.
 
         If this task's or a sibling's merged commit covers the clean checkout,
         verify that commit and current acceptance checks. On first attempt or

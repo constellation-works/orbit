@@ -558,6 +558,66 @@ fn valid_part_of_legacy_active_footprint_still_protects_missing_files() {
     assert_eq!(result.deferred_conflicts[0].task_id, candidate.id);
 }
 
+#[test]
+fn a_whole_workspace_claim_defers_a_descendant_file_candidate() {
+    let temp = TempDir::new().expect("temp");
+    let fixture = Coordinated::open(temp.path());
+    let mut whole = create_params("whole workspace");
+    whole.context_files = vec!["dir:.".into()];
+    let whole = fixture
+        .backends
+        .task
+        .task
+        .create_task(whole)
+        .expect("whole");
+    let claim = receipt(pull(&fixture, &request("one")))
+        .claim
+        .expect("whole-workspace claim");
+    assert_eq!(claim.task_id, whole.id);
+
+    let mut candidate = create_params("descendant");
+    candidate.context_files = vec!["file:src/lib.rs".into()];
+    let candidate = fixture
+        .backends
+        .task
+        .task
+        .create_task(candidate)
+        .expect("candidate");
+    let result = receipt(pull(&fixture, &request("two")));
+    assert!(result.claim.is_none());
+    assert_eq!(result.deferred_conflicts[0].task_id, candidate.id);
+    assert!(result.deferred_conflicts[0].reason.contains(&whole.id));
+}
+
+#[test]
+fn an_active_descendant_file_defers_an_absolute_workspace_root_candidate() {
+    let temp = TempDir::new().expect("temp");
+    let fixture = Coordinated::open(temp.path());
+    let repo_root = fixture.orbit_dir.parent().expect("repo");
+    let mut active = create_params("active");
+    active.status = TaskStatus::Review;
+    active.context_files = vec!["file:src/lib.rs".into()];
+    let active = fixture
+        .backends
+        .task
+        .task
+        .create_task(active)
+        .expect("active");
+    let mut candidate = create_params("whole workspace");
+    candidate.context_files = vec![format!("dir:{}", repo_root.display())];
+    let candidate = fixture
+        .backends
+        .task
+        .task
+        .create_task(candidate)
+        .expect("candidate");
+    let result = receipt(pull(&fixture, &request("one")));
+    assert!(result.claim.is_none());
+    assert!(result.invalid_candidates.is_empty());
+    assert_eq!(result.deferred_conflicts[0].task_id, candidate.id);
+    assert!(result.deferred_conflicts[0].reason.contains(&active.id));
+}
+
 /// The ladder is ordered, and a probe reading it sees the same verdict an
 /// admission would reach [ORB-12495]. Each case below is wrong in *two* ways
 /// at once, so the assertion pins which refusal comes first rather than merely

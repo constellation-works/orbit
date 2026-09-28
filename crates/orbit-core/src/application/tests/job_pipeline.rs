@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -6,16 +7,18 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunStepParams;
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRunStartOutcome, JobRunState};
+use orbit_types::workflow::{JobRunStartOutcome, JobRunState, JobTargetType, PipelineState};
 use orbit_types::workspace::WorkspacePaths;
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
 use crate::WorkspaceRuntimeBinding;
 use crate::application::job::JobRunListParams;
+use crate::application::job::pipeline::PipelineWaitClock;
 #[cfg(unix)]
 use crate::application::job::pipeline::pipeline_worker_log_test_hook::{self, Phase};
 use crate::application::job::pipeline::{
@@ -37,6 +40,164 @@ fn test_runtime() -> (TempDir, OrbitRuntime) {
     let runtime =
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
     (root, runtime)
+}
+
+struct FixtureWaitClock {
+    elapsed: Cell<Duration>,
+    sleeps: Cell<u32>,
+}
+
+impl FixtureWaitClock {
+    fn new() -> Self {
+        Self {
+            elapsed: Cell::new(Duration::ZERO),
+            sleeps: Cell::new(0),
+        }
+    }
+}
+
+impl PipelineWaitClock for FixtureWaitClock {
+    fn elapsed(&self) -> Duration {
+        self.elapsed.get()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        assert!(self.sleeps.get() < 2, "wait fixture exceeded its deadline");
+        self.sleeps.set(self.sleeps.get() + 1);
+        self.elapsed.set(self.elapsed.get() + duration);
+    }
+}
+
+#[test]
+fn pipeline_wait_preserves_durable_terminal_evidence_on_first_snapshot() {
+    let (_root, runtime) = test_runtime();
+
+    for state in [
+        JobRunState::Success,
+        JobRunState::Failed,
+        JobRunState::Cancelled,
+        JobRunState::Interrupted,
+        JobRunState::Timeout,
+    ] {
+        let run = runtime
+            .stores()
+            .jobs()
+            .insert_job_run("wait_fixture", 1, Utc::now(), None, None)
+            .expect("insert wait run");
+        runtime
+            .stores()
+            .jobs()
+            .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .expect("start wait run");
+
+        let pipeline = serde_json::json!({ "recorded_state": state.to_string() });
+        let mut checkpoint = PipelineState::new(
+            run.run_id.clone(),
+            run.job_id.clone(),
+            serde_json::json!({}),
+        );
+        checkpoint.pipeline = pipeline.clone();
+        runtime
+            .stores()
+            .jobs()
+            .write_run_state(&run.run_id, &checkpoint)
+            .expect("store pipeline output");
+
+        let finished_at = Utc::now();
+        let expected_error = if state == JobRunState::Success {
+            None
+        } else {
+            runtime
+                .stores()
+                .jobs()
+                .complete_job_run_step(
+                    &run.run_id,
+                    &JobRunStepParams {
+                        step_index: 0,
+                        target_type: JobTargetType::Activity,
+                        target_id: "fixture".to_string(),
+                        started_at: finished_at,
+                        finished_at,
+                        duration_ms: Some(41),
+                        exit_code: None,
+                        agent_response_json: None,
+                        state,
+                        error_code: Some("fixture_error".to_string()),
+                        error_message: Some(format!("{state} reason")),
+                    },
+                )
+                .expect("store failure diagnostic");
+            Some(format!("fixture_error: {state} reason"))
+        };
+        runtime
+            .stores()
+            .jobs()
+            .finalize_job_run(&run.run_id, state, finished_at, Some(41))
+            .expect("finalize wait run");
+
+        let clock = FixtureWaitClock::new();
+        let waited = runtime
+            .wait_pipeline_runs_with_clock(
+                std::slice::from_ref(&run.run_id),
+                2,
+                1,
+                Some("fixture"),
+                &clock,
+            )
+            .expect("read terminal wait result");
+        let entry = &waited.results[0];
+        assert_eq!(clock.sleeps.get(), 0, "{state} should settle immediately");
+        assert_eq!(entry.status, state.to_string());
+        assert_eq!(
+            entry.finished_at.as_deref(),
+            Some(finished_at.to_rfc3339().as_str())
+        );
+        assert_eq!(entry.duration_ms, Some(41));
+        assert_eq!(entry.pipeline.as_ref(), Some(&pipeline));
+        assert_eq!(entry.error, expected_error);
+    }
+}
+
+#[test]
+fn pipeline_wait_deadline_keeps_active_run_distinct_from_durable_timeout() {
+    let (_root, runtime) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("wait_fixture", 1, Utc::now(), None, None)
+        .expect("insert wait run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start wait run");
+    let mut checkpoint = PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        serde_json::json!({}),
+    );
+    checkpoint.pipeline = serde_json::json!({ "partial": true });
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(&run.run_id, &checkpoint)
+        .expect("store partial output");
+
+    let clock = FixtureWaitClock::new();
+    let waited = runtime
+        .wait_pipeline_runs_with_clock(std::slice::from_ref(&run.run_id), 2, 1, None, &clock)
+        .expect("caller deadline returns a wait result");
+    let entry = &waited.results[0];
+    assert_eq!(clock.sleeps.get(), 2);
+    assert_eq!(entry.status, "timeout");
+    assert_eq!(entry.finished_at, None);
+    assert_eq!(entry.duration_ms, None);
+    assert_eq!(entry.pipeline, None);
+    assert_eq!(entry.error, None);
+    assert_eq!(
+        runtime.show_job_run(&run.run_id).expect("read run").state,
+        JobRunState::Running
+    );
 }
 
 fn test_runtime_with_named_crews() -> (TempDir, OrbitRuntime) {

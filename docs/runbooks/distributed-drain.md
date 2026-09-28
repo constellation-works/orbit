@@ -8,7 +8,7 @@ paths:
   - "crates/orbit-cli/src/command/task/lint.rs"
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-09-27
 ---
 
@@ -290,11 +290,26 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   validate on the exact candidate, push, open the PR, hand off. The owner
   observes the PR itself and moves the task to `review`. **Nothing lands until
   the owner approves the handoff** on its dashboard.
+- The implement step runs in **claimed mode**. The agent sandbox denies
+  `~/.ssh`, so a sandboxed agent on a follower has no route to the owner; it
+  does not need one. It works from the injected task envelope, is not granted
+  `orbit.task.show` or `orbit.task.update`, and returns its execution summary
+  in the step output. `claim_handoff` carries that summary in the typed
+  handoff, and the owner writes it as the task's `execution_summary` when it
+  accepts. Do not loosen the sandbox or add SSH credentials to it to "fix" a
+  leaf; an agent that reports an unreachable owner store is a prompt or
+  binary mismatch, not a transport problem (check the follower's binary is
+  current).
 - An owner that refuses a request is checked against its receipt first: a
   committed claim is carried forward, and only a request the owner holds no
   receipt for is closed (`Refused`) and its slot returned.
 - An unreachable owner is reported in the iteration output and retried; the
   drain never fails over to its own store.
+- A leaf that fails before its handoff is settled by the drain, not by the
+  leaf: the owner moves the task to `blocked` with a summary naming the leaf
+  run, its failed step and that step's error. The full diagnostic stays in
+  the follower's run (`orbit run show <leaf-run>`, and
+  `.orbit/state/logs/<leaf-run>.worker.log` on the follower).
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,

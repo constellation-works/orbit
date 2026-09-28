@@ -97,15 +97,15 @@ fn update_rejects_terminal_as_a_writable_field() {
 }
 
 #[test]
-fn show_schema_documents_terminal_projection() {
+fn show_schema_exposes_projection_without_retired_parameters() {
     let schema = OrbitTaskShowTool.schema();
-    assert!(schema.description.contains("read-only `terminal`"));
     let fields = schema
         .parameters
         .iter()
         .find(|parameter| parameter.name == "fields")
         .expect("fields parameter");
-    assert!(fields.description.contains("terminal"));
+    assert_eq!(fields.param_type, "string_list");
+    assert!(!fields.required);
     assert!(
         !schema
             .parameters

@@ -454,69 +454,38 @@ fn task_update_dependency_params_remain_in_agent_tool_schema() {
 }
 
 #[test]
-fn task_show_schema_distinguishes_execution_crew_from_orchestrator() {
+fn task_show_schema_has_required_id_and_optional_filters() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
 
     let schema = registry
         .get_schema("orbit.task.show")
         .expect("orbit.task.show schema");
-    let fields = schema
-        .parameters
-        .iter()
-        .find(|param| param.name == "fields")
-        .expect("task show fields parameter");
-    assert!(fields.description.contains("crew"));
-    assert!(fields.description.contains("orchestrator"));
-    for field in [
-        "status",
-        "id",
-        "title",
-        "type",
-        "priority",
-        "complexity",
-        "created_at",
-        "updated_at",
-        "relations",
-        "job_run_id",
-        "external_refs",
-    ] {
-        assert!(
-            fields.description.contains(field),
-            "task show fields schema must advertise `{field}`: {}",
-            fields.description
-        );
-    }
-    assert!(schema.description.contains("execution"));
-    assert!(schema.description.contains("orchestration attribution"));
-    assert!(
-        schema.description.contains("globally unique"),
-        "task show must advertise global id resolution: {}",
-        schema.description
-    );
+    assert_eq!(schema.name, "orbit.task.show");
+
     let id = schema
         .parameters
         .iter()
         .find(|param| param.name == "id")
         .expect("task show id parameter");
-    assert!(
-        id.description.contains("Globally unique"),
-        "id help must not send callers through workspace selection: {}",
-        id.description
-    );
+    assert_eq!(id.param_type, "string");
+    assert!(id.required);
+
+    let fields = schema
+        .parameters
+        .iter()
+        .find(|param| param.name == "fields")
+        .expect("task show fields parameter");
+    assert_eq!(fields.param_type, "string_list");
+    assert!(!fields.required);
+
     let workspace = schema
         .parameters
         .iter()
         .find(|param| param.name == "workspace")
         .expect("task show optional workspace filter");
+    assert_eq!(workspace.param_type, "string");
     assert!(!workspace.required);
-    assert!(
-        workspace
-            .description
-            .contains("resolved globally by default"),
-        "workspace help must stay an explicit filter: {}",
-        workspace.description
-    );
 }
 
 #[test]

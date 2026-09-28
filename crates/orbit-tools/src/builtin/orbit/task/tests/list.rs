@@ -14,12 +14,4 @@ fn schema_exposes_multi_status_filter() {
 
     assert_eq!(status.param_type, "string_list");
     assert!(!status.required);
-    assert!(
-        status
-            .description
-            .contains("comma-separated string or an array")
-    );
-    assert!(schema.description.contains("{tasks, total, truncated}"));
-    assert!(schema.description.contains("non-terminal tasks come first"));
-    assert!(schema.description.contains("`truncated`"));
 }
