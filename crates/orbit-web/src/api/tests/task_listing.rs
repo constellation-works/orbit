@@ -131,7 +131,10 @@ async fn aggregate_selects_global_newest_rows_before_reading_off_page_workspace_
     );
 }
 use axum::http::StatusCode;
-use orbit_core::{OrbitRuntime, TaskStatus, application::task::TaskUpdateParams};
+use orbit_core::{
+    OrbitRuntime, TaskStatus,
+    application::task::{TaskAddParams, TaskUpdateParams},
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -240,9 +243,9 @@ async fn list_rows_are_summaries_and_detail_carries_the_bodies() {
         detail_expected["resolved_crew"] = json!(crew.name);
         detail_expected["crew_model"] = json!(crew.model);
     }
-    // ORB-12516: the detail says whether `#runs?run_id=` resolves in *this*
-    // checkout. A task with no run has nothing to navigate to. The list rows
-    // below keep the summary shape and carry no such key.
+    // ORB-12516 / ORB-13495: both projections say whether `#runs?run_id=`
+    // resolves in *this* checkout. A task with no run has nothing to navigate
+    // to, so the summary carries the same false the detail does.
     detail_expected["job_run_navigable"] = json!(false);
 
     let mut summary_expected = crate::projections::task_to_json(&task, &statuses);
@@ -259,6 +262,7 @@ async fn list_rows_are_summaries_and_detail_carries_the_bodies() {
         );
     }
     summary_object.insert("projection".into(), json!("summary"));
+    summary_object.insert("job_run_navigable".into(), json!(false));
     summary_object.insert("comment_count".into(), json!(comments.len()));
     summary_object.insert("history_count".into(), json!(history.len()));
     summary_object.insert("artifact_count".into(), json!(artifacts.len()));
@@ -396,4 +400,119 @@ async fn list_and_detail_agree_on_the_tasks_own_crew() {
     assert_eq!(detail["crew_model"], json!(assigned.model));
     assert_eq!(row["resolved_crew"], detail["resolved_crew"]);
     assert_eq!(row["crew_model"], detail["crew_model"]);
+}
+
+/// ORB-13495: a summary carries the same local-navigation decision as the
+/// detail. A recorded remote machine is not navigable here; a recorded local
+/// machine is; a run with no recorded machine keeps the historical local link.
+#[tokio::test]
+async fn summary_navigation_authority_follows_the_recorded_machine() {
+    let runtime = Arc::new(
+        OrbitRuntime::in_memory()
+            .unwrap()
+            .with_automation_machine_identity(Some("local-box".to_string())),
+    );
+    let remote = seed_in_progress_run(
+        &runtime,
+        "Remote run",
+        "jrun-remote",
+        Some(orbit_types::task::ExecutionLocation {
+            machine_id: "remote-box".to_string(),
+            machine_name: Some("remote-host".to_string()),
+        }),
+    );
+    let local = seed_in_progress_run(
+        &runtime,
+        "Local run",
+        "jrun-local",
+        Some(orbit_types::task::ExecutionLocation {
+            machine_id: "local-box".to_string(),
+            machine_name: Some("this-host".to_string()),
+        }),
+    );
+    let unrecorded = seed_in_progress_run(&runtime, "Historical run", "jrun-historical", None);
+
+    let list = body_json(request_shared(runtime.clone(), "/tasks").await).await;
+    for (id, navigable, machine_id) in [
+        (remote, false, Some("remote-box")),
+        (local, true, Some("local-box")),
+        (unrecorded, true, None),
+    ] {
+        let row = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == json!(id))
+            .unwrap_or_else(|| panic!("{id} missing from the list"));
+        let detail =
+            body_json(request_shared(runtime.clone(), &format!("/tasks/{id}")).await).await;
+        assert_eq!(row["projection"], json!("summary"), "{id}");
+        assert_eq!(row["status"], json!("in-progress"), "{id}");
+        assert_eq!(row["job_run_navigable"], json!(navigable), "{id}");
+        assert_eq!(detail["job_run_navigable"], json!(navigable), "{id}");
+        assert_eq!(
+            row["job_run_machine"]["machine_id"], detail["job_run_machine"]["machine_id"],
+            "{id}"
+        );
+        match machine_id {
+            Some(machine_id) => {
+                assert_eq!(
+                    row["job_run_machine"]["machine_id"],
+                    json!(machine_id),
+                    "{id}"
+                )
+            }
+            None => assert!(row["job_run_machine"].is_null(), "{id}"),
+        }
+        assert!(row.get("description").is_none(), "{id} stays a summary");
+    }
+}
+
+fn seed_in_progress_run(
+    runtime: &OrbitRuntime,
+    title: &str,
+    run_id: &str,
+    location: Option<orbit_types::task::ExecutionLocation>,
+) -> String {
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: title.to_string(),
+            description: format!("Fixture task: {title}."),
+            plan: "Run it.".to_string(),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        })
+        .expect("create in-progress task");
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                job_run_id: Some(Some(run_id.to_string())),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("bind job run");
+    if let Some(location) = location {
+        // The public task update records a run id and leaves the machine
+        // unset. The binding's recorded host lives on the envelope; rewrite
+        // that field the way a trusted execution origin would.
+        let path = runtime
+            .global_root()
+            .join("tasks/workspaces")
+            .join(runtime.workspace_id().expect("workspace"))
+            .join(task.id.as_str())
+            .join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
+        let text = std::fs::read_to_string(&path).expect("read envelope");
+        let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+            serde_yaml::from_str(&text).expect("parse envelope");
+        envelope.job_run_machine = Some(location);
+        std::fs::write(
+            &path,
+            serde_yaml::to_string(&envelope).expect("render envelope"),
+        )
+        .expect("record execution machine");
+    }
+    task.id
 }

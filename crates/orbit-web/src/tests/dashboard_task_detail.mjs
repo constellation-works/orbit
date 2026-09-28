@@ -273,4 +273,52 @@ assert.ok(row().textContent.includes("status forced"), "forced success feedback 
 const forcedPatch = requests.filter((r) => r.method === "PATCH").at(-1);
 assert.deepEqual(forcedPatch.body, { status: "proposed", force: true });
 
+// ORB-13495: an in-progress summary with a remote machine does not link into
+// this host's run store; it names the recorded host. A local machine and a
+// historical row with no recorded machine keep View run.
+context.getActiveStatuses = () => new Set(["in-progress", "proposed", "backlog", "review", "done"]);
+const runSummary = (id, extra) => ({
+  id,
+  title: id,
+  status: "in-progress",
+  crew: null,
+  projection: "summary",
+  comment_count: 0,
+  history_count: 0,
+  artifact_count: 0,
+  status_transitions: [],
+  job_run_id: `jrun-${id}`,
+  ...extra,
+});
+tasks = [
+  runSummary("ORB-R", {
+    job_run_navigable: false,
+    job_run_machine: { machine_id: "remote-box", machine_name: "remote-host" },
+  }),
+  runSummary("ORB-L", {
+    job_run_navigable: true,
+    job_run_machine: { machine_id: "local-box", machine_name: "this-host" },
+  }),
+  runSummary("ORB-H", { job_run_navigable: true }),
+];
+renderTasks(tasks, context);
+const quickCell = (id) => {
+  const node = tasksBody.children.find((child) => child.dataset.key === `task-${id}`);
+  assert.ok(node, `${id} renders from the summary`);
+  const cell = node.querySelector(".task-quick-cell");
+  assert.ok(cell, `${id} has a quick action`);
+  return cell;
+};
+const remoteCell = quickCell("ORB-R");
+assert.equal(remoteCell.querySelector("a"), null, "a remote summary has no local View run link");
+assert.equal(remoteCell.textContent.includes("View run"), false);
+assert.ok(remoteCell.textContent.includes("remote-box"), "a remote summary names the recorded machine");
+assert.ok(remoteCell.textContent.includes("remote-host"), "a remote summary names the recorded host");
+for (const id of ["ORB-L", "ORB-H"]) {
+  const link = quickCell(id).querySelector("a.task-quick-link");
+  assert.ok(link, `${id} keeps View run`);
+  assert.equal(link.textContent, "View run");
+  assert.equal(link.href, `#runs?run_id=${encodeURIComponent(`jrun-${id}`)}`);
+}
+
 console.log("dashboard summary rows expand through the detail endpoint");
