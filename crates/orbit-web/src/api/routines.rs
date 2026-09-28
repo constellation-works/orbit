@@ -137,20 +137,26 @@ pub(super) async fn toggle_routine(
     if status.routine.source_workspace != body.source
         || status.routine.source_orbit_dir != runtime.shared_root()
     {
-        return selection_conflict(
-            "workspace_mismatch",
-            format!(
+        let refusal = json!({
+            "error": format!(
                 "select routine source workspace '{}' before changing '{}'",
                 status.routine.source_workspace, body.name
             ),
-        );
+            "code": "workspace_mismatch",
+        });
+        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
     }
     let actual_target = status.routine.definition.target.as_ref_string();
     if body.target != actual_target {
-        return selection_conflict(
-            "target_mismatch",
-            format!("routine target changed; refresh and confirm '{actual_target}'"),
-        );
+        return refuse_routine_toggle(
+            &runtime,
+            workspace,
+            &body,
+            &caller,
+            started,
+            target_mismatch(&actual_target),
+        )
+        .await;
     }
 
     let outcome = match blocking("routine toggle", {
@@ -181,16 +187,20 @@ pub(super) async fn toggle_routine(
         }
         Err(response) => return *response,
     };
-    if let RoutineToggleOutcome::Conflict { actual_enabled } = outcome {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "routine state changed while this action was pending; refresh before retrying",
-                "code": "stale_routine_state",
-                "actual_enabled": actual_enabled,
-            })),
-        )
-            .into_response();
+    let refusal = match &outcome {
+        RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => None,
+        RoutineToggleOutcome::Conflict { actual_enabled } => Some(json!({
+            "error": "routine state changed while this action was pending; refresh before retrying",
+            "code": "stale_routine_state",
+            "actual_enabled": actual_enabled,
+        })),
+        // The definition was retargeted between selection and write.
+        RoutineToggleOutcome::TargetConflict { actual_target } => {
+            Some(target_mismatch(&actual_target.as_ref_string()))
+        }
+    };
+    if let Some(refusal) = refusal {
+        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
     }
     record_operation_audit(
         &runtime,
@@ -215,6 +225,46 @@ pub(super) async fn toggle_routine(
         "message": if body.enabled { "Routine enabled" } else { "Routine disabled" },
     }))
     .into_response()
+}
+
+/// The request's selected target is no longer the definition's target.
+fn target_mismatch(actual_target: &str) -> Value {
+    json!({
+        "error": format!("routine target changed; refresh and confirm '{actual_target}'"),
+        "code": "target_mismatch",
+        "actual_target": actual_target,
+    })
+}
+
+/// Audit an authorized toggle that was refused without writing, then answer
+/// with the refusal as a 409 the client resolves by refreshing.
+async fn refuse_routine_toggle(
+    runtime: &Arc<OrbitRuntime>,
+    workspace: &str,
+    body: &RoutineToggleRequest,
+    caller: &CallerCapabilities,
+    started: Instant,
+    refusal: Value,
+) -> Response {
+    let reason = format!(
+        "{}: {}",
+        refusal["code"].as_str().unwrap_or("conflict"),
+        refusal["error"].as_str().unwrap_or_default()
+    );
+    record_operation_audit(
+        runtime,
+        workspace,
+        "routine.toggle",
+        &body.name,
+        &body.machine_name,
+        &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
+        Some(caller),
+        None,
+        Some(&reason),
+        started,
+    )
+    .await;
+    (StatusCode::CONFLICT, Json(refusal)).into_response()
 }
 
 /// `POST /api/routines/clock` — typed native-service or cadence control.

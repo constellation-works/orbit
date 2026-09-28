@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use chrono::{Duration, Local, TimeZone, Timelike, Utc};
 use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_types::workflow::RoutineTarget;
 use tempfile::tempdir;
 
 use super::super::loader::{LoadedRoutine, RoutineOrigin};
@@ -69,6 +70,32 @@ fn routine_toggle_inserts_missing_default_and_rejects_stale_duplicate() {
         fs::read_to_string(&path).expect("read duplicate result"),
         after_first,
         "stale duplicate must not rewrite the definition"
+    );
+}
+
+#[test]
+fn routine_toggle_refuses_a_same_name_definition_retargeted_after_selection() {
+    let root = tempdir().expect("temp root");
+    let path = root.path().join("nightly.yaml");
+    fs::write(
+        &path,
+        "schemaVersion: 1\nname: nightly\nenabled: false\ntrigger:\n  cron: '0 2 * * *'\ntarget: job:alpha\n",
+    )
+    .expect("write fixture");
+    let selected = loaded(path.clone());
+    let retargeted = "schemaVersion: 1\nname: nightly\nenabled: false # keep\ntrigger:\n  cron: '0 2 * * *'\ntarget: job:beta\n";
+    fs::write(&path, retargeted).expect("retarget fixture");
+
+    assert_eq!(
+        set_routine_enabled(&selected, false, true).expect("stale selection"),
+        RoutineToggleOutcome::TargetConflict {
+            actual_target: RoutineTarget::Job("beta".to_string())
+        }
+    );
+    assert_eq!(
+        fs::read_to_string(&path).expect("read retargeted fixture"),
+        retargeted,
+        "a stale selection must not enable the retargeted definition"
     );
 }
 
