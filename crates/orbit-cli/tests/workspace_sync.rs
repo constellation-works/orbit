@@ -201,3 +201,76 @@ fn workspace_sync_outside_registered_workspace_fails_before_writing() {
     assert!(!repo.join(".orbit").exists());
     assert_eq!(read(parent.path().join(".orbit/config.yaml")), parent_state);
 }
+
+/// Exact shipped jobs whose manifest cannot be written: both the JSON report
+/// and the human summary name the skipped provenance write, and neither
+/// claims the catalog converged or its provenance was recorded.
+#[cfg(unix)]
+#[test]
+fn workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempdir().expect("home tempdir");
+    let repo = home.path().join("workspace");
+    std::fs::create_dir_all(repo.join(".git")).expect("create workspace repo");
+    write_machine_identity(home.path());
+    orbit(&repo, home.path())
+        .args(["workspace", "init"])
+        .assert()
+        .success();
+    let jobs = home.path().join(".orbit/resources/jobs");
+    let manifest = jobs.join(".orbit-managed-assets.json");
+    std::fs::remove_file(&manifest).expect("drop the job manifest");
+
+    std::fs::set_permissions(&jobs, std::fs::Permissions::from_mode(0o555))
+        .expect("make the job catalog read-only");
+    let json = orbit(&repo, home.path())
+        .args(["workspace", "sync", "--json"])
+        .output()
+        .expect("run JSON sync");
+    let human = orbit(&repo, home.path())
+        .args(["workspace", "sync"])
+        .output()
+        .expect("run human sync");
+    std::fs::set_permissions(&jobs, std::fs::Permissions::from_mode(0o755))
+        .expect("restore job catalog permissions");
+
+    assert!(json.status.success(), "{json:?}");
+    assert!(!manifest.exists(), "the denied write left no manifest");
+    let report: Value = serde_json::from_slice(&json.stdout).expect("parse sync JSON");
+    assert!(
+        report["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| {
+                warning.contains("could not write managed job asset manifest")
+            })),
+        "{report}"
+    );
+    let migrated: Vec<_> = report["actions"]
+        .as_array()
+        .expect("actions")
+        .iter()
+        .filter(|action| action["kind"] == "job" && action["outcome"] == "migrated")
+        .collect();
+    assert!(!migrated.is_empty(), "{report}");
+    for action in migrated {
+        assert!(
+            action["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains("not recorded")),
+            "{action}"
+        );
+    }
+
+    assert!(human.status.success(), "{human:?}");
+    let stdout = String::from_utf8(human.stdout).expect("utf8 human output");
+    assert!(
+        stdout.contains("warning: could not write managed job asset manifest"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("not fully converged"), "{stdout}");
+    assert!(!stdout.contains("managed artifacts converged"), "{stdout}");
+    assert!(!stdout.contains("already converged"), "{stdout}");
+}

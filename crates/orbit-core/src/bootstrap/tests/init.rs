@@ -358,6 +358,51 @@ fn workspace_init_seeds_inert_defaults_without_clobbering_edits() {
     );
 }
 
+/// Workspace init reads a host-global catalog it may not be allowed to write.
+/// A denied manifest write stays a warning, reported once even though the
+/// global pass and the workspace convergence both reconcile that catalog.
+#[cfg(unix)]
+#[test]
+fn workspace_init_reports_a_denied_global_manifest_write_once() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_root = temp.path().join("repo/.orbit");
+    init_workspace_at_root(
+        &global_root,
+        InitOptions {
+            global_only: true,
+            ..Default::default()
+        },
+    )
+    .expect("initialize scratch global root");
+    let jobs = global_root.join("resources/jobs");
+    let manifest = jobs.join(crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE);
+    fs::remove_file(&manifest).expect("drop the job manifest");
+
+    fs::set_permissions(&jobs, fs::Permissions::from_mode(0o555))
+        .expect("make the job catalog read-only");
+    let initialized = init_workspace_at_root(
+        &orbit_root,
+        InitOptions {
+            global_root_override: Some(global_root.clone()),
+            ..Default::default()
+        },
+    );
+    fs::set_permissions(&jobs, fs::Permissions::from_mode(0o755))
+        .expect("restore job catalog permissions");
+
+    let initialized = initialized.expect("a denied manifest write does not fail init");
+    let denied: Vec<_> = initialized
+        .managed_asset_warnings
+        .iter()
+        .filter(|warning| warning.contains("could not write managed job asset manifest"))
+        .collect();
+    assert_eq!(denied.len(), 1, "{:?}", initialized.managed_asset_warnings);
+    assert!(!manifest.exists());
+}
+
 #[test]
 fn global_init_seeds_skills_and_home_level_links() {
     let home = tempdir().expect("home tempdir");

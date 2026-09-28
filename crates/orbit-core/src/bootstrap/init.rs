@@ -340,6 +340,13 @@ pub fn init_workspace_at_root(
                         .filter(|action| action.outcome == ManagedArtifactOutcome::Preserved)
                         .filter_map(|action| action.detail),
                 );
+                // The global pass above already reconciled the host-global
+                // catalogs, so a skipped manifest write there repeats here.
+                for warning in reconciliation.warnings {
+                    if !managed_asset_warnings.contains(&warning) {
+                        managed_asset_warnings.push(warning);
+                    }
+                }
             }
             (
                 global_result.refreshed_default_activities,

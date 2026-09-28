@@ -477,12 +477,26 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     };
     if mode == ManagedAssetReconcileMode::Apply && previous.as_ref() != Some(&manifest) {
         let encoded = encode_managed_asset_manifest(&manifest)?;
-        record_managed_manifest_write(
+        let recorded = record_managed_manifest_write(
             &manifest_path,
             asset_kind,
             atomic_write_text(&manifest_path, &encoded),
             &mut result.warnings,
         )?;
+        if !recorded {
+            // An adoption only records provenance once the manifest lands;
+            // the skipped write is reported through `result.warnings`.
+            for action in result
+                .actions
+                .iter_mut()
+                .filter(|action| action.outcome == ManagedAssetOutcome::Migrated)
+            {
+                action.detail = Some(
+                    "exact existing shipped artifact; its provenance was not recorded because the manifest write was denied"
+                        .to_string(),
+                );
+            }
+        }
     }
 
     for warning in &result.warnings {
@@ -611,21 +625,22 @@ fn managed_asset_manifest_io_error(
 }
 
 /// Record a needed manifest write, warning (instead of failing closed) when
-/// the destination is EROFS/EACCES. Other I/O failures stay fatal.
+/// the destination is EROFS/EACCES. Other I/O failures stay fatal. Returns
+/// whether the manifest was persisted.
 pub(crate) fn record_managed_manifest_write(
     manifest_path: &Path,
     asset_kind: &str,
     write_result: Result<(), io::Error>,
     warnings: &mut Vec<String>,
-) -> Result<(), OrbitError> {
+) -> Result<bool, OrbitError> {
     match write_result {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(true),
         Err(error) if managed_manifest_write_is_skippable(&error) => {
             warnings.push(format!(
                 "could not write managed {asset_kind} asset manifest '{}': {error}; continuing without updating it",
                 manifest_path.display()
             ));
-            Ok(())
+            Ok(false)
         }
         Err(error) => Err(managed_asset_manifest_io_error(
             manifest_path,
