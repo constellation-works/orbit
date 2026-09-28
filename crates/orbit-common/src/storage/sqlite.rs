@@ -124,12 +124,14 @@ pub fn lease_wal_file_set(path: &Path) -> Result<Option<WalFileSetLease>, OrbitE
 ///
 /// Writable databases are created or repaired to owner-only access on Unix.
 /// The database is hardened before SQLite can create WAL/SHM sidecars, and
-/// pre-existing sidecars are repaired as part of the same operation. Newly
-/// created parent directories are owner-only as well. An existing read-only
-/// database on writable storage has group/other permissions removed before it
-/// is opened for observation. A database on a read-only filesystem is opened
-/// observationally before any directory creation or permission change is
-/// attempted; see [`open_observational`] for how such a database is read.
+/// pre-existing sidecars are repaired as part of the same operation; a
+/// symlinked or otherwise irregular sidecar fails the open without its target
+/// being touched. Newly created parent directories are owner-only as well.
+/// An existing read-only database on writable storage has group/other
+/// permissions removed before it is opened for observation. A database on a
+/// read-only filesystem is opened observationally before any directory
+/// creation or permission change is attempted; see [`open_observational`] for
+/// how such a database is read.
 pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
     let path = validated_sqlite_path(path)?;
 
@@ -139,13 +141,15 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
             if filesystem_read_only || metadata.permissions().readonly() {
                 return open_private_read_only(&path, filesystem_read_only);
             }
-            harden_sqlite_files(&path)?;
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(sqlite_path_error("inspect", &path, error)),
     }
 
     prepare_private_database_file(&path)?;
+    // Sidecars left beside a newly created database are checked too, before
+    // SQLite opens them by path.
+    harden_sqlite_files(&path)?;
 
     let connection = Connection::open_with_flags(
         &path,
@@ -278,6 +282,9 @@ fn prepare_private_database_file(path: &Path) -> Result<(), OrbitError> {
     }
 }
 
+/// Restrict the database and its existing sidecars to owner-only access
+/// through no-follow descriptors; see
+/// [`crate::fs::io::set_private_file_permissions`].
 fn harden_sqlite_files(path: &Path) -> Result<(), OrbitError> {
     harden_existing_file(path)?;
     for sidecar in sqlite_sidecar_paths(path) {
