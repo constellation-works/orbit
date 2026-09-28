@@ -13,7 +13,7 @@ use orbit_tools::{ToolContext, ToolRegistry};
 
 use super::agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopError, LoopOutcome};
 use super::audit::{AuditSink, LoopAuditEvent};
-use super::transport::{LoopTransport, Message};
+use super::transport::{ContentBlock, LoopTransport, Message, MessageRole};
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -78,6 +78,26 @@ impl Session {
 
     pub fn append_message(&mut self, msg: Message) {
         self.history.push(msg);
+    }
+
+    /// Append a new user prompt. A turn that ended with answered tool calls
+    /// (terminal stop reason or policy termination) leaves a trailing
+    /// tool-result user message; the prompt joins it so roles keep
+    /// alternating and the results stay first in that message.
+    pub fn append_user_prompt(&mut self, prompt: &str) {
+        if let Some(last) = self.history.last_mut()
+            && last.role == MessageRole::User
+            && last
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+        {
+            last.content.push(ContentBlock::Text {
+                text: prompt.to_string(),
+            });
+            return;
+        }
+        self.history.push(Message::user_text(prompt));
     }
 
     pub fn ensure_spawn_emitted(

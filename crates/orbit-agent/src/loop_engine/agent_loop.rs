@@ -189,7 +189,7 @@ impl AgentLoop {
     ) -> Result<LoopOutcome, AgentLoopError> {
         session.ensure_spawn_emitted(&cfg.run_id, cfg.task_id.as_deref(), sink);
 
-        session.append_message(Message::user_text(user_prompt));
+        session.append_user_prompt(user_prompt);
 
         let advertised: Vec<String> = match cfg.advertised_tools.as_ref() {
             Some(set) => set.clone(),
@@ -264,6 +264,7 @@ impl AgentLoop {
             let mut iter_denials = Vec::new();
             let mut user_tool_results: Vec<ContentBlock> = Vec::new();
             let mut deadline_hit: Option<AgentLoopError> = None;
+            let mut terminating_denial: Option<String> = None;
 
             let mut pending_calls = tool_calls.into_iter();
             while let Some((tool_use_id, tool_name, input)) = pending_calls.next() {
@@ -305,39 +306,13 @@ impl AgentLoop {
                         reason,
                     });
                     iter_denials.push(tool_name.clone());
+                    user_tool_results.push(error_tool_result(tool_use_id, &denial_payload));
                     match cfg.on_denial {
                         OnDenial::Terminate => {
-                            sink.emit(&LoopAuditEvent::IterationBoundary {
-                                ts: Utc::now(),
-                                run_id: cfg.run_id.clone(),
-                                session_id: session.id().to_string(),
-                                iteration,
-                                continues: false,
-                            });
-                            trace.push(IterationTrace {
-                                iteration,
-                                stop_reason,
-                                tool_calls: iter_tool_names,
-                                policy_denials: iter_denials,
-                                usage: usage.clone(),
-                            });
-                            return Err(AgentLoopError::PolicyDenied {
-                                tool_name,
-                                iteration,
-                            });
+                            terminating_denial = Some(tool_name);
+                            break;
                         }
-                        OnDenial::Continue => {
-                            let tool_text = match serde_json::to_string(&denial_payload) {
-                                Ok(s) => s,
-                                Err(err) => format!("{{\"error\":\"serialize: {err}\"}}"),
-                            };
-                            user_tool_results.push(ContentBlock::ToolResult {
-                                tool_use_id,
-                                content: tool_text,
-                                is_error: true,
-                            });
-                            continue;
-                        }
+                        OnDenial::Continue => continue,
                     }
                 }
 
@@ -383,28 +358,47 @@ impl AgentLoop {
                 });
             }
 
-            // The last tool may itself outlive the budget; never report
-            // success or start another turn after expiry.
-            let deadline = match deadline_hit {
-                Some(err) => Err(err),
-                None => check_deadline(cfg, started),
-            };
-            if let Err(err) = deadline {
-                sink.emit(&LoopAuditEvent::IterationBoundary {
-                    ts: Utc::now(),
-                    run_id: cfg.run_id.clone(),
-                    session_id: session.id().to_string(),
-                    iteration,
-                    continues: false,
-                });
-                if !user_tool_results.is_empty() {
-                    session.append_message(Message::user_blocks(user_tool_results));
+            if let Some(denied_tool) = &terminating_denial {
+                // Calls after the terminating denial are never executed, but
+                // each still needs a result so the session stays resumable.
+                for (tool_use_id, tool_name, _) in pending_calls {
+                    let skipped_payload = serde_json::json!({
+                        "error": {
+                            "code": "tool_not_executed",
+                            "message": format!(
+                                "not executed: turn terminated after tool '{denied_tool}' was denied"
+                            ),
+                        },
+                        "tool_name": &tool_name,
+                        "tool_use_id": &tool_use_id,
+                    });
+                    user_tool_results.push(error_tool_result(tool_use_id, &skipped_payload));
                 }
-                return Err(err);
+            } else {
+                // The last tool may itself outlive the budget; never report
+                // success or start another turn after expiry.
+                let deadline = match deadline_hit {
+                    Some(err) => Err(err),
+                    None => check_deadline(cfg, started),
+                };
+                if let Err(err) = deadline {
+                    sink.emit(&LoopAuditEvent::IterationBoundary {
+                        ts: Utc::now(),
+                        run_id: cfg.run_id.clone(),
+                        session_id: session.id().to_string(),
+                        iteration,
+                        continues: false,
+                    });
+                    if !user_tool_results.is_empty() {
+                        session.append_message(Message::user_blocks(user_tool_results));
+                    }
+                    return Err(err);
+                }
             }
 
-            let continues =
-                matches!(stop_reason, StopReason::ToolUse) && !user_tool_results.is_empty();
+            let continues = terminating_denial.is_none()
+                && matches!(stop_reason, StopReason::ToolUse)
+                && !user_tool_results.is_empty();
             sink.emit(&LoopAuditEvent::IterationBoundary {
                 ts: Utc::now(),
                 run_id: cfg.run_id.clone(),
@@ -420,6 +414,19 @@ impl AgentLoop {
                 usage: usage.clone(),
             });
 
+            // Answer every tool_use appended above before any exit, so a later
+            // `Session::send` never replays an unmatched tool request.
+            if !user_tool_results.is_empty() {
+                session.append_message(Message::user_blocks(user_tool_results));
+            }
+
+            if let Some(tool_name) = terminating_denial {
+                return Err(AgentLoopError::PolicyDenied {
+                    tool_name,
+                    iteration,
+                });
+            }
+
             if !continues {
                 let terminate_reason = match stop_reason {
                     StopReason::MaxTokens => TerminateReason::MaxTokens,
@@ -433,9 +440,19 @@ impl AgentLoop {
                     trace,
                 });
             }
-
-            session.append_message(Message::user_blocks(user_tool_results));
         }
+    }
+}
+
+fn error_tool_result(tool_use_id: String, payload: &serde_json::Value) -> ContentBlock {
+    let content = match serde_json::to_string(payload) {
+        Ok(s) => s,
+        Err(err) => format!("{{\"error\":\"serialize: {err}\"}}"),
+    };
+    ContentBlock::ToolResult {
+        tool_use_id,
+        content,
+        is_error: true,
     }
 }
 
