@@ -4,7 +4,8 @@
 
 use crate::task::{Task, TaskStatus, TaskType};
 use crate::workflow::automation::members::{
-    PreparationEligibility, StateMember, StateTrigger, StateTriggerKind, bundle_crew,
+    FreshnessOverride, MaterialField, PreparationEligibility, PreparationFreshness,
+    SourceSensitivity, StateMember, StateTrigger, StateTriggerKind, bundle_crew,
 };
 use serde_json::json;
 
@@ -20,6 +21,7 @@ fn trigger(kind: StateTriggerKind, eligibility: PreparationEligibility) -> State
         deadline_minutes: 90,
         batch_size: None,
         eligibility,
+        freshness: Default::default(),
     }
 }
 
@@ -253,4 +255,92 @@ fn member_crew_defaults_absent_and_normalizes_like_dispatch() {
     assert_eq!(bundle_crew(Some("")), None);
     assert_eq!(bundle_crew(Some("   ")), None);
     assert_eq!(bundle_crew(None), None);
+}
+
+/// [ORB-13638] `trigger.state.freshness` is a partial block: absent keys fall
+/// through to the next layer, a definition without it serializes unchanged,
+/// and an unusable block fails closed.
+#[test]
+fn freshness_override_layers_per_key_and_validates() {
+    let without: StateTrigger = serde_json::from_value(
+        serde_json::to_value(trigger(
+            StateTriggerKind::PreparationEligible,
+            PreparationEligibility::default(),
+        ))
+        .expect("serialize"),
+    )
+    .expect("deserialize");
+    assert!(without.freshness.is_empty());
+    assert!(
+        serde_json::to_value(&without)
+            .expect("serialize")
+            .get("freshness")
+            .is_none(),
+        "a definition without the block keeps its serialized shape"
+    );
+
+    let partial: FreshnessOverride =
+        serde_json::from_value(json!({"source_sensitivity": "context_files"})).expect("parse");
+    let configured = PreparationFreshness {
+        material_fields: vec![MaterialField::Title, MaterialField::Crew],
+        source_sensitivity: SourceSensitivity::Any,
+    };
+    assert_eq!(
+        configured.overridden_by(&partial),
+        PreparationFreshness {
+            material_fields: vec![MaterialField::Title, MaterialField::Crew],
+            source_sensitivity: SourceSensitivity::ContextFiles,
+        },
+        "an absent key keeps the lower layer's value"
+    );
+    let fields: FreshnessOverride =
+        serde_json::from_value(json!({"material_fields": ["plan", "title", "plan"]}))
+            .expect("parse");
+    assert_eq!(
+        configured.overridden_by(&fields),
+        PreparationFreshness {
+            material_fields: vec![MaterialField::Title, MaterialField::Plan],
+            source_sensitivity: SourceSensitivity::Any,
+        },
+        "a set key replaces the lower layer's value, normalized"
+    );
+    assert!(PreparationFreshness::default().is_default());
+    assert!(!configured.is_default());
+
+    assert!(
+        serde_json::from_value::<FreshnessOverride>(json!({"fields": ["title"]})).is_err(),
+        "unknown keys fail closed"
+    );
+    assert!(
+        serde_json::from_value::<FreshnessOverride>(json!({"material_fields": ["priority"]}))
+            .is_err(),
+        "priority is never material"
+    );
+    let with = |kind, freshness| StateTrigger {
+        freshness,
+        ..trigger(kind, PreparationEligibility::default())
+    };
+    assert!(
+        with(
+            StateTriggerKind::PreparationEligible,
+            FreshnessOverride {
+                material_fields: Some(vec![]),
+                ..Default::default()
+            }
+        )
+        .validate()
+        .is_err(),
+        "an empty material set would never re-assess anything"
+    );
+    assert!(
+        with(StateTriggerKind::ExecutionFailed, partial.clone())
+            .validate()
+            .is_err(),
+        "freshness applies to preparation_eligible only"
+    );
+    assert!(
+        with(StateTriggerKind::PreparationEligible, partial)
+            .validate()
+            .is_ok()
+    );
 }

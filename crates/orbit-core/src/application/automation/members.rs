@@ -85,8 +85,14 @@ pub(crate) struct Host<'a> {
     /// trigger [ORB-13016].
     routine: &'a str,
     trigger: &'a StateTrigger,
+    /// The one policy this consumer observes, admits and fingerprints with
+    /// [ORB-12745, ORB-13638].
+    policy: PreparationPolicy,
     incidents: RefCell<super::incidents::IncidentSession>,
     instructions: RefCell<BTreeMap<String, InstructionSnapshot>>,
+    /// `refs/orbit/automation/<attempt>` → pinned commit, read once per host
+    /// to carry pre-upgrade assessments forward.
+    pinned: RefCell<Option<BTreeMap<String, String>>>,
 }
 
 impl<'a> Host<'a> {
@@ -99,15 +105,27 @@ impl<'a> Host<'a> {
             runtime,
             routine,
             trigger,
+            policy: preparation::resolve_policy(runtime, Some(trigger)),
             incidents: RefCell::new(super::incidents::IncidentSession::new()),
             instructions: RefCell::new(BTreeMap::new()),
+            pinned: RefCell::new(None),
         }
     }
 
-    /// The one predicate this consumer observes, admits and fingerprints
-    /// with [ORB-12745].
     fn eligibility(&self) -> &PreparationEligibility {
-        &self.trigger.eligibility
+        &self.policy.eligibility
+    }
+
+    /// One instruction snapshot per revision serves every task on a page.
+    fn instructions(&self, revision: &str) -> Result<InstructionSnapshot, AutomationError> {
+        if let Some(snapshot) = self.instructions.borrow().get(revision) {
+            return Ok(snapshot.clone());
+        }
+        let snapshot = preparation::instructions(self.runtime, revision)?;
+        self.instructions
+            .borrow_mut()
+            .insert(revision.to_string(), snapshot.clone());
+        Ok(snapshot)
     }
 
     fn fingerprint(
@@ -115,25 +133,59 @@ impl<'a> Host<'a> {
         task: &orbit_types::task::Task,
         revision: &str,
     ) -> Result<String, AutomationError> {
-        let instructions = {
-            let mut cached = self.instructions.borrow_mut();
-            match cached.get(revision) {
-                Some(snapshot) => snapshot.clone(),
-                None => {
-                    let snapshot = preparation::instructions(self.runtime, revision)?;
-                    cached.insert(revision.to_string(), snapshot.clone());
-                    snapshot
-                }
-            }
-        };
-
         preparation::fingerprint_with_instructions(
             self.runtime,
             task,
             revision,
+            &|revision| self.instructions(revision),
+            &self.policy,
+        )
+    }
+
+    /// The commit an attempt pinned when it was admitted.
+    fn pinned_revision(&self, attempt_id: &str) -> Result<Option<String>, AutomationError> {
+        if self.pinned.borrow().is_none() {
+            let listing = Source::new(&self.runtime.paths().repo_root).git(&[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/orbit/automation/",
+            ])?;
+            let refs = listing
+                .lines()
+                .filter_map(|line| line.split_once(' '))
+                .map(|(name, object)| (name.to_string(), object.to_string()))
+                .collect();
+            *self.pinned.borrow_mut() = Some(refs);
+        }
+        Ok(self.pinned.borrow().as_ref().and_then(|refs| {
+            refs.get(&format!("refs/orbit/automation/{attempt_id}"))
+                .cloned()
+        }))
+    }
+
+    /// The `material_v1` hash the member's task would certify at the revision
+    /// `assessment`'s attempt pinned.
+    fn legacy_fingerprint(
+        &self,
+        member: &StateMember,
+        assessment: &MemberAssessment,
+    ) -> Result<Option<String>, AutomationError> {
+        let [task_id] = member.task_ids.as_slice() else {
+            return Ok(None);
+        };
+        let Some(revision) = self.pinned_revision(&assessment.receipt_id)? else {
+            return Ok(None);
+        };
+        let task = self.runtime.get_task(task_id)?;
+        let instructions = self.instructions(&revision)?;
+        preparation::legacy_fingerprint(
+            self.runtime,
+            &task,
+            &revision,
             &instructions,
             self.eligibility(),
         )
+        .map(Some)
     }
 
     #[cfg(test)]
@@ -400,6 +452,19 @@ impl MemberHost for Host<'_> {
             )
             .map(|run| run.run_id)
             .map_err(Into::into)
+    }
+
+    /// An assessment accepted under `material_v1` hashed every task field and
+    /// the head it pinned, so it can only be checked by recomputing that hash
+    /// at the pinned revision [ORB-13638]. When it still matches, nothing
+    /// that contract covered has changed — in particular none of the default
+    /// material fields — and the task keeps its assessment instead of joining
+    /// a re-pilot wave on upgrade. Any doubt answers `false`.
+    fn carries_forward(&self, member: &StateMember, assessment: &MemberAssessment) -> bool {
+        self.trigger.kind == StateTriggerKind::PreparationEligible
+            && self
+                .legacy_fingerprint(member, assessment)
+                .is_ok_and(|legacy| legacy.as_ref() == Some(&assessment.resulting_fingerprint))
     }
 
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {

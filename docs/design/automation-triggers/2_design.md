@@ -295,15 +295,20 @@ them. Missing selectors are one reason to prepare, not the general definition of
 staleness. Tasks in progress, review, terminal, withdrawn, or human-blocked are
 not automatic pilot candidates. Preparing proposed work does not approve it.
 
-A material fingerprint covers normalized title, description, acceptance criteria,
-plan, selectors, type, complexity/crew and required tools, behavior-relevant tags,
-dependency identities and delivery state, applicable repository instructions,
-pilot contract version, and pinned integration revision. V1 conservatively treats
-any source revision change as stale; selective path invalidation needs separate
-evidence and is deferred. Resolve dependency evidence, not raw done statuses.
-Priority-only edits reorder candidates; comments, summaries, timestamps, run
-linkage and instrumentation do not invalidate. Proposed/backlog share an
-eligibility class so authorized promotion alone does not cause a pilot loop.
+A material fingerprint (`material_v2`) covers the pilot contract version, the
+eligibility verdict, and the task inputs the consumer's resolved freshness names
+[ORB-13638]. By default those are normalized title, description, acceptance
+criteria, plan and selectors: what an assessment is about. Tags, crew and its
+resolved model/provider, required tools, type, complexity, relations, dependency
+evidence and repository instructions are opt-in fields, and the pinned
+integration revision is recorded as evidence but is material only under
+`source_sensitivity: context_files` (a commit touched a selector path) or `any`
+(every head move). `material_v1` hashed all of them and treated any head move
+as stale, so every merge re-piloted every assessed task. Resolve dependency
+evidence, not raw done statuses, when it is opted in. Priority-only edits
+reorder candidates; comments, summaries, timestamps, run linkage and
+instrumentation never invalidate. Proposed/backlog share an eligibility class
+so authorized promotion alone does not cause a pilot loop.
 
 Use proposed defaults of a two-minute quiet period, ten-minute maximum wait and
 50 tasks per batch, preserving partitions of at most five. Coalesce repeated
@@ -464,7 +469,7 @@ target: job:task_pilot_pipeline
 trigger:
   kind: preparation_eligible
   statuses: [proposed, backlog]
-  freshness: material_v1
+  freshness: {source_sensitivity: ignore}   # material_v2 defaults
   debounce_minutes: 2
   max_wait_minutes: 10
 batch:

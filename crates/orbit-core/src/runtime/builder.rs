@@ -294,6 +294,7 @@ pub(crate) fn build_context_from_roots(
             workflow_auto_ship,
             workflow_required_validation_commands,
             workflow_distributed_completion,
+            runtime_config.snapshot.task_pilot_freshness(),
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),

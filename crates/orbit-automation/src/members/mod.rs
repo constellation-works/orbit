@@ -55,6 +55,13 @@ pub trait MemberHost {
     fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError>;
 
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError>;
+
+    /// Whether `assessment`, certified under an earlier fingerprint contract,
+    /// still describes `member` [ORB-13638]. A host that cannot tell answers
+    /// `false`, so the member is assessed again rather than trusted.
+    fn carries_forward(&self, _member: &StateMember, _assessment: &MemberAssessment) -> bool {
+        false
+    }
 }
 
 pub struct MemberEvaluation<'a> {
@@ -205,12 +212,12 @@ pub fn evaluate(
             members.withheld.remove(task_id);
         }
 
-        // Already assessed at exactly this fingerprint: nothing left to apply.
-        if members
-            .assessed
-            .get(&member.key)
-            .is_some_and(|assessed| assessed.resulting_fingerprint == member.fingerprint)
-        {
+        // Already assessed at exactly this fingerprint, or under an earlier
+        // contract whose assessment still holds: nothing left to apply.
+        if members.assessed.get(&member.key).is_some_and(|assessed| {
+            assessed.resulting_fingerprint == member.fingerprint
+                || host.carries_forward(&member, assessed)
+        }) {
             members.pending.remove(&member.key);
             continue;
         }

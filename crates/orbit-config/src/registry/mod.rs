@@ -19,6 +19,9 @@ use orbit_types::identity::{
     Crew, CrewAssignment, resolve_crew, validate_machine_id, validate_machine_name,
     validate_stored_task_prefix,
 };
+use orbit_types::workflow::automation::members::{
+    MaterialField, PreparationFreshness, SourceSensitivity,
+};
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 

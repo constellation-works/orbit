@@ -65,9 +65,8 @@ pub(in super::super) fn prepare(
     let explicit_task_ids = string_array(input, "task_ids", action)?;
     let explicit_mode = !explicit_task_ids.is_empty();
     let active_preparations = active_task_pilot_preparations(runtime, action, &workspace_root)?;
-    let eligibility =
-        crate::application::automation::preparation::claim_eligibility(runtime, claim.as_ref())
-            .map_err(|error| action_failed(action, error.to_string()))?;
+    let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
+        .map_err(|error| action_failed(action, error.to_string()))?;
 
     let (mode, task_ids, mut task_snapshots, excluded) = if explicit_mode {
         let all_tasks = runtime
@@ -167,7 +166,7 @@ pub(in super::super) fn prepare(
                     action,
                     &envelope.id,
                     source.as_ref(),
-                    &eligibility,
+                    &policy,
                 )? {
                 Some("no_target_assessment_fresh")
             } else {
@@ -228,7 +227,7 @@ pub(in super::super) fn prepare(
                 runtime,
                 &task,
                 &source.source_revision,
-                &eligibility,
+                &policy,
             )
             .map_err(|error| action_failed(action, error.to_string()))?;
         // Each task is checked against the batch member that claimed it.
@@ -290,7 +289,7 @@ fn fresh_no_target_assessment(
     action: &str,
     task_id: &str,
     source: Option<&SourceSnapshot>,
-    eligibility: &orbit_types::workflow::automation::members::PreparationEligibility,
+    policy: &orbit_types::workflow::automation::members::PreparationPolicy,
 ) -> Result<bool, DispatchError> {
     let history = runtime
         .get_task_history(task_id)
@@ -314,7 +313,7 @@ fn fresh_no_target_assessment(
         runtime,
         &task,
         source.map(|source| source.source_revision.as_str()),
-        eligibility,
+        policy,
     )
     .map_err(|error| action_failed(action, format!("fingerprint task {task_id}: {error}")))?;
     Ok(current == assessed_fingerprint)

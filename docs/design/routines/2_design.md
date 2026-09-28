@@ -153,7 +153,10 @@ seed time, so two hosts initializing the same workspace name write byte-identica
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
 [ORB-12745]; a state trigger names the one machine that evaluates it, so its
 `owner_machine` renders this host's registered machine id and its `branch` the workspace's
-registered base branch — the only host-dependent bytes a seed writes. Auto-task definitions
+registered base branch — the only host-dependent bytes a seed writes. Which edits re-pilot an
+assessed task is `[workflow.task_pilot_freshness]` in `config.toml` (default: title,
+description, criteria, plan and selectors; head moves ignored), overridable by the routine's
+optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's versioned
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.

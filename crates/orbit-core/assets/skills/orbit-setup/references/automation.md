@@ -174,6 +174,16 @@ under the old one; the default predicate keeps the fingerprints a workspace
 accepted before the block existed. Explicit runs (`orbit run task-pilot <id>`)
 ignore the block.
 
+Which edits make an assessed task due again is `[workflow.task_pilot_freshness]`
+in `config.toml`. By default only a change to the title, description,
+acceptance criteria, plan or selectors does; retagging, reassigning crew, and
+merges to the branch do not. Add fields to `material_fields` (`tags`, `crew`,
+`tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`) or
+set `source_sensitivity` to `context_files` (a merge that touches a task's
+selector paths) or `any` (every merge). A `freshness:` block under the
+routine's `trigger.state` overrides either key for that routine. Changing the
+resolved value re-prepares tasks assessed under the old one.
+
 **Upgrading from the cron form.** A workspace seeded before the state form
 holds a cron `task_pilot.yaml` (`*/40 * * * *`). `orbit workspace sync` refreshes
 an unmodified one — or one whose only edit is `enabled: true` — onto the state

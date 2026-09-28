@@ -42,6 +42,12 @@ pub struct StateTrigger {
     /// configurable, so an older definition keeps its behaviour.
     #[serde(default)]
     pub eligibility: PreparationEligibility,
+    /// Which inputs make a `preparation_eligible` consumer's accepted
+    /// assessment stale [ORB-13638]. Each key present here overrides the
+    /// `[workflow.task_pilot_freshness]` config value, which overrides the
+    /// built-in default.
+    #[serde(default, skip_serializing_if = "FreshnessOverride::is_empty")]
+    pub freshness: FreshnessOverride,
 }
 
 /// The task predicate a `preparation_eligible` consumer evaluates. Every
@@ -150,13 +156,155 @@ impl PreparationEligibility {
     }
 }
 
+/// One task input the material fingerprint can hash [ORB-13638].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaterialField {
+    Title,
+    Description,
+    Criteria,
+    Plan,
+    /// The task's `context_files`.
+    Selectors,
+    Tags,
+    /// The stored crew and the model/provider it resolves to.
+    Crew,
+    Tools,
+    Type,
+    Complexity,
+    Relations,
+    /// Each resolved dependency's status and meaning.
+    Dependencies,
+    /// Repository `AGENTS.md` / `CLAUDE.md` bytes at the pinned revision.
+    Instructions,
+}
+
+impl MaterialField {
+    /// What an assessment is about: editing any of these re-admits the task.
+    pub const DEFAULT: [Self; 5] = [
+        Self::Title,
+        Self::Description,
+        Self::Criteria,
+        Self::Plan,
+        Self::Selectors,
+    ];
+}
+
+/// How the observed branch head bears on an accepted assessment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceSensitivity {
+    /// The head is evidence only; moving it invalidates nothing.
+    #[default]
+    Ignore,
+    /// Stale only when the head changed a path one of the task's selectors
+    /// names (`file:`/`dir:` by prefix, `symbol:` through its file).
+    ContextFiles,
+    /// Every head move invalidates every assessment.
+    Any,
+}
+
+/// A partial freshness block: an absent key falls through to the next layer
+/// (routine, then `config.toml`, then the built-in default).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct FreshnessOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material_fields: Option<Vec<MaterialField>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_sensitivity: Option<SourceSensitivity>,
+}
+
+impl FreshnessOverride {
+    pub fn is_empty(&self) -> bool {
+        self.material_fields.is_none() && self.source_sensitivity.is_none()
+    }
+
+    pub fn validate(&self) -> Result<(), super::super::error::WorkflowError> {
+        if self
+            .material_fields
+            .as_ref()
+            .is_some_and(|fields| fields.is_empty())
+        {
+            return Err(super::super::error::WorkflowError::Invalid(
+                "state trigger freshness material_fields requires at least one field".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The resolved inputs whose change makes an accepted task-pilot assessment
+/// stale. Eligibility still decides whether a task is fingerprinted at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreparationFreshness {
+    pub material_fields: Vec<MaterialField>,
+    pub source_sensitivity: SourceSensitivity,
+}
+
+impl Default for PreparationFreshness {
+    fn default() -> Self {
+        Self {
+            material_fields: MaterialField::DEFAULT.to_vec(),
+            source_sensitivity: SourceSensitivity::Ignore,
+        }
+    }
+}
+
+impl PreparationFreshness {
+    /// This value with every key `layer` sets taking precedence.
+    pub fn overridden_by(&self, layer: &FreshnessOverride) -> Self {
+        Self {
+            material_fields: layer
+                .material_fields
+                .clone()
+                .unwrap_or_else(|| self.material_fields.clone()),
+            source_sensitivity: layer.source_sensitivity.unwrap_or(self.source_sensitivity),
+        }
+        .normalized()
+    }
+
+    /// Field order and duplicates are not material.
+    pub fn normalized(&self) -> Self {
+        let mut material_fields = self.material_fields.clone();
+        material_fields.sort();
+        material_fields.dedup();
+        Self {
+            material_fields,
+            source_sensitivity: self.source_sensitivity,
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.normalized() == Self::default().normalized()
+    }
+
+    pub fn includes(&self, field: MaterialField) -> bool {
+        self.material_fields.contains(&field)
+    }
+}
+
+/// Everything one `preparation_eligible` consumer resolves once and applies
+/// at every check of an assessment: observation, admission, prepare/apply
+/// and promotion.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreparationPolicy {
+    pub eligibility: PreparationEligibility,
+    pub freshness: PreparationFreshness,
+}
+
 impl StateTrigger {
     pub fn validate(&self) -> Result<(), super::super::error::WorkflowError> {
         if self.kind == StateTriggerKind::PreparationEligible {
             self.eligibility.validate()?;
+            self.freshness.validate()?;
         } else if !self.eligibility.is_default() {
             return Err(super::super::error::WorkflowError::Invalid(
                 "state trigger eligibility applies to kind preparation_eligible only".into(),
+            ));
+        } else if !self.freshness.is_empty() {
+            return Err(super::super::error::WorkflowError::Invalid(
+                "state trigger freshness applies to kind preparation_eligible only".into(),
             ));
         }
         if self

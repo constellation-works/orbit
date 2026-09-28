@@ -98,6 +98,21 @@ xhard_complexity_crews = []
 | `workflow.required_validation_commands` | `[]` | Commands a distributed-drain claim must pass on its exact candidate before this owner accepts its handoff. Empty refuses every claimed handoff. |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff. `review` waits for an operator's **Approve handoff**; `done` has the owner authorize it on acceptance and land it through `task_landing_pipeline`, rechecking this key before the merge. |
 
+### `[workflow.task_pilot_freshness]` — when a task is piloted again
+
+```toml
+[workflow.task_pilot_freshness]
+material_fields = ["title", "description", "criteria", "plan", "selectors"]
+source_sensitivity = "ignore"
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.task_pilot_freshness.material_fields` | `["title", "description", "criteria", "plan", "selectors"]` | The task inputs whose edit makes an accepted task-pilot assessment stale, so the state-triggered task pilot assesses the task again. Choose from `title`, `description`, `criteria`, `plan`, `selectors` (`context_files`), `tags`, `crew` (the stored crew and the model/provider it resolves to), `tools`, `type`, `complexity`, `relations`, `dependencies` (each dependency's status and meaning) and `instructions` (repository `AGENTS.md`/`CLAUDE.md` at the pinned revision). Must name at least one field. |
+| `workflow.task_pilot_freshness.source_sensitivity` | `ignore` | Whether moving the observed branch head makes an assessment stale. `ignore`: never; the pinned revision is still recorded as evidence. `context_files`: only when the head changed a path one of the task's selectors names (`file:` and `dir:` by prefix, `symbol:` through its file). `any`: every head move. |
+
+Eligibility is separate: a routine's `eligibility` block still decides which tasks are piloted at all, so a task that becomes eligible with no fresh assessment is still piloted, while retagging an already-assessed, still-eligible task is not. A task-pilot routine's `trigger.state.freshness` block overrides either key for that routine (routine, then this table, then the defaults). A value that differs from the default is itself material, so changing it re-pilots the tasks assessed under the old value once. Assessments accepted before this setting existed stay fresh while their task is unchanged. See [automation triggers](design/automation-triggers/5_operations.md).
+
 **The `system` name.** Shipped job steps such as `task_pilot_pipeline` name `crew: system` directly. At load that name is aliased onto the crew `workflow.system_crew` names, so `system_crew = "luna"` runs the task pilot on Luna. A user-authored `[crews.system]` table wins over the alias. Older configs without `system_crew` fall back to an existing `[crews.qa]`, then to the default crew. An unknown custom name is not substituted and fails at dispatch. A missing or unusable system crew leaves the original failed step failed, with a diagnostic naming `workflow.system_crew`.
 
 **What `orbit init` seeds.** Only the global file, and only when it is absent (or under `--force`):

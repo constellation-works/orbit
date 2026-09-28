@@ -523,6 +523,9 @@ trigger:
       exclude_tags: [no-diff-expected, no-diff-needed]
       require_tags: []
       task_types: []
+    freshness:                                  # optional; overrides config per key
+      material_fields: [title, description, criteria, plan, selectors]
+      source_sensitivity: ignore                # ignore | context_files | any
 policy:
   overlap: forbid
   timeout_minutes: 90
@@ -543,6 +546,32 @@ predicate is material input: a non-default value is folded into the
 fingerprint, so changing it invalidates assessments accepted under the old
 one, while the default adds nothing and keeps the fingerprints accepted before
 the block existed. Explicit task-ID runs do not consult it.
+
+`freshness` [ORB-13638] decides which edits make an assessed task due again;
+eligibility only decides whether it is fingerprinted at all, so a task that
+newly becomes eligible is piloted while retagging an eligible, already-assessed
+one is not. Each key resolves routine block, then `config.toml`
+`[workflow.task_pilot_freshness]`, then the default: `material_fields`
+`[title, description, criteria, plan, selectors]` and `source_sensitivity:
+ignore`. The opt-in fields are `tags`, `crew` (with the resolved
+model/provider), `tools`, `type`, `complexity`, `relations`, `dependencies`
+(resolved dependency status and meaning) and `instructions` (pinned repository
+instruction files). `source_sensitivity: context_files` makes a head move
+material only when it changes the object at one of the task's selector paths
+(a directory selector covers everything under it; at most 50 selector paths
+are compared, beyond which the member defers with `selector_scan_budget`);
+`any` makes every head move material. An empty `material_fields` or an
+unknown field fails closed, and a non-empty block is rejected on any other
+trigger kind. Scheduling, the prepare/apply fingerprint check, promotion
+readiness and `pilot_fingerprint` resolve the same value for a consumer, and
+a non-default one is folded into the fingerprint. Pilots still pin and record
+the source revision they assessed against, whichever mode applies.
+
+Assessments accepted under the earlier `material_v1` fingerprint, which
+hashed every field and the source revision, are carried forward rather than
+re-piloted: a scheduled member stays fresh while the `material_v1` hash
+recomputed at the revision its receipt pinned still matches, and becomes due
+at the first edit that hash covers.
 
 `kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
 longer ships; the shape is recorded here for definitions written before the
@@ -577,11 +606,11 @@ before batching, whose active attempt names a single `member`, still
 deserializes as a batch of one and completes through the same path.
 
 Preparation includes populated selectors when their assessment is missing or
-stale. The material fingerprint covers task meaning, criteria, plan, selectors,
-relationships, dependency decisions, task/crew assignment, resolved model/provider,
-required tools, tags, pinned repository instructions, source revision and the
-consumer's non-default resolved eligibility. Comments,
-audit writes, priority and execution summaries do not invalidate it. Accepted
+stale. The material fingerprint covers the eligibility verdict, the fields and
+source sensitivity the consumer's resolved `freshness` names (by default title,
+description, criteria, plan and selectors), and the consumer's non-default
+resolved eligibility and freshness. Comments,
+audit writes, priority and execution summaries never invalidate it. Accepted
 apply records certify the resulting fingerprint, retaining the original input
 and exact resulting assessment in immutable receipt bytes. A fresh unready result
 is an assessment, and does not repeatedly dispatch. Changing a material input

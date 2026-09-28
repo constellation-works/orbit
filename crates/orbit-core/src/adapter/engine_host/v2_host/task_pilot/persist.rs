@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::automation::members::PreparationEligibility;
+use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -27,7 +27,7 @@ pub(super) fn apply_task(
     snapshot: &PreparedTaskSnapshot,
     task: &ValidatedTask,
     prepared: &Value,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Result<ApplyTaskOutcome, OrbitError> {
     if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Ok(ApplyTaskOutcome::Stale(
@@ -61,7 +61,7 @@ pub(super) fn apply_task(
                     runtime,
                     &task.task_id,
                     &snapshot,
-                    eligibility,
+                    policy,
                 )?));
                 return Ok(());
             }
@@ -76,10 +76,10 @@ pub(super) fn apply_task(
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(reason) = task_snapshot_drift(runtime, &current, &snapshot, eligibility) {
+            if let Some(reason) = task_snapshot_drift(runtime, &current, &snapshot, policy) {
                 if attempt == 0 && matches!(reason.0, "material_changed" | "status_changed") {
                     retry_fingerprint =
-                        status_only_fingerprint(runtime, &current, &snapshot, eligibility)
+                        status_only_fingerprint(runtime, &current, &snapshot, policy)
                             .map(|fingerprint| (fingerprint, current.status));
                 }
                 if retry_fingerprint.is_none() {
@@ -117,7 +117,7 @@ pub(super) fn apply_task(
                         .material
                         .as_ref()
                         .map(|(_, revision)| revision.as_str()),
-                    eligibility,
+                    policy,
                 )
                 .map_err(orbit_automation::automation_error_to_orbit)?;
                 history_summary.push_str(&format!(
@@ -157,7 +157,7 @@ pub(super) fn apply_task(
                         runtime,
                         &task.task_id,
                         &snapshot,
-                        eligibility,
+                        policy,
                     )?));
                 }
                 AtomicTaskMutationOutcome::AlreadyApplied => {
@@ -165,7 +165,7 @@ pub(super) fn apply_task(
                         runtime,
                         &task.task_id,
                         &snapshot,
-                        eligibility,
+                        policy,
                     )?));
                 }
                 AtomicTaskMutationOutcome::Stale => {
@@ -233,15 +233,12 @@ fn status_only_fingerprint(
     runtime: &OrbitRuntime,
     current: &Task,
     snapshot: &PreparedTaskSnapshot,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Option<String> {
     let (_, revision) = snapshot.material.as_ref()?;
     let neutral = snapshot.status_neutral_fingerprint.as_ref()?;
     let (fresh, fresh_neutral) = crate::application::automation::preparation::fingerprints(
-        runtime,
-        current,
-        revision,
-        eligibility,
+        runtime, current, revision, policy,
     )
     .ok()?;
     if &fresh_neutral != neutral {
@@ -278,20 +275,15 @@ fn resulting_fingerprint(
     runtime: &OrbitRuntime,
     task_id: &str,
     snapshot: &PreparedTaskSnapshot,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Result<Option<String>, OrbitError> {
     let Some((_, revision)) = &snapshot.material else {
         return Ok(None);
     };
     let current = runtime.get_task(task_id)?;
-    crate::application::automation::preparation::fingerprint(
-        runtime,
-        &current,
-        revision,
-        eligibility,
-    )
-    .map(Some)
-    .map_err(orbit_automation::automation_error_to_orbit)
+    crate::application::automation::preparation::fingerprint(runtime, &current, revision, policy)
+        .map(Some)
+        .map_err(orbit_automation::automation_error_to_orbit)
 }
 
 pub(super) fn task_operation_id(prepared: &Value, task_id: &str, assessment: &Value) -> String {
@@ -348,17 +340,14 @@ fn task_snapshot_drift(
     runtime: &OrbitRuntime,
     current: &Task,
     snapshot: &PreparedTaskSnapshot,
-    eligibility: &PreparationEligibility,
+    policy: &PreparationPolicy,
 ) -> Option<(&'static str, &'static str)> {
     if snapshot
         .material
         .as_ref()
         .is_some_and(|(expected, revision)| {
             crate::application::automation::preparation::fingerprint(
-                runtime,
-                current,
-                revision,
-                eligibility,
+                runtime, current, revision, policy,
             )
             .map_or(true, |fingerprint| &fingerprint != expected)
         })

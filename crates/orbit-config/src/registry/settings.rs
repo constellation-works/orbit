@@ -248,6 +248,12 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 20,
         resolve: |raw: Option<String>| resolve_optional_non_empty(raw, "workflow.default_crew"),
     },
+    workflow_distributed_completion: String => String {
+        key: "workflow.distributed_completion", value_type: "string",
+        description: "How far this owner takes a distributed execution claim's accepted handoff: `review` (default) waits for an operator's Approve handoff; `done` has the owner authorize and land it through its landing job, as `orbit run auto --complete` does for its own tasks.",
+        section: ConfigSection::Delivery, order: 65,
+        resolve: |raw: Option<String>| resolve_distributed_completion(raw),
+    },
     workflow_hard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.hard_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
@@ -272,17 +278,23 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 60,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
-    workflow_distributed_completion: String => String {
-        key: "workflow.distributed_completion", value_type: "string",
-        description: "How far this owner takes a distributed execution claim's accepted handoff: `review` (default) waits for an operator's Approve handoff; `done` has the owner authorize and land it through its landing job, as `orbit run auto --complete` does for its own tasks.",
-        section: ConfigSection::Delivery, order: 65,
-        resolve: |raw: Option<String>| resolve_distributed_completion(raw),
-    },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
         section: ConfigSection::Delivery, order: 30,
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_SYSTEM_CREW, "workflow.system_crew"),
+    },
+    workflow_task_pilot_freshness_material_fields: Vec<MaterialField> => Vec<MaterialField> {
+        key: "workflow.task_pilot_freshness.material_fields", value_type: "array<string>",
+        description: "Task inputs whose edit makes an accepted task-pilot assessment stale, from title, description, criteria, plan, selectors, tags, crew, tools, type, complexity, relations, dependencies, instructions (default title, description, criteria, plan, selectors). A routine's trigger.state.freshness overrides it.",
+        section: ConfigSection::Delivery, order: 110,
+        resolve: |raw: Option<Vec<MaterialField>>| resolve_material_fields(raw),
+    },
+    workflow_task_pilot_freshness_source_sensitivity: SourceSensitivity => SourceSensitivity {
+        key: "workflow.task_pilot_freshness.source_sensitivity", value_type: "string",
+        description: "Whether a branch-head move makes an accepted task-pilot assessment stale: ignore (default), context_files (only when the head changed a path the task's selectors name) or any. A routine's trigger.state.freshness overrides it.",
+        section: ConfigSection::Delivery, order: 120,
+        resolve: |raw: Option<SourceSensitivity>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.xhard_complexity_crews", value_type: "array<string>",
@@ -366,6 +378,16 @@ pub struct WorkerContainmentSettings {
 }
 
 impl ConfigSnapshot {
+    /// The admitted `[workflow.task_pilot_freshness]` table: the global layer
+    /// a routine's `trigger.state.freshness` overrides.
+    pub fn task_pilot_freshness(&self) -> PreparationFreshness {
+        PreparationFreshness {
+            material_fields: self.workflow_task_pilot_freshness_material_fields.clone(),
+            source_sensitivity: self.workflow_task_pilot_freshness_source_sensitivity,
+        }
+        .normalized()
+    }
+
     /// The admitted `machine.worker_*` limits.
     pub fn worker_containment(&self) -> WorkerContainmentSettings {
         WorkerContainmentSettings {
@@ -623,6 +645,20 @@ fn resolve_non_empty(raw: Option<String>, default: &str, key: &str) -> Result<St
         Err(OrbitError::InvalidInput(format!("{key} must not be empty")))
     } else {
         Ok(value.to_string())
+    }
+}
+
+/// The default material set when unset; an explicit list must name a field.
+fn resolve_material_fields(
+    raw: Option<Vec<MaterialField>>,
+) -> Result<Vec<MaterialField>, OrbitError> {
+    match raw {
+        None => Ok(MaterialField::DEFAULT.to_vec()),
+        Some(fields) if fields.is_empty() => Err(OrbitError::InvalidInput(
+            "workflow.task_pilot_freshness.material_fields must name at least one field"
+                .to_string(),
+        )),
+        Some(fields) => Ok(fields),
     }
 }
 

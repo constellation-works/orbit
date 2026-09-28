@@ -19,8 +19,9 @@ use orbit_types::{
         automation::{
             AutomationState, SourceRevision,
             members::{
-                MemberAttempt, MemberState, PreparationEligibility, StateMember, StateTrigger,
-                StateTriggerKind,
+                FreshnessOverride, MaterialField, MemberAttempt, MemberState,
+                PreparationEligibility, PreparationFreshness, PreparationPolicy, StateMember,
+                StateTrigger, StateTriggerKind,
             },
         },
     },
@@ -80,6 +81,7 @@ fn trigger() -> StateTrigger {
         deadline_minutes: 30,
         batch_size: None,
         eligibility: PreparationEligibility::default(),
+        freshness: Default::default(),
     }
 }
 
@@ -272,7 +274,24 @@ fn preparation_page_lists_instructions_once_for_all_eligible_tasks() {
     }
 
     reset_ls_tree_invocations();
-    let trigger = preparation_trigger();
+    let page = Host::new(&runtime, "task-pilot", &preparation_trigger())
+        .observe(None, Utc::now())
+        .unwrap();
+    assert_eq!(page.candidates.len(), 3);
+    assert_eq!(
+        ls_tree_invocations(),
+        0,
+        "instructions are not default material, so they are never read [ORB-13638]"
+    );
+
+    reset_ls_tree_invocations();
+    let trigger = StateTrigger {
+        freshness: FreshnessOverride {
+            material_fields: Some(vec![MaterialField::Title, MaterialField::Instructions]),
+            ..Default::default()
+        },
+        ..preparation_trigger()
+    };
     let page = Host::new(&runtime, "task-pilot", &trigger)
         .observe(None, Utc::now())
         .unwrap();
@@ -443,16 +462,22 @@ fn cached_instruction_snapshot_preserves_preparation_fingerprint_bytes() {
     let task = runtime.get_task(&id).expect("task");
     let revision = preparation::head_revision(&runtime, "agent-main").expect("head");
 
-    let eligibility = PreparationEligibility::default();
+    let policy = PreparationPolicy {
+        freshness: PreparationFreshness {
+            material_fields: vec![MaterialField::Instructions],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     let before =
-        preparation::fingerprint(&runtime, &task, &revision, &eligibility).expect("fingerprint");
+        preparation::fingerprint(&runtime, &task, &revision, &policy).expect("fingerprint");
     let instructions = preparation::instructions(&runtime, &revision).expect("instructions");
     let after = preparation::fingerprint_with_instructions(
         &runtime,
         &task,
         &revision,
-        &instructions,
-        &eligibility,
+        &|_| Ok(instructions.clone()),
+        &policy,
     )
     .expect("fingerprint with cached instructions");
 
