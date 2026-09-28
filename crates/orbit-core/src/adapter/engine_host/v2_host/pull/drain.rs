@@ -56,6 +56,16 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
     }
 }
 
+/// Consecutive claims a drain settled as failures, with no handoff between
+/// them, after which it stops requesting new work.
+///
+/// A leaf that fails fast frees its slot within seconds, so without a breaker
+/// a systemic executor fault — a missing credential, a broken toolchain, an
+/// incompatible owner — would claim and block the owner's backlog one task per
+/// poll. Settlement of work already running is unaffected, and an operator
+/// resets the breaker by starting a new drain.
+pub(crate) const CONSECUTIVE_FAILURE_BREAKER: usize = 3;
+
 pub(crate) struct PullDrain<'a> {
     pub(crate) jobs: &'a dyn JobRunStoreBackend,
     pub(crate) peer: &'a dyn PullPeer,
@@ -66,6 +76,10 @@ impl PullDrain<'_> {
     /// One bounded refill. Each new ID is made durable before the request goes
     /// on the wire. An idle response ends the whole pass, regardless of free
     /// slots. Reconciliation errors prevent all fresh admission.
+    ///
+    /// The failure breaker is checked after reconciliation, because settling
+    /// a leaf that has just failed can be what opens it: that pass must not
+    /// request replacements.
     pub(crate) fn refill(
         &self,
         destination: &PullDestination,
@@ -73,6 +87,11 @@ impl PullDrain<'_> {
         ceiling: usize,
     ) -> Result<usize, OrbitError> {
         if !self.reconcile_pending(destination)? {
+            return Ok(0);
+        }
+        if self.consecutive_failed_settlements(destination, &template.run_context.run_id)?
+            >= CONSECUTIVE_FAILURE_BREAKER
+        {
             return Ok(0);
         }
         let mut admitted = 0;
@@ -140,6 +159,29 @@ impl PullDrain<'_> {
             .local_pull_admissions()?
             .iter()
             .filter(|record| record.destination == *destination && record.holds_capacity())
+            .count())
+    }
+
+    /// How many of this drain's most recent settled claims failed in a row.
+    ///
+    /// Reads only admissions `run_id` made, in admission order, so an earlier
+    /// drain's history never trips a new one.
+    pub(crate) fn consecutive_failed_settlements(
+        &self,
+        destination: &PullDestination,
+        run_id: &str,
+    ) -> Result<usize, OrbitError> {
+        Ok(self
+            .jobs
+            .local_pull_admissions()?
+            .iter()
+            .filter(|record| {
+                record.destination == *destination
+                    && record.request.run_context.run_id == run_id
+                    && record.phase == LocalPullPhase::Settled
+            })
+            .rev()
+            .take_while(|record| matches!(record.settlement, Some(ClaimMutation::Fail(_))))
             .count())
     }
 
