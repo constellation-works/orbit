@@ -129,7 +129,7 @@ absolute and need no cursor.
 `<orbit_dir>/state/auto-tasks.json` (`{ baseline_at, last_slot, last_fired_at,
 last_task_id, pending?, last_skip? }`). This is workspace-local, gitignored
 runtime state (the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
-definition YAML and a definition edit never races the scheduler.
+definition YAML and a definition edit never races the scheduler's cursor writes.
 
 Admission and persistence share one stable sidecar lock,
 `.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is
@@ -156,7 +156,12 @@ clears it.
 
 `scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
 then per enabled definition holds the sidecar lock, re-reads cursors, and
-either baselines, skips, or fires. Dry-run never writes. On first sight it
+either baselines, skips, or fires. Under that lock it first revalidates the
+loaded revision: a definition deleted since discovery skips as
+`definition_removed`, and one whose file no longer loads to the same
+definition skips as `definition_changed`, so a disable or template edit that
+completed before admission never mints (or evaluates a delivery) from the old
+revision. The next pass admits the current revision. Dry-run never writes. On first sight it
 records a baseline and fires nothing; otherwise it evaluates due-math. On
 `Fire`, if `dedupe = skip_if_open` and a task tagged `auto-task:<name>` is
 still open, it skips **without claiming or advancing the cursor** — so the
@@ -244,7 +249,12 @@ job, activity, or job run is created, and fires do not appear on
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
 rejects duplicate names; update patches present fields; toggle flips `enabled`
-(disabling pauses and preserves; removal is `delete`, below). Both surfaces validate the schedule
+(disabling pauses and preserves; removal is `delete`, below). Update and
+toggle re-read the definition and write it while holding the cursor sidecar
+lock (without loading the cursor, so a malformed cursor cannot block the
+kill-switch). Scheduler admission revalidates under the same lock, and
+concurrent edits each patch the latest committed definition instead of
+overwriting one another. Both surfaces validate the schedule
 (cron parse / interval > 0) and crew at write time, so a bad definition is never
 persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the

@@ -186,7 +186,8 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
     collection
 }
 
-fn load_definition_file(path: &Path) -> Result<LoadedAutoTask, String> {
+/// Load and validate one definition file, as discovery does for each entry.
+pub(crate) fn load_definition_file(path: &Path) -> Result<LoadedAutoTask, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
     let definition = parse_auto_task_yaml(&raw).map_err(|error| error.to_string())?;
     validate_schedule(&definition.schedule).map_err(|error| error.to_string())?;

@@ -185,8 +185,8 @@ impl OrbitRuntime {
         name: &str,
         params: AutoTaskUpdateParams,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        let mut definition = self.require_validated_auto_task(name)?;
         if let Some(request) = &params.waive_batch {
+            let definition = self.require_validated_auto_task(name)?;
             if params.description.is_some()
                 || params.schedule.is_some()
                 || params.dedupe.is_some()
@@ -209,20 +209,21 @@ impl OrbitRuntime {
             return Ok(definition);
         }
 
-        if let Some(description) = params.description {
-            definition.description = description;
-        }
-        if let Some(schedule) = params.schedule {
-            definition.schedule = schedule;
-        }
-        if let Some(dedupe) = params.dedupe {
-            definition.dedupe = dedupe;
-        }
-        if let Some(mut template) = params.template {
-            template.required_tools = normalize_required_tools(template.required_tools);
-            definition.template = template;
-        }
-        self.stamp_and_write(definition)
+        self.edit_auto_task(name, |definition| {
+            if let Some(description) = params.description {
+                definition.description = description;
+            }
+            if let Some(schedule) = params.schedule {
+                definition.schedule = schedule;
+            }
+            if let Some(dedupe) = params.dedupe {
+                definition.dedupe = dedupe;
+            }
+            if let Some(mut template) = params.template {
+                template.required_tools = normalize_required_tools(template.required_tools);
+                definition.template = template;
+            }
+        })
     }
 
     /// Enable or disable a definition (the kill-switch). Disabling pauses an
@@ -232,9 +233,7 @@ impl OrbitRuntime {
         name: &str,
         enabled: bool,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        let mut definition = self.require_validated_auto_task(name)?;
-        definition.enabled = enabled;
-        self.stamp_and_write(definition)
+        self.edit_auto_task(name, |definition| definition.enabled = enabled)
     }
 
     /// Mint one task from a definition on demand — the manual counterpart to a
@@ -390,15 +389,29 @@ impl OrbitRuntime {
         Ok(collection)
     }
 
-    fn stamp_and_write(
+    /// Read, patch, and write one definition under the cursor sidecar lock.
+    ///
+    /// Scheduler admission revalidates its loaded revision under this lock, so
+    /// once an edit or toggle returns, no pass can admit the revision it
+    /// replaced. Reading inside the lock also serializes concurrent edits: each
+    /// patches the latest committed definition, so neither drops the other's
+    /// change. Like manual mint, this never loads or saves the cursor, so a
+    /// malformed cursor cannot block the kill-switch.
+    fn edit_auto_task(
         &self,
-        mut definition: AutoTaskDefinition,
+        name: &str,
+        edit: impl FnOnce(&mut AutoTaskDefinition),
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
-        definition.updated_at = chrono::Utc::now().to_rfc3339();
-        self.validate_auto_task(&definition)?;
-        self.write_auto_task(&definition)?;
-        Ok(definition)
+        let state_path = cursor_state_path(&self.paths().state_dir);
+        with_exclusive_file_lock(&state_path, "auto-task cursor", || {
+            let mut definition = self.require_validated_auto_task(name)?;
+            edit(&mut definition);
+            definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
+            definition.updated_at = chrono::Utc::now().to_rfc3339();
+            self.validate_auto_task(&definition)?;
+            self.write_auto_task(&definition)?;
+            Ok(definition)
+        })
     }
 
     fn validate_auto_task(&self, definition: &AutoTaskDefinition) -> Result<(), OrbitError> {

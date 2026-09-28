@@ -1,17 +1,24 @@
 //! Scheduler-pass tests [ORB-10149]: baseline-on-first-sight, provenance,
-//! catch-up collapse, dedupe, disabled skip, and dry-run inertness.
+//! catch-up collapse, dedupe, disabled skip, dry-run inertness, and admission
+//! against edits committed after discovery.
+
+use std::sync::{Arc, Barrier, mpsc};
+use std::thread;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use orbit_automation::auto_tasks::scheduler as automation;
+use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{AutoTaskSchedule, auto_task_tag};
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, auto_task_tag};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
+use crate::application::auto_tasks::crud::AutoTaskUpdateParams;
 use crate::application::auto_tasks::cursor_state_path;
 use crate::application::auto_tasks::scheduler::{SchedulerOptions, run_auto_task_scheduler_at};
 use crate::application::task::TaskUpdateParams;
 
-use super::interval_params;
+use super::{PausedDispatch, interval_params, seed_cursor, template};
 
 fn runtime() -> OrbitRuntime {
     OrbitRuntime::in_memory().expect("build in-memory runtime")
@@ -354,5 +361,158 @@ fn linked_worktree_scheduler_reads_local_definition_and_writes_shared_cursor() {
     assert!(
         !primary_orbit.join("auto_tasks/local-chore.yaml").exists(),
         "scheduler/CRUD must not materialize tracked definitions in primary"
+    );
+}
+
+/// Pause a live pass after discovery, run `edit` to completion, then let the
+/// pass resume admission. The edit's result is checked only after the pass is
+/// released, so a failed edit reports instead of stranding the barrier.
+fn pass_with_edit_after_load(
+    runtime: &OrbitRuntime,
+    edit: impl FnOnce() -> Result<AutoTaskDefinition, OrbitError>,
+) -> Vec<crate::application::auto_tasks::AutoTaskFireReport> {
+    let loaded = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let dispatch = PausedDispatch {
+        runtime,
+        mint: None,
+        admission: Some((Arc::clone(&loaded), Arc::clone(&resume))),
+    };
+    thread::scope(|scope| {
+        let pass = scope.spawn(|| {
+            automation::run_auto_task_scheduler_at(
+                &dispatch,
+                Utc::now() + Duration::minutes(65),
+                SchedulerOptions::default(),
+            )
+            .expect("scheduler pass")
+        });
+        loaded.wait(); // The pass holds the enabled, original revision.
+        let edited = edit();
+        resume.wait();
+        let reports = pass.join().expect("scheduler thread").reports;
+        edited.expect("edit completes while the pass is paused");
+        reports
+    })
+}
+
+#[test]
+fn disable_completed_after_load_admits_nothing_from_the_stale_snapshot() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(interval_params("chore", 60))
+        .expect("add");
+    seed_cursor(&runtime, "chore");
+
+    let reports = pass_with_edit_after_load(&runtime, || runtime.auto_task_toggle("chore", false));
+
+    assert_eq!(reports.len(), 1, "the enabled revision was loaded");
+    assert_eq!(reports[0].action, "skipped");
+    assert_eq!(reports[0].reason.as_deref(), Some("definition_changed"));
+    assert!(runtime.list_tasks().expect("tasks").is_empty());
+    assert!(!runtime.auto_task_show("chore").unwrap().unwrap().enabled);
+}
+
+#[test]
+fn template_edit_completed_after_load_mints_only_the_committed_revision() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(interval_params("chore", 60))
+        .expect("add");
+    seed_cursor(&runtime, "chore");
+
+    let reports = pass_with_edit_after_load(&runtime, || {
+        runtime.auto_task_update(
+            "chore",
+            AutoTaskUpdateParams {
+                template: Some(template("Edited chore")),
+                ..Default::default()
+            },
+        )
+    });
+
+    assert_eq!(reports[0].reason.as_deref(), Some("definition_changed"));
+    assert!(runtime.list_tasks().expect("tasks").is_empty());
+
+    let next = fire(&runtime, Utc::now() + Duration::minutes(65));
+    assert_eq!(next[0].0, "fired");
+    let tasks = runtime.list_tasks().expect("tasks");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].title, "[auto-task] Edited chore");
+}
+
+#[test]
+fn edits_queued_behind_admission_keep_each_committed_change() {
+    let runtime = runtime();
+    runtime
+        .auto_task_add(interval_params("chore", 60))
+        .expect("add");
+    seed_cursor(&runtime, "chore");
+    let mint_reached = Arc::new(Barrier::new(2));
+    let mint_resume = Arc::new(Barrier::new(2));
+    let dispatch = PausedDispatch {
+        runtime: &runtime,
+        mint: Some((Arc::clone(&mint_reached), Arc::clone(&mint_resume))),
+        admission: None,
+    };
+
+    thread::scope(|scope| {
+        let pass = scope.spawn(|| {
+            automation::run_auto_task_scheduler_at(
+                &dispatch,
+                Utc::now() + Duration::minutes(65),
+                SchedulerOptions::default(),
+            )
+            .expect("scheduler pass")
+        });
+        mint_reached.wait(); // Admission holds the cursor lock at mint.
+        let (sender, receiver) = mpsc::channel();
+        let runtime_ref = &runtime;
+        let toggle_sender = sender.clone();
+        let toggle = scope.spawn(move || {
+            let result = runtime_ref.auto_task_toggle("chore", false);
+            let _ = toggle_sender.send(());
+            result
+        });
+        let update = scope.spawn(move || {
+            let result = runtime_ref.auto_task_update(
+                "chore",
+                AutoTaskUpdateParams {
+                    template: Some(template("Edited chore")),
+                    ..Default::default()
+                },
+            );
+            let _ = sender.send(());
+            result
+        });
+        let edited_during_admission = receiver
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_ok();
+        mint_resume.wait();
+        assert!(
+            !edited_during_admission,
+            "definition writes must wait for the admission holding the lock"
+        );
+
+        let outcome = pass.join().expect("scheduler thread");
+        assert_eq!(outcome.reports[0].action, "fired");
+        toggle.join().expect("toggle thread").expect("toggle");
+        update.join().expect("update thread").expect("update");
+    });
+
+    let definition = runtime.auto_task_show("chore").unwrap().unwrap();
+    assert!(
+        !definition.enabled,
+        "the toggle survived the concurrent edit"
+    );
+    assert_eq!(
+        definition.template.title, "Edited chore",
+        "the edit survived the concurrent toggle"
+    );
+    let tasks = runtime.list_tasks().expect("tasks");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(
+        tasks[0].title, "[auto-task] Chore for chore",
+        "the pass that won admission minted the revision it validated"
     );
 }

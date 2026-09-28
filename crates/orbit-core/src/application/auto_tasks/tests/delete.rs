@@ -6,14 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 
-use chrono::{DateTime, Duration, Utc};
-use orbit_automation::auto_tasks::scheduler::{
-    AutoTaskDispatch, ChangeProbe, SchedulerOptions, run_auto_task_scheduler_at,
-};
-use orbit_common::OrbitError;
-use orbit_store::compose::auto_task::{load_cursor_state, upsert_cursor};
-use orbit_types::workflow::automation::AutomationDiagnostic;
-use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition, DedupePolicy, SkipIfUnchanged};
+use chrono::{Duration, Utc};
+use orbit_automation::auto_tasks::scheduler::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_store::compose::auto_task::load_cursor_state;
+use orbit_types::workflow::DedupePolicy;
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
@@ -33,7 +29,7 @@ use crate::application::managed_assets::{
 };
 use crate::bootstrap::init::{InitOptions, init_workspace_at_root};
 
-use super::interval_params;
+use super::{PausedDispatch, interval_params, seed_cursor};
 
 fn delete(name: &str) -> AutoTaskDeleteParams {
     AutoTaskDeleteParams {
@@ -41,18 +37,6 @@ fn delete(name: &str) -> AutoTaskDeleteParams {
         reason: Some("not used in this workspace".to_string()),
         force: false,
     }
-}
-
-fn seed_cursor(runtime: &OrbitRuntime, name: &str) {
-    upsert_cursor(
-        &cursor_state_path(&runtime.paths().state_dir),
-        name,
-        serde_json::from_value::<AutoTaskCursor>(serde_json::json!({
-            "baseline_at": chrono::Utc::now().to_rfc3339(),
-        }))
-        .expect("cursor fixture"),
-    )
-    .expect("seed scheduler cursor");
 }
 
 fn cursor_names(runtime: &OrbitRuntime) -> Vec<String> {
@@ -287,63 +271,6 @@ fn delete_refuses_while_a_minted_task_is_open_unless_forced() {
         runtime.get_task(&minted.id).is_ok(),
         "a forced delete leaves the open task itself alone"
     );
-}
-
-struct PausedDispatch<'a> {
-    runtime: &'a OrbitRuntime,
-    mint: Option<(Arc<Barrier>, Arc<Barrier>)>,
-    admission: Option<(Arc<Barrier>, Arc<Barrier>)>,
-}
-
-impl AutoTaskDispatch for PausedDispatch<'_> {
-    fn evaluate_delivery(
-        &self,
-        definition: &AutoTaskDefinition,
-        dry_run: bool,
-        now: DateTime<Utc>,
-    ) -> Result<AutomationDiagnostic, OrbitError> {
-        self.runtime.evaluate_delivery(definition, dry_run, now)
-    }
-
-    fn definition_root(&self) -> PathBuf {
-        self.runtime.definition_root()
-    }
-
-    fn state_dir(&self) -> PathBuf {
-        self.runtime.state_dir()
-    }
-
-    fn has_open_instance(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<Option<String>, OrbitError> {
-        self.runtime.has_open_instance(definition)
-    }
-
-    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
-        if let Some((reached, resume)) = &self.mint {
-            reached.wait();
-            resume.wait();
-        }
-        self.runtime.mint_task(definition)
-    }
-
-    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
-        if let Some((reached, resume)) = &self.admission {
-            reached.wait();
-            resume.wait();
-        }
-        self.runtime.skip_reason(definition)
-    }
-
-    fn probe_change_since_last_sweep(
-        &self,
-        definition: &AutoTaskDefinition,
-        precondition: &SkipIfUnchanged,
-    ) -> Result<ChangeProbe, OrbitError> {
-        self.runtime
-            .probe_change_since_last_sweep(definition, precondition)
-    }
 }
 
 #[test]
