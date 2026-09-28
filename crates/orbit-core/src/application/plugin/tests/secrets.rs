@@ -38,6 +38,12 @@ fn stored_names(fixture: &PluginFixture) -> Vec<String> {
 
 #[test]
 fn set_accepts_only_a_declared_name_and_list_shows_set_state() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "set_accepts_only_a_declared_name_and_list_shows_set_state",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -72,6 +78,9 @@ fn set_accepts_only_a_declared_name_and_list_shows_set_state() {
 
 #[test]
 fn set_needs_an_installed_plugin() {
+    if !super::fixture::enter_isolated_child(module_path!(), "set_needs_an_installed_plugin") {
+        return;
+    }
     let fixture = PluginFixture::new();
     let error = set_plugin_secret(&fixture.runtime, "absent", "token", &value("x"))
         .expect_err("no such plugin");
@@ -80,6 +89,12 @@ fn set_needs_an_installed_plugin() {
 
 #[test]
 fn rm_removes_one_secret_and_reports_an_unset_one() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "rm_removes_one_secret_and_reports_an_unset_one",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -97,6 +112,12 @@ fn rm_removes_one_secret_and_reports_an_unset_one() {
 
 #[test]
 fn enable_names_each_unset_declared_secret() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "enable_names_each_unset_declared_secret",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -121,6 +142,12 @@ fn enable_names_each_unset_declared_secret() {
 
 #[test]
 fn upgrade_keeps_still_declared_secrets_and_drops_the_rest() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "upgrade_keeps_still_declared_secrets_and_drops_the_rest",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -155,6 +182,12 @@ fn upgrade_keeps_still_declared_secrets_and_drops_the_rest() {
 
 #[test]
 fn remove_deletes_the_secrets_and_record_only_keeps_them() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "remove_deletes_the_secrets_and_record_only_keeps_them",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -195,6 +228,12 @@ fn remove_deletes_the_secrets_and_record_only_keeps_them() {
 
 #[test]
 fn doctor_reports_each_declared_but_unset_secret() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_reports_each_declared_but_unset_secret",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -224,6 +263,12 @@ fn doctor_reports_each_declared_but_unset_secret() {
 #[cfg(unix)]
 #[test]
 fn a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them",
+    ) {
+        return;
+    }
     use serde_json::json;
 
     let fixture = PluginFixture::new();
@@ -310,6 +355,12 @@ printf '{"ok":true,"output":{"seen":"%s","version":"%s"},"secret_updates":{"refr
 #[cfg(unix)]
 #[test]
 fn a_backend_rotation_is_stored_and_audited_by_name_and_outcome_only() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_backend_rotation_is_stored_and_audited_by_name_and_outcome_only",
+    ) {
+        return;
+    }
     use orbit_types::plugin::PluginSecretUpdateStatus;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -428,6 +479,12 @@ fn assert_not_visible<T: std::fmt::Debug>(result: Result<T, orbit_common::OrbitE
 /// delete secrets or state refuse, and change nothing a host run would see.
 #[test]
 fn a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,
@@ -466,6 +523,12 @@ fn a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything()
 /// never reports a declared secret as unset.
 #[test]
 fn doctor_in_a_masked_sandbox_reports_the_mask_instead_of_unset_secrets() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_in_a_masked_sandbox_reports_the_mask_instead_of_unset_secrets",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(
         &fixture,

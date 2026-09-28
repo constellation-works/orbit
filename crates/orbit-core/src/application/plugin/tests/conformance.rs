@@ -62,6 +62,12 @@ fn write_tested_plugin(
 #[cfg(unix)]
 #[test]
 fn a_passing_suite_certifies_the_installed_plugin_for_this_orbit() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_passing_suite_certifies_the_installed_plugin_for_this_orbit",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "conform", "world");
     install_plugin(
@@ -99,6 +105,12 @@ fn a_passing_suite_certifies_the_installed_plugin_for_this_orbit() {
 #[cfg(unix)]
 #[test]
 fn omitted_golden_input_is_an_empty_object_for_an_object_schema() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "omitted_golden_input_is_an_empty_object_for_an_object_schema",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "defaultinput", "world");
     let manifest = root.join("plugin.yaml");
@@ -126,6 +138,12 @@ fn omitted_golden_input_is_an_empty_object_for_an_object_schema() {
 #[cfg(unix)]
 #[test]
 fn golden_templates_and_backend_error_codes_run_in_the_hermetic_workspace() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "golden_templates_and_backend_error_codes_run_in_the_hermetic_workspace",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "templated", "unused");
     let backend = root.join("bin/backend.sh");
@@ -207,6 +225,12 @@ tests:
 #[cfg(unix)]
 #[test]
 fn a_directory_with_a_first_party_origin_remote_is_refused() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_directory_with_a_first_party_origin_remote_is_refused",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "firstparty", "world");
     mark_first_party_source(&root);
@@ -228,6 +252,12 @@ fn a_directory_with_a_first_party_origin_remote_is_refused() {
 #[cfg(unix)]
 #[test]
 fn an_uninstalled_first_party_suite_requires_the_explicit_flag() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_uninstalled_first_party_suite_requires_the_explicit_flag",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "uninstalled", "world");
     mark_first_party_manifest(&root);
@@ -259,6 +289,12 @@ fn an_uninstalled_first_party_suite_requires_the_explicit_flag() {
 #[cfg(unix)]
 #[test]
 fn a_wrong_expected_output_fails_and_names_the_test() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_wrong_expected_output_fails_and_names_the_test",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "wrong", "mars");
     install_plugin(
@@ -299,6 +335,12 @@ fn a_wrong_expected_output_fails_and_names_the_test() {
 #[cfg(unix)]
 #[test]
 fn a_directory_that_is_not_the_installed_tree_is_not_certified() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_directory_that_is_not_the_installed_tree_is_not_certified",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "drifted", "world");
     install_plugin(
@@ -332,6 +374,12 @@ fn a_directory_that_is_not_the_installed_tree_is_not_certified() {
 #[cfg(unix)]
 #[test]
 fn a_plugin_with_no_goldens_cannot_be_certified() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_plugin_with_no_goldens_cannot_be_certified",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = fixture.sources.join("bare");
     super::fixture::write_plugin_at(
@@ -350,6 +398,12 @@ fn a_plugin_with_no_goldens_cannot_be_certified() {
 #[cfg(unix)]
 #[test]
 fn a_golden_naming_an_undeclared_tool_refuses_the_directory() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_golden_naming_an_undeclared_tool_refuses_the_directory",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "typo", "world");
     let golden = root.join("tests/conformance/greet.yaml");
@@ -443,6 +497,12 @@ fn assert_refusal_prints_requested_set(error: &OrbitError, expected: &[&str]) {
 #[cfg(unix)]
 #[test]
 fn consent_required_requests_refuse_without_a_grant_or_accept_requested() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "consent_required_requests_refuse_without_a_grant_or_accept_requested",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let cases = [
         (
@@ -489,6 +549,12 @@ fn consent_required_requests_refuse_without_a_grant_or_accept_requested() {
 #[cfg(unix)]
 #[test]
 fn a_manifest_with_every_consent_required_request_prints_the_whole_set() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_manifest_with_every_consent_required_request_prints_the_whole_set",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "allgrants", "world");
     patch_manifest(
@@ -515,6 +581,12 @@ fn a_manifest_with_every_consent_required_request_prints_the_whole_set() {
 #[cfg(unix)]
 #[test]
 fn a_grant_list_that_omits_a_dangerous_request_still_refuses() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_grant_list_that_omits_a_dangerous_request_still_refuses",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "half", "world");
     patch_manifest(
@@ -547,6 +619,12 @@ fn a_grant_list_that_omits_a_dangerous_request_still_refuses() {
 #[cfg(unix)]
 #[test]
 fn an_unknown_grant_name_is_refused_before_the_run() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_unknown_grant_name_is_refused_before_the_run",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "typoed", "world");
 
@@ -571,6 +649,12 @@ fn an_unknown_grant_name_is_refused_before_the_run() {
 #[cfg(unix)]
 #[test]
 fn template_writes_and_loopback_run_without_consent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "template_writes_and_loopback_run_without_consent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "bounded", "world");
     patch_manifest(
@@ -602,6 +686,12 @@ fn template_writes_and_loopback_run_without_consent() {
 #[cfg(unix)]
 #[test]
 fn a_golden_reads_its_own_state_and_cannot_list_the_state_tree() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_golden_reads_its_own_state_and_cannot_list_the_state_tree",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "stateful", "world");
     std::fs::write(
@@ -629,6 +719,12 @@ printf '{"ok":true,"output":{"subject":"world"}}\n'
 #[cfg(unix)]
 #[test]
 fn accept_requested_keeps_the_certification_rule() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "accept_requested_keeps_the_certification_rule",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "open", "world");
     patch_manifest(&root, "    sandbox: none\n", "");
@@ -710,6 +806,12 @@ fn accept_requested_keeps_the_certification_rule() {
 #[cfg(unix)]
 #[test]
 fn grant_names_that_cover_the_request_run_the_requested_profile() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "grant_names_that_cover_the_request_run_the_requested_profile",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "named", "world");
     let write_root = fixture.sources.join("named-write");
@@ -797,6 +899,12 @@ fn grant_names_that_cover_the_request_run_the_requested_profile() {
 #[cfg(unix)]
 #[test]
 fn accept_requested_still_refuses_a_write_root_that_covers_the_global_root() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "accept_requested_still_refuses_a_write_root_that_covers_the_global_root",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "cover", "world");
     patch_manifest(&root, "", "  permissions:\n    fs:\n      write: [\"/\"]\n");
@@ -851,6 +959,12 @@ fn sentinel(dir: &Path) -> String {
 #[cfg(unix)]
 #[test]
 fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_config_templated_write_root_outside_scratch_needs_fs_consent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "configured", "world");
     let external = external_dir_with_sentinel(&fixture, "configured-output");
@@ -898,6 +1012,12 @@ fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
 #[cfg(unix)]
 #[test]
 fn a_config_templated_write_root_inside_scratch_runs_without_consent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_config_templated_write_root_inside_scratch_runs_without_consent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "scratchcfg", "world");
     patch_manifest(
@@ -914,6 +1034,12 @@ fn a_config_templated_write_root_inside_scratch_runs_without_consent() {
 #[cfg(unix)]
 #[test]
 fn a_write_root_escaping_the_source_or_scratch_needs_fs_consent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_write_root_escaping_the_source_or_scratch_needs_fs_consent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "escaping", "world");
     let external = external_dir_with_sentinel(&fixture, "escaping-outside");
@@ -947,6 +1073,12 @@ fn a_write_root_escaping_the_source_or_scratch_needs_fs_consent() {
 #[cfg(unix)]
 #[test]
 fn consent_still_refuses_a_config_templated_protected_write_root() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "consent_still_refuses_a_config_templated_protected_write_root",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "protect", "world");
     patch_manifest(
@@ -1014,6 +1146,12 @@ fn write_secret_plugin(fixture: &PluginFixture, namespace: &str, golden: &str) -
 #[cfg(unix)]
 #[test]
 fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_secret_plugin(
         &fixture,
@@ -1053,6 +1191,12 @@ fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
 /// did not test what it says.
 #[test]
 fn a_golden_supplying_an_undeclared_secret_is_refused() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_golden_supplying_an_undeclared_secret_is_refused",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = write_secret_plugin(
         &fixture,

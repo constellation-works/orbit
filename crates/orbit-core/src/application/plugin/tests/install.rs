@@ -66,24 +66,27 @@ chmod +x "$checkout/.orbit-plugin/bin/backend.sh"
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    let output = Command::new(std::env::current_exe().expect("test executable"))
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    super::fixture::clear_child_authority(&mut child);
+    let output = child
         .args(["--exact", &exact_test, "--nocapture"])
         .env("ORBIT_TEST_PLUGIN_GIT_INSTALL_CHILD", &exact_test)
         .env("PATH", std::env::join_paths(paths).expect("fake git PATH"))
         .output()
         .expect("run isolated fake-git install test");
-    assert!(
-        output.status.success(),
-        "fake-git install child failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    super::fixture::assert_child_passed(&output, &exact_test);
     false
 }
 
 #[cfg(unix)]
 #[test]
 fn add_installs_a_tagged_https_git_source() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_installs_a_tagged_https_git_source",
+    ) {
+        return;
+    }
     if !enter_fake_git_install_child("add_installs_a_tagged_https_git_source") {
         return;
     }
@@ -101,6 +104,12 @@ fn add_installs_a_tagged_https_git_source() {
 
 #[test]
 fn add_refuses_unsafe_git_source_entries() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_refuses_unsafe_git_source_entries",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     for source in [
         "git+ext::sh -c 'exit 0' %S",
@@ -120,6 +129,12 @@ fn add_refuses_unsafe_git_source_entries() {
 
 #[test]
 fn add_refuses_a_source_inside_the_repository() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_refuses_a_source_inside_the_repository",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let inside = fixture.repo_root.join("plugins/demo");
     write_plugin_at(&inside, PluginSpecFixture::new("demo", "demo"));
@@ -141,6 +156,12 @@ fn add_refuses_a_source_inside_the_repository() {
 
 #[test]
 fn add_then_enable_puts_the_tool_on_the_surface() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_then_enable_puts_the_tool_on_the_surface",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
 
@@ -221,6 +242,12 @@ fn add_then_enable_puts_the_tool_on_the_surface() {
 
 #[test]
 fn adding_a_version_with_wider_requests_revokes_carried_grants() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "adding_a_version_with_wider_requests_revokes_carried_grants",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut v1 = PluginSpecFixture::new("demo-v1", "demo");
     v1.permissions = Some("  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n");
@@ -293,6 +320,12 @@ fn adding_a_version_with_wider_requests_revokes_carried_grants() {
 
 #[test]
 fn adding_a_version_without_wider_requests_preserves_authority() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "adding_a_version_without_wider_requests_preserves_authority",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let v1 = fixture.write_plugin(PluginSpecFixture::new("demo-v1", "demo").requesting_fs_write());
     install_plugin(
@@ -332,6 +365,12 @@ fn adding_a_version_without_wider_requests_preserves_authority() {
 
 #[test]
 fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let v1 = fixture.write_plugin(PluginSpecFixture::new("demo-v1", "demo").requesting_fs_write());
     install_plugin(
@@ -376,6 +415,9 @@ fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
 
 #[test]
 fn add_rejects_grants_without_enable() {
+    if !super::fixture::enter_isolated_child(module_path!(), "add_rejects_grants_without_enable") {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let error = install_plugin(
@@ -395,6 +437,12 @@ fn add_rejects_grants_without_enable() {
 #[cfg(unix)]
 #[test]
 fn an_enabled_plugin_tool_executes_through_audited_dispatch() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_enabled_plugin_tool_executes_through_audited_dispatch",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     install_plugin(
@@ -445,6 +493,12 @@ fn an_enabled_plugin_tool_executes_through_audited_dispatch() {
 /// re-consent commands.
 #[test]
 fn a_rewritten_manifest_after_install_is_refused_until_reconsent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_rewritten_manifest_after_install_is_refused_until_reconsent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let summary = install_plugin(
@@ -487,6 +541,12 @@ fn a_rewritten_manifest_after_install_is_refused_until_reconsent() {
 /// apply the same shared rule.
 #[test]
 fn validate_refuses_fs_write_roots_that_cover_the_plugin_or_global_root() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "validate_refuses_fs_write_roots_that_cover_the_plugin_or_global_root",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut covering_plugin = PluginSpecFixture::new("cover", "cover");
     covering_plugin.permissions =
@@ -585,6 +645,12 @@ fn validate_refuses_fs_write_roots_that_cover_the_plugin_or_global_root() {
 #[cfg(unix)]
 #[test]
 fn a_failing_plugin_call_is_audited_with_plugin_provenance_and_no_partial_output() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_failing_plugin_call_is_audited_with_plugin_provenance_and_no_partial_output",
+    ) {
+        return;
+    }
     for (backend, expected, status) in [
         (
             "#!/bin/sh\ncat >/dev/null\necho boom >&2\nexit 7\n",
@@ -650,6 +716,12 @@ fn a_failing_plugin_call_is_audited_with_plugin_provenance_and_no_partial_output
 #[cfg(unix)]
 #[test]
 fn an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo").requesting_fs_write());
     install_plugin(
@@ -680,6 +752,12 @@ fn an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance() {
 
 #[test]
 fn a_pinned_but_uninstalled_plugin_is_reported_without_breaking_the_runtime() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_pinned_but_uninstalled_plugin_is_reported_without_breaking_the_runtime",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     fixture.write_pin_file(
         "schemaVersion: 1\nplugins:\n  - name: absent\n    source: /nowhere/absent\n    enabled: true\n",
@@ -706,6 +784,12 @@ fn a_pinned_but_uninstalled_plugin_is_reported_without_breaking_the_runtime() {
 
 #[test]
 fn doctor_reports_an_unparseable_pin_file() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_reports_an_unparseable_pin_file",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     fixture.write_pin_file("schemaVersion: 1\nplugins:\n  - name: graph\n    version: invalid\n");
 
@@ -749,6 +833,12 @@ fn relative_inventory(root: &Path) -> BTreeSet<String> {
 #[cfg(unix)]
 #[test]
 fn add_from_a_git_source_excludes_the_clone_metadata() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_from_a_git_source_excludes_the_clone_metadata",
+    ) {
+        return;
+    }
     if !enter_fake_git_install_child("add_from_a_git_source_excludes_the_clone_metadata") {
         return;
     }
@@ -782,6 +872,12 @@ fn add_from_a_git_source_excludes_the_clone_metadata() {
 
 #[test]
 fn install_inventory_matches_the_source_tree() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "install_inventory_matches_the_source_tree",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let source_inventory = relative_inventory(&source);
@@ -807,6 +903,12 @@ fn install_inventory_matches_the_source_tree() {
 #[cfg(unix)]
 #[test]
 fn add_installs_only_the_orbit_plugin_directory() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_installs_only_the_orbit_plugin_directory",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let checkout = root.parent().expect("checkout");
@@ -835,6 +937,12 @@ fn add_installs_only_the_orbit_plugin_directory() {
 
 #[test]
 fn validate_resolves_a_checkout_or_the_orbit_plugin_directory_and_refuses_a_flat_source() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "validate_resolves_a_checkout_or_the_orbit_plugin_directory_and_refuses_a_flat_source",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let canonical_root = std::fs::canonicalize(&root).expect("canonical root");
@@ -876,6 +984,12 @@ fn validate_resolves_a_checkout_or_the_orbit_plugin_directory_and_refuses_a_flat
 /// list are keyed on — does not change.
 #[test]
 fn moving_a_manifest_into_orbit_plugin_keeps_its_digest() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "moving_a_manifest_into_orbit_plugin_keeps_its_digest",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let root = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let bytes = std::fs::read(root.join(MANIFEST_FILE_NAME)).expect("manifest bytes");
@@ -911,6 +1025,12 @@ fn moving_a_manifest_into_orbit_plugin_keeps_its_digest() {
 #[cfg(unix)]
 #[test]
 fn add_refuses_a_source_with_a_symlink_to_a_file_outside_the_tree() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_refuses_a_source_with_a_symlink_to_a_file_outside_the_tree",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let secret = fixture.sources.join("outside-secret");
@@ -954,6 +1074,12 @@ fn add_refuses_a_source_with_a_symlink_to_a_file_outside_the_tree() {
 #[cfg(unix)]
 #[test]
 fn a_hand_edited_install_with_a_symlink_cannot_become_active() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_hand_edited_install_with_a_symlink_cannot_become_active",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let summary = install_plugin(
@@ -1032,6 +1158,12 @@ const COPY_PADDING_FILES: usize = 300;
 #[cfg(unix)]
 #[test]
 fn a_forced_reinstall_never_exposes_a_half_copied_tree() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_forced_reinstall_never_exposes_a_half_copied_tree",
+    ) {
+        return;
+    }
     use std::os::unix::fs::MetadataExt;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1139,6 +1271,12 @@ fn a_forced_reinstall_never_exposes_a_half_copied_tree() {
 /// plugin [ORB-12823].
 #[test]
 fn upgrades_prune_the_namespace_and_remove_takes_the_whole_family() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "upgrades_prune_the_namespace_and_remove_takes_the_whole_family",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let namespace_dir = fixture.global_root.join("plugins/demo");
     for (dir, version) in [("v1", "1.0.0"), ("v2", "2.0.0"), ("v3", "3.0.0")] {
@@ -1184,6 +1322,12 @@ fn upgrades_prune_the_namespace_and_remove_takes_the_whole_family() {
 #[cfg(unix)]
 #[test]
 fn add_writes_no_current_link_and_prunes_one_an_earlier_orbit_left() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_writes_no_current_link_and_prunes_one_an_earlier_orbit_left",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let namespace_dir = fixture.global_root.join("plugins/demo");
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
@@ -1222,6 +1366,12 @@ fn add_writes_no_current_link_and_prunes_one_an_earlier_orbit_left() {
 /// demanded `--force` for a plugin this host never recorded [ORB-12823].
 #[test]
 fn an_install_that_fails_after_the_copy_leaves_no_tree_and_no_row() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_install_that_fails_after_the_copy_leaves_no_tree_and_no_row",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     // Refused where it is refused today: after the tree is staged and
@@ -1259,6 +1409,12 @@ fn an_install_that_fails_after_the_copy_leaves_no_tree_and_no_row() {
 #[cfg(unix)]
 #[test]
 fn a_forced_replace_that_fails_puts_the_previous_tree_back() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_forced_replace_that_fails_puts_the_previous_tree_back",
+    ) {
+        return;
+    }
     const FIRST: &str = "#!/bin/sh\nprintf 'first\\n'\n";
     const SECOND: &str = "#!/bin/sh\nprintf 'second\\n'\n";
 
@@ -1307,6 +1463,12 @@ fn a_forced_replace_that_fails_puts_the_previous_tree_back() {
 /// displaced the recorded tree. The failed publication must restore that tree.
 #[test]
 fn a_failed_publish_restores_the_displaced_tree_and_keeps_its_row() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_failed_publish_restores_the_displaced_tree_and_keeps_its_row",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let installed = install_plugin(
@@ -1360,6 +1522,12 @@ fn a_failed_publish_restores_the_displaced_tree_and_keeps_its_row() {
 /// survive the failed second rename and the error names the recovery path.
 #[test]
 fn failed_restore_keeps_the_displaced_tree_and_reports_its_path() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "failed_restore_keeps_the_displaced_tree_and_reports_its_path",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let installed = install_plugin(
@@ -1425,6 +1593,12 @@ fn failed_restore_keeps_the_displaced_tree_and_reports_its_path() {
 #[cfg(unix)]
 #[test]
 fn rollback_does_not_remove_a_new_occupant_of_the_published_path() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "rollback_does_not_remove_a_new_occupant_of_the_published_path",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let installed = install_plugin(
@@ -1590,11 +1764,23 @@ fn two_versions_racing_from(park: NamespaceStep) {
 
 #[test]
 fn concurrent_installs_of_two_versions_never_prune_the_recorded_tree() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "concurrent_installs_of_two_versions_never_prune_the_recorded_tree",
+    ) {
+        return;
+    }
     two_versions_racing_from(NamespaceStep::InstallRowWritten);
 }
 
 #[test]
 fn a_concurrent_install_never_prunes_another_installs_staging_tree() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_concurrent_install_never_prunes_another_installs_staging_tree",
+    ) {
+        return;
+    }
     two_versions_racing_from(NamespaceStep::InstallStaged);
 }
 
@@ -1602,6 +1788,12 @@ fn a_concurrent_install_never_prunes_another_installs_staging_tree() {
 /// up an install of another.
 #[test]
 fn an_install_parked_in_one_namespace_does_not_hold_up_another() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_install_parked_in_one_namespace_does_not_hold_up_another",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let demo = version_source(&fixture, "demo", "demo", "1.0.0");
     let other = version_source(&fixture, "other", "other", "1.0.0");
@@ -1626,6 +1818,12 @@ fn an_install_parked_in_one_namespace_does_not_hold_up_another() {
 /// plugin with no row.
 #[test]
 fn a_removal_overlapping_an_install_removes_it_whole() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_removal_overlapping_an_install_removes_it_whole",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let first = version_source(&fixture, "first", "demo", "1.0.0");
     let second = version_source(&fixture, "second", "demo", "2.0.0");
@@ -1662,6 +1860,12 @@ fn a_removal_overlapping_an_install_removes_it_whole() {
 /// delete the new install's tree and witness under a row that named them.
 #[test]
 fn an_install_overlapping_a_removal_lands_on_an_empty_namespace() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_install_overlapping_a_removal_lands_on_an_empty_namespace",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let first = version_source(&fixture, "first", "demo", "1.0.0");
     let second = version_source(&fixture, "second", "demo", "2.0.0");
@@ -1704,6 +1908,12 @@ fn an_install_overlapping_a_removal_lands_on_an_empty_namespace() {
 /// between, the upgrade refuses rather than installing the plugin afresh.
 #[test]
 fn an_upgrade_that_loses_its_row_to_a_removal_installs_nothing() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_upgrade_that_loses_its_row_to_a_removal_installs_nothing",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let first = version_source(&fixture, "first", "demo", "1.0.0");
     let second = version_source(&fixture, "second", "demo", "2.0.0");

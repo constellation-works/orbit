@@ -1,11 +1,9 @@
 //! Seeding, re-seeding and what happens to a seeded schedule when its plugin
 //! is disabled (design §3, §4.5).
 
-use std::path::PathBuf;
 #[cfg(unix)]
-use std::process::Command;
-
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use std::path::PathBuf;
 
 use super::super::{PluginAddOptions, PluginEnableOptions, disable_plugin, enable_plugin};
 use super::definition_fixture::DefinitionPlugin;
@@ -46,27 +44,13 @@ fn managed_manifest_path(fixture: &PluginFixture, directory: &str) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn redirected_seed_destinations_are_refused_before_either_catalog_changes() {
-    if std::env::var_os("ORBIT_TEST_REDIRECTED_SEED_CHILD").is_some() {
-        run_redirected_seed_cases();
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "redirected_seed_destinations_are_refused_before_either_catalog_changes",
+    ) {
         return;
     }
-    let mut child = Command::new(std::env::current_exe().expect("test executable"));
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        child.env_remove(name);
-    });
-    let output = child
-        .arg("redirected_seed_destinations_are_refused_before_either_catalog_changes")
-        .arg("--nocapture")
-        .env("ORBIT_TEST_REDIRECTED_SEED_CHILD", "1")
-        .env_remove("ORBIT_WORKTREE_ROOT")
-        .output()
-        .expect("run isolated plugin seeding fixture");
-    assert!(
-        output.status.success(),
-        "isolated fixture failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    run_redirected_seed_cases();
 }
 
 #[cfg(unix)]
@@ -256,6 +240,12 @@ fn run_redirected_seed_cases() {
 
 #[test]
 fn enable_seeds_each_definition_disabled_and_stamped_with_its_plugin() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "enable_seeds_each_definition_disabled_and_stamped_with_its_plugin",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     let runtime = fixture.reopen();
@@ -280,6 +270,12 @@ fn enable_seeds_each_definition_disabled_and_stamped_with_its_plugin() {
 
 #[test]
 fn an_upgrade_reseeds_an_untouched_file_and_preserves_a_customised_one() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "an_upgrade_reseeds_an_untouched_file_and_preserves_a_customised_one",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     let runtime = fixture.reopen();
@@ -354,6 +350,12 @@ fn an_upgrade_reseeds_an_untouched_file_and_preserves_a_customised_one() {
 
 #[test]
 fn ambiguous_routine_filename_is_refused_without_changing_the_first_owner() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "ambiguous_routine_filename_is_refused_without_changing_the_first_owner",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut first = DefinitionPlugin::new("a");
     first.routine = "b-c";
@@ -401,6 +403,12 @@ fn ambiguous_routine_filename_is_refused_without_changing_the_first_owner() {
 
 #[test]
 fn ambiguous_auto_task_filename_is_refused_even_without_force() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "ambiguous_auto_task_filename_is_refused_even_without_force",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut first = DefinitionPlugin::new("alpha-beta");
     first.auto_task = "gamma";
@@ -441,6 +449,12 @@ fn ambiguous_auto_task_filename_is_refused_even_without_force() {
 
 #[test]
 fn a_disabled_plugins_seeded_schedules_are_skipped_with_a_reason_naming_it() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_disabled_plugins_seeded_schedules_are_skipped_with_a_reason_naming_it",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     let runtime = fixture.reopen();
@@ -486,6 +500,12 @@ fn a_disabled_plugins_seeded_schedules_are_skipped_with_a_reason_naming_it() {
 
 #[test]
 fn a_task_minted_from_a_seeded_auto_task_carries_its_plugin_tag() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_task_minted_from_a_seeded_auto_task_carries_its_plugin_tag",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
     let runtime = fixture.reopen();

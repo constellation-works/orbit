@@ -14,6 +14,10 @@ use super::fixture::{PluginFixture, PluginSpecFixture};
 
 #[test]
 fn sync_refuses_unsafe_git_pin_entries() {
+    if !super::fixture::enter_isolated_child(module_path!(), "sync_refuses_unsafe_git_pin_entries")
+    {
+        return;
+    }
     for source in [
         "git+ext::sh -c 'exit 0' %S",
         "git+file:///tmp/plugin",
@@ -37,6 +41,12 @@ fn sync_refuses_unsafe_git_pin_entries() {
 
 #[test]
 fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_installs_what_the_pin_file_names_and_reports_what_it_cannot",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     fixture.write_pin_file(&format!(
@@ -71,6 +81,12 @@ fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
 
 #[test]
 fn sync_refuses_a_source_namespace_that_differs_from_the_pin_on_every_run() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_refuses_a_source_namespace_that_differs_from_the_pin_on_every_run",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("source", "actual"));
     fixture.write_pin_file(&format!(
@@ -102,6 +118,12 @@ fn sync_refuses_a_source_namespace_that_differs_from_the_pin_on_every_run() {
 
 #[test]
 fn sync_refuses_an_out_of_range_source_without_side_effects_and_continues() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_refuses_an_out_of_range_source_without_side_effects_and_continues",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mismatching = DefinitionPlugin::new("graph")
         .with_version("2.0.0")
@@ -158,6 +180,12 @@ fn sync_refuses_an_out_of_range_source_without_side_effects_and_continues() {
 
 #[test]
 fn sync_reconciles_enabled_contributions_into_each_workspace() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_reconciles_enabled_contributions_into_each_workspace",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     fixture.write_pin_file(&format!(
@@ -201,6 +229,12 @@ fn sync_reconciles_enabled_contributions_into_each_workspace() {
 
 #[test]
 fn sync_does_not_enable_a_grant_requesting_plugin_without_consent() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_does_not_enable_a_grant_requesting_plugin_without_consent",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source =
         fixture.write_plugin(PluginSpecFixture::new("guarded", "guarded").requesting_fs_write());
@@ -241,6 +275,12 @@ fn sync_does_not_enable_a_grant_requesting_plugin_without_consent() {
 
 #[test]
 fn sync_and_dry_run_report_the_loader_refusal_for_enabled_plugins() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_and_dry_run_report_the_loader_refusal_for_enabled_plugins",
+    ) {
+        return;
+    }
     for (name, spec) in [
         (
             "ungranted",
@@ -285,6 +325,12 @@ fn sync_and_dry_run_report_the_loader_refusal_for_enabled_plugins() {
 
 #[test]
 fn doctor_reports_seeded_definitions_older_than_the_installed_plugin() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_reports_seeded_definitions_older_than_the_installed_plugin",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
     install_plugin(
@@ -319,6 +365,12 @@ fn doctor_reports_seeded_definitions_older_than_the_installed_plugin() {
 
 #[test]
 fn disable_and_remove_take_the_plugin_off_the_surface() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "disable_and_remove_take_the_plugin_off_the_surface",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     let summary = install_plugin(
@@ -358,6 +410,12 @@ fn disable_and_remove_take_the_plugin_off_the_surface() {
 
 #[test]
 fn remove_retains_state_by_default_and_purges_only_its_own_state_when_requested() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "remove_retains_state_by_default_and_purges_only_its_own_state_when_requested",
+    ) {
+        return;
+    }
     for purge_state in [false, true] {
         let fixture = PluginFixture::new();
         let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
@@ -398,6 +456,12 @@ fn remove_retains_state_by_default_and_purges_only_its_own_state_when_requested(
 #[cfg(unix)]
 #[test]
 fn purge_refuses_a_symlinked_state_prefix_before_changing_the_install() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "purge_refuses_a_symlinked_state_prefix_before_changing_the_install",
+    ) {
+        return;
+    }
     use std::os::unix::fs::symlink;
 
     for prefix in ["state/plugins", "state/plugins/demo"] {
@@ -440,6 +504,12 @@ fn purge_refuses_a_symlinked_state_prefix_before_changing_the_install() {
 
 #[test]
 fn validate_reports_an_unsatisfiable_requirement_as_a_warning() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "validate_reports_an_unsatisfiable_requirement_as_a_warning",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let mut spec = PluginSpecFixture::new("future", "future");
     spec.requires_orbit = Some(">=99.0.0");
@@ -459,6 +529,12 @@ fn validate_reports_an_unsatisfiable_requirement_as_a_warning() {
 
 #[test]
 fn failed_enabled_contributions_leave_the_installed_row_disabled() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "failed_enabled_contributions_leave_the_installed_row_disabled",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("unsafe-default")
         .with_enabled_routine()
@@ -504,6 +580,12 @@ fn failed_enabled_contributions_leave_the_installed_row_disabled() {
 /// this path [ORB-12807].
 #[test]
 fn add_enable_carries_the_seeded_skills_and_warnings_report_out_of_install() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "add_enable_carries_the_seeded_skills_and_warnings_report_out_of_install",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
 
@@ -568,6 +650,12 @@ fn add_enable_carries_the_seeded_skills_and_warnings_report_out_of_install() {
 
 #[test]
 fn validate_reports_the_namespaced_skill_discovery_id() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "validate_reports_the_namespaced_skill_discovery_id",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
 
@@ -584,6 +672,12 @@ fn validate_reports_the_namespaced_skill_discovery_id() {
 
 #[test]
 fn migrate_writes_a_v2_manifest_from_v1_sidecars() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "migrate_writes_a_v2_manifest_from_v1_sidecars",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let plugin_dir = fixture.sources.join("legacy");
     std::fs::create_dir_all(&plugin_dir).expect("create legacy dir");
@@ -643,6 +737,12 @@ fn migrate_writes_a_v2_manifest_from_v1_sidecars() {
 /// by it, so all three refuse together [ORB-12800].
 #[test]
 fn a_relocated_row_is_refused_by_every_lifecycle_verb_and_leaves_that_tree_alone() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_relocated_row_is_refused_by_every_lifecycle_verb_and_leaves_that_tree_alone",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     install_plugin(
@@ -793,7 +893,9 @@ fn enter_fake_fetch_child(test: &str) -> bool {
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    let output = Command::new(std::env::current_exe().expect("test executable"))
+    let mut child = Command::new(std::env::current_exe().expect("test executable"));
+    super::fixture::clear_child_authority(&mut child);
+    let output = child
         .args(["--exact", &exact_test, "--nocapture"])
         .env("ORBIT_TEST_PLUGIN_FETCH_CHILD", &exact_test)
         .env("ORBIT_TEST_PLUGIN_ARCHIVE", &archive)
@@ -803,12 +905,7 @@ fn enter_fake_fetch_child(test: &str) -> bool {
         )
         .output()
         .expect("run isolated fake-fetch test");
-    assert!(
-        output.status.success(),
-        "fake-fetch child failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    super::fixture::assert_child_passed(&output, &exact_test);
     false
 }
 
@@ -843,6 +940,12 @@ fn publish_archive(source: &Path) -> String {
 #[cfg(unix)]
 #[test]
 fn sync_installs_a_digest_pinned_https_archive() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_installs_a_digest_pinned_https_archive",
+    ) {
+        return;
+    }
     if !enter_fake_fetch_child("sync_installs_a_digest_pinned_https_archive") {
         return;
     }
@@ -882,6 +985,12 @@ fn sync_installs_a_digest_pinned_https_archive() {
 #[cfg(unix)]
 #[test]
 fn sync_refuses_a_pinned_archive_whose_digest_does_not_match() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_refuses_a_pinned_archive_whose_digest_does_not_match",
+    ) {
+        return;
+    }
     if !enter_fake_fetch_child("sync_refuses_a_pinned_archive_whose_digest_does_not_match") {
         return;
     }
@@ -918,6 +1027,12 @@ fn sync_refuses_a_pinned_archive_whose_digest_does_not_match() {
 /// fetch, and the diagnostic names the entry to fix.
 #[test]
 fn sync_refuses_an_archive_pin_without_a_digest() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "sync_refuses_an_archive_pin_without_a_digest",
+    ) {
+        return;
+    }
     let fixture = PluginFixture::new();
     fixture.write_pin_file(&format!(
         "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {ARCHIVE_URL}\n    enabled: true\n"
@@ -939,6 +1054,12 @@ fn sync_refuses_an_archive_pin_without_a_digest() {
 #[cfg(unix)]
 #[test]
 fn doctor_reports_a_pinned_archive_whose_digest_no_longer_matches() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "doctor_reports_a_pinned_archive_whose_digest_no_longer_matches",
+    ) {
+        return;
+    }
     if !enter_fake_fetch_child("doctor_reports_a_pinned_archive_whose_digest_no_longer_matches") {
         return;
     }
