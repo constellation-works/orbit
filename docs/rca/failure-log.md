@@ -4,7 +4,7 @@ summary: Running log of why Orbit task runs failed or got blocked, one entry per
 incident_date: 2026-09-27
 last_validated: 2026-09-27
 tags: [incident, rca, operations, distributed-drain, sandbox]
-paths: ["scripts/test-validate-codex-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**"]
+paths: ["scripts/test-validate-codex-plugin.sh", "scripts/test-validate-agent-plugin.sh", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/adapter/engine_host/v2_host/pull/**", "crates/orbit-core/assets/activities/**"]
 related_artifacts: [ORB-13605, ORB-13604, ORB-13606, ORB-13642, ORB-13639, ORB-13501, ORB-13492, ORB-13491, ORB-13486]
 ---
 
@@ -57,8 +57,9 @@ you close it out.
   per-run `mktemp` directory. It checks whether the folder exists, deletes it,
   then copies, and never cleans the folder up afterwards. Concurrent leaves on one
   host raced on the same path, and the leftover folders stay behind.
-- **Fix:** open (ORB-13650). Create the case folders inside `fixture_root` so the existing
-  cleanup removes them.
+- **Fix:** ORB-13650. The base fixture and every case folder now live under the
+  per-run `fixture_root`, so the existing cleanup removes them.
+  `scripts/test-validate-agent-plugin.sh` had the same pattern and got the same fix.
 - **Tasks:** ORB-13606. Its change had already landed via #2867 before validation
   failed.
 
