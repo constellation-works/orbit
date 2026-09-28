@@ -53,21 +53,36 @@ impl Execute for AuditExportArgs {
     }
 }
 
-fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
-    let file =
-        std::fs::File::create(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
-    let mut writer = std::io::BufWriter::new(file);
-
+// pub(super) widened for sibling-layout tests in audit/tests/export.rs
+pub(super) fn write_json_export<W: Write>(
+    mut writer: W,
+    events: &[AuditEvent],
+    label: &str,
+) -> Result<(), OrbitError> {
     let values: Vec<Value> = events.iter().map(audit_event_to_json).collect();
     let json_bytes = serde_json::to_string_pretty(&Value::Array(values))
         .map_err(|e| OrbitError::Execution(e.to_string()))?;
 
     writer
         .write_all(json_bytes.as_bytes())
-        .map_err(|e| OrbitError::Io(format!("write {path}: {e}")))?;
+        .map_err(|e| OrbitError::Io(format!("write {label}: {e}")))?;
     writer
         .write_all(b"\n")
-        .map_err(|e| OrbitError::Io(format!("write {path}: {e}")))?;
+        .map_err(|e| OrbitError::Io(format!("write {label}: {e}")))?;
+    writer
+        .flush()
+        .map_err(|e| OrbitError::Io(format!("flush {label}: {e}")))?;
+
+    Ok(())
+}
+
+// pub(super) widened for sibling-layout tests in audit/tests/export.rs
+pub(super) fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
+    let file =
+        std::fs::File::create(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
+    let writer = std::io::BufWriter::new(file);
+
+    write_json_export(writer, events, path)?;
 
     println!("Exported {} events to {path}", events.len());
     Ok(())
