@@ -26,6 +26,12 @@ make the server disagree with the manifest. `MCP_FIXTURE_SERVER_REQUEST=<method>
 makes `echo` send that server-initiated request and *wait* for the host's
 answer before replying, which is how a client that drops server requests shows
 up as a deadlock rather than as a quiet omission.
+
+`MCP_FIXTURE_COLLIDE=<method>` makes the server, before answering that request,
+ping the host with the *same* id the host's request carries and wait for the
+answer; anything but a ping result for that id is answered with an error rather
+than the real reply. `MCP_FIXTURE_SHAPELESS=<method>` answers that request with
+a message naming its id but carrying neither `result` nor `error`.
 """
 import hashlib
 import json
@@ -67,14 +73,14 @@ def reply(request_id, result):
     send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
 
-def ask_host(method):
+def ask_host(method, request_id="fixture-server-1"):
     """Send a server->client request and block until the host answers.
 
-    The host is awaiting this server's `tools/call` reply, so the next line it
-    writes is the answer to this request — or nothing at all, if it drops
-    server requests, in which case this read is where the call dies.
+    The host is awaiting this server's reply, so the next line it writes is
+    the answer to this request — or nothing at all, if it drops server
+    requests, in which case this read is where the call dies.
     """
-    send({"jsonrpc": "2.0", "id": "fixture-server-1", "method": method})
+    send({"jsonrpc": "2.0", "id": request_id, "method": method})
     line = sys.stdin.readline()
     return json.loads(line) if line.strip() else None
 
@@ -159,6 +165,16 @@ while True:
     message = json.loads(line)
     method = message.get("method")
     request_id = message.get("id")
+    if request_id is not None and method == os.environ.get("MCP_FIXTURE_SHAPELESS"):
+        send({"jsonrpc": "2.0", "id": request_id})
+        continue
+    if request_id is not None and method == os.environ.get("MCP_FIXTURE_COLLIDE"):
+        answer = ask_host("ping", request_id)
+        if answer != {"jsonrpc": "2.0", "id": request_id, "result": {}}:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32603,
+                            "message": f"host did not answer the colliding ping: {answer}"}})
+            continue
     if method == "initialize":
         reply(request_id, {"protocolVersion": message["params"].get("protocolVersion", "2025-06-18"),
                            "capabilities": {"tools": {}},
