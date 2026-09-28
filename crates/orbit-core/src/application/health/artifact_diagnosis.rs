@@ -269,6 +269,38 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
     finish_catalog_health(runtime, catalog, findings, &tracked)
 }
 
+/// Whether `path` is the managed catalog file for `name`.
+///
+/// A directory walk that canonicalizes its root (auto-tasks) still matches.
+/// Only parent directories are canonicalized, so a symlink file in another
+/// catalog cannot borrow this location by pointing at the managed bytes.
+fn is_managed_artifact_location(catalog: &ManagedCatalog, name: &str, path: &Path) -> bool {
+    same_catalog_file(&catalog.path_of(name), path)
+}
+
+fn same_catalog_file(managed: &Path, path: &Path) -> bool {
+    if managed == path {
+        return true;
+    }
+    let (Some(managed_name), Some(path_name)) = (managed.file_name(), path.file_name()) else {
+        return false;
+    };
+    if managed_name != path_name {
+        return false;
+    }
+    let (Some(managed_dir), Some(path_dir)) = (managed.parent(), path.parent()) else {
+        return false;
+    };
+    managed_dir == path_dir
+        || matches!(
+            (
+                std::fs::canonicalize(managed_dir),
+                std::fs::canonicalize(path_dir)
+            ),
+            (Ok(managed_dir), Ok(path_dir)) if managed_dir == path_dir
+        )
+}
+
 /// The catalog entry dispatch actually loads: a YAML stem, or a skill's
 /// `SKILL.md`. Reference files under a skill tree are not independent
 /// definitions, so a missing one is not reported here.
@@ -300,13 +332,20 @@ fn finish_catalog_health(
         } else {
             read_artifact(&fault.path)
         };
+        // Digests and stale-default remediation describe the managed file at
+        // its managed path. A same-named activity in a workspace or explicit
+        // catalog is a different file and keeps its own provenance.
+        let recorded = is_managed_artifact_location(catalog, &fault.name, &fault.path)
+            .then(|| tracked.get(&fault.name))
+            .flatten();
         let provenance = on_disk
-            .map(|on_disk| provenance(kind, &fault.name, tracked.get(&fault.name), &on_disk))
+            .map(|on_disk| provenance(kind, &fault.name, recorded, &on_disk))
             .unwrap_or(ArtifactProvenance::UserAuthored);
         let stale_shipped_default = findings.iter().any(|finding| {
             finding.name == fault.name
                 && finding.condition == ArtifactCondition::Stale
                 && finding.provenance == ArtifactProvenance::OrbitWritten
+                && same_catalog_file(&finding.path, &fault.path)
         });
         let remediation = if fault.condition == ArtifactCondition::Residual {
             format!(

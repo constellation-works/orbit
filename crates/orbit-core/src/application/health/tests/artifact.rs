@@ -5,7 +5,7 @@ use tempfile::tempdir;
 
 use super::super::activity_catalog::remove_spec_backend_key;
 use super::super::artifact::{
-    ArtifactCondition, ArtifactHealth, ArtifactKind, ArtifactProvenance,
+    ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
     FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
 };
 use crate::OrbitRuntime;
@@ -741,5 +741,185 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
             .expect("configured root link survives")
             .file_type()
             .is_symlink()
+    );
+}
+
+fn record_managed_digest(dir: &Path, name: &str, content: &str) {
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let mut manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&manifest_path).expect("read managed manifest"),
+    )
+    .expect("parse managed manifest");
+    manifest["assets"]
+        .as_object_mut()
+        .expect("manifest assets")
+        .insert(
+            name.to_string(),
+            serde_json::Value::String(sha256_hex(content.as_bytes())),
+        );
+    std::fs::write(
+        &manifest_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("serialize managed manifest")
+        ),
+    )
+    .expect("write managed manifest");
+}
+
+/// Rewrite the seeded default so it still loads, its manifest digest matches
+/// those bytes, and those bytes differ from the binary. Doctor then reports
+/// one stale shipped default at the managed path.
+fn install_stale_loading_git_merge(global_root: &Path) -> PathBuf {
+    let managed = global_root.join("resources/activities/git_merge.yaml");
+    let current = std::fs::read_to_string(&managed).expect("read managed git_merge");
+    let stale = format!("{current}# older release\n");
+    std::fs::write(&managed, &stale).expect("write stale managed git_merge");
+    record_managed_digest(
+        managed.parent().expect("activities dir"),
+        "git_merge",
+        &stale,
+    );
+    managed
+}
+
+fn unknown_tool_git_merge() -> String {
+    agent_loop_yaml("git_merge", "  tools:\n    - orbit.not_a_real_tool\n")
+}
+
+fn assert_stale_managed_git_merge(findings: &[ArtifactFinding], managed: &Path) {
+    let finding = findings
+        .iter()
+        .find(|finding| finding.path == managed && finding.condition == ArtifactCondition::Stale)
+        .unwrap_or_else(|| panic!("missing stale managed git_merge: {findings:?}"));
+    assert_eq!(finding.provenance, ArtifactProvenance::OrbitWritten);
+    assert!(
+        !finding.is_unloadable_shipped_default(),
+        "a loadable stale default warns; it is not a doctor error: {finding:?}"
+    );
+    assert_eq!(finding.remediation, "Run `orbit init`.");
+}
+
+fn assert_user_authored_git_merge(findings: &[ArtifactFinding], path: &Path) {
+    let finding = findings
+        .iter()
+        .find(|finding| finding.path == path)
+        .unwrap_or_else(|| panic!("missing fault for {}: {findings:?}", path.display()));
+    assert_eq!(finding.name, "git_merge");
+    assert_eq!(finding.condition, ArtifactCondition::Faulty);
+    assert_eq!(finding.provenance, ArtifactProvenance::UserAuthored);
+    assert!(
+        !finding.is_unloadable_shipped_default(),
+        "a same-named user activity must not escalate doctor to an error: {finding:?}"
+    );
+    assert!(
+        finding.detail.contains("orbit.not_a_real_tool"),
+        "{}",
+        finding.detail
+    );
+    assert_eq!(
+        finding.remediation,
+        format!(
+            "Fix the activity definition at `{}` (or move it aside), then rerun `orbit doctor`.",
+            path.display()
+        ),
+        "user activity must not borrow another path's stale remediation"
+    );
+}
+
+fn assert_activity_doctor_does_not_error(findings: &[ArtifactFinding]) {
+    assert!(
+        findings
+            .iter()
+            .all(|finding| !finding.is_unloadable_shipped_default()),
+        "doctor severity stays a warning while the managed default still loads: {findings:?}"
+    );
+}
+
+#[test]
+fn same_named_workspace_activity_stays_user_authored_beside_managed_default() {
+    let root = tempdir().expect("tempdir");
+    let (runtime, global_root, workspace_root) = seeded_runtime(root.path());
+    let managed = install_stale_loading_git_merge(&global_root);
+    let workspace_activity = workspace_root.join("resources/activities/git_merge.yaml");
+    std::fs::create_dir_all(workspace_activity.parent().expect("workspace activities"))
+        .expect("create workspace activities");
+    std::fs::write(&workspace_activity, unknown_tool_git_merge())
+        .expect("write workspace activity");
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    let findings = &health_of(&report, ArtifactKind::Activity).findings;
+    assert_stale_managed_git_merge(findings, &managed);
+    assert_user_authored_git_merge(findings, &workspace_activity);
+    assert_activity_doctor_does_not_error(findings);
+}
+
+#[cfg(unix)]
+#[test]
+fn same_named_explicit_catalog_activity_stays_user_authored() {
+    const CHILD_FLAG: &str = "ORBIT_EXPLICIT_ACTIVITY_PROVENANCE_CHILD";
+    if std::env::var_os(CHILD_FLAG).is_none() {
+        run_isolated_child_fixture(
+            "same_named_explicit_catalog_activity_stays_user_authored",
+            CHILD_FLAG,
+        );
+        return;
+    }
+
+    let root = tempdir().expect("tempdir");
+    let (runtime, global_root, _workspace) = seeded_runtime(root.path());
+    let managed = install_stale_loading_git_merge(&global_root);
+    let explicit = root.path().join("explicit");
+    std::fs::create_dir_all(&explicit).expect("create explicit catalog");
+    let explicit_activity = explicit.join("git_merge.yaml");
+    std::fs::write(&explicit_activity, unknown_tool_git_merge()).expect("write explicit activity");
+    let explicit_dir = explicit
+        .to_str()
+        .expect("explicit catalog path is utf-8")
+        .to_string();
+    let _env =
+        orbit_common::test_env::scoped([("ORBIT_ACTIVITY_DIR", Some(explicit_dir.as_str()))]);
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    let findings = &health_of(&report, ArtifactKind::Activity).findings;
+    assert_stale_managed_git_merge(findings, &managed);
+    assert_user_authored_git_merge(findings, &explicit_activity);
+    assert_activity_doctor_does_not_error(findings);
+}
+
+#[test]
+fn malformed_managed_activity_remains_unloadable_shipped_default() {
+    let root = tempdir().expect("tempdir");
+    let (runtime, global_root, _workspace) = seeded_runtime(root.path());
+    let activities = global_root.join("resources/activities");
+    let managed = activities.join("git_merge.yaml");
+    let corrupt = "schemaVersion: 2\nkind: Activity\nmetadata: {}\n";
+    std::fs::write(&managed, corrupt).expect("corrupt managed git_merge");
+    record_managed_digest(&activities, "git_merge", corrupt);
+
+    let report = runtime
+        .inspect_definition_artifacts()
+        .expect("inspect artifacts");
+    let findings = &health_of(&report, ArtifactKind::Activity).findings;
+    let fault = findings
+        .iter()
+        .find(|finding| finding.path == managed && finding.condition == ArtifactCondition::Faulty)
+        .expect("malformed managed activity is reported");
+    assert_eq!(fault.name, "git_merge");
+    assert_eq!(fault.provenance, ArtifactProvenance::OrbitWritten);
+    assert!(
+        fault.is_unloadable_shipped_default(),
+        "a malformed managed default remains a doctor error: {fault:?}"
+    );
+    assert_eq!(fault.remediation, "Run `orbit init`.");
+    assert!(
+        findings
+            .iter()
+            .any(ArtifactFinding::is_unloadable_shipped_default),
+        "doctor severity escalates when the managed file itself is unloadable: {findings:?}"
     );
 }
