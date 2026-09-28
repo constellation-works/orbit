@@ -412,13 +412,14 @@ pub fn validate_task_dependencies(
 ///
 /// `lookup(id)` returns that task's current dependency IDs, or `None` when the
 /// id is unknown. Unknown targets are treated as leaves (no further edges),
-/// matching an adjacency-map miss. Lookups are cached so each id is resolved
-/// at most once. The task being updated is not looked up; its outgoing edges
-/// are the `dependencies` argument.
+/// matching an adjacency-map miss. Each reachable id is looked up at most once
+/// and examined once, so validation work is bounded by the reachable
+/// vertices and edges. The task being updated is not looked up; its outgoing
+/// edges are the `dependencies` argument.
 pub fn validate_task_dependencies_with<F, E>(
     current_task_id: Option<&str>,
     dependencies: &[OrbitId],
-    mut lookup: F,
+    lookup: F,
 ) -> Result<(), E>
 where
     F: FnMut(&str) -> Result<Option<Vec<OrbitId>>, E>,
@@ -438,67 +439,72 @@ where
         .into());
     }
 
-    let mut resolved = BTreeMap::new();
-    resolved.insert(current_task_id.to_string(), dependencies.to_vec());
-
-    for dependency in dependencies {
-        let mut visiting = BTreeSet::new();
-        let mut trail = Vec::new();
-        if let Some(path) = find_dependency_path(
-            dependency,
-            current_task_id,
-            &mut resolved,
-            &mut lookup,
-            &mut visiting,
-            &mut trail,
-        )? {
-            let mut cycle = Vec::with_capacity(path.len() + 1);
-            cycle.push(current_task_id.to_string());
-            cycle.extend(path);
-            return Err(TaskError::Invalid(format!(
-                "task dependency cycle detected: {}",
-                cycle.join(" -> ")
-            ))
-            .into());
-        }
+    match walk_dependencies_to_self(current_task_id, dependencies, lookup)?.cycle {
+        Some(cycle) => Err(TaskError::Invalid(format!(
+            "task dependency cycle detected: {}",
+            cycle.join(" -> ")
+        ))
+        .into()),
+        None => Ok(()),
     }
-
-    Ok(())
 }
 
-fn find_dependency_path<F, E>(
-    current: &str,
-    target: &str,
-    resolved: &mut BTreeMap<OrbitId, Vec<OrbitId>>,
-    lookup: &mut F,
-    visiting: &mut BTreeSet<OrbitId>,
-    trail: &mut Vec<OrbitId>,
-) -> Result<Option<Vec<OrbitId>>, E>
+/// Result of one dependency walk from the updated task.
+pub(crate) struct DependencyWalk {
+    /// Cycle witness from the updated task back to itself, when one exists.
+    pub(crate) cycle: Option<Vec<OrbitId>>,
+    /// Dependency edges examined; bounded by the reachable edge count. Read by
+    /// the traversal-work tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) edges_examined: usize,
+}
+
+/// Depth-first search for a path from `dependencies` back to `current_task_id`.
+///
+/// Iterative so long chains cannot exhaust the stack. A node is expanded at
+/// most once: a node already expanded either finished without reaching the
+/// updated task or is still on the active path, whose exploration covers
+/// everything it reaches. Cycles that do not pass through the updated task are
+/// ignored, as they predate this edit.
+pub(crate) fn walk_dependencies_to_self<F, E>(
+    current_task_id: &str,
+    dependencies: &[OrbitId],
+    mut lookup: F,
+) -> Result<DependencyWalk, E>
 where
     F: FnMut(&str) -> Result<Option<Vec<OrbitId>>, E>,
 {
-    if !visiting.insert(current.to_string()) {
-        return Ok(None);
-    }
+    let mut expanded = BTreeSet::new();
+    let mut path = vec![current_task_id.to_string()];
+    let mut pending = vec![Vec::from(dependencies).into_iter()];
+    let mut edges_examined = 0;
 
-    trail.push(current.to_string());
-    if current == target {
-        return Ok(Some(trail.clone()));
-    }
-
-    if !resolved.contains_key(current) {
-        resolved.insert(current.to_string(), lookup(current)?.unwrap_or_default());
-    }
-    let next_dependencies = resolved.get(current).cloned().unwrap_or_default();
-    for next in &next_dependencies {
-        if let Some(path) = find_dependency_path(next, target, resolved, lookup, visiting, trail)? {
-            return Ok(Some(path));
+    while let Some(next_edges) = pending.last_mut() {
+        let Some(next) = next_edges.next() else {
+            pending.pop();
+            path.pop();
+            continue;
+        };
+        edges_examined += 1;
+        if next == current_task_id {
+            path.push(next);
+            return Ok(DependencyWalk {
+                cycle: Some(path),
+                edges_examined,
+            });
         }
+        if !expanded.insert(next.clone()) {
+            continue;
+        }
+        let adjacency = lookup(&next)?.unwrap_or_default();
+        path.push(next);
+        pending.push(adjacency.into_iter());
     }
 
-    trail.pop();
-    visiting.remove(current);
-    Ok(None)
+    Ok(DependencyWalk {
+        cycle: None,
+        edges_examined,
+    })
 }
 
 /// Canonical automatic admission order, shared by reporting and the owner store.
