@@ -38,5 +38,7 @@ libc.workspace = true
 orbit-core = { path = "../orbit-core", features = ["test-support"] }
 serde_yaml.workspace = true
 tempfile.workspace = true
+# Paused virtual time for the shutdown grace-period tests.
+tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber.workspace = true
