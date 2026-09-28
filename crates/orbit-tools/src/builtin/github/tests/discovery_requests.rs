@@ -2,8 +2,16 @@
 //! tools. These assert the contract a task body depends on without needing a
 //! GitHub CLI on the machine running the tests.
 
-use serde_json::json;
+use std::fs;
+use std::path::PathBuf;
 
+use orbit_common::OrbitError;
+use orbit_exec::{ExecRequest, NoSandbox, run_process};
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+use super::log_fallback::{set_executable, wait_until_executable};
+use crate::ToolContext;
 use crate::builtin::github::{dependabot_alerts, logs, pr_list, run_list, run_view};
 
 #[test]
@@ -337,4 +345,95 @@ fn pr_list_defaults_to_a_bounded_open_query() {
         .map(|index| req.args[index + 1].clone())
         .expect("limit flag");
     assert_eq!(limit, "30");
+}
+
+type ToolRequest = fn(&ToolContext, &Value) -> Result<ExecRequest, OrbitError>;
+
+/// Each registered repository-scoped discovery tool, with a minimal valid input.
+fn discovery_tools() -> [(&'static str, ToolRequest, Value); 3] {
+    [
+        (
+            "github.pr.list",
+            |ctx, input| pr_list::GithubPrListTool.exec_request(ctx, input),
+            json!({}),
+        ),
+        (
+            "github.run.list",
+            |ctx, input| run_list::GithubRunListTool.exec_request(ctx, input),
+            json!({}),
+        ),
+        (
+            "github.run.view",
+            |ctx, input| run_view::GithubRunViewTool.exec_request(ctx, input),
+            json!({"run": "42"}),
+        ),
+    ]
+}
+
+/// Run `request` as-is except for its program, which reports the directory
+/// it was started in.
+fn executed_in(request: &ExecRequest, bin: &TempDir) -> PathBuf {
+    let program = bin.path().join("gh");
+    if !program.exists() {
+        fs::write(
+            &program,
+            "#!/bin/sh\n[ \"$1\" = --warmup ] && exit 0\npwd -P\n",
+        )
+        .expect("write fake gh");
+        set_executable(&program);
+        wait_until_executable(&program);
+    }
+    let request = ExecRequest {
+        program: program.display().to_string(),
+        ..request.clone()
+    };
+    let result = run_process(&request, &NoSandbox).expect("run request");
+    assert!(result.success, "fake gh failed: {}", result.stderr);
+    PathBuf::from(result.stdout.trim())
+}
+
+#[test]
+fn discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd() {
+    let workspace = TempDir::new().expect("selected workspace");
+    let bin = TempDir::new().expect("fake gh dir");
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.path().to_path_buf()),
+        ..ToolContext::default()
+    };
+    let selected = fs::canonicalize(workspace.path()).expect("canonical workspace");
+    let process_cwd = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .expect("process cwd");
+    assert_ne!(selected, process_cwd);
+
+    for (name, request, input) in discovery_tools() {
+        let omitted = request(&ctx, &input).expect("request");
+        assert!(
+            !omitted.args.iter().any(|arg| arg == "--repo"),
+            "{name}: an omitted repo must be resolved from the workspace: {:?}",
+            omitted.args
+        );
+        assert_eq!(executed_in(&omitted, &bin), selected, "{name}");
+
+        let mut explicit_input = input.clone();
+        explicit_input["repo"] = json!("acme/orbit");
+        let explicit = request(&ctx, &explicit_input).expect("request");
+        assert!(
+            explicit
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--repo", "acme/orbit"]),
+            "{name}: an explicit repo must still select that repository: {:?}",
+            explicit.args
+        );
+        assert_eq!(executed_in(&explicit, &bin), selected, "{name}");
+    }
+}
+
+#[test]
+fn discovery_tools_without_a_selected_workspace_keep_the_callers_directory() {
+    for (name, request, input) in discovery_tools() {
+        let request = request(&ToolContext::default(), &input).expect("request");
+        assert_eq!(request.current_dir, None, "{name}");
+    }
 }

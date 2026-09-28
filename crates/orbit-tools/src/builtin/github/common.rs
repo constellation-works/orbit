@@ -16,6 +16,27 @@ pub fn gh_exec_request(
     }
 }
 
+/// The checkout a repository-scoped `gh` call made through a registered tool
+/// runs in: the caller's selected workspace, else its cwd.
+///
+/// Without an explicit `repo`, `gh` resolves the repository from its working
+/// directory, so leaving it unset would query whatever checkout the host
+/// process happened to start in rather than the one the caller selected.
+pub(super) fn tool_workspace_dir(ctx: &ToolContext) -> Option<String> {
+    ctx.workspace_root
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .or_else(|| ctx.cwd.clone())
+}
+
+/// Bind `request` to the caller's selected workspace, when it has one.
+pub(super) fn in_tool_workspace(mut request: ExecRequest, ctx: &ToolContext) -> ExecRequest {
+    if let Some(dir) = tool_workspace_dir(ctx) {
+        request.current_dir = Some(dir);
+    }
+    request
+}
+
 pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam>) -> ToolSchema {
     ToolSchema {
         name: name.to_string(),
@@ -50,6 +71,19 @@ macro_rules! gh_tool {
     ) => {
         $vis struct $name;
 
+        impl $name {
+            /// The `gh` request this tool executes for `input` under `ctx`.
+            pub(crate) fn exec_request(
+                &self,
+                ctx: &crate::ToolContext,
+                input: &serde_json::Value,
+            ) -> Result<orbit_exec::ExecRequest, orbit_common::OrbitError> {
+                let $request_ctx = ctx;
+                let $request_input = input;
+                $request
+            }
+        }
+
         impl crate::Tool for $name {
             fn schema(&self) -> orbit_types::tool::ToolSchema {
                 super::gh_schema($tool_name, $description, vec![$($param),*])
@@ -60,11 +94,7 @@ macro_rules! gh_tool {
                 ctx: &crate::ToolContext,
                 input: serde_json::Value,
             ) -> Result<serde_json::Value, orbit_common::OrbitError> {
-                let req = {
-                    let $request_ctx = ctx;
-                    let $request_input = &input;
-                    $request
-                }?;
+                let req = self.exec_request(ctx, &input)?;
                 let exec_result = orbit_exec::run_process(&req, &orbit_exec::NoSandbox)?;
                 let $response_ctx = ctx;
                 let $response_input = &input;

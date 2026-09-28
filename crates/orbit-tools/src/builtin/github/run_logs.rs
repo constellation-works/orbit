@@ -14,6 +14,22 @@ const MAX_MAX_BYTES: u64 = 262_144;
 
 pub struct GithubRunLogsTool;
 
+impl GithubRunLogsTool {
+    /// The `gh` requests this tool reads for `input` under `ctx`. Fallback
+    /// job-log reads derive from these, so they share the same checkout.
+    pub(crate) fn requests(
+        &self,
+        ctx: &crate::ToolContext,
+        input: &Value,
+    ) -> Result<RunLogRequests, OrbitError> {
+        let requests = RunLogRequests::from_input(input)?;
+        Ok(match super::tool_workspace_dir(ctx) {
+            Some(dir) => requests.in_directory(&dir),
+            None => requests,
+        })
+    }
+}
+
 impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::gh_schema(
@@ -49,8 +65,8 @@ impl crate::Tool for GithubRunLogsTool {
         )
     }
 
-    fn execute(&self, _ctx: &crate::ToolContext, input: Value) -> Result<Value, OrbitError> {
-        let requests = RunLogRequests::from_input(&input)?;
+    fn execute(&self, ctx: &crate::ToolContext, input: Value) -> Result<Value, OrbitError> {
+        let requests = self.requests(ctx, &input)?;
         let max_bytes =
             super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)? as usize;
         let scope = requests.scope;
