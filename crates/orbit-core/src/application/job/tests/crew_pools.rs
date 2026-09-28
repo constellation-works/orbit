@@ -1161,6 +1161,25 @@ model = "gpt-6-luna"
 provider = "codex"
 "#;
 
+const PARKED_SINGLETON_POOL_CONFIG: &str = r#"
+[workflow]
+default_crew = "grok"
+medium_complexity_crews = ["opus:0", "sol:1"]
+
+[crews.grok]
+model = "gpt-6-luna"
+provider = "codex"
+
+[crews.opus]
+model = "opus"
+provider = "claude"
+
+[crews.sol]
+enabled = false
+model = "gpt-6-sol"
+provider = "codex"
+"#;
+
 /// A disabled pool member holds no ticket: every draw lands on an enabled
 /// member, at creation and at admission alike.
 #[test]
@@ -1209,6 +1228,98 @@ fn an_all_disabled_pool_falls_through_to_the_default_crew() {
     assert_eq!(
         crew_assigned_notes(&runtime, &created.id),
         vec!["assigned crew `opus` from default".to_string()],
+    );
+}
+
+/// A disabled positive-weight member must not make the remaining parked
+/// singleton drawable. Creation, clearing, and legacy admission reject the
+/// pool without selecting it, and eligibility reports the same rejection.
+/// Explicit selection and a positive singleton keep their weight-one behavior.
+#[test]
+fn a_zero_weight_singleton_left_by_disabled_filtering_is_never_drawn() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(PARKED_SINGLETON_POOL_CONFIG);
+
+    let creation = runtime.add_task(TaskAddParams {
+        title: "Parked pool creation fixture".into(),
+        description: "Exercise a zero-weight singleton after disabled filtering".into(),
+        plan: "Keep the parked crew out of the draw".into(),
+        complexity: TaskComplexity::Medium,
+        status: Some(TaskStatus::Backlog),
+        ..Default::default()
+    });
+    assert!(
+        creation
+            .expect_err("creation cannot select the parked member")
+            .to_string()
+            .contains("weight above 0")
+    );
+
+    let explicit = added_task(&runtime, TaskComplexity::Medium, Some("opus"));
+    assert_eq!(explicit.crew.as_deref(), Some("opus"));
+    assert_eq!(
+        crew_assigned_notes(&runtime, &explicit.id),
+        vec!["assigned crew `opus` from explicit".to_string()],
+    );
+    let clearing = runtime.update_task(
+        &explicit.id,
+        crate::application::task::TaskUpdateParams {
+            crew: Some(Some(String::new())),
+            ..Default::default()
+        },
+    );
+    assert!(
+        clearing
+            .expect_err("clearing cannot select the parked member")
+            .to_string()
+            .contains("weight above 0")
+    );
+    assert_eq!(
+        runtime
+            .get_task(&explicit.id)
+            .expect("unchanged task")
+            .crew
+            .as_deref(),
+        Some("opus"),
+        "a failed clear leaves the prior explicit crew intact"
+    );
+
+    let parent = coordinator(&runtime, json!({}));
+    let legacy = task(&runtime, TaskComplexity::Medium, None);
+    let mut admission_input = json!({"task_ids": [legacy.id]});
+    let admission = runtime
+        .install_auto_crew_admission(
+            "task_auto_pipeline",
+            &mut admission_input,
+            Some(&parent),
+            false,
+            &mut no_draw,
+        )
+        .expect_err("legacy admission cannot draw the parked member");
+    assert!(admission.to_string().contains("weight above 0"));
+    let allowlist = runtime
+        .crew_allowlist(&["opus".to_string()])
+        .expect("build allowlist")
+        .expect("non-empty allowlist");
+    let eligibility = runtime
+        .enforce_admitted_crew_allowlist(
+            &legacy,
+            &json!({"run_id": parent}),
+            &allowlist,
+            "task pool",
+        )
+        .expect_err("eligibility cannot admit the parked member");
+    assert_eq!(admission.to_string(), eligibility.to_string());
+
+    let positive_parent = coordinator(
+        &runtime,
+        json!({"medium_complexity_crews": ["opus:3", "sol:1"]}),
+    );
+    let positive_singleton = task(&runtime, TaskComplexity::Medium, None);
+    let positive = admit(&runtime, &positive_parent, &positive_singleton, 0);
+    assert_eq!(positive["crew"], "opus");
+    assert_eq!(
+        positive["crew_selection"]["eligible_pool"],
+        json!([{"name": "opus", "weight": 3}]),
     );
 }
 
