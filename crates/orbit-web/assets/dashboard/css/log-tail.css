@@ -159,16 +159,19 @@
   height: 18px; background: linear-gradient(var(--bg-elev), transparent);
   pointer-events: none;
 }
-.log-filters {
+/* The toolbar wraps rather than clipping: at the 280-336px dock widths the
+   pills, follow, wrap and the paused "N buffered" action do not fit one row,
+   and a hidden overflow left the trailing controls unreachable. The doubled
+   class outranks the later .log-foot padding/gap on the same element. */
+.log-foot.log-filters {
   flex: 0 0 auto;
   border-top: none !important;
   border-bottom: 1px solid var(--hair);
   padding: 7px 12px;
-  gap: 5px;
-  flex-wrap: nowrap;
-  white-space: nowrap;
-  overflow: hidden;
+  gap: 6px 5px;
+  flex-wrap: wrap;
 }
+.log-filters > * { white-space: nowrap; }
 .log-filters .filter-pill { padding: 2px 7px; }
 .log-filters .seg.right { margin-left: auto; }
 .log-foot {

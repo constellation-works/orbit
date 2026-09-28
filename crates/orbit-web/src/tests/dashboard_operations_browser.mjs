@@ -216,6 +216,70 @@ try {
   await drainCheck('375x812', null);
   await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
 
+  // The Log dock toolbar keeps every control reachable at the 280px (<=1250px
+  // viewport) and 336px dock minimums, while following and while paused with
+  // the buffered action shown. Pausing and buffering go through the real
+  // follow handler and SSE consumer, fed by a fixture stream.
+  await page.evaluate(async () => {
+    const fixtureFetch = globalThis.fetch;
+    globalThis.fetch = (url, options) => new URL(url, location.href).pathname === '/api/log'
+      ? Promise.resolve({ ok: true, status: 200, json: async () => ({ events: [], offset: 0 }) })
+      : fixtureFetch(url, options);
+    globalThis.EventSource = class FixtureStream {
+      static CLOSED = 2;
+      constructor() { globalThis.logFixtureStream = this; this.readyState = 1; }
+      close() { this.readyState = FixtureStream.CLOSED; }
+    };
+    const { initLogTail, setDockMode } = await import('/js/log-tail.js');
+    initLogTail();
+    setDockMode('log');
+  });
+  await page.waitForFunction(() => globalThis.logFixtureStream?.onmessage);
+  const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
+    await page.setViewportSize(viewport);
+    await page.evaluate((width) => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', `${width}px`), dockWidth);
+    const ids = ['all', 'err', 'deny', 'warn'].map(filter => `.log-filters .filter-pill[data-filter="${filter}"]`)
+      .concat(['#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
+    const layout = await page.evaluate((selectors) => {
+      const bar = document.querySelector('#side-dock .log-filters');
+      const barBox = bar.getBoundingClientRect();
+      const unreachable = selectors.filter((selector) => {
+        const box = document.querySelector(selector).getBoundingClientRect();
+        return box.width === 0 || box.height === 0 || box.left < barBox.left - 1 || box.right > barBox.right + 1
+          || box.top < barBox.top - 1 || box.bottom > barBox.bottom + 1;
+      });
+      return { dockWidth: Math.round(document.getElementById('side-dock').getBoundingClientRect().width), clipped: bar.scrollWidth > bar.clientWidth + 1, unreachable };
+    }, ids);
+    if (layout.dockWidth !== dockWidth) throw new Error(`Log dock is not ${dockWidth}px at ${label}: ${layout.dockWidth}`);
+    if (layout.clipped || layout.unreachable.length) throw new Error(`Log toolbar clips controls at ${label}: ${JSON.stringify(layout)}`);
+    for (const selector of ids) {
+      await page.focus(selector);
+      const focused = await page.evaluate(sel => document.activeElement === document.querySelector(sel), selector);
+      if (!focused) throw new Error(`Log toolbar control ${selector} not keyboard focusable at ${label}`);
+      // The trial click fails if another element covers the control's centre.
+      await page.click(selector, { trial: true, timeout: 2000 });
+    }
+    await page.screenshot({ path: path.join(evidence, `log-toolbar-${label}.png`), fullPage: true });
+  };
+  const logToolbarSizes = [
+    ['1024-dock280', { width: 1024, height: 900 }, 280],
+    ['1440-dock336', { width: 1440, height: 1000 }, 336],
+  ];
+  for (const [label, viewport, width] of logToolbarSizes) await logToolbarCheck(`${label}-following`, viewport, width, false);
+  await page.click('#log-follow-tail');
+  await page.evaluate(() => {
+    for (let id = 1; id <= 1123; id += 1) {
+      globalThis.logFixtureStream.onmessage({ lastEventId: String(id), data: JSON.stringify({ ts: '2026-09-27T12:00:00Z', level: 'info', code: 'fixture', msg: `event ${id}` }) });
+    }
+  });
+  const buffered = await page.locator('#log-buffered-count').textContent();
+  if (!/buffered · \d+ discarded/.test(buffered)) throw new Error(`Paused SSE events did not show the buffered action: ${buffered}`);
+  for (const [label, viewport, width] of logToolbarSizes) await logToolbarCheck(`${label}-paused`, viewport, width, true);
+  await page.click('#log-buffered-count');
+  const resumed = await page.evaluate(() => getComputedStyle(document.getElementById('log-buffered-count')).display);
+  if (resumed !== 'none') throw new Error('Clicking the buffered action did not flush the paused buffer');
+  await page.evaluate(() => document.querySelector('main.tasks-layout').style.removeProperty('--dock-w'));
+
   await page.setViewportSize({ width: 375, height: 812 });
   await page.click('.tab[data-tab="tasks"]');
   await page.waitForTimeout(200);
@@ -324,7 +388,7 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, Drain dock card at 336/900/375, reload, history. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; subtabs, Drain dock card at 336/900/375, Log toolbar at dock 280/336 following and paused, reload, history. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }
