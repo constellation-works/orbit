@@ -344,8 +344,10 @@ where
 /// scalar and short-list fields, `comment_count` / `history_count` /
 /// `artifact_count` in place of the comment, history and artifact bodies, no
 /// `description` / `plan` / `execution_summary` / `acceptance_criteria`, the
-/// governed `status_transitions` without their `required_field`, and a
-/// `resolved_crew` read from the crew registry alone. `GET /api/tasks/:id`
+/// governed `status_transitions` without their `required_field`, a
+/// `resolved_crew` read from the crew registry alone, and `job_run_navigable`
+/// from the same local-machine decision as the detail projection.
+/// `GET /api/tasks/:id`
 /// serves the full projection (DANI-10391; see
 /// [`TaskListProjection`]).
 ///

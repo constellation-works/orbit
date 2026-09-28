@@ -228,7 +228,10 @@ pub(crate) fn task_row_to_json(
     // still reads *unknown*, which is what the absent field means.
     object.insert(
         "job_run_navigable".to_string(),
-        Value::Bool(job_run_is_locally_navigable(runtime, task)),
+        Value::Bool(job_run_is_locally_navigable(
+            runtime.automation_machine_identity(),
+            task,
+        )),
     );
     let registry = runtime.configured_crew_registry_projection();
     if let Some(projection) = dashboard_resolved_crew_projection(runtime, &registry, task)? {
@@ -243,7 +246,7 @@ pub(crate) fn task_row_to_json(
     Ok(value)
 }
 
-fn job_run_is_locally_navigable(runtime: &OrbitRuntime, task: &Task) -> bool {
+fn job_run_is_locally_navigable(local_machine_id: Option<&str>, task: &Task) -> bool {
     if task.job_run_id.is_none() {
         return false;
     }
@@ -253,9 +256,7 @@ fn job_run_is_locally_navigable(runtime: &OrbitRuntime, task: &Task) -> bool {
     // A recorded host has to *match* to navigate: with no local identity there
     // is nothing to prove the run is here, and an owner-local link would open
     // the wrong thing or nothing. An unrecorded host is handled above.
-    runtime
-        .automation_machine_identity()
-        .is_some_and(|local| local == host.machine_id)
+    local_machine_id.is_some_and(|local| local == host.machine_id)
 }
 
 /// Marker the list rows carry so a client can tell a summary from the full
@@ -272,16 +273,20 @@ pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
 /// that until a row is expanded, and it fetches `GET /api/tasks/:id` for the
 /// expansion. A summary row therefore carries the identifying and sortable
 /// fields, counts in place of the bodies, the governed status targets without
-/// their evidence requirement, and a crew resolved purely from the registry
-/// built once here — never a store call per row.
+/// their evidence requirement, whether the linked run is navigable on this
+/// machine, and a crew resolved purely from the registry built once here —
+/// never a store call per row. Navigability uses the machine id captured with
+/// the registry and the row's own `job_run_id` / `job_run_machine`.
 pub(crate) struct TaskListProjection {
     registry: ConfiguredCrewRegistryProjection,
+    local_machine_id: Option<String>,
 }
 
 impl TaskListProjection {
     pub(crate) fn new(runtime: &OrbitRuntime) -> Self {
         Self {
             registry: runtime.configured_crew_registry_projection(),
+            local_machine_id: runtime.automation_machine_identity().map(str::to_string),
         }
     }
 
@@ -313,6 +318,16 @@ impl TaskListProjection {
             object.insert("resolved_crew".to_string(), Value::String(projection.name));
             object.insert("crew_model".to_string(), Value::String(projection.model));
         }
+        // Same decision as the detail projection. The list used to omit the
+        // flag, and the dashboard treats a missing value as permission to
+        // link `#runs?run_id=` on this host.
+        object.insert(
+            "job_run_navigable".to_string(),
+            Value::Bool(job_run_is_locally_navigable(
+                self.local_machine_id.as_deref(),
+                task,
+            )),
+        );
         Ok(value)
     }
 }

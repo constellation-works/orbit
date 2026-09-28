@@ -2564,7 +2564,19 @@ function openDraftNodes(body) {
 
 function quickActionSignature(task) {
   const state = quickActionState.get(task.id);
-  return `${task.job_run_id || ""}-${shipInFlightTaskIds.has(task.id)}-${state ? `${state.kind}:${state.text}` : ""}`;
+  const machine = task.job_run_machine;
+  const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
+  const navigable = task.job_run_navigable === false ? "0" : "1";
+  return `${task.job_run_id || ""}-${navigable}-${host}-${shipInFlightTaskIds.has(task.id)}-${state ? `${state.kind}:${state.text}` : ""}`;
+}
+
+function summaryExecutionLocation(machine) {
+  if (!machine || !machine.machine_id) return { known: false };
+  return {
+    known: true,
+    machine_id: machine.machine_id,
+    machine_name: machine.machine_name || null,
+  };
 }
 
 // The one decision a row is waiting on, one click from the list: Approve a
@@ -2574,12 +2586,22 @@ function buildQuickAction(task, context) {
   const cell = el("span", { class: "task-quick-cell" });
   stopRowInteraction(cell);
   const state = quickActionState.get(task.id);
-  if (task.status === "in-progress" && task.job_run_id && task.job_run_navigable !== false) {
-    const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
-    link.href = `#runs?run_id=${encodeURIComponent(task.job_run_id)}`;
-    link.addEventListener("click", (event) => event.stopPropagation());
-    cell.appendChild(link);
-    return cell;
+  if (task.status === "in-progress" && task.job_run_id) {
+    // A missing flag stays a link: that is the historical unrecorded-host row.
+    // An explicit false means the run was recorded on another machine, so name
+    // that host instead of opening this host's job store.
+    if (task.job_run_navigable !== false) {
+      const link = el("a", { class: "task-quick-link", text: "View run", title: `Open run ${task.job_run_id}` });
+      link.href = `#runs?run_id=${encodeURIComponent(task.job_run_id)}`;
+      link.addEventListener("click", (event) => event.stopPropagation());
+      cell.appendChild(link);
+      return cell;
+    }
+    const location = summaryExecutionLocation(task.job_run_machine);
+    if (location.known) {
+      cell.appendChild(buildExecutionProvenance(location));
+      return cell;
+    }
   }
   let spec = null;
   if (task.status === "proposed") {
