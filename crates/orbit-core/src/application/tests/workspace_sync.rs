@@ -529,3 +529,140 @@ fn seeded_delivery_definitions_target_the_registered_base_branch() {
         .expect("read refreshed delivery definition");
     assert!(refreshed.contains("\n    branch: develop\n"), "{refreshed}");
 }
+
+/// A catalog holding byte-exact shipped files but no manifest, on a root
+/// Orbit may not write, still syncs; the report carries the skipped manifest
+/// write and no adoption claims provenance it never recorded.
+#[cfg(unix)]
+#[test]
+fn skipped_manifest_write_survives_the_report_without_claiming_provenance() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().expect("create tempdir");
+    let (global, workspace) = initialized_roots(root.path());
+    let jobs = global.join("resources/jobs");
+    let manifest_path = jobs.join(MANAGED_ASSET_MANIFEST_FILE);
+    std::fs::remove_file(&manifest_path).expect("drop the job manifest");
+
+    std::fs::set_permissions(&jobs, std::fs::Permissions::from_mode(0o555))
+        .expect("make the job catalog read-only");
+    let report = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    );
+    std::fs::set_permissions(&jobs, std::fs::Permissions::from_mode(0o755))
+        .expect("restore job catalog permissions");
+
+    let report = report.expect("a denied manifest write stays tolerant");
+    assert!(!manifest_path.exists(), "the denied write left no manifest");
+    let skipped: Vec<_> = report
+        .warnings
+        .iter()
+        .filter(|warning| {
+            warning.contains("could not write managed job asset manifest")
+                && warning.contains(MANAGED_ASSET_MANIFEST_FILE)
+        })
+        .collect();
+    assert_eq!(skipped.len(), 1, "{:?}", report.warnings);
+    let migrated: Vec<_> = report
+        .actions
+        .iter()
+        .filter(|action| action.kind == "job" && action.outcome == ManagedArtifactOutcome::Migrated)
+        .collect();
+    assert!(!migrated.is_empty(), "exact shipped jobs are adopted");
+    for action in migrated {
+        let detail = action.detail.as_deref().unwrap_or_default();
+        assert!(
+            detail.contains("not recorded"),
+            "an adoption without a manifest must not claim recorded provenance: {detail}"
+        );
+    }
+    let serialized = serde_json::to_value(&report).expect("serialize report");
+    assert!(
+        serialized["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .is_some_and(|warning| warning.contains("could not write managed job"))),
+        "{serialized}"
+    );
+
+    // Once the catalog is writable the same sync records provenance and a
+    // repeat is warning-free and inert.
+    let recorded = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    )
+    .expect("sync a writable catalog");
+    assert!(recorded.warnings.is_empty(), "{:?}", recorded.warnings);
+    assert!(manifest_path.exists());
+    let second = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    )
+    .expect("repeat sync");
+    assert!(!second.has_pending_changes());
+    assert!(second.warnings.is_empty(), "{:?}", second.warnings);
+}
+
+/// Untracked YAML in a manifestless catalog has no action of its own; its
+/// warning must still reach the report, and `--check` writes nothing.
+#[test]
+fn ambiguous_legacy_yaml_warning_survives_check_and_apply() {
+    let root = tempdir().expect("create tempdir");
+    let (global, workspace) = initialized_roots(root.path());
+    let activities = global.join("resources/activities");
+    let manifest_path = activities.join(MANAGED_ASSET_MANIFEST_FILE);
+    std::fs::remove_file(&manifest_path).expect("drop the activity manifest");
+    let legacy = activities.join("legacy_operator_activity.yaml");
+    std::fs::write(&legacy, "name: legacy_operator_activity\n").expect("write legacy YAML");
+
+    let is_legacy_warning = |warning: &String| {
+        warning.contains("no managed provenance")
+            && warning.contains("legacy_operator_activity.yaml")
+    };
+    let checked = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        true,
+    )
+    .expect("check a manifestless catalog");
+    assert!(
+        checked.warnings.iter().any(is_legacy_warning),
+        "{:?}",
+        checked.warnings
+    );
+    assert!(!manifest_path.exists(), "--check must not write a manifest");
+
+    let applied = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "main",
+        false,
+    )
+    .expect("apply to a manifestless catalog");
+    assert!(
+        applied.warnings.iter().any(is_legacy_warning),
+        "{:?}",
+        applied.warnings
+    );
+    assert!(manifest_path.exists());
+    assert_eq!(
+        std::fs::read_to_string(&legacy).expect("legacy YAML preserved"),
+        "name: legacy_operator_activity\n"
+    );
+}

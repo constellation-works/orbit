@@ -130,9 +130,16 @@ fn format_report(report: &WorkspaceManagedArtifactSyncReport) -> String {
                 .unwrap_or_default()
         );
     }
+    for warning in &report.warnings {
+        let _ = writeln!(output, "  warning: {warning}");
+    }
     if report.check && report.has_pending_changes() {
         output.push_str(
             "pending managed-artifact changes; run `orbit workspace sync` to apply them\n",
+        );
+    } else if !report.warnings.is_empty() {
+        output.push_str(
+            "managed artifacts not fully converged; resolve the warnings above, then rerun `orbit workspace sync`\n",
         );
     } else if report.has_pending_changes() {
         output.push_str("managed artifacts converged\n");

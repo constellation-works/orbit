@@ -75,6 +75,10 @@ pub struct ManagedArtifactSyncAction {
 pub struct WorkspaceManagedArtifactSyncReport {
     pub check: bool,
     pub actions: Vec<ManagedArtifactSyncAction>,
+    /// Operator warnings no action's `detail` already carries: a manifest
+    /// write skipped on a read-only or permission-denied catalog, or
+    /// untracked legacy YAML preserved in place.
+    pub warnings: Vec<String>,
 }
 
 impl WorkspaceManagedArtifactSyncReport {
@@ -115,6 +119,7 @@ pub fn reconcile_workspace_managed_artifacts(
     let mut report = WorkspaceManagedArtifactSyncReport {
         check,
         actions: Vec::new(),
+        warnings: Vec::new(),
     };
 
     let skills = reconcile_managed_assets_in_mode(
@@ -234,6 +239,16 @@ fn append_actions(
     kind: &str,
     reconciliation: ManagedAssetReconciliation,
 ) {
+    // Most warnings also describe a preserved action and already reach the
+    // report as its detail; keep the rest, which have no action to ride on.
+    report
+        .warnings
+        .extend(reconciliation.warnings.into_iter().filter(|warning| {
+            !reconciliation
+                .actions
+                .iter()
+                .any(|action| action.detail.as_ref() == Some(warning))
+        }));
     report.actions.extend(
         reconciliation
             .actions

@@ -152,13 +152,14 @@ fn stubbed_erofs_and_eacces_are_skippable() {
             "{error} should be skippable"
         );
         let mut warnings = Vec::new();
-        record_managed_manifest_write(
+        let recorded = record_managed_manifest_write(
             Path::new("/tmp/.orbit-managed-assets.json"),
             "activity",
             Err(io::Error::from_raw_os_error(errno)),
             &mut warnings,
         )
         .expect("skippable write must not fail closed");
+        assert!(!recorded, "a skipped write must not report persistence");
         assert_eq!(warnings.len(), 1, "{errno}");
         assert!(
             warnings[0].contains("could not write managed activity asset manifest"),
