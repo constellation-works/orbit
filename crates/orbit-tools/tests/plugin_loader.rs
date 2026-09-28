@@ -119,15 +119,18 @@ fn rejects_unknown_keys_naming_the_field() {
 
 #[test]
 fn rejects_a_ref_escaping_the_plugin_root() {
-    let temp = scratch_example();
-    let outside = temp.path().parent().expect("parent").join("outside.json");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let plugin_root = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_root).expect("create plugin root");
+    copy_tree(&graph_example(), &plugin_root);
+    let outside = temp.path().join("outside.json");
     std::fs::write(&outside, "{\"type\":\"object\"}").expect("write outside schema");
     rewrite_manifest(
-        temp.path(),
+        &plugin_root,
         "input_schema:  { $ref: schemas/recommend.request.json }",
         "input_schema:  { $ref: ../outside.json }",
     );
-    let error = load_plugin_dir(temp.path()).unwrap_err();
+    let error = load_plugin_dir(&plugin_root).unwrap_err();
     assert_eq!(
         manifest_field(error.clone()),
         "spec.tools[0].input_schema.$ref"
