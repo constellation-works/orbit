@@ -5,19 +5,24 @@
 //! deadline can signal the child and the descendants that inherited its group.
 //! Other targets have no group primitive — [`super::ancestry::current_process_group`]
 //! is `None` there — and only the direct child is killed.
+//!
+//! Both pipes are drained while the child runs, so a verbose child never stalls
+//! on a full pipe. [`run_bounded_capped`] keeps only a prefix of each stream.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::output_capture::BoundedOutputCapture;
 use crate::OrbitError;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// How long a SIGTERM may take before the group is SIGKILL'd.
 const TERM_GRACE: Duration = Duration::from_millis(200);
-/// After the child is gone, keep pulling pipes only this long. Dropping the
-/// read end then unblocks a writer the group signal did not reach.
+/// After the child is gone, keep pulling pipes only this long, and never past
+/// the caller's deadline. Dropping the read end then unblocks a writer the
+/// group signal did not reach.
 const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
 
 /// Stdout, stderr, and exit status of a child that finished before the deadline.
@@ -25,9 +30,9 @@ const DRAIN_AFTER_EXIT: Duration = Duration::from_millis(500);
 pub struct CapturedOutput {
     /// Exit status of the direct child.
     pub status: ExitStatus,
-    /// Everything the child wrote to stdout.
+    /// What the child wrote to stdout, up to the retention limit.
     pub stdout: Vec<u8>,
-    /// Everything the child wrote to stderr.
+    /// What the child wrote to stderr, up to the retention limit.
     pub stderr: Vec<u8>,
 }
 
@@ -48,6 +53,23 @@ pub fn run_bounded(
     command: &mut Command,
     deadline: Duration,
 ) -> Result<CapturedOutput, OrbitError> {
+    run_bounded_capped(command, deadline, usize::MAX)
+}
+
+/// [`run_bounded`] that retains at most `output_limit` bytes of each stream.
+///
+/// Output past the limit is still read, so the child never blocks on a full
+/// pipe, but it is discarded; a truncated stream ends with
+/// [`OUTPUT_TRUNCATED_MARKER`](super::output_capture::OUTPUT_TRUNCATED_MARKER).
+///
+/// # Errors
+///
+/// Same as [`run_bounded`].
+pub fn run_bounded_capped(
+    command: &mut Command,
+    deadline: Duration,
+    output_limit: usize,
+) -> Result<CapturedOutput, OrbitError> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -56,11 +78,15 @@ pub fn run_bounded(
     let child = command
         .spawn()
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
-    supervise(child, deadline)
+    supervise(child, deadline, output_limit)
 }
 
 #[cfg(unix)]
-fn supervise(mut child: Child, deadline: Duration) -> Result<CapturedOutput, OrbitError> {
+fn supervise(
+    mut child: Child,
+    deadline: Duration,
+    output_limit: usize,
+) -> Result<CapturedOutput, OrbitError> {
     let leader = child.id();
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
@@ -70,8 +96,8 @@ fn supervise(mut child: Child, deadline: Duration) -> Result<CapturedOutput, Orb
     }
 
     let started = Instant::now();
-    let mut out = Vec::new();
-    let mut err = Vec::new();
+    let mut out = BoundedOutputCapture::new(output_limit);
+    let mut err = BoundedOutputCapture::new(output_limit);
     loop {
         let out_eof = drain_pipe(stdout.as_mut(), &mut out)?;
         let err_eof = drain_pipe(stderr.as_mut(), &mut err)?;
@@ -82,18 +108,20 @@ fn supervise(mut child: Child, deadline: Duration) -> Result<CapturedOutput, Orb
             // The leader is reaped. Signal the group so a descendant that
             // inherited it and is still holding a pipe is torn down with it.
             signal_owned_group(leader, kill_signal());
-            drain_until(stdout.as_mut(), &mut out, out_eof, DRAIN_AFTER_EXIT)?;
-            drain_until(stderr.as_mut(), &mut err, err_eof, DRAIN_AFTER_EXIT)?;
+            let drain_end =
+                Instant::now() + DRAIN_AFTER_EXIT.min(deadline.saturating_sub(started.elapsed()));
+            drain_until(stdout.as_mut(), &mut out, out_eof, drain_end)?;
+            drain_until(stderr.as_mut(), &mut err, err_eof, drain_end)?;
             return Ok(CapturedOutput {
                 status,
-                stdout: out,
-                stderr: err,
+                stdout: out.into_bytes(),
+                stderr: err.into_bytes(),
             });
         }
         if started.elapsed() >= deadline {
+            // The output is discarded; dropping the pipes on return unblocks
+            // any writer the group signal missed.
             terminate(&mut child, leader)?;
-            let _ = drain_until(stdout.as_mut(), &mut out, out_eof, DRAIN_AFTER_EXIT);
-            let _ = drain_until(stderr.as_mut(), &mut err, err_eof, DRAIN_AFTER_EXIT);
             return Err(process_timeout(deadline));
         }
         thread::sleep(POLL_INTERVAL);
@@ -101,10 +129,14 @@ fn supervise(mut child: Child, deadline: Duration) -> Result<CapturedOutput, Orb
 }
 
 #[cfg(not(unix))]
-fn supervise(mut child: Child, deadline: Duration) -> Result<CapturedOutput, OrbitError> {
+fn supervise(
+    mut child: Child,
+    deadline: Duration,
+    output_limit: usize,
+) -> Result<CapturedOutput, OrbitError> {
     let leader = child.id();
-    let stdout = spawn_reader(child.stdout.take());
-    let stderr = spawn_reader(child.stderr.take());
+    let stdout = spawn_reader(child.stdout.take(), output_limit);
+    let stderr = spawn_reader(child.stderr.take(), output_limit);
     let started = Instant::now();
     loop {
         if let Some(status) = child
@@ -128,7 +160,10 @@ fn supervise(mut child: Child, deadline: Duration) -> Result<CapturedOutput, Orb
 }
 
 #[cfg(not(unix))]
-fn spawn_reader<R>(pipe: Option<R>) -> Option<std::sync::mpsc::Receiver<io::Result<Vec<u8>>>>
+fn spawn_reader<R>(
+    pipe: Option<R>,
+    output_limit: usize,
+) -> Option<std::sync::mpsc::Receiver<io::Result<Vec<u8>>>>
 where
     R: Read + Send + 'static,
 {
@@ -136,8 +171,18 @@ where
     // One shot: the reader sends exactly the finished buffer.
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     thread::spawn(move || {
-        let mut buf = Vec::new();
-        let result = pipe.read_to_end(&mut buf).map(|_len| buf);
+        let mut buf = BoundedOutputCapture::new(output_limit);
+        let mut tmp = [0u8; 8192];
+        let result = loop {
+            match pipe.read(&mut tmp) {
+                Ok(0) => break Ok(buf.into_bytes()),
+                Ok(n) => {
+                    buf.push(&tmp[..n]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => break Err(error),
+            }
+        };
         let _ = tx.send(result);
     });
     Some(rx)
@@ -167,7 +212,10 @@ fn process_timeout(deadline: Duration) -> OrbitError {
 }
 
 #[cfg(unix)]
-fn drain_pipe(pipe: Option<&mut impl Read>, buf: &mut Vec<u8>) -> Result<bool, OrbitError> {
+fn drain_pipe(
+    pipe: Option<&mut impl Read>,
+    buf: &mut BoundedOutputCapture,
+) -> Result<bool, OrbitError> {
     match pipe {
         Some(pipe) => {
             read_available(pipe, buf).map_err(|error| OrbitError::Execution(error.to_string()))
@@ -176,17 +224,17 @@ fn drain_pipe(pipe: Option<&mut impl Read>, buf: &mut Vec<u8>) -> Result<bool, O
     }
 }
 
+/// Read until EOF or `deadline`; at least one read happens before giving up.
 #[cfg(unix)]
 fn drain_until(
     pipe: Option<&mut impl Read>,
-    buf: &mut Vec<u8>,
+    buf: &mut BoundedOutputCapture,
     mut eof: bool,
-    budget: Duration,
+    deadline: Instant,
 ) -> Result<(), OrbitError> {
     let Some(pipe) = pipe else {
         return Ok(());
     };
-    let deadline = Instant::now() + budget;
     while !eof {
         eof =
             read_available(pipe, buf).map_err(|error| OrbitError::Execution(error.to_string()))?;
@@ -200,12 +248,14 @@ fn drain_until(
 
 /// Read whatever is currently buffered. `Ok(true)` means the pipe reached EOF.
 #[cfg(unix)]
-fn read_available(pipe: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<bool> {
+fn read_available(pipe: &mut impl Read, buf: &mut BoundedOutputCapture) -> io::Result<bool> {
     let mut tmp = [0u8; 8192];
     loop {
         match pipe.read(&mut tmp) {
             Ok(0) => return Ok(true),
-            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Ok(n) => {
+                buf.push(&tmp[..n]);
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
             Err(error) => return Err(error),
