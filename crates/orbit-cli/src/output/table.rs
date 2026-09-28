@@ -218,7 +218,9 @@ impl Table {
     ///
     /// Truncation is disabled by construction rather than by passing a width:
     /// a plain sink has no width, and silently shortening a value on its way
-    /// into a pipe is the failure this form exists to avoid.
+    /// into a pipe is the failure this form exists to avoid. Each value is
+    /// passed through [`escape_plain`] so an embedded tab or line break cannot
+    /// split one record into extra fields or lines (spec §1).
     pub(crate) fn render_plain(&self, sink: &OutputSink) -> String {
         let visible = self.visible_columns(sink.suppress_uniform_columns());
         self.rows
@@ -226,7 +228,7 @@ impl Table {
             .map(|row| {
                 visible
                     .iter()
-                    .map(|index| cell_at(row, *index).content())
+                    .map(|index| escape_plain(&cell_at(row, *index).content()))
                     .collect::<Vec<_>>()
                     .join("\t")
             })
@@ -446,6 +448,27 @@ pub(crate) struct Rendered {
 
 fn cell_at(row: &[Cell], index: usize) -> Cell {
     row.get(index).cloned().unwrap_or_else(|| Cell::new(""))
+}
+
+/// Encode a plain-form field so it cannot contain the form's field or record
+/// separator: backslash, tab, line feed, and carriage return become `\\`,
+/// `\t`, `\n`, and `\r`. Escaping the backslash keeps the encoding reversible;
+/// a value with none of the four is returned unchanged.
+fn escape_plain(value: &str) -> String {
+    if !value.contains(['\\', '\t', '\n', '\r']) {
+        return value.to_string();
+    }
+    let mut escaped = String::with_capacity(value.len() + 2);
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '\t' => escaped.push_str("\\t"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 fn total_width(layout: &[(usize, usize)]) -> usize {

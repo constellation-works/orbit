@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Table Rendering"
-last_validated: 2026-09-24
+last_validated: 2026-09-27
 ---
 
 # Spec: Table Rendering
@@ -17,6 +17,7 @@ Before [ORB-10567], `build_table` paired `UTF8_BORDERS_ONLY` with `ContentArrang
 - **Header.** One row, uppercase, dim, no rule beneath it. Present in `table` mode; absent in the plain (piped) form so consumers need not skip a line. Suppress the header when the result set is empty — print the empty-state line from §6 instead.
 - **Body.** One line per record. No leading indent, no outer border, no column separators.
 - **Gutter.** Exactly two spaces between columns. Padding is spaces only; never tabs in `table` mode.
+- **Plain field encoding.** The plain form separates fields with a tab and records with a line feed, so a value may contain neither. Each plain field is escaped: a backslash becomes `\\`, a tab `\t`, a line feed `\n`, and a carriage return `\r`. A title stored as `first line`⏎`second`⇥`field` is piped as the single field `first line\nsecond\tfield`. A value without those four characters renders unchanged, and the escape is reversible. Only the plain form is encoded: `json` and `ndjson` carry the stored value, and the `table` rendering keeps its one-line truncation (§4).
 - **No footer.** Counts, totals, and pagination hints go to stderr or a `--stats` flag, never into the table body where a consumer would parse them as a record.
 
 ## 2. Column Widths

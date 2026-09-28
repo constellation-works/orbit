@@ -58,6 +58,77 @@ fn task_list_renders_one_line_per_task() {
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
 }
 
+/// A stored title may carry a line feed, carriage return, or tab. The plain form
+/// escapes them so the record stays one line with a stable field count, while
+/// JSON and NDJSON carry the value exactly as stored (spec §1).
+#[test]
+fn task_list_plain_escapes_embedded_separators_and_json_keeps_them() {
+    const RAW_TITLE: &str = "first line\nsecond\tfield\r\nthird";
+    const ESCAPED_TITLE: &str = "first line\\nsecond\\tfield\\r\\nthird";
+    const ORDINARY_TITLE: &str = "An ordinary single-line title";
+    let workspace = TestWorkspace::new();
+    workspace.add_task(RAW_TITLE);
+    workspace.add_task(ORDINARY_TITLE);
+
+    let plain = workspace.run(&["task", "list"], "plain task list");
+    let stdout = String::from_utf8(plain.stdout).expect("utf-8 stdout");
+    assert!(
+        !stdout.contains('\r'),
+        "a raw carriage return reached the pipe: {stdout:?}"
+    );
+    let rows = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(rows.len(), 2, "one physical line per task: {stdout:?}");
+    let fields = rows
+        .iter()
+        .map(|row| row.split('\t').collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields[0].len(),
+        fields[1].len(),
+        "every row carries the same field count: {stdout:?}"
+    );
+    let titles = fields
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect::<Vec<_>>();
+    assert!(
+        titles.contains(&ESCAPED_TITLE),
+        "the embedded separators are escaped within one field: {stdout:?}"
+    );
+    assert!(
+        titles.contains(&ORDINARY_TITLE),
+        "an ordinary title renders unchanged: {stdout:?}"
+    );
+
+    let json = workspace.run(&["task", "list", "--format", "json"], "task list JSON");
+    let tasks: Value = serde_json::from_slice(&json.stdout).expect("task list JSON");
+    let json_titles = tasks
+        .as_array()
+        .expect("task array")
+        .iter()
+        .map(|task| task["title"].as_str().expect("title").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        json_titles.iter().any(|title| title == RAW_TITLE),
+        "JSON keeps the stored title: {json_titles:?}"
+    );
+
+    let ndjson = workspace.run(&["task", "list", "--format", "ndjson"], "task list NDJSON");
+    let ndjson_titles = String::from_utf8(ndjson.stdout)
+        .expect("utf-8 NDJSON")
+        .lines()
+        .map(|line| {
+            let task: Value = serde_json::from_str(line).expect("NDJSON record");
+            task["title"].as_str().expect("title").to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ndjson_titles.len(), 2, "one NDJSON record per task");
+    assert!(
+        ndjson_titles.iter().any(|title| title == RAW_TITLE),
+        "NDJSON keeps the stored title: {ndjson_titles:?}"
+    );
+}
+
 #[test]
 fn job_show_json_contains_no_human_step_rows() {
     let workspace = TestWorkspace::new();
