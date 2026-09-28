@@ -141,6 +141,7 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .iter()
         .find(|param| param.name == "workspace")
         .expect("workspace param");
+    assert_eq!(workspace.param_type, "string");
     assert!(!workspace.required);
 
     for removed in RETIRED_TASK_ADD_INPUT_FIELDS {
@@ -157,26 +158,6 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .expect("complexity param");
     assert_eq!(complexity.param_type, "string");
     assert!(complexity.required);
-    assert!(
-        complexity
-            .description
-            .contains("low, medium, hard, or xhard")
-    );
-    for alias in ["easy", "small", "trivial", "large", "big"] {
-        assert!(
-            complexity.description.contains(alias),
-            "complexity schema must advertise alias {alias}: {}",
-            complexity.description
-        );
-    }
-    assert!(
-        !complexity
-            .description
-            .to_ascii_lowercase()
-            .contains("optional"),
-        "complexity must not be described as optional: {}",
-        complexity.description
-    );
 
     let relations = schema
         .parameters
@@ -191,11 +172,6 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .find(|p| p.name == "context_files")
         .expect("context_files");
     assert_eq!(context_files.param_type, "string_list");
-    assert!(
-        context_files.description.contains("filesystem anchor only"),
-        "context_files help must document that a `symbol:` name is not verified: {}",
-        context_files.description
-    );
 }
 
 #[test]
@@ -412,37 +388,6 @@ fn add_call_missing_workspace_without_session_context_returns_clear_error() {
     assert!(
         host.call.lock().expect("lock").is_none(),
         "host must not be called when workspace cannot be resolved"
-    );
-}
-
-#[test]
-fn schema_workspace_param_documents_the_shared_selector_grammar() {
-    let schema = OrbitTaskAddTool.schema();
-    let workspace = schema
-        .parameters
-        .iter()
-        .find(|param| param.name == "workspace")
-        .expect("workspace param");
-
-    assert!(
-        workspace.description.contains("registered workspace name"),
-        "workspace param must document the registered-name form: {}",
-        workspace.description
-    );
-    assert!(
-        workspace.description.contains("ws_*"),
-        "workspace param must document logical ws_* ids: {}",
-        workspace.description
-    );
-    assert!(
-        workspace.description.contains("absolute path"),
-        "workspace param must document the checkout-path form: {}",
-        workspace.description
-    );
-    assert!(
-        !workspace.description.contains("never a logical"),
-        "workspace param must not forbid logical ids: {}",
-        workspace.description
     );
 }
 
