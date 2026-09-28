@@ -8,7 +8,7 @@ use orbit_types::task::{ORB_TASK_ID_MAX, TaskRelation, TaskRelationType, TaskSta
 use tempfile::TempDir;
 
 use crate::contracts::TaskHistoryUpdateParams;
-use crate::driver::file::task_bundle::bundle_lock_target;
+use crate::driver::file::task_bundle::{bundle_lock_target, publish_envelope};
 use crate::repository::task::TaskV2Store;
 use crate::workflow::task::reindex::{
     REINDEX_LOCK_BATCH, clear_after_reindex_snapshot_hook, clear_before_reindex_publication_hook,
@@ -229,6 +229,91 @@ fn assert_index_matches_disk(
             );
         }
     }
+}
+
+fn blocked_by(target: &str) -> TaskRelation {
+    TaskRelation {
+        relation_type: TaskRelationType::BlockedBy,
+        target: target.to_string(),
+    }
+}
+
+#[test]
+fn reindex_settles_reversed_relations_across_three_batches() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_reversed_relations";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let ids = seed_range(&store, &registry, ws, 0..2 * REINDEX_LOCK_BATCH + 1);
+    let (a, b, c) = (
+        &ids[0],
+        &ids[REINDEX_LOCK_BATCH],
+        &ids[2 * REINDEX_LOCK_BATCH],
+    );
+
+    // The index still has C -> B -> A, as it could after an external sync.
+    let mut old_b = store.read_bundle(b).unwrap().envelope;
+    old_b.relations = vec![blocked_by(a)];
+    registry.replace_task_index(ws, &old_b).unwrap();
+    let mut old_c = store.read_bundle(c).unwrap().envelope;
+    old_c.relations = vec![blocked_by(b)];
+    registry.replace_task_index(ws, &old_c).unwrap();
+
+    // The canonical bundles have the healthy reverse chain A -> B -> C.
+    for (id, target) in [(a, Some(b)), (b, Some(c)), (c, None)] {
+        let mut envelope = store.read_bundle(id).unwrap().envelope;
+        envelope.relations = target
+            .into_iter()
+            .map(|target| blocked_by(target))
+            .collect();
+        envelope.updated_at += chrono::Duration::seconds(1);
+        publish_envelope(&store.envelope_path(id).unwrap(), &envelope).unwrap();
+    }
+
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, ids.len());
+    assert_index_matches_disk(&store, &registry, ws, &ids);
+    for (source, targets) in [(a, vec![b.clone()]), (b, vec![c.clone()]), (c, vec![])] {
+        assert_eq!(
+            registry
+                .indexed_relation_targets(ws, source, TaskRelationType::BlockedBy)
+                .unwrap(),
+            targets,
+            "{source} relation index must match its canonical bundle"
+        );
+    }
+}
+
+#[test]
+fn reindex_retains_genuinely_invalid_relation_failure() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_invalid_relation";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    let ids = seed_range(&store, &registry, ws, 0..REINDEX_LOCK_BATCH + 1);
+    let invalid = &ids[0];
+    let healthy = ids.last().unwrap();
+    let mut invalid_envelope = store.read_bundle(invalid).unwrap().envelope;
+    invalid_envelope.relations = vec![blocked_by("ORB-99999")];
+    invalid_envelope.updated_at += chrono::Duration::seconds(1);
+    publish_envelope(&store.envelope_path(invalid).unwrap(), &invalid_envelope).unwrap();
+    let mut healthy_envelope = store.read_bundle(healthy).unwrap().envelope;
+    healthy_envelope.updated_at += chrono::Duration::seconds(1);
+    publish_envelope(&store.envelope_path(healthy).unwrap(), &healthy_envelope).unwrap();
+
+    let error = reindex_workspace(&registry, ws).unwrap_err();
+    assert!(error.to_string().contains("reindex incomplete"), "{error}");
+    assert!(error.to_string().contains(invalid), "{error}");
+    let versions = registry.indexed_task_versions_for_workspace(ws).unwrap();
+    assert_ne!(
+        versions.get(invalid).map(String::as_str),
+        Some(invalid_envelope.updated_at.to_rfc3339().as_str())
+    );
+    assert_eq!(
+        versions.get(healthy).map(String::as_str),
+        Some(healthy_envelope.updated_at.to_rfc3339().as_str())
+    );
 }
 
 #[test]

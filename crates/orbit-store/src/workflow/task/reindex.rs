@@ -125,32 +125,69 @@ pub fn reindex_workspace(
                 return Ok(envelopes.len());
             }
             // Relation validation also walks rows of tasks outside this batch,
-            // which may be stale rows a later batch replaces. Retry once every
-            // other batch has published.
+            // which may be stale rows a later batch replaces.
             deferred.extend(readable.into_iter().map(|(task_id, dir, _)| (task_id, dir)));
             Ok(0)
         })?;
     }
-    for batch in deferred.chunks(REINDEX_LOCK_BATCH) {
-        indexed += with_candidate_locks(batch, || {
-            let envelopes = inspect_batch(
-                &store,
-                registry,
-                &workspace_id,
-                batch,
-                &mut removed_stale,
-                &mut failures,
-            )
-            .into_iter()
-            .map(|(_, _, envelope)| envelope)
-            .collect::<Vec<_>>();
-            Ok(index_healthy_set(
-                registry,
-                &workspace_id,
-                &envelopes,
-                &mut failures,
-            ))
-        })?;
+    // Publishing a later batch may unblock an earlier one, and that earlier
+    // batch may in turn unblock another. Only a pass with no successful batch
+    // is stalled; failed attempts before that are not unresolved bundles.
+    while !deferred.is_empty() {
+        let mut remaining = Vec::new();
+        let mut published = 0;
+        for batch in deferred.chunks(REINDEX_LOCK_BATCH) {
+            published += with_candidate_locks(batch, || {
+                let readable = inspect_batch(
+                    &store,
+                    registry,
+                    &workspace_id,
+                    batch,
+                    &mut removed_stale,
+                    &mut failures,
+                );
+                let envelopes = readable
+                    .iter()
+                    .map(|(_, _, envelope)| envelope.clone())
+                    .collect::<Vec<_>>();
+                if registry
+                    .replace_task_indexes(&workspace_id, &envelopes)
+                    .is_ok()
+                {
+                    return Ok(envelopes.len());
+                }
+                remaining.extend(readable.into_iter().map(|(task_id, dir, _)| (task_id, dir)));
+                Ok(0)
+            })?;
+        }
+        indexed += published;
+        if published == 0 {
+            // A genuinely invalid relation cannot become valid by retrying
+            // the same rows. Repair any healthy members and retain errors.
+            for batch in remaining.chunks(REINDEX_LOCK_BATCH) {
+                indexed += with_candidate_locks(batch, || {
+                    let envelopes = inspect_batch(
+                        &store,
+                        registry,
+                        &workspace_id,
+                        batch,
+                        &mut removed_stale,
+                        &mut failures,
+                    )
+                    .into_iter()
+                    .map(|(_, _, envelope)| envelope)
+                    .collect::<Vec<_>>();
+                    Ok(index_healthy_set(
+                        registry,
+                        &workspace_id,
+                        &envelopes,
+                        &mut failures,
+                    ))
+                })?;
+            }
+            break;
+        }
+        deferred = remaining;
     }
 
     // Include unresolved IDs so allocator recovery cannot collide with data
