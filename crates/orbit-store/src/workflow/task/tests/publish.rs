@@ -536,6 +536,64 @@ fn an_unrecorded_push_reconciles_by_commit_id_instead_of_republishing() {
     );
 }
 
+/// Push N+1 over a recorded N, then lose the owner's save of N+1.
+fn land_unrecorded_advance(
+    fixture: &Fixture,
+) -> (PublicationPublishOutcome, PublicationPublishOutcome) {
+    let first = publish_first(fixture);
+    seed_task(fixture, "ORB-00002");
+    let landed = publish(fixture, request(fixture, 2, Some(&first))).expect("advance");
+    assert_eq!(landed.status, PublicationPublishStatus::Advanced);
+    (first, landed)
+}
+
+#[test]
+fn a_reconciled_push_survives_failed_recording_until_last_success_names_it() {
+    let fixture = fixture("ws_publish_reconcile_retry");
+    let (first, landed) = land_unrecorded_advance(&fixture);
+    let history = vec![landed.commit_id.clone(), first.commit_id.clone()];
+
+    // Each reconciliation's own save is lost too, so last success stays at N.
+    for second in [3, 4] {
+        let reconciled =
+            publish(&fixture, request(&fixture, second, Some(&first))).expect("reconcile");
+        assert_eq!(reconciled.status, PublicationPublishStatus::Reconciled);
+        assert_eq!(reconciled.commit_id, landed.commit_id);
+        assert_eq!(reconciled.generation, 2);
+        assert_eq!(fixture.remote_history(), history);
+        assert_eq!(read_pending(&fixture).commit, landed.commit_id);
+    }
+
+    // A request carrying the landed commit proves it was recorded; cleanup is
+    // then idempotent and nothing new is pushed.
+    for second in [5, 6] {
+        let recorded =
+            publish(&fixture, request(&fixture, second, Some(&landed))).expect("recorded");
+        assert_eq!(recorded.status, PublicationPublishStatus::Unchanged);
+        assert_eq!(recorded.commit_id, landed.commit_id);
+        assert_eq!(fixture.remote_history(), history);
+        assert!(!pending_path(&fixture).exists());
+    }
+}
+
+#[test]
+fn a_retained_pending_push_does_not_excuse_an_unrelated_tip() {
+    let fixture = fixture("ws_publish_reconcile_conflict");
+    let (first, landed) = land_unrecorded_advance(&fixture);
+    let reconciled = publish(&fixture, request(&fixture, 3, Some(&first))).expect("reconcile");
+    assert_eq!(reconciled.status, PublicationPublishStatus::Reconciled);
+
+    let snapshot = external_snapshot(&fixture, "after-reconcile", 3, Some(&landed.commit_id));
+    let competing = push_external(&fixture, "after-reconcile", &snapshot, false);
+    for last in [&first, &landed] {
+        let error = publish(&fixture, request(&fixture, 4, Some(last)))
+            .unwrap_err()
+            .to_string();
+        assert_authority_conflict(&error, &competing);
+    }
+    assert_eq!(fixture.remote_tip().as_deref(), Some(competing.as_str()));
+}
+
 #[test]
 fn publication_never_touches_the_source_repository_or_canonical_state() {
     let fixture = fixture("ws_publish_readonly");
@@ -860,7 +918,6 @@ impl Drop for GitDeadlineGuard {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug, Deserialize)]
 struct PendingView {
     commit: String,
@@ -945,7 +1002,7 @@ fn a_stalled_push_times_out_keeps_pending_and_reconciles_a_landed_commit() {
         !marker.exists(),
         "reconcile pushed again after the timed-out publish had already landed"
     );
-    assert!(!pending_path(&fixture).exists());
+    assert_eq!(read_pending(&fixture).commit, reconciled.commit_id);
 }
 
 #[cfg(unix)]
@@ -958,7 +1015,6 @@ fn install_hook(remote: &Path, body: &str) {
     fs::set_permissions(&path, permissions).expect("hook mode");
 }
 
-#[cfg(unix)]
 fn pending_path(fixture: &Fixture) -> PathBuf {
     fixture
         .cache
@@ -967,7 +1023,6 @@ fn pending_path(fixture: &Fixture) -> PathBuf {
         .join("pending-publication.yaml")
 }
 
-#[cfg(unix)]
 fn read_pending(fixture: &Fixture) -> PendingView {
     let raw = fs::read_to_string(pending_path(fixture)).expect("pending publication record");
     serde_yaml::from_str(&raw).expect("pending publication yaml")
