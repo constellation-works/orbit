@@ -828,6 +828,85 @@ fn files_shape_reservations_conflict_and_release_like_task_reservations() {
 }
 
 #[test]
+fn a_whole_workspace_reservation_conflicts_with_a_descendant_file() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn ok() {}\n").expect("write source file");
+    let reserve = |files: Value| {
+        run_tool_as_operator(
+            &runtime,
+            "orbit.task.locks.reserve",
+            json!({
+                "files": files,
+                "ttl_seconds": 3600,
+                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+            }),
+        )
+        .expect("reserve file selectors")
+    };
+    let release = |reservation: &Value| {
+        run_tool_as_operator(
+            &runtime,
+            "orbit.task.locks.release",
+            json!({
+                "reservation_id": reservation["reservation_id"],
+                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+            }),
+        )
+        .expect("release reservation");
+    };
+
+    // Relative and absolute spellings of the workspace hold the same root.
+    for root in ["dir:.".to_string(), format!("dir:{}", repo_root.display())] {
+        let whole = reserve(json!([root]));
+        assert_eq!(whole["reserved"], true, "`{root}` reserves");
+        assert_eq!(whole["reserved_files"], json!(["dir:."]));
+
+        let task = create_context_task(
+            &runtime,
+            &repo_root,
+            TaskStatus::Backlog,
+            &["file:src/lib.rs"],
+        );
+        let blocked = run_tool_as_operator(
+            &runtime,
+            "orbit.task.locks.reserve",
+            json!({
+                "task_ids": [task.id],
+                "ttl_seconds": 3600,
+                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+            }),
+        )
+        .expect("task reservation returns conflict");
+        assert_eq!(blocked["reserved"], false, "`{root}` holds `src/lib.rs`");
+        assert_eq!(
+            blocked["conflicts"],
+            json!([{
+                "file": "file:src/lib.rs",
+                "held_by": "reservation",
+                "held_by_id": whole["reservation_id"],
+            }])
+        );
+        release(&whole);
+    }
+
+    // The reverse order: a held descendant blocks a whole-workspace request.
+    let descendant = reserve(json!(["file:src/lib.rs"]));
+    assert_eq!(descendant["reserved"], true);
+    let blocked = reserve(json!(["dir:."]));
+    assert_eq!(blocked["reserved"], false);
+    assert_eq!(
+        blocked["conflicts"],
+        json!([{
+            "file": "dir:.",
+            "held_by": "reservation",
+            "held_by_id": descendant["reservation_id"],
+        }])
+    );
+}
+
+#[test]
 fn files_shape_reservations_reject_outside_workspace_before_persisting() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, _repo_root) = test_runtime();
