@@ -2366,7 +2366,9 @@ Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText
 const { initRuns, renderRuns } = await import("./js/runs.js");
 
 let loading = true;
-let lastRuns = [];
+let lastRuns = [
+  { run_id: "jrun-current-success", job_id: "ship", state: "succeeded", created_at: "2026-09-07T09:00:00Z" },
+];
 let lastMeta = { state: "all", total: 4, limit: 3, truncated: true };
 let navigated = null;
 initRuns({
@@ -2381,15 +2383,36 @@ initRuns({
 });
 
 renderRuns(lastRuns);
+const runsBody = get("runs-body");
+const hasRunsClass = (className) => runsBody.children.some((node) => node.className.includes(className));
+if (get("diag-count").textContent !== "…") {
+  throw new Error(`mismatched all-runs payload must keep the count in its loading state, got: ${get("diag-count").textContent}`);
+}
+if (!hasRunsClass("skeleton-state") || hasRunsClass("empty-state")) {
+  throw new Error("mismatched all-runs payload must render loading affordances instead of a genuine empty state");
+}
+if (hasRunsClass("runs-limit-note")) {
+  throw new Error("loading results must not present a stale truncated-results affordance");
+}
+
 loading = false;
 lastRuns = [];
 lastMeta = { state: "failed", total: 0, limit: 25, truncated: false };
 renderRuns(lastRuns);
+if (get("diag-count").textContent !== "0 shown · 0 total") {
+  throw new Error(`genuine empty failed results must render their count, got: ${get("diag-count").textContent}`);
+}
+if (!hasRunsClass("empty-state") || hasRunsClass("skeleton-state") || hasRunsClass("runs-limit-note")) {
+  throw new Error("genuine empty failed results must show the empty state without loading or truncation affordances");
+}
 lastRuns = [
   { run_id: "jrun-older-failed", job_id: "ship", state: "failed", created_at: "2026-09-07T10:00:00Z", finished_at: "2026-09-07T10:01:00Z" },
 ];
 lastMeta = { state: "failed", total: 1, limit: 3, truncated: false };
 renderRuns(lastRuns);
+if (get("diag-count").textContent !== "1 shown · 1 total") {
+  throw new Error(`filtered failed results must render their count, got: ${get("diag-count").textContent}`);
+}
 const failedRows = get("runs-body").children.filter((node) => node.className.includes("runs-row") && !node.className.includes("runs-header"));
 if (failedRows.length !== 1 || !failedRows[0].textContent.includes("jrun-older-failed")) {
   throw new Error("server-filtered failed payload must keep a failure older than the recent success slice");
@@ -2407,6 +2430,16 @@ lastRuns = Array.from({ length: 25 }, (_, index) => ({
 }));
 lastMeta = { state: "failed", total: 81, limit: 25, truncated: true };
 renderRuns(lastRuns);
+if (get("diag-count").textContent !== "25 shown · 81 total · server limit 25") {
+  throw new Error(`truncated failed results must render the shown and total counts, got: ${get("diag-count").textContent}`);
+}
+const truncatedRows = runsBody.children.filter((node) => node.className.includes("runs-row") && !node.className.includes("runs-header"));
+if (truncatedRows.length !== 25) {
+  throw new Error(`truncated failed results must render 25 rows, got: ${truncatedRows.length}`);
+}
+if (!hasRunsClass("runs-limit-note")) {
+  throw new Error("truncated failed results must render the limit affordance");
+}
 
 "#,
     );
