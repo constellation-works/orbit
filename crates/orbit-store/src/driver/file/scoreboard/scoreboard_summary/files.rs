@@ -1,6 +1,7 @@
 //! Scoreboard files on disk: the summary write path and the validated reads
 //! of the model and token scoreboards.
 
+use super::super::common::read_scoreboard_file;
 use super::ScoreboardSummary;
 use super::overlay::normalize_model_scoreboard;
 use super::types::FamilyScoreboard;
@@ -33,11 +34,20 @@ pub fn summary_path(scoreboard_dir: &Path) -> std::path::PathBuf {
 }
 
 pub(super) fn read_model_scoreboard(scoreboard_dir: &Path) -> Result<FamilyScoreboard, OrbitError> {
-    let Some(path) = validated_scoreboard_file_path(scoreboard_dir, ScoreboardFile::Pr)? else {
+    read_model_scoreboard_after_check(scoreboard_dir, |_| Ok(()))
+}
+
+/// [`read_model_scoreboard`] with a hook between the pathname check and the
+/// descriptor open, so tests can swap the file in that window.
+pub(super) fn read_model_scoreboard_after_check(
+    scoreboard_dir: &Path,
+    before_open: impl FnOnce(&Path) -> Result<(), OrbitError>,
+) -> Result<FamilyScoreboard, OrbitError> {
+    let Some(raw) =
+        read_validated_scoreboard_file(scoreboard_dir, ScoreboardFile::Pr, before_open)?
+    else {
         return Ok(FamilyScoreboard::new());
     };
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| OrbitError::Io(format!("read {PR_SCOREBOARD_FILENAME}: {e}")))?;
     if raw.trim().is_empty() {
         return Ok(FamilyScoreboard::new());
     }
@@ -62,12 +72,26 @@ impl ScoreboardFile {
     }
 }
 
+/// Read a fixed scoreboard file after validating its path, binding the read to
+/// a no-follow descriptor so a swap after validation cannot redirect it.
+fn read_validated_scoreboard_file(
+    scoreboard_dir: &Path,
+    file: ScoreboardFile,
+    before_open: impl FnOnce(&Path) -> Result<(), OrbitError>,
+) -> Result<Option<String>, OrbitError> {
+    let Some(path) = validated_scoreboard_file_path(scoreboard_dir, file)? else {
+        return Ok(None);
+    };
+    read_scoreboard_file(&path, before_open)
+}
+
 /// Resolve a fixed scoreboard file beneath the selected scoreboard root.
 ///
 /// The root is selected by the workspace configuration, but the file read by
 /// this summary is fixed. Canonicalizing the root, checking containment, and
 /// rejecting a symlink or non-regular target prevents a path component from
-/// redirecting this read to an unrelated file.
+/// redirecting this read to an unrelated file. The pathname check alone cannot
+/// pin the inode later opened; [`read_scoreboard_file`] closes that window.
 fn validated_scoreboard_file_path(
     scoreboard_dir: &Path,
     file: ScoreboardFile,
@@ -136,11 +160,20 @@ fn validated_scoreboard_file_path(
 }
 
 pub(super) fn read_token_agents(scoreboard_dir: &Path) -> Result<Vec<TokenAgentEntry>, OrbitError> {
-    let Some(path) = validated_scoreboard_file_path(scoreboard_dir, ScoreboardFile::Tokens)? else {
+    read_token_agents_after_check(scoreboard_dir, |_| Ok(()))
+}
+
+/// [`read_token_agents`] with a hook between the pathname check and the
+/// descriptor open, so tests can swap the file in that window.
+pub(super) fn read_token_agents_after_check(
+    scoreboard_dir: &Path,
+    before_open: impl FnOnce(&Path) -> Result<(), OrbitError>,
+) -> Result<Vec<TokenAgentEntry>, OrbitError> {
+    let Some(raw) =
+        read_validated_scoreboard_file(scoreboard_dir, ScoreboardFile::Tokens, before_open)?
+    else {
         return Ok(Vec::new());
     };
-    let raw =
-        fs::read_to_string(&path).map_err(|e| OrbitError::Io(format!("read tokens.json: {e}")))?;
     if raw.trim().is_empty() {
         return Ok(Vec::new());
     }
