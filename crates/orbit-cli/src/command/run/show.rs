@@ -2,7 +2,7 @@ use clap::Args;
 use std::collections::HashSet;
 
 use orbit_core::runtime::audit::run::RunProviderProcess;
-use orbit_core::{CatalogReferenceLayer, JobRun, NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
@@ -362,9 +362,7 @@ pub(crate) fn legacy_logs_summary_payload(
     run_id: &str,
     step_id: Option<&str>,
 ) -> CommandOut {
-    let run = runtime
-        .show_job_run(run_id)
-        .map_err(|_| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
+    let run = runtime.show_job_run(run_id)?;
     let steps = filtered_steps(&run, step_id)?;
 
     let values = steps

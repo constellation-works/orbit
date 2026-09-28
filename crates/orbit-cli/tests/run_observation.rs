@@ -10,6 +10,9 @@
 //! finalized as `interrupted` and its reservations released, either lazily by
 //! the query or at runtime open. Each fixture here spawns the real binary
 //! against a disposable home so the runtime-open path is exercised too.
+//!
+//! An explicit run lookup also keeps a store failure distinct from a missing
+//! run, so an unreadable record is not reported as nonexistent.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -195,6 +198,17 @@ impl Fixture {
         );
         serde_json::from_slice(&output.stdout).expect("json output")
     }
+
+    /// The structured error a failing `--json` invocation writes to stderr.
+    fn failure(&self, args: &[&str]) -> Value {
+        let output = self.orbit().args(args).output().expect("spawn orbit");
+        assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Legacy `orbit logs` prints a deprecation line ahead of the error.
+        let start = stderr.find('{').unwrap_or(0);
+        serde_json::from_str(&stderr[start..])
+            .unwrap_or_else(|_| panic!("{args:?} stderr is not one JSON error: {stderr}"))
+    }
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -318,4 +332,51 @@ fn default_run_reads_still_reconcile_stale_runs() {
             .all(|run| run["state"] == "interrupted"),
         "history must reconcile by default: {history}"
     );
+}
+
+/// An explicit run lookup reports why the stored run is unreadable instead
+/// of claiming it does not exist; only a run with no row is `not_found`.
+/// Legacy `orbit logs` follows the same rule.
+#[test]
+fn explicit_run_lookup_preserves_store_errors() {
+    const MISSING: &str = "jrun-20260920-9999";
+    let fixture = Fixture::init();
+    fixture
+        .db()
+        .execute(
+            "UPDATE job_runs SET state = 'corrupt_state' WHERE run_id = ?1",
+            [FAILED],
+        )
+        .expect("corrupt stored run");
+
+    let lookups = |run_id: &'static str| {
+        [
+            vec!["run", "show", run_id, "--no-reconcile", "--json"],
+            vec!["run", "show", run_id, "--json"],
+            vec!["run", "logs", run_id, "--no-reconcile", "--json"],
+            vec!["run", "events", run_id, "--no-reconcile", "--json"],
+            vec!["run", "trace", run_id, "--json"],
+            vec!["logs", run_id, "--json"],
+        ]
+    };
+    for args in lookups(FAILED) {
+        let error = fixture.failure(&args);
+        assert_eq!(error["code"], "store_error", "{args:?} -> {error}");
+        assert!(
+            error["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("corrupt_state")),
+            "{args:?} must keep the store diagnostic: {error}"
+        );
+    }
+    for args in lookups(MISSING) {
+        let error = fixture.failure(&args);
+        assert_eq!(error["code"], "job_run_not_found", "{args:?} -> {error}");
+        assert!(
+            error["error"]
+                .as_str()
+                .is_some_and(|message| message.contains(MISSING)),
+            "{args:?} must name the missing run: {error}"
+        );
+    }
 }
