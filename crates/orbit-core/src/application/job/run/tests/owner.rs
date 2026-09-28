@@ -262,8 +262,9 @@ fn legacy_unversioned_token_does_not_falsely_finalize_live_run() {
 
 // ---- Probe-outcome regression coverage (ORB-00037) ----
 //
-// `classify_run_owner_with_probes` lets these tests inject deterministic
-// `ProbeOutcome` values without depending on a real misbehaving `ps`.
+// `override_start_identity_probe` lets these tests inject deterministic
+// `ProbeOutcome` values through the production stale-owner gate without
+// depending on a real misbehaving `ps`.
 // They guard the rule from the task ACs: a transient probe failure with a
 // live PID must never terminalize the run; a dead PID still must.
 
@@ -352,42 +353,35 @@ fn versioned_token_match_classifies_as_verified() {
 #[cfg(unix)]
 #[test]
 fn running_run_owner_stale_reason_excludes_probe_unavailable() {
-    // A Running run whose probe is Unavailable and whose PID is alive
-    // must NOT be classified as stale.
-    let run = JobRun {
-        executed_on: None,
-        run_id: "qa_run".to_string(),
-        job_id: "qa_job".to_string(),
-        attempt: 1,
-        state: JobRunState::Running,
-        scheduled_at: Utc::now(),
-        started_at: Some(Utc::now()),
-        finished_at: None,
-        duration_ms: None,
-        pid: Some(4242),
-        pid_start_time: Some(format!("{STABLE_TOKEN_PREFIX}lstart-token")),
-        input: None,
-        retry_source_run_id: None,
-        created_at: Utc::now(),
-        steps: Vec::new(),
-        knowledge_metrics: None,
-        resolved_crew: None,
-        crew_model: None,
-    };
-    // We can't override the probe at this seam (production wrapper), but
-    // we can assert the lower-level helper agrees: ProbeUnavailable is
-    // not in the stale set.
-    let identity = classify_run_owner_with_probes(
-        run.pid,
-        run.pid_start_time.as_deref(),
-        PidNamespaceScope::Same,
-        |_| ProbeOutcome::Unavailable,
-        |_| false,
-        |_| true,
+    let mut sentinel = spawn_sentinel();
+    let token = format!("{STABLE_TOKEN_PREFIX}lstart-token");
+    let mut live_run = running_run_with_token(sentinel.id(), Some(&token));
+    live_run.started_at = Some(Utc::now() - Duration::minutes(1));
+
+    let _probe = super::super::owner::override_start_identity_probe(|_| ProbeOutcome::Unavailable);
+    assert_eq!(
+        running_run_owner_stale_reason(&live_run),
+        None,
+        "an aged run with a live owner and unavailable identity probe must remain non-stale"
     );
-    assert!(matches!(identity, OwnerIdentity::ProbeUnavailable));
-    // And the stale-reason helper would only emit Some for Mismatch /
-    // Missing — verified separately by other tests.
+
+    // The same unavailable probe still marks a confirmed-dead owner stale.
+    // Keep this control alongside the live case so the gate cannot pass by
+    // treating every inconclusive identity as live.
+    let mut dead_sentinel = spawn_sentinel();
+    let dead_pid = dead_sentinel.id();
+    dead_sentinel.kill().expect("kill dead-owner sentinel");
+    dead_sentinel.wait().expect("reap dead-owner sentinel");
+    let mut dead_run = running_run_with_token(dead_pid, Some(&token));
+    dead_run.started_at = Some(Utc::now() - Duration::minutes(1));
+    assert_eq!(
+        running_run_owner_stale_reason(&dead_run),
+        Some(OwnerIdentity::Missing),
+        "an aged run whose PID is dead must remain stale when the identity probe is unavailable"
+    );
+
+    sentinel.kill().expect("kill sentinel");
+    sentinel.wait().expect("reap sentinel");
 }
 
 #[cfg(unix)]
