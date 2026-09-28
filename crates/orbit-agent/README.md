@@ -122,6 +122,15 @@ Three distinct structured errors, each configurable on
 Each check runs at iteration start and after every HTTP response. The
 first to trip wins.
 
+The wall-clock deadline is also checked before each tool dispatch and
+once more after a response's tools finish, before the loop returns
+success or starts the next turn. A tool already running is not
+interrupted, but once the budget expires no further tool in that
+response executes and the loop returns `Timeout`. The session keeps a
+consistent history: completed calls keep their real `tool_result`, and
+every call skipped after expiry gets an `is_error` `tool_result` with
+code `wall_clock_timeout`, so each `tool_use` stays paired on replay.
+
 ## Audit model
 
 Every operation emits a structured event. Events carry sha256 pointers
