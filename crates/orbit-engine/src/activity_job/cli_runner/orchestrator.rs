@@ -652,6 +652,21 @@ pub fn run_cli_backend(
         ]
         .contains(&key.as_str())
     });
+    // Provider-pinned entries replace any same-named value the allowlist
+    // forwarded, so an outer process cannot re-enable what the provider
+    // disables for headless runs. [ORB-13664]
+    child_env.retain(|(key, _)| {
+        !invocation
+            .fixed_env
+            .iter()
+            .any(|(fixed, _)| *fixed == key.as_str())
+    });
+    child_env.extend(
+        invocation
+            .fixed_env
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+    );
     child_env.extend(dispatch_env);
     if host.worker_invocation().is_some() {
         child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));

@@ -56,6 +56,7 @@ pub(crate) fn build_invocation_spec(
         stdin,
         stdout_schema_json: None,
         required_env_vars,
+        fixed_env: &[],
     }
 }
 
