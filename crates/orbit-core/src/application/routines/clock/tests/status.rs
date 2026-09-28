@@ -526,7 +526,11 @@ fn sandboxed_launchctl_list_denial_with_unloaded_agent_is_not_enabled() {
 fn launchd_agent_naming_a_missing_program_is_unhealthy() {
     let root = tempdir().expect("create global root");
     let home = tempdir().expect("create home");
-    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    // A path under the fixture's own root, so a real install at the usual
+    // package-manager location cannot answer the probe instead.
+    let missing = home.path().join("removed-install/bin/orbit");
+    let missing = missing.to_str().expect("utf-8 temp path");
+    write_launchd_unit(home.path(), missing);
     let runner = MockRunner::with_probes(
         Vec::new(),
         Vec::new(),
@@ -550,7 +554,7 @@ fn launchd_agent_naming_a_missing_program_is_unhealthy() {
         .health_issue
         .expect("a missing program is a health issue");
     assert!(issue.contains("program cannot run"));
-    assert!(issue.contains(INSTALLED_PROGRAM));
+    assert!(issue.contains(missing));
     assert!(issue.contains("program does not exist"));
     assert!(issue.contains("orbit clock enable"));
     // The transcript is never fetched: the unit file already settled it.
