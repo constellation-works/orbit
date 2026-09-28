@@ -216,19 +216,6 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 720px) {
-  table.sb2-matrix col.metric { width: 132px; }
-  table.sb2-matrix tr.group td,
-  table.sb2-matrix td.m-label {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  table.sb2-matrix tr.group td .badge {
-    display: block;
-    margin-left: 0;
-    margin-top: 4px;
-  }
-}
 @media (max-width: 620px) {
   .scoreboard-agent-strip-inner {
     grid-template-columns: 1fr;
@@ -238,13 +225,21 @@
   }
 }
 
+/* Fixed layout never widens a column for its content, so the table keeps a
+   minimum width that fits the four canonical agent columns; below it the
+   `.scoreboard-table-wrap` host scrolls instead of painting values into the
+   neighbouring column. The widest cell is a leading compact pair such as
+   "888.9K/888.9K ▲" beside its bar. */
 table.sb2-matrix {
+  --sb2-metric-col: 220px;
+  --sb2-agent-col: 164px;
   width: 100%;
+  min-width: calc(var(--sb2-metric-col) + 4 * var(--sb2-agent-col));
   border-collapse: collapse;
   font-size: 12px;
   table-layout: fixed;
 }
-table.sb2-matrix col.metric { width: 220px; }
+table.sb2-matrix col.metric { width: var(--sb2-metric-col); }
 table.sb2-matrix th,
 table.sb2-matrix td {
   padding: 7px 12px;
@@ -374,6 +369,21 @@ table.sb2-matrix td.cell {
   vertical-align: 2px;
 }
 .sb2-cell .em { color: rgba(255, 255, 255, 0.18); }
+
+/* After the base matrix rules so the narrower metric column wins the cascade. */
+@media (max-width: 720px) {
+  table.sb2-matrix { --sb2-metric-col: 132px; }
+  table.sb2-matrix tr.group td,
+  table.sb2-matrix td.m-label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  table.sb2-matrix tr.group td .badge {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+  }
+}
 
 .scoreboard-insights .ins-row {
   padding: 10px 16px;

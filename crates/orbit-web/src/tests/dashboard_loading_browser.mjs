@@ -118,6 +118,89 @@ async function assertRunStepLayout(page) {
   }
 }
 
+// Every scoreboard metric cell must paint its bar and value inside its own
+// agent column, and each value must be reachable by scrolling the matrix's
+// own wrapper: a fixed-layout table squeezed below its content width paints
+// values into the neighbouring agent's column instead.
+async function assertScoreboardLayout(page) {
+  await page.evaluate(async () => {
+    const { getWindow } = await import('/js/common.js');
+    const { renderScoreboard } = await import('/js/scoreboard.js');
+    const agent = (base, incidents) => ({
+      tasks_created: base, tasks_planned: base + 1, tasks_completed: base + 2,
+      pr: { review_comments: base + 3 },
+      tool_calls_by_surface: { graph: base * 10, task: base * 11 },
+      failed_tool_calls: base, tool_calls: base * 100,
+      failure_incidents: incidents, failure_incident_events: incidents === null ? null : base * 7,
+      friction: { reported: base + 4 },
+    });
+    // Two agents report grouped failures and two have an unavailable source,
+    // so one row mixes populated pairs with "unavailable" markers.
+    renderScoreboard({
+      window: getWindow(),
+      agents: { codex: agent(123, 45), claude: agent(9876, 888888), gemini: agent(123, null), grok: agent(888888, null) },
+      coverage: { failure_incidents: { availability: 'partial' } },
+    });
+    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'diagnostics');
+    document.getElementById('diagnostics-main').style.display = 'none';
+    document.getElementById('diagnostics-scoreboard-main').style.display = 'grid';
+  });
+  for (const width of [1280, 720, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await page.evaluate(() => {
+      const wrap = document.getElementById('scoreboard-body');
+      const table = wrap.querySelector('table.sb2-matrix');
+      const heads = [...table.querySelectorAll('thead th.col-agent')];
+      const agents = heads.map(th => th.firstChild.textContent);
+      const within = (inner, outer) => inner.width > 0 && inner.left >= outer.left - 0.5 && inner.right <= outer.right + 0.5;
+      const problems = [];
+      heads.forEach((th, index) => {
+        const column = th.getBoundingClientRect();
+        for (const child of th.querySelectorAll('.totals')) {
+          if (!within(child.getBoundingClientRect(), column)) problems.push({ header: agents[index], rect: child.getBoundingClientRect().toJSON(), column: column.toJSON() });
+        }
+      });
+      let unavailable = 0;
+      let populated = 0;
+      for (const row of table.querySelectorAll('tbody tr.metric')) {
+        const cells = [...row.querySelectorAll('td.cell')];
+        if (cells.map(td => td.dataset.agent).join() !== agents.join()) problems.push({ row: row.dataset.key, order: cells.map(td => td.dataset.agent) });
+        cells.forEach((td, index) => {
+          const value = td.querySelector('.sb2-cell .v');
+          if (value.querySelector('.unavailable')) unavailable++; else if (!value.classList.contains('dim')) populated++;
+          value.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          // Measure only after scrolling so every rect shares one scroll offset.
+          const column = heads[index].getBoundingClientRect();
+          const cell = td.getBoundingClientRect();
+          const bar = td.querySelector('.sb2-cell').getBoundingClientRect();
+          const rect = value.getBoundingClientRect();
+          const bounds = wrap.getBoundingClientRect();
+          const topmost = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+          const attributed = Math.abs(cell.left - column.left) < 1 && Math.abs(cell.right - column.right) < 1;
+          const contained = within(bar, cell) && within(rect, cell);
+          const reachable = within(rect, bounds) && rect.left >= 0 && rect.right <= window.innerWidth && td.contains(topmost);
+          if (!attributed || !contained || !reachable) {
+            problems.push({ row: row.dataset.key, agent: td.dataset.agent, text: value.textContent, attributed, contained, reachable, value: rect.toJSON(), bar: bar.toJSON(), cell: cell.toJSON(), column: column.toJSON() });
+          }
+        });
+      }
+      wrap.scrollLeft = 0;
+      return {
+        problems,
+        unavailable,
+        populated,
+        scrolls: wrap.scrollWidth > wrap.clientWidth,
+        pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+    if (layout.problems.length) throw new Error(`Scoreboard values leave their agent columns at ${width}px: ${JSON.stringify(layout.problems.slice(0, 4))}`);
+    if (layout.unavailable !== 2 || layout.populated < 20) throw new Error(`Scoreboard fixture did not render populated and unavailable metrics at ${width}px: ${JSON.stringify(layout)}`);
+    if (layout.pageOverflow) throw new Error(`Scoreboard widens the page instead of scrolling its matrix at ${width}px`);
+    if (width === 1280 && layout.scrolls) throw new Error('Desktop scoreboard matrix must fit without horizontal scrolling');
+    await page.screenshot({ path: path.join(evidence, `scoreboard-${width}.png`), fullPage: true });
+  }
+}
+
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
   const served = name === '/test.mjs' ? { data: fs.readFileSync(scenarios), type: 'text/javascript' } : dashboardFile(name);
@@ -203,6 +286,7 @@ try {
     if (!(await page.locator('#refresh-btn').isEnabled())) throw new Error('Retry disabled');
     await page.screenshot({ path: path.join(evidence, `refresh-${width}.png`) });
   }
+  await assertScoreboardLayout(page);
   await assertRunStepLayout(page);
   await new Promise(resolve => server.close(resolve));
   await page.evaluate(() => {
@@ -211,7 +295,7 @@ try {
   });
   await page.waitForFunction(() => document.getElementById('meta-text').textContent.includes('offline'));
   if (!(await page.locator('#conn-status').getAttribute('class')).includes('red')) throw new Error('Stopped server must show red connection status');
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, scenarios: 'Scoreboard values attributed to and contained in their agent columns, reachable by matrix scrolling, for populated and unavailable metrics at 1280px, 720px and 390px; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
   console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
 } finally {
   await browser?.close();
