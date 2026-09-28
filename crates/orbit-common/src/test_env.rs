@@ -73,11 +73,11 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
 /// That is not hypothetical: it created three real task records before it was
 /// caught (ORB-11300).
 ///
-/// Clearing the whole set — routing, managed-run trust, actor identity, and
-/// inherited sandbox grants — makes a fixture's authority a property of the
-/// fixture rather than of how the suite was launched. Apply it with
-/// [`clear_inherited_authority`] *before* any variable a test sets on
-/// purpose, so the deliberate value wins.
+/// Clearing the whole set — routing, managed-run trust, actor identity,
+/// inherited sandbox grants, and the plugin broker socket — makes a fixture's
+/// authority a property of the fixture rather than of how the suite was
+/// launched. Apply it with [`clear_inherited_authority`] *before* any variable
+/// a test sets on purpose, so the deliberate value wins.
 pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // Durable routing: which registry, workspace, and data root the child
     // writes to. `ORBIT_REGISTRY_ROOT` and `ORBIT_WORKSPACE` outrank `HOME`.
@@ -115,6 +115,9 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     "ORBIT_PROC_PROGRAM_POLICY",
     "ORBIT_PROC_DISALLOWED_PROGRAMS",
     "ORBIT_BIN",
+    // Routes plugin tool calls to the enclosing run's host broker instead of
+    // the fixture's own install; a fixture that needs a broker sets its own.
+    "ORBIT_PLUGIN_BROKER",
 ];
 
 /// Clear every [`INHERITED_AUTHORITY_ENV`] variable from a child command.

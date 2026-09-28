@@ -164,6 +164,43 @@ fn clear_inherited_authority_visits_every_name_once() {
     }
 }
 
+/// An inherited `ORBIT_PLUGIN_BROKER` forwards a fixture's plugin calls to the
+/// enclosing run's host broker, which refuses them (F2026-09-244). The shared
+/// clear must strip it from a child command, while a value the fixture sets
+/// afterwards on purpose still reaches the child.
+#[test]
+fn clear_inherited_authority_strips_the_plugin_broker_socket_from_a_child() {
+    const BROKER: &str = "ORBIT_PLUGIN_BROKER";
+    let child_value = |command: &std::process::Command| {
+        command
+            .get_envs()
+            .find(|(name, _)| *name == BROKER)
+            .map(|(_, value)| value.map(|value| value.to_os_string()))
+    };
+
+    let mut inherited = std::process::Command::new("orbit");
+    inherited.env(BROKER, "/run/orbit/live-host-broker.sock");
+    super::clear_inherited_authority(|name| {
+        inherited.env_remove(name);
+    });
+    assert_eq!(
+        child_value(&inherited),
+        Some(None),
+        "an inherited broker socket must be removed from the child"
+    );
+
+    let mut deliberate = std::process::Command::new("orbit");
+    super::clear_inherited_authority(|name| {
+        deliberate.env_remove(name);
+    });
+    deliberate.env(BROKER, "/tmp/fixture-broker.sock");
+    assert_eq!(
+        child_value(&deliberate),
+        Some(Some("/tmp/fixture-broker.sock".into())),
+        "a broker the fixture sets after clearing must still reach the child"
+    );
+}
+
 /// The blocker is the one signal environment-dependent tests skip on, so it
 /// must agree with the probe they would otherwise rely on: `None` exactly when
 /// the current process can derive its own versioned token.
