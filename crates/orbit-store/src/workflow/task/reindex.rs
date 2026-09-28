@@ -54,51 +54,104 @@ pub fn reindex_workspace(
         candidates.insert(existing.task_id);
     }
     let store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
+    let candidates = candidates
+        .into_iter()
+        .map(|task_id| {
+            let dir = registry.canonical_task_bundle_path(&workspace_id, &task_id)?;
+            Ok((task_id, dir))
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()?;
     let mut removed_stale = 0;
     let mut snapshots: Vec<(String, PathBuf)> = Vec::new();
     let mut failures = Vec::new();
-    for task_id in &candidates {
-        let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
-        // Deletion recovery, the existence check and the first settled read
-        // stay under the bundle lock: dropping a binding whose directory
-        // vanished must not race a creator publishing the same id. The
-        // envelope collected here is *not* what gets indexed — a concurrent
-        // update or delete can land after this lock is dropped.
-        match inspect_candidate(
-            &store,
-            registry,
-            &workspace_id,
-            task_id,
-            &dir,
-            &mut removed_stale,
-        ) {
-            Ok(Some(_)) => snapshots.push((task_id.clone(), dir)),
-            Ok(None) => {}
-            // Keep unresolved bytes AND any authoritative binding/index. A
-            // healthy neighbor still gets repaired, but this run cannot succeed.
-            Err(error) => failures.push(format!("{task_id}: {error}")),
-        }
+    // Deletion recovery, the existence check, the first settled read and the
+    // binding stay under the bundle locks: dropping or adding a binding must
+    // not race a creator or deleter of the same id. Every readable binding
+    // lands before any index row, so a relation may name a task in a later
+    // batch. The envelopes read here are *not* what gets indexed — a
+    // concurrent update or delete can land after these locks are dropped.
+    for batch in candidates.chunks(REINDEX_LOCK_BATCH) {
+        let readable = with_candidate_locks(batch, || {
+            let readable = inspect_batch(
+                &store,
+                registry,
+                &workspace_id,
+                batch,
+                &mut removed_stale,
+                &mut failures,
+            )
+            .into_iter()
+            .map(|(task_id, dir, _)| (task_id, dir))
+            .collect::<Vec<_>>();
+            registry.register_task_bundles(&workspace_id, &readable)?;
+            Ok(readable)
+        })?;
+        snapshots.extend(readable);
     }
 
     // Tests inject an update or delete in this window, matching a concurrent
-    // writer that ran after the first read and before the batch.
+    // writer that ran after the first read and before publication.
     #[cfg(test)]
     run_after_snapshot_hook();
 
-    // Acquire candidate locks in task-id order and retain them through both
-    // registry commits. Writers and deleters take a bundle lock before the
-    // registry, so none can publish a newer state between our final read and
-    // index publication. A fixed order avoids deadlocks with other reindexes.
-    let indexed = with_candidate_locks(&snapshots, || {
-        publish_healthy_set(
-            &store,
-            registry,
-            &workspace_id,
-            &snapshots,
-            &mut removed_stale,
-            &mut failures,
-        )
-    })?;
+    // Publish in bounded batches. Each batch takes its bundle locks in task-id
+    // order and retains them from the final envelope read through the index
+    // commit. Writers and deleters take a bundle lock before the registry, so
+    // none can publish a newer state in between. Holding every lock at once
+    // would keep one descriptor open per task. A fixed order avoids deadlocks
+    // with other reindexes.
+    let mut indexed = 0;
+    let mut deferred: Vec<(String, PathBuf)> = Vec::new();
+    for batch in snapshots.chunks(REINDEX_LOCK_BATCH) {
+        indexed += with_candidate_locks(batch, || {
+            let readable = inspect_batch(
+                &store,
+                registry,
+                &workspace_id,
+                batch,
+                &mut removed_stale,
+                &mut failures,
+            );
+            #[cfg(test)]
+            run_before_reindex_publication_hook(batch);
+            let envelopes = readable
+                .iter()
+                .map(|(_, _, envelope)| envelope.clone())
+                .collect::<Vec<_>>();
+            if registry
+                .replace_task_indexes(&workspace_id, &envelopes)
+                .is_ok()
+            {
+                return Ok(envelopes.len());
+            }
+            // Relation validation also walks rows of tasks outside this batch,
+            // which may be stale rows a later batch replaces. Retry once every
+            // other batch has published.
+            deferred.extend(readable.into_iter().map(|(task_id, dir, _)| (task_id, dir)));
+            Ok(0)
+        })?;
+    }
+    for batch in deferred.chunks(REINDEX_LOCK_BATCH) {
+        indexed += with_candidate_locks(batch, || {
+            let envelopes = inspect_batch(
+                &store,
+                registry,
+                &workspace_id,
+                batch,
+                &mut removed_stale,
+                &mut failures,
+            )
+            .into_iter()
+            .map(|(_, _, envelope)| envelope)
+            .collect::<Vec<_>>();
+            Ok(index_healthy_set(
+                registry,
+                &workspace_id,
+                &envelopes,
+                &mut failures,
+            ))
+        })?;
+    }
 
     // Include unresolved IDs so allocator recovery cannot collide with data
     // retained for repair. Never replace the entire index with a partial set.
@@ -120,6 +173,13 @@ pub fn reindex_workspace(
     })
 }
 
+/// Most bundle locks one reindex holds at once. Each held lock keeps a file
+/// descriptor open and a stack frame live, so this bounds both regardless of
+/// workspace size while still amortizing registry commits across a batch.
+pub(crate) const REINDEX_LOCK_BATCH: usize = 64;
+
+/// Run `op` while holding the bundle lock of every candidate, acquired in
+/// slice order. Callers pass at most [`REINDEX_LOCK_BATCH`] candidates.
 fn with_candidate_locks<T, F>(candidates: &[(String, PathBuf)], op: F) -> Result<T, OrbitError>
 where
     F: FnOnce() -> Result<T, OrbitError>,
@@ -127,51 +187,35 @@ where
     let Some((_, dir)) = candidates.first() else {
         return op();
     };
-    with_exclusive_file_lock(&bundle_lock_target(dir), "task reindex publication", || {
+    with_exclusive_file_lock(&bundle_lock_target(dir), "task reindex", || {
         with_candidate_locks(&candidates[1..], op)
     })
 }
 
-fn publish_healthy_set(
+/// Inspect every candidate of a locked batch, returning the settled envelope
+/// of each one still readable. Unreadable candidates become failures: their
+/// bytes and any authoritative binding/index are kept, and a healthy neighbor
+/// still gets repaired, but the run cannot succeed.
+fn inspect_batch(
     store: &TaskBundleStoreV2,
     registry: &TaskRegistryStore,
     workspace_id: &str,
-    snapshots: &[(String, PathBuf)],
+    batch: &[(String, PathBuf)],
     removed_stale: &mut usize,
     failures: &mut Vec<String>,
-) -> Result<usize, OrbitError> {
-    // Re-check while the locks are held. Include only the envelope just read
-    // from disk; drop tasks whose directory vanished or deletion published.
-    let mut readable: Vec<(String, PathBuf)> = Vec::new();
-    let mut envelopes: Vec<TaskEnvelopeV2> = Vec::new();
-    for (task_id, dir) in snapshots {
+) -> Vec<(String, PathBuf, TaskEnvelopeV2)> {
+    let mut readable = Vec::new();
+    for (task_id, dir) in batch {
         match inspect_candidate(store, registry, workspace_id, task_id, dir, removed_stale) {
-            Ok(Some(envelope)) => {
-                readable.push((task_id.clone(), dir.clone()));
-                envelopes.push(envelope);
-            }
+            Ok(Some(envelope)) => readable.push((task_id.clone(), dir.clone(), envelope)),
             Ok(None) => {}
             Err(error) => failures.push(format!("{task_id}: {error}")),
         }
     }
-
-    #[cfg(test)]
-    run_before_reindex_publication_hook();
-
-    // One commit for every healthy binding, then one for the whole index batch,
-    // instead of two per task. Registering the readable set before the index
-    // pass is what lets a bundle refer to another that sorts after it; the
-    // index batch then validates those relations as one set.
-    registry.register_task_bundles(workspace_id, &readable)?;
-    Ok(index_healthy_set(
-        registry,
-        workspace_id,
-        &envelopes,
-        failures,
-    ))
+    readable
 }
 
-/// Index the readable set in one commit, returning how many tasks landed.
+/// Index a set in one commit, returning how many tasks landed.
 ///
 /// A batch that the registry refuses as a whole — a relation the set cannot
 /// satisfy together, say — is retried one envelope at a time, because repairing
@@ -242,16 +286,20 @@ fn inspect_candidate(
     })
 }
 
+/// A one-shot publication callback and the task id whose batch triggers it.
+#[cfg(test)]
+type PublicationHook = (String, Box<dyn FnOnce() + 'static>);
+
 #[cfg(test)]
 thread_local! {
     static AFTER_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce() + 'static>>> =
         std::cell::RefCell::new(None);
-    static BEFORE_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce() + 'static>>> =
+    static BEFORE_PUBLICATION: std::cell::RefCell<Option<PublicationHook>> =
         std::cell::RefCell::new(None);
 }
 
-/// Install a one-shot callback that runs after the first envelope pass and
-/// immediately before the freshness re-check that builds the registry batch.
+/// Install a one-shot callback that runs after the binding pass and before
+/// the first publication batch re-reads its envelopes.
 #[cfg(test)]
 pub(crate) fn set_after_reindex_snapshot_hook(hook: impl FnOnce() + 'static) {
     AFTER_SNAPSHOT.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
@@ -262,9 +310,13 @@ pub(crate) fn clear_after_reindex_snapshot_hook() {
     AFTER_SNAPSHOT.with(|cell| cell.borrow_mut().take());
 }
 
+/// Install a one-shot callback that runs after the final envelope reads of the
+/// publication batch containing `task_id`, while that batch's locks are held
+/// and before its index commit.
 #[cfg(test)]
-pub(crate) fn set_before_reindex_publication_hook(hook: impl FnOnce() + 'static) {
-    BEFORE_PUBLICATION.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+pub(crate) fn set_before_reindex_publication_hook(task_id: &str, hook: impl FnOnce() + 'static) {
+    BEFORE_PUBLICATION
+        .with(|cell| *cell.borrow_mut() = Some((task_id.to_string(), Box::new(hook))));
 }
 
 #[cfg(test)]
@@ -273,8 +325,15 @@ pub(crate) fn clear_before_reindex_publication_hook() {
 }
 
 #[cfg(test)]
-fn run_before_reindex_publication_hook() {
-    if let Some(hook) = BEFORE_PUBLICATION.with(|cell| cell.borrow_mut().take()) {
+fn run_before_reindex_publication_hook(batch: &[(String, PathBuf)]) {
+    let hook = BEFORE_PUBLICATION.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let due = slot
+            .as_ref()
+            .is_some_and(|(target, _)| batch.iter().any(|(task_id, _)| task_id == target));
+        if due { slot.take() } else { None }
+    });
+    if let Some((_, hook)) = hook {
         hook();
     }
 }
