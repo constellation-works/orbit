@@ -4,13 +4,16 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
-use orbit_core::application::auto_tasks::cursor_state_path;
+use orbit_core::application::auto_tasks::schedule::decide_due;
+use orbit_core::application::auto_tasks::{AutoTaskDueDecision, cursor_state_path};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{AutoTaskAddParams, OrbitRuntime};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use serde_json::Value;
 use tower::ServiceExt;
 
 use super::super::router;
@@ -335,14 +338,17 @@ async fn list_labels_disabled_next_evaluation_as_hypothetical() {
     assert!(item["next_evaluation"]["at"].as_str().is_some(), "{item}");
 }
 
+const STALE_BASELINE: &str = "2020-01-01T00:00:00+00:00";
+const STALE_LAST_SLOT: &str = "2020-01-01T01:00:00+00:00";
+
 /// A cursor whose baseline and last consumed slot are both far in the past, so
 /// the scheduler still owes a catch-up fire the moment it next runs.
 fn write_stale_cursor(runtime: &OrbitRuntime, name: &str) {
     let path = cursor_state_path(&runtime.paths().state_dir);
     std::fs::create_dir_all(path.parent().expect("state dir")).expect("mkdir");
     let doc = serde_json::json!({"definitions": {name: {
-        "baseline_at": "2020-01-01T00:00:00+00:00",
-        "last_slot": "2020-01-01T01:00:00+00:00",
+        "baseline_at": STALE_BASELINE,
+        "last_slot": STALE_LAST_SLOT,
         "last_fired_at": "2020-01-01T01:00:05+00:00",
         "last_task_id": "ORB-00001"
     }}});
@@ -353,6 +359,103 @@ fn write_stale_cursor(runtime: &OrbitRuntime, name: &str) {
     .expect("write cursor");
 }
 
+fn utc(rfc3339: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(rfc3339)
+        .expect("rfc3339 timestamp")
+        .with_timezone(&Utc)
+}
+
+/// Sends the list request and returns its only row with the clock readings
+/// taken immediately before and after it. The handler observes "now" somewhere
+/// inside that bracket, so projection checks accept every answer that is
+/// correct for some instant in it instead of comparing against a later clock
+/// read that may already sit past a schedule boundary.
+async fn list_single_row_bracketed(state: DashboardState) -> (Value, DateTime<Utc>, DateTime<Utc>) {
+    let before = Utc::now();
+    let response = send(state, Method::GET, "/auto-tasks?workspace=default", None).await;
+    let after = Utc::now();
+    let json = body_json(response).await;
+    let item = json["definitions"].as_array().expect("definitions")[0].clone();
+    (item, before, after)
+}
+
+fn projected_at(item: &Value) -> DateTime<Utc> {
+    utc(item["next_evaluation"]["at"]
+        .as_str()
+        .expect("projected slot"))
+}
+
+/// Checks an interval projection for the stale cursor against the owed
+/// catch-up slot at each end of the request bracket.
+///
+/// The projection must be exactly one period past the slot the scheduler owed
+/// at the handler's observation, which lies between the slots owed at
+/// `before` and `after` (they differ only when a boundary fell inside the
+/// bracket). The owed slot itself, or any later arrival, is rejected.
+fn check_interval_projection(
+    schedule: &AutoTaskSchedule,
+    projected: DateTime<Utc>,
+    before: DateTime<Utc>,
+    after: DateTime<Utc>,
+) -> Result<(), String> {
+    let AutoTaskSchedule::Interval { every_minutes } = schedule else {
+        return Err(format!("expected an interval schedule, got {schedule:?}"));
+    };
+    let period = Duration::minutes(i64::try_from(*every_minutes).expect("interval minutes"));
+    let baseline = utc(STALE_BASELINE);
+    let owed_at = |now: DateTime<Utc>| -> Result<DateTime<Utc>, String> {
+        match decide_due(schedule, baseline, Some(utc(STALE_LAST_SLOT)), now)
+            .map_err(|err| err.to_string())?
+        {
+            AutoTaskDueDecision::Fire { slot } => Ok(utc(&slot)),
+            AutoTaskDueDecision::NotDue => Err(format!(
+                "a years-old cursor must still owe a catch-up fire at {now}"
+            )),
+        }
+    };
+    let (earliest_owed, latest_owed) = (owed_at(before)?, owed_at(after)?);
+    if earliest_owed > before {
+        return Err(format!(
+            "owed catch-up slot {earliest_owed} is not in the past"
+        ));
+    }
+
+    // Both answers come from the same anchored arithmetic: consecutive period
+    // boundaries off the recorded baseline.
+    let preceding = projected - period;
+    let aligned = (preceding - baseline).num_milliseconds() % period.num_milliseconds() == 0;
+    if !aligned || preceding < earliest_owed || preceding > latest_owed {
+        return Err(format!(
+            "projection {projected} is not the arrival after the owed slot \
+             ({earliest_owed}..={latest_owed}) observed in {before}..={after}"
+        ));
+    }
+    Ok(())
+}
+
+/// Checks a `* * * * *` projection against the request bracket: pinned to a
+/// whole minute, strictly ahead of every instant the handler could have
+/// observed, and no later than the minute after the last of them.
+fn check_minutely_cron_projection(
+    projected: DateTime<Utc>,
+    before: DateTime<Utc>,
+    after: DateTime<Utc>,
+) -> Result<(), String> {
+    // The canonical cron projection pins every occurrence to its minute, so the
+    // rendered slot never carries the poll's sub-minute component.
+    if projected.second() != 0 || projected.nanosecond() != 0 {
+        return Err(format!(
+            "projection {projected} is not pinned to the minute"
+        ));
+    }
+    if projected <= before || projected > after + Duration::minutes(1) {
+        return Err(format!(
+            "projection {projected} is not the next minute for an observation in {before}..={after}"
+        ));
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn list_projects_the_next_interval_slot_not_the_owed_catch_up_slot() {
     let runtime = runtime();
@@ -360,55 +463,64 @@ async fn list_projects_the_next_interval_slot_not_the_owed_catch_up_slot() {
     write_stale_cursor(&runtime, "stale");
 
     let (state, runtime) = state(runtime);
-    let json =
-        body_json(send(state, Method::GET, "/auto-tasks?workspace=default", None).await).await;
-    let item = &json["definitions"].as_array().expect("definitions")[0];
-
-    let now = chrono::Utc::now();
-    let baseline = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00+00:00")
-        .expect("baseline")
-        .with_timezone(&chrono::Utc);
-    let projected = chrono::DateTime::parse_from_rfc3339(
-        item["next_evaluation"]["at"]
-            .as_str()
-            .expect("projected slot"),
-    )
-    .expect("rfc3339 projection")
-    .with_timezone(&chrono::Utc);
+    let (item, before, after) = list_single_row_bracketed(state).await;
+    let schedule = runtime
+        .auto_task_show("stale")
+        .expect("show")
+        .expect("definition")
+        .schedule;
 
     assert_eq!(item["next_evaluation"]["state"], "scheduled");
-    assert!(
-        projected > now,
-        "the dashboard projects the schedule's next arrival: {item}"
+    // The scheduler still owes a fire for a boundary years in the past. The two
+    // answers are different by design, so the row must project the schedule's
+    // next arrival rather than the owed slot.
+    let checked = check_interval_projection(&schedule, projected_at(&item), before, after);
+    assert_eq!(checked, Ok(()), "{item}");
+}
+
+#[test]
+fn interval_projection_check_tolerates_an_hour_boundary_inside_the_request() {
+    let schedule = chore_params("stale").schedule;
+    let before = utc("2026-09-27T12:59:59.999+00:00");
+    let after = utc("2026-09-27T13:00:00.001+00:00");
+
+    // Observed just before 13:00 the next arrival is 13:00; just after, 14:00.
+    for projected in ["2026-09-27T13:00:00+00:00", "2026-09-27T14:00:00+00:00"] {
+        assert_eq!(
+            check_interval_projection(&schedule, utc(projected), before, after),
+            Ok(()),
+            "{projected}"
+        );
+    }
+}
+
+#[test]
+fn interval_projection_check_rejects_the_owed_slot_and_misaligned_arrivals() {
+    let schedule = chore_params("stale").schedule;
+    let observed = utc("2026-09-27T12:30:00+00:00");
+    assert_eq!(
+        check_interval_projection(
+            &schedule,
+            utc("2026-09-27T13:00:00+00:00"),
+            observed,
+            observed
+        ),
+        Ok(())
     );
 
-    // The scheduler, meanwhile, still owes a fire for a boundary years in the
-    // past. The two answers are different by design, so the row must not claim
-    // the owed slot as its next evaluation.
-    let owed = orbit_core::application::auto_tasks::schedule::decide_due(
-        &runtime
-            .auto_task_show("stale")
-            .expect("show")
-            .expect("definition")
-            .schedule,
-        baseline,
-        Some(baseline + chrono::Duration::hours(1)),
-        now,
-    )
-    .expect("due decision");
-    let orbit_core::application::auto_tasks::AutoTaskDueDecision::Fire { slot: owed_slot } = owed
-    else {
-        panic!("a years-old cursor must still owe a catch-up fire");
-    };
-    let owed_slot = chrono::DateTime::parse_from_rfc3339(&owed_slot)
-        .expect("rfc3339 owed slot")
-        .with_timezone(&chrono::Utc);
-    assert!(owed_slot <= now, "an owed catch-up slot is in the past");
-    assert_ne!(projected, owed_slot);
-
-    // Both answers come from the same anchored arithmetic: consecutive
-    // 60-minute boundaries off the recorded baseline.
-    assert_eq!(projected, owed_slot + chrono::Duration::minutes(60));
+    for wrong in [
+        // The owed catch-up slot.
+        "2026-09-27T12:00:00+00:00",
+        // Off the baseline's hourly boundaries.
+        "2026-09-27T13:00:30+00:00",
+        // One arrival too far.
+        "2026-09-27T14:00:00+00:00",
+    ] {
+        assert!(
+            check_interval_projection(&schedule, utc(wrong), observed, observed).is_err(),
+            "{wrong} must be rejected"
+        );
+    }
 }
 
 #[tokio::test]
@@ -422,22 +534,49 @@ async fn list_projects_cron_definitions_pinned_to_the_minute() {
     write_cursor(&runtime, "minutely", "ORB-00001");
 
     let (state, _) = state(runtime);
-    let json =
-        body_json(send(state, Method::GET, "/auto-tasks?workspace=default", None).await).await;
-    let item = &json["definitions"].as_array().expect("definitions")[0];
-    let projected = chrono::DateTime::parse_from_rfc3339(
-        item["next_evaluation"]["at"]
-            .as_str()
-            .expect("projected slot"),
-    )
-    .expect("rfc3339 projection");
+    let (item, before, after) = list_single_row_bracketed(state).await;
 
     assert_eq!(item["next_evaluation"]["state"], "scheduled");
-    // The canonical cron projection pins every occurrence to its minute, so the
-    // rendered slot never carries the poll's sub-minute component.
-    assert_eq!(chrono::Timelike::second(&projected), 0, "{item}");
-    assert_eq!(chrono::Timelike::nanosecond(&projected), 0, "{item}");
-    assert!(projected.with_timezone(&chrono::Utc) > chrono::Utc::now());
+    let checked = check_minutely_cron_projection(projected_at(&item), before, after);
+    assert_eq!(checked, Ok(()), "{item}");
+}
+
+#[test]
+fn cron_projection_check_tolerates_a_minute_boundary_inside_the_request() {
+    let before = utc("2026-09-27T12:34:59.999+00:00");
+    let after = utc("2026-09-27T12:35:00.001+00:00");
+
+    // Observed just before 12:35 the next minute is 12:35; at or after, 12:36.
+    for projected in ["2026-09-27T12:35:00+00:00", "2026-09-27T12:36:00+00:00"] {
+        assert_eq!(
+            check_minutely_cron_projection(utc(projected), before, after),
+            Ok(()),
+            "{projected}"
+        );
+    }
+}
+
+#[test]
+fn cron_projection_check_rejects_rounded_occurrences() {
+    let observed = utc("2026-09-27T12:34:30.250+00:00");
+    assert_eq!(
+        check_minutely_cron_projection(utc("2026-09-27T12:35:00+00:00"), observed, observed),
+        Ok(())
+    );
+
+    for wrong in [
+        // The observation plus a minute, keeping its sub-minute component.
+        "2026-09-27T12:35:30.250+00:00",
+        // Rounded down to the minute already under way.
+        "2026-09-27T12:34:00+00:00",
+        // Rounded past the next minute.
+        "2026-09-27T12:36:00+00:00",
+    ] {
+        assert!(
+            check_minutely_cron_projection(utc(wrong), observed, observed).is_err(),
+            "{wrong} must be rejected"
+        );
+    }
 }
 
 #[tokio::test]
