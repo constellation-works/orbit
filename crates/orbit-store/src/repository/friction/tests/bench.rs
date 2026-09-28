@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 
-use super::super::{FrictionListFilter, FrictionStore};
-use super::support::{at, store};
+use super::super::FrictionListFilter;
+use super::support::{at, friction_store};
 use crate::driver::file::friction_store::{friction_record_paths, read_record_at, write_record_at};
 
 /// Corpus size, overridable with `ORBIT_FRICTION_BENCH_N`.
@@ -37,13 +37,19 @@ fn bench_friction_scan_baseline_versus_candidate() {
         .unwrap_or(DEFAULT_CORPUS);
     let temp = tempfile::tempdir().expect("tempdir");
     let source = temp.path().join("ws_bench");
-    generate_corpus(&source, corpus);
+    let open = generate_corpus(&source, corpus);
+    let expected_page = PAGE.min(open);
 
-    println!("corpus: {corpus} records at {}", source.display());
-    println!("baseline peak RSS after generation: {} kB", peak_rss_kb());
+    println!(
+        "corpus: {corpus} records ({open} open) at {}",
+        source.display()
+    );
+    println!("peak RSS after generation: {} kB", peak_rss_kb());
 
-    let frictions = FrictionStore::open(store(temp.path()), "ws_bench", &source)
-        .expect("open and import friction store");
+    // Import outside the timed arms: the candidate measures reads, not the
+    // one-time migration of the legacy tree.
+    let frictions = friction_store(temp.path(), "ws_bench");
+    println!("peak RSS after import: {} kB", peak_rss_kb());
 
     let candidate_list = measure(|| {
         frictions
@@ -75,8 +81,8 @@ fn bench_friction_scan_baseline_versus_candidate() {
     );
     report("baseline  friction stats", &baseline_stats);
 
-    assert_eq!(candidate_list.result, PAGE.min(corpus));
-    assert_eq!(baseline_list.result, PAGE.min(corpus));
+    assert_eq!(candidate_list.result, expected_page);
+    assert_eq!(baseline_list.result, expected_page);
     assert_eq!(candidate_stats.result, corpus);
     assert_eq!(baseline_stats.result, corpus);
 }
@@ -142,7 +148,9 @@ fn baseline_stats(root: &Path) -> usize {
     records.len()
 }
 
-fn generate_corpus(root: &Path, count: usize) {
+/// Writes `count` legacy records under `root` and returns how many are open.
+fn generate_corpus(root: &Path, count: usize) -> usize {
+    let mut open = 0;
     for index in 0..count {
         let month = 1 + (index / 900) as u32;
         let seq = 1 + (index % 900) as u32;
@@ -168,6 +176,9 @@ fn generate_corpus(root: &Path, count: usize) {
                 "log line filler ".repeat(40)
             ),
         };
+        if record.status == FrictionStatus::Open {
+            open += 1;
+        }
         write_record_at(
             &root
                 .join(format!("2026-{month:02}"))
@@ -176,6 +187,7 @@ fn generate_corpus(root: &Path, count: usize) {
         )
         .expect("write generated record");
     }
+    open
 }
 
 /// Process high-water RSS in kB, or 0 where `/proc` is unavailable.

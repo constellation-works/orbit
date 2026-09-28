@@ -26,6 +26,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 echo "friction scan benchmark: corpus=${CORPUS} (ORB-10680)"
-exec cargo test --release -p orbit-store \
-  --lib sqlite::friction_store::tests::bench::bench_friction_scan_baseline_versus_candidate \
-  -- --ignored --nocapture --test-threads=1
+output="$(cargo test --release -p orbit-store \
+  --lib repository::friction::tests::bench::bench_friction_scan_baseline_versus_candidate \
+  -- --exact --ignored --nocapture --test-threads=1 2>&1 | tee /dev/stderr)"
+
+# A stale test path selects zero tests and still exits 0; refuse that.
+if ! grep -q '^test result: ok\. 1 passed' <<<"$output"; then
+  echo "bench-friction-scan: the benchmark test did not run" >&2
+  exit 1
+fi
