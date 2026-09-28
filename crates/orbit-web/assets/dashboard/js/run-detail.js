@@ -648,10 +648,28 @@ function buildLogBlock(record, stream) {
   return block;
 }
 
+function knowledgeMetricsForStep(step) {
+  if (!step || step.step_index !== 0) return null;
+  const metrics = activeRunDetail && activeRunDetail.run && activeRunDetail.run.knowledge_metrics;
+  return metrics || null;
+}
+
+// Log blocks and step 0's knowledge metrics are not fields of `step`.
+// Keyed reconciliation retains the previous detail node while this hash
+// matches, so a late /logs payload never paints unless those inputs are in it.
+function stepDetailHash(step, logs) {
+  return JSON.stringify({
+    step,
+    logs,
+    knowledge: knowledgeMetricsForStep(step),
+  });
+}
+
 function buildStepDetail(step) {
+  const logs = logsForStep(step);
   const wrap = el("div", { class: "step-detail" });
   wrap.dataset.key = `step-detail-${step.step_index}`;
-  wrap.dataset.hash = JSON.stringify(step);
+  wrap.dataset.hash = stepDetailHash(step, logs);
   wrap.addEventListener("click", (e) => e.stopPropagation());
 
   const addBlock = (label, raw) => {
@@ -665,7 +683,6 @@ function buildStepDetail(step) {
 
   if (step.error_message) addBlock("error", `${step.error_code || ""} ${step.error_message}`);
   addBlock("agent_response", step.agent_response_json);
-  const logs = logsForStep(step);
   if (logs.length > 0) {
     const section = el("div", { class: "step-log-section" });
     section.appendChild(el("div", { class: "label", text: "agent logs" }));
@@ -677,8 +694,8 @@ function buildStepDetail(step) {
     }
     wrap.appendChild(section);
   }
-  const km = activeRunDetail && activeRunDetail.run && activeRunDetail.run.knowledge_metrics;
-  if (km && step.step_index === 0) addBlock("knowledge_metrics (run)", km);
+  const km = knowledgeMetricsForStep(step);
+  if (km) addBlock("knowledge_metrics (run)", km);
   return wrap;
 }
 
