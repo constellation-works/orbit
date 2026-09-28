@@ -169,6 +169,7 @@ fn grok_state_dir_falls_back_to_home_dot_grok() {
 #[test]
 fn grok_state_dir_from_env_reads_runtime_env() {
     const EXPECTED_ENV: &str = "ORBIT_TEST_EXPECTED_GROK_STATE_DIR";
+    const RAN_ENV: &str = "ORBIT_TEST_GROK_STATE_DIR_HELPER_RAN";
     if let Some(expected) = std::env::var_os(EXPECTED_ENV) {
         if expected == OsStr::new("__none__") {
             assert_eq!(grok_state_dir_from_env(), None);
@@ -179,18 +180,24 @@ fn grok_state_dir_from_env_reads_runtime_env() {
                 "GROK_HOME should take precedence over HOME"
             );
         }
+        if let Some(marker) = std::env::var_os(RAN_ENV) {
+            std::fs::write(marker, b"helper body ran").expect("write helper execution marker");
+        }
         return;
     }
 
     fn run_case(expected: &str, grok_home: Option<&str>, home: Option<&str>) {
+        let marker_dir = tempfile::tempdir().expect("create helper execution marker directory");
+        let marker_path = marker_dir.path().join("helper-ran");
         let mut command =
             std::process::Command::new(std::env::current_exe().expect("current test executable"));
         command
-            .arg("grok_state_dir_from_env_reads_runtime_env")
+            .arg("macos_sandbox::tests::provider_dirs::grok_state_dir_from_env_reads_runtime_env")
             .arg("--exact")
             .arg("--nocapture")
             .arg("--test-threads=1")
-            .env(EXPECTED_ENV, expected);
+            .env(EXPECTED_ENV, expected)
+            .env(RAN_ENV, &marker_path);
         match grok_home {
             Some(value) => {
                 command.env("GROK_HOME", value);
@@ -207,8 +214,17 @@ fn grok_state_dir_from_env_reads_runtime_env() {
                 command.env_remove("HOME");
             }
         }
-        let status = command.status().expect("run env helper child test");
-        assert!(status.success(), "child env helper case failed: {status:?}");
+        let output = command.output().expect("run env helper child test");
+        assert!(
+            output.status.success(),
+            "child env helper case failed: status={:?}, stdout={}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let marker = std::fs::read(&marker_path)
+            .expect("child exited successfully without executing the helper body");
+        assert_eq!(marker, b"helper body ran");
     }
 
     run_case("/tmp/grok-home", Some("/tmp/grok-home"), Some("/tmp/home"));
