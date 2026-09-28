@@ -239,6 +239,10 @@ impl RuntimeHost for FailureHandoffHost<'_> {
                 message: WORKTREE_FIXTURE_FAILURE.to_string(),
             });
         }
+        if action == "test_pr_failure_handoff" {
+            self.record(action, "stubbed_success".to_string());
+            return Ok(json!({"phase": "fixture", "decision": "preserved"}));
+        }
         let result = <OrbitRuntime as RuntimeHost>::run_deterministic(
             self.runtime,
             action,
@@ -258,10 +262,26 @@ impl RuntimeHost for FailureHandoffHost<'_> {
     }
 
     fn has_deterministic_action(&self, action: &str) -> bool {
-        if action == "test_worktree_setup" {
+        if matches!(action, "test_worktree_setup" | "test_pr_failure_handoff") {
             return true;
         }
         <OrbitRuntime as RuntimeHost>::has_deterministic_action(self.runtime, action)
+    }
+
+    fn checkpoint_failure_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        failed_step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        <OrbitRuntime as RuntimeHost>::checkpoint_failure_activity(
+            self.runtime,
+            run_id,
+            activity_name,
+            failed_step_id,
+            output,
+        )
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
@@ -285,43 +305,61 @@ impl RuntimeHost for FailureHandoffHost<'_> {
     }
 }
 
-/// [ORB-10410] `task_pr_pipeline` binds `pr_failure_handoff` as its
-/// terminal `failure_activity`, and that hook resolves through the same v2
-/// deterministic dispatch table as any ordinary step. While the allowlist
-/// omitted the name, every terminal PR-pipeline failure ran the hook as
-/// `DeterministicActionNotRegistered`: the recoverable candidate was never
-/// published, and the registry miss masked the real failure. The hook must
-/// reach its own implementation, and the original step error must stay
+/// The resolved terminal activity uses a deterministic test action so the
+/// engine path and its successful failure-activity checkpoint are observable
+/// without running recovery side effects. The failed worktree step stays
 /// authoritative.
 #[test]
 fn failed_pr_pipeline_dispatches_the_failure_handoff_and_keeps_the_original_error() {
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
-    let run_id = Utc::now()
-        .timestamp_nanos_opt()
-        .unwrap_or_default()
-        .to_string();
+    let run_input = json!({
+        "task_ids": ["ORB-FAILURE-HANDOFF"],
+        "base_branch": "agent-main",
+        "base_sync": "local",
+        "review": false,
+    });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(run_input.clone()),
+            None,
+        )
+        .expect("insert pipeline run");
+    let run_id = run.run_id;
+    runtime
+        .write_run_state(
+            &run_id,
+            &orbit_types::workflow::PipelineState::new(
+                run_id.clone(),
+                run.job_id,
+                run_input.clone(),
+            ),
+        )
+        .expect("seed pipeline run state");
     let worktree_activity = global_root.join("resources/activities/worktree_setup.yaml");
     let activity_yaml = std::fs::read_to_string(&worktree_activity)
         .expect("read seeded worktree activity")
         .replace("action: worktree_setup", "action: test_worktree_setup");
     std::fs::write(&worktree_activity, activity_yaml).expect("write test worktree activity");
     let host = FailureHandoffHost::new(&runtime);
+    let mut job = resolved_job(&runtime, "task_pr_pipeline");
+    let failure_activity = job
+        .resolved_failure_activity
+        .as_mut()
+        .expect("pipeline resolves its terminal failure activity");
+    let orbit_types::workflow::ActivityV2Spec::Deterministic(spec) = &mut failure_activity.spec
+    else {
+        panic!("terminal failure activity must remain deterministic");
+    };
+    spec.action = "test_pr_failure_handoff".to_string();
 
-    let error = try_execute_named_job(
-        &runtime,
-        &repo_root,
-        &host,
-        "task_pr_pipeline",
-        json!({
-            "task_ids": ["ORB-FAILURE-HANDOFF"],
-            "base_branch": "agent-main",
-            "base_sync": "local",
-            "review": false,
-        }),
-        &run_id,
-    )
-    .expect_err("the seeded worktree failure must terminalize the run");
+    let error = try_execute_job(&runtime, &repo_root, &host, job, run_input, &run_id)
+        .expect_err("the seeded worktree failure must terminalize the run");
 
     assert!(
         error.to_string().contains(WORKTREE_FIXTURE_FAILURE),
@@ -333,6 +371,26 @@ fn failed_pr_pipeline_dispatches_the_failure_handoff_and_keeps_the_original_erro
             .iter()
             .any(|outcome| outcome == "seeded_failure"),
         "the test action must reach the host once before terminal failure handling"
+    );
+
+    assert_eq!(
+        host.outcomes("test_pr_failure_handoff"),
+        ["stubbed_success"],
+        "the terminal failure activity must dispatch its deterministic action"
+    );
+
+    let state = runtime
+        .read_run_state(&run_id)
+        .expect("read pipeline run state")
+        .expect("pipeline run state exists");
+    let checkpoint = state
+        .failure_activity_checkpoint
+        .expect("successful terminal failure activity is checkpointed");
+    assert_eq!(checkpoint.activity_name, "pr_failure_handoff");
+    assert_eq!(checkpoint.failed_step_id, "worktree");
+    assert_eq!(
+        checkpoint.output,
+        json!({"phase": "fixture", "decision": "preserved"})
     );
 }
 
