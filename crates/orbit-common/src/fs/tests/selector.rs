@@ -40,6 +40,49 @@ mod matching {
     }
 
     #[test]
+    fn root_selectors_overlap_their_descendants_in_both_directions() {
+        let contained = [
+            ("dir:.", "file:src/lib.rs"),
+            ("dir:.", "file:README.md"),
+            ("dir:.", "dir:src/nested"),
+            ("dir:.", "symbol:src/lib.rs#run:function"),
+            (".", "file:src/nested/deep/a.rs"),
+            ("dir:/", "file:/etc/hosts"),
+            ("dir:/", "dir:/etc/ssh"),
+            ("/", "file:/etc/hosts"),
+        ];
+        for (root, descendant) in contained {
+            assert!(
+                overlaps(root, descendant),
+                "`{root}` contains `{descendant}`"
+            );
+            assert!(
+                overlaps(descendant, root),
+                "`{descendant}` sits under `{root}`"
+            );
+        }
+
+        let disjoint = [
+            ("dir:.", "file:/etc/hosts"),
+            ("dir:.", "file:../outside.rs"),
+            ("dir:/", "file:src/lib.rs"),
+            ("file:.", "file:src/lib.rs"),
+            ("dir:src", "dir:lib"),
+            ("dir:src", "file:src-old/lib.rs"),
+        ];
+        for (left, right) in disjoint {
+            assert!(
+                !overlaps(left, right),
+                "`{left}` and `{right}` are disjoint"
+            );
+            assert!(
+                !overlaps(right, left),
+                "`{right}` and `{left}` are disjoint"
+            );
+        }
+    }
+
+    #[test]
     fn overlap_scope_parses_each_side_once_with_the_same_answers() {
         assert_eq!(
             OverlapScope::parse("dir:src/"),
@@ -202,6 +245,43 @@ mod parse {
             canonical_selector_in_workspace("src/nested", workspace).unwrap(),
             "dir:src/nested"
         );
+    }
+
+    #[test]
+    fn canonical_selector_in_workspace_keeps_the_workspace_root() {
+        let temp = tempdir().unwrap();
+        let workspace = temp.path();
+        let absolute_root = workspace.to_string_lossy().into_owned();
+
+        for input in [
+            "dir:.".to_string(),
+            ".".to_string(),
+            "./".to_string(),
+            format!("dir:{absolute_root}"),
+            absolute_root.clone(),
+            format!("{absolute_root}/"),
+        ] {
+            let canonical = canonical_selector_in_workspace(&input, workspace).unwrap();
+            assert_eq!(canonical, "dir:.", "`{input}` names the workspace root");
+            assert!(canonical.parse::<Selector>().is_ok());
+            assert!(exists_in_workspace(&canonical, workspace));
+            assert_eq!(
+                canonical_selector_in_workspace(&canonical, workspace).unwrap(),
+                canonical,
+                "`{input}` normalizes stably"
+            );
+        }
+
+        let outside = tempdir().unwrap();
+        assert!(
+            canonical_selector_in_workspace(
+                &format!("dir:{}", outside.path().display()),
+                workspace
+            )
+            .is_err()
+        );
+        assert!(canonical_selector_in_workspace("dir:..", workspace).is_err());
+        assert!(canonical_selector_in_workspace("dir:/", workspace).is_err());
     }
 
     #[cfg(unix)]

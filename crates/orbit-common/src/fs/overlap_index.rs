@@ -5,10 +5,11 @@
 //! does this requested selector overlap" for every requested selector against
 //! every held one re-parses both sides per pair and does `requested × held`
 //! comparisons. Two selectors overlap only when they share an anchor or one
-//! anchor is a `/`-boundary prefix of the other, so the held side can be keyed
-//! by normalized anchor and a query touches exactly: the requested anchor, each
-//! of its ancestors, and — only when the requested selector can contain
-//! descendants — the contiguous key range beneath it.
+//! anchor contains the other — a `/`-boundary prefix, or a root (`.` / `/`)
+//! above everything on its side — so the held side can be keyed by normalized
+//! anchor and a query touches exactly: the requested anchor, each of its
+//! ancestors including its root, and — only when the requested selector can
+//! contain descendants — the key range beneath it.
 //!
 //! Every candidate the prefix walk produces is re-checked with
 //! [`OverlapScope::overlaps`], so the answers are those of
@@ -17,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use super::selector::OverlapScope;
+use super::selector::{OverlapScope, root_ancestor};
 
 /// One indexed selector and the value it carries.
 #[derive(Debug, Clone)]
@@ -91,9 +92,12 @@ impl<V> OverlapIndex<V> {
                 contains_descendants,
             } => {
                 let mut candidates = Vec::new();
-                // Ancestors: every `/`-boundary prefix of the anchor, which is
-                // exactly the set an indexed `dir:` or legacy path could be
-                // anchored at and still contain this one.
+                // Ancestors: the root and every `/`-boundary prefix of the
+                // anchor, which is exactly the set an indexed `dir:` or legacy
+                // path could be anchored at and still contain this one.
+                if let Some(root) = root_ancestor(path) {
+                    candidates.extend(self.anchored.get(root).into_iter().flatten());
+                }
                 for (offset, byte) in path.bytes().enumerate() {
                     if byte == b'/' && offset > 0 {
                         candidates.extend(self.anchored.get(&path[..offset]).into_iter().flatten());
@@ -102,13 +106,20 @@ impl<V> OverlapIndex<V> {
                 candidates.extend(self.anchored.get(path.as_str()).into_iter().flatten());
                 // Descendants: keys starting with `anchor/` are contiguous in
                 // the map, and only a selector that contains descendants can
-                // overlap them.
+                // overlap them. `/` owns every absolute key; `.` owns the
+                // relative keys, which are not contiguous, so it takes every
+                // key and the final re-check drops the absolute ones.
                 if *contains_descendants {
-                    let prefix = format!("{path}/");
+                    let prefix = match path.as_str() {
+                        "/" => "/".to_string(),
+                        "." => String::new(),
+                        _ => format!("{path}/"),
+                    };
                     candidates.extend(
                         self.anchored
                             .range::<str, _>((Bound::Included(prefix.as_str()), Bound::Unbounded))
                             .take_while(|(key, _)| key.starts_with(&prefix))
+                            .filter(|(key, _)| *key != path)
                             .flat_map(|(_, entries)| entries),
                     );
                 }
