@@ -768,6 +768,59 @@ fn a_server_request_before_the_reply_is_answered_rather_than_dropped() {
 #[cfg(unix)]
 #[test]
 #[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_server_ping_reusing_the_pending_id_is_answered_not_taken_as_the_reply() {
+    require_sandbox();
+    require_python3();
+    // Each peer numbers its own requests, so a server ping can carry the id
+    // of the request Orbit is waiting on. Matched by id alone, that ping was
+    // taken as the reply: a `tools/call` returned null, and a handshake
+    // failed as malformed, while the server waited for a pong that never came.
+    for method in ["initialize", "tools/list", "tools/call"] {
+        let fixture = Fixture::new(&[], 3_000);
+        let ctx = fixture.context(&[("MCP_FIXTURE_COLLIDE", method)]);
+        let started = Instant::now();
+        let output = fixture
+            .tool("echo", None)
+            .execute(&ctx, json!({ "message": "hi" }))
+            .unwrap_or_else(|error| panic!("a ping colliding with '{method}': {error}"));
+        assert_eq!(
+            output["echo"],
+            json!({ "message": "hi" }),
+            "the real reply to the call arrives after a ping colliding with '{method}'"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(fixture.timeout_ms),
+            "answering the colliding ping must not cost the timeout: {:?}",
+            started.elapsed()
+        );
+        assert!(fixture.backend.is_running(), "and the child is kept");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_reply_with_neither_result_nor_error_is_refused_not_taken_as_success() {
+    require_sandbox();
+    require_python3();
+    for method in ["initialize", "tools/list", "tools/call"] {
+        let fixture = Fixture::new(&[], 3_000);
+        let ctx = fixture.context(&[("MCP_FIXTURE_SHAPELESS", method)]);
+        let error = fixture
+            .tool("echo", None)
+            .execute(&ctx, json!({}))
+            .expect_err("a reply without a result is not a successful answer");
+        assert!(
+            error.to_string().contains("neither a result nor an error"),
+            "a shapeless reply to '{method}' is refused as such: {error}"
+        );
+        assert!(!fixture.backend.is_running(), "and the child is not kept");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn one_session_s_slow_call_does_not_hold_up_another_session() {
     require_sandbox();
     require_python3();

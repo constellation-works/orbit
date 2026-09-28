@@ -645,16 +645,19 @@ impl McpSession {
             let message: Value = serde_json::from_str(line.trim())
                 .map_err(|error| format!("emitted invalid JSON: {error}"))?;
             let message_id = message.get("id").filter(|value| !value.is_null());
-            if message_id.and_then(Value::as_i64) != Some(id) {
-                // Not this request's answer. A message that names a method
-                // is the server calling *us*, and a request of its own
-                // carries an id that must be answered; anything else is a
-                // notification or a stale response and is skipped.
-                if let Some(method) = message.get("method").and_then(Value::as_str)
-                    && let Some(server_id) = message_id.cloned()
-                {
-                    self.answer(&server_id, method, deadline)?;
+            // A message that names a method is the server calling *us*,
+            // whatever its id: each peer numbers its own requests, so a
+            // server ping may carry the very id this request is waiting on.
+            // A request of its own carries an id that must be answered; a
+            // notification is skipped.
+            if let Some(server_method) = message.get("method").and_then(Value::as_str) {
+                if let Some(server_id) = message_id.cloned() {
+                    self.answer(&server_id, server_method, deadline)?;
                 }
+                continue;
+            }
+            if message_id.and_then(Value::as_i64) != Some(id) {
+                // A stale response to an earlier request.
                 continue;
             }
             if let Some(error) = message.get("error") {
@@ -666,6 +669,11 @@ impl McpSession {
                     } else {
                         text
                     }
+                ));
+            }
+            if message.get("result").is_none() {
+                return Err(format!(
+                    "answered '{method}' with neither a result nor an error"
                 ));
             }
             return Ok(message);
