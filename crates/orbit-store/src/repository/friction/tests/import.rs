@@ -354,6 +354,58 @@ fn import_leaves_legacy_files_untouched_and_export_re_materializes_them() {
     assert!(dumped.contains("Report body for F2026-05-001"), "{dumped}");
 }
 
+/// A `rehome_required` disposition set on the live record is part of the
+/// record: exporting it and importing that export into a separate store must
+/// carry the owning workspace along with every other field.
+#[test]
+fn export_then_import_preserves_the_rehome_disposition() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("ws_one");
+    legacy_record(&source, "F2026-05-001", "codex", FrictionStatus::Resolved);
+
+    let shared = store(temp.path());
+    let frictions = crate::compose::workspace_friction_store(shared.clone(), "ws_one", &source)
+        .expect("open friction store");
+    frictions
+        .update(
+            "F2026-05-001",
+            FrictionUpdateParams {
+                status: None,
+                tags: None,
+                title: None,
+                body: None,
+                resolved_by_task: None,
+                rehome_to: Some(Some("ws_owner".to_string())),
+                updated_at: at(12, 0),
+            },
+        )
+        .expect("record the rehome disposition");
+    let live = frictions
+        .show("F2026-05-001")
+        .expect("show")
+        .expect("live record")
+        .record;
+    assert_eq!(live.rehome_to.as_deref(), Some("ws_owner"));
+
+    let exported_root = temp.path().join("export");
+    assert_eq!(
+        export_workspace_frictions(&shared, "ws_one", &exported_root).expect("export corpus"),
+        1
+    );
+
+    let restored_root = temp.path().join("restored");
+    fs::create_dir_all(&restored_root).expect("restored store root");
+    let restored =
+        crate::compose::workspace_friction_store(store(&restored_root), "ws_one", &exported_root)
+            .expect("import the export into an isolated store")
+            .show("F2026-05-001")
+            .expect("show")
+            .expect("imported record")
+            .record;
+
+    assert_eq!(restored, live);
+}
+
 fn assert_no_partial_import(root: &std::path::Path, workspace_id: &str) {
     let shared = store(root);
     let (records, markers): (i64, i64) = shared

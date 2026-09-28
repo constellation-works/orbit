@@ -92,6 +92,8 @@ pub struct FrictionFrontmatter {
     pub during_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rehome_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
