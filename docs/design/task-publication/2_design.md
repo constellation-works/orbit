@@ -207,7 +207,10 @@ workspace, branch, generation, and the commit id it is about to push — into th
 same Orbit-owned cache. That record is what phase 8's "reconcile by commit ID"
 reads on the next run: a branch tip equal to the pending commit that the owner
 never recorded is reconciled and reported without republishing, while any other
-unexpected tip is an authority conflict.
+unexpected tip is an authority conflict. Reconciliation keeps the pending record,
+because the owner records the reconciled commit only afterwards; the record is
+removed once a later run's last success names that commit, so a lost save can
+reconcile again instead of turning into an authority conflict.
 
 Task bundles have per-bundle durability rather than one workspace-wide read
 transaction. A v1 publication is therefore a validated set of individually

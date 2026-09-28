@@ -715,7 +715,9 @@ fn decide_action(
         .as_ref()
         .is_some_and(|last| last.commit == tip.commit);
     if pending_landed && !recorded {
-        cache.remove_pending()?;
+        // Keep the pending record: the caller records this outcome only after
+        // we return, so a failed save must be able to reconcile again. It is
+        // removed once a later request carries this commit as last success.
         return Ok(PublishAction::Reconcile(Box::new(
             PublicationPublishOutcome {
                 status: PublicationPublishStatus::Reconciled,
@@ -835,7 +837,8 @@ fn assert_outside_source_checkout(
 
 /// Private record of a push that was issued but not yet confirmed as recorded
 /// by the owner. It lets the next run reconcile by commit id instead of
-/// publishing a duplicate or divergent generation.
+/// publishing a duplicate or divergent generation, and it survives
+/// reconciliation until a request's last success names the landed commit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PendingPublication {
