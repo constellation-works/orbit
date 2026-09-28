@@ -1,12 +1,18 @@
 //! Concurrent-mutation races against `reindex_workspace`.
 
-use orbit_types::task::{ORB_TASK_ID_MAX, TaskStatus};
+use std::sync::mpsc;
+use std::time::Duration;
+
+use orbit_common::fs::io::{FileLockOptions, with_exclusive_file_lock_options};
+use orbit_types::task::{ORB_TASK_ID_MAX, TaskRelation, TaskRelationType, TaskStatus};
 use tempfile::TempDir;
 
 use crate::contracts::TaskHistoryUpdateParams;
+use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::repository::task::TaskV2Store;
 use crate::workflow::task::reindex::{
-    clear_after_reindex_snapshot_hook, set_after_reindex_snapshot_hook,
+    clear_after_reindex_snapshot_hook, clear_before_reindex_publication_hook,
+    set_after_reindex_snapshot_hook, set_before_reindex_publication_hook,
 };
 
 use super::*;
@@ -16,7 +22,161 @@ struct AfterSnapshotGuard;
 impl Drop for AfterSnapshotGuard {
     fn drop(&mut self) {
         clear_after_reindex_snapshot_hook();
+        clear_before_reindex_publication_hook();
     }
+}
+
+/// Attempt the same bundle lock ordinary mutations need while reindex is in
+/// its final read-to-publication window. The timeout proves that the worker
+/// reached that window instead of relying on a sleep or scheduler timing.
+fn assert_final_window_blocks_mutation(
+    lock_target: std::path::PathBuf,
+    mutate: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let (start_tx, start_rx) = mpsc::channel();
+    let (probe_tx, probe_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        start_rx.recv().expect("start final-window mutation");
+        let probe = with_exclusive_file_lock_options(
+            &lock_target,
+            "reindex race probe",
+            FileLockOptions {
+                timeout: Duration::from_millis(100),
+                warn_after: Duration::from_secs(1),
+            },
+            || Ok::<_, std::io::Error>(()),
+        );
+        probe_tx
+            .send(matches!(probe, Err(ref error) if error.kind() == std::io::ErrorKind::TimedOut))
+            .expect("report lock contention");
+        mutate();
+    });
+    set_before_reindex_publication_hook(move || {
+        start_tx.send(()).expect("start mutation worker");
+        assert!(
+            probe_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("lock contention result"),
+            "final envelope read must retain the bundle lock through publication"
+        );
+    });
+    worker
+}
+
+#[test]
+fn final_read_to_publication_update_waits_then_keeps_committed_status_and_version() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_final_update";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    for id in ["ORB-00000", "ORB-00001"] {
+        seed(&store, &registry, ws, &make_bundle(id, id, Vec::new()));
+    }
+    let _guard = AfterSnapshotGuard;
+    let target = bundle_lock_target(&store.bundle_path("ORB-00000").unwrap());
+    let updater = TaskV2Store::new(registry.clone(), ws.to_string());
+    let worker = assert_final_window_blocks_mutation(target, move || {
+        updater
+            .update_task_history(
+                "ORB-00000",
+                &TaskHistoryUpdateParams {
+                    actor: "codex".to_string(),
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .expect("update after reindex publication");
+    });
+
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, 2);
+    worker.join().expect("mutation worker");
+    let envelope = store.read_bundle("ORB-00000").unwrap().envelope;
+    assert_eq!(envelope.status, TaskStatus::InProgress);
+    let statuses = TaskV2Store::new(registry.clone(), ws.to_string())
+        .task_status_index()
+        .unwrap();
+    assert_eq!(statuses.get("ORB-00000"), Some(&envelope.status));
+    assert_eq!(statuses.get("ORB-00001"), Some(&TaskStatus::Backlog));
+    let versions = registry.indexed_task_versions_for_workspace(ws).unwrap();
+    assert_eq!(
+        versions.get("ORB-00000").map(String::as_str),
+        Some(envelope.updated_at.to_rfc3339().as_str())
+    );
+}
+
+#[test]
+fn final_read_to_publication_delete_cannot_resurrect_binding_or_index() {
+    let temp = TempDir::new().unwrap();
+    let ws = "ws_final_delete";
+    let registry = open_registry(temp.path());
+    let binding = bind(&registry, temp.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "deleted", Vec::new()),
+    );
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00002", "target", Vec::new()),
+    );
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle(
+            "ORB-00001",
+            "neighbor",
+            vec![TaskRelation {
+                relation_type: TaskRelationType::ChildOf,
+                target: "ORB-00002".into(),
+            }],
+        ),
+    );
+    // Repair must rebuild the healthy neighbor's relation, not merely leave
+    // its previously indexed edge untouched.
+    registry.unregister_task_bundle("ORB-00001", ws).unwrap();
+    let _guard = AfterSnapshotGuard;
+    let target = bundle_lock_target(&store.bundle_path("ORB-00000").unwrap());
+    let deleting_store = bundle_store(&registry, &binding);
+    let worker = assert_final_window_blocks_mutation(target, move || {
+        deleting_store
+            .delete_bundle("ORB-00000")
+            .expect("delete after reindex publication");
+    });
+
+    assert_eq!(reindex_workspace(&registry, ws).unwrap().indexed, 3);
+    worker.join().expect("deletion worker");
+    assert!(!store.bundle_path("ORB-00000").unwrap().exists());
+    let bindings = registry.tasks_for_workspace(ws).unwrap();
+    assert_eq!(
+        bindings
+            .into_iter()
+            .map(|binding| binding.task_id)
+            .collect::<Vec<_>>(),
+        vec!["ORB-00001", "ORB-00002"]
+    );
+    let statuses = TaskV2Store::new(registry.clone(), ws.to_string())
+        .task_status_index()
+        .unwrap();
+    assert!(!statuses.contains_key("ORB-00000"));
+    assert_eq!(statuses.get("ORB-00001"), Some(&TaskStatus::Backlog));
+    assert!(
+        !registry
+            .indexed_task_versions_for_workspace(ws)
+            .unwrap()
+            .contains_key("ORB-00000")
+    );
+    assert_eq!(
+        registry
+            .indexed_relation_targets(ws, "ORB-00001", TaskRelationType::ChildOf)
+            .unwrap(),
+        vec!["ORB-00002"]
+    );
 }
 
 /// A concurrent update after the first envelope read must not publish the
