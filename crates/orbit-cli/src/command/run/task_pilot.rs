@@ -35,7 +35,8 @@ pub struct TaskPilotCommand {
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
-    /// Block until the submitted run reaches a terminal state.
+    /// Block until the submitted run reaches a terminal state, and exit
+    /// nonzero unless it succeeded.
     #[arg(long)]
     pub wait: bool,
 }

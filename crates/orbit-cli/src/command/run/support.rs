@@ -6,6 +6,10 @@ use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
 
+/// Terminal wait statuses that mean the submitted run did not succeed.
+pub(super) const FAILED_WAIT_STATUSES: [&str; 4] =
+    ["failed", "timeout", "cancelled", "interrupted"];
+
 #[derive(Clone)]
 pub(crate) struct WorkflowDispatchResult {
     pub workflow_alias: &'static str,
@@ -92,6 +96,9 @@ pub(crate) fn dispatch_workflow(
     Ok(results)
 }
 
+/// Render dispatched workflow runs, failing the command when any waited run
+/// ended in a non-success terminal state. Submitted and queued runs report no
+/// outcome yet, so they keep a zero exit.
 pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
@@ -112,7 +119,14 @@ pub(crate) fn workflow_dispatch_payload(
         .flat_map(workflow_dispatch_result_lines)
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(Payload::detail(doc, text).into())
+    let payload = Payload::detail(doc, text);
+    if runs
+        .iter()
+        .any(|run| FAILED_WAIT_STATUSES.contains(&run.state.as_str()))
+    {
+        return Ok(payload.with_exit_code(1).into());
+    }
+    Ok(payload.into())
 }
 
 pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> Value {

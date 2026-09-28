@@ -11,8 +11,7 @@ use clap::Args;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
-/// Terminal wait statuses that mean the submitted run did not succeed.
-const FAILED_WAIT_STATUSES: [&str; 4] = ["failed", "timeout", "cancelled", "interrupted"];
+use super::support::FAILED_WAIT_STATUSES;
 
 #[derive(Args)]
 #[command(
