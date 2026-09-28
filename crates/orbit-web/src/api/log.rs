@@ -2,7 +2,7 @@
 
 use std::convert::Infallible;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -226,18 +226,23 @@ pub(super) fn spawn_log_sse_frames(
     let (tx, rx) = mpsc::channel(LOG_STREAM_CHANNEL_DEPTH);
     thread::spawn(move || {
         // Permit is dropped when this thread exits, which happens within one
-        // poll interval of the client disconnecting (tx.is_closed()).
+        // poll interval — or one batch of a replay — of the client
+        // disconnecting (tx.is_closed()).
         let _permit = permit;
         let mut offset =
             resume_offset.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
-        let mut leftover = Vec::new();
+        let mut lines = LogLineBuffer::default();
         loop {
             if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
                 return;
             }
-            match read_appended_log_events(&path, &filters, &mut offset, &mut leftover) {
-                Ok(events) => {
-                    for (event, event_offset) in events {
+            // A replay (`from=0` over a large log) drains batch by batch with
+            // no sleep between them, re-checking disconnect and shutdown each
+            // time; only a caught-up stream waits for the next poll.
+            let caught_up = match read_appended_log_events(&path, &filters, &mut offset, &mut lines)
+            {
+                Ok(batch) => {
+                    for (event, event_offset) in batch.events {
                         let frame = match format_sse_frame(&event, event_offset) {
                             Ok(frame) => frame,
                             Err(_) => continue,
@@ -246,18 +251,85 @@ pub(super) fn spawn_log_sse_frames(
                             return;
                         }
                     }
+                    !batch.more
                 }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(_) => {}
+                Err(_) => true,
+            };
+            if caught_up {
+                thread::sleep(LOG_STREAM_POLL_INTERVAL);
             }
-            thread::sleep(LOG_STREAM_POLL_INTERVAL);
         }
     });
     rx
 }
 
+/// Most matching events one [`read_appended_log_events`] call renders.
+pub(super) const LOG_STREAM_BATCH_EVENTS: usize = 256;
+/// Most bytes one [`read_appended_log_events`] call scans, so a filter that
+/// matches nothing still yields to the disconnect/shutdown check regularly.
+pub(super) const LOG_STREAM_BATCH_BYTES: u64 = 1 << 20;
+/// Longest record the stream reassembles. A longer one — or an unterminated
+/// run of bytes that never gets its newline — is dropped through its next
+/// newline, so partial-line storage never exceeds this.
+pub(super) const LOG_STREAM_MAX_RECORD_BYTES: usize = 1 << 20;
+
+/// Bytes of the record being read, carried across polls until its newline.
+#[derive(Debug, Default)]
+pub(super) struct LogLineBuffer {
+    pub(super) partial: Vec<u8>,
+    /// Set once the current record exceeded [`LOG_STREAM_MAX_RECORD_BYTES`];
+    /// its remaining bytes are skipped up to and including the next newline.
+    pub(super) discarding: bool,
+}
+
+impl LogLineBuffer {
+    fn clear(&mut self) {
+        self.partial.clear();
+        self.discarding = false;
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        if self.discarding {
+            return;
+        }
+        if self.partial.len() + bytes.len() > LOG_STREAM_MAX_RECORD_BYTES {
+            // Release the allocation, not just the length.
+            self.partial = Vec::new();
+            self.discarding = true;
+            return;
+        }
+        self.partial.extend_from_slice(bytes);
+    }
+
+    /// End the current record at its newline; `None` when it was discarded.
+    fn finish(&mut self) -> Option<String> {
+        if std::mem::take(&mut self.discarding) {
+            tracing::warn!(
+                limit = LOG_STREAM_MAX_RECORD_BYTES,
+                "log stream skipped an oversized record"
+            );
+            return None;
+        }
+        let line = String::from_utf8_lossy(&self.partial).into_owned();
+        self.partial.clear();
+        Some(line)
+    }
+}
+
+/// One bounded read of the log: the rendered matches, and whether unread
+/// bytes remain past `offset` so the caller should read again without waiting.
+#[derive(Debug)]
+pub(super) struct AppendedLogBatch {
+    pub(super) events: Vec<(RenderedLogEvent, u64)>,
+    pub(super) more: bool,
+}
+
 /// Read complete lines appended since `offset`, keeping a trailing partial
-/// line in `leftover` until its newline arrives.
+/// line in `lines` until its newline arrives.
+///
+/// One call stops after [`LOG_STREAM_BATCH_EVENTS`] matches or
+/// [`LOG_STREAM_BATCH_BYTES`] scanned bytes, whichever comes first, leaving
+/// `offset` at the resume point.
 ///
 /// Lines are read as bytes and decoded lossily: a torn write or a resume
 /// offset inside a multi-byte character must cost one malformed line, not
@@ -267,35 +339,45 @@ pub(super) fn read_appended_log_events(
     path: &std::path::Path,
     filters: &LogFilters,
     offset: &mut u64,
-    leftover: &mut Vec<u8>,
-) -> io::Result<Vec<(RenderedLogEvent, u64)>> {
+    lines: &mut LogLineBuffer,
+) -> io::Result<AppendedLogBatch> {
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     if len < *offset {
         *offset = 0;
-        leftover.clear();
+        lines.clear();
     }
     file.seek(SeekFrom::Start(*offset))?;
-    let mut reader = BufReader::new(file);
+    let budget = (len - *offset).min(LOG_STREAM_BATCH_BYTES);
+    let mut reader = BufReader::new(file.take(budget));
     let mut events = Vec::new();
 
-    loop {
-        let n = reader.read_until(b'\n', leftover)?;
-        if n == 0 {
+    while events.len() < LOG_STREAM_BATCH_EVENTS {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
             break;
         }
-        *offset += n as u64;
-        if leftover.last() != Some(&b'\n') {
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let chunk = newline.map_or(buf, |at| &buf[..at]);
+        lines.push(chunk);
+        let consumed = chunk.len() + usize::from(newline.is_some());
+        reader.consume(consumed);
+        *offset += consumed as u64;
+        if newline.is_none() {
             continue;
         }
-        let line = String::from_utf8_lossy(&leftover[..leftover.len() - 1]).into_owned();
-        leftover.clear();
-        if let Some(event) = parse_matching_event(&line, filters) {
+        if let Some(event) = lines
+            .finish()
+            .and_then(|line| parse_matching_event(&line, filters))
+        {
             events.push((render_log_event_for_web(&event), *offset));
         }
     }
 
-    Ok(events)
+    Ok(AppendedLogBatch {
+        events,
+        more: *offset < len,
+    })
 }
 
 // Widened to pub(super) for api/tests/ access after test layout migration (ORB-00224).

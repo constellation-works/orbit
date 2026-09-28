@@ -9,7 +9,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 
 use super::super::LogQuery;
 use super::super::log::{
-    LOG_MAX_LIMIT, LogSnapshot, LogStreamGate, format_sse_frame, last_event_id_header,
+    LOG_MAX_LIMIT, LOG_STREAM_BATCH_BYTES, LOG_STREAM_BATCH_EVENTS, LOG_STREAM_MAX_RECORD_BYTES,
+    LogLineBuffer, LogSnapshot, LogStreamGate, format_sse_frame, last_event_id_header,
     log_stream_unavailable, read_appended_log_events, read_log_snapshot_from_path,
     read_log_snapshot_then, spawn_log_sse_frames, stream_resume_offset,
 };
@@ -175,7 +176,7 @@ fn log_stream_framing_emits_one_data_frame_per_appended_line() {
     let path = dir.path().join("orbit.jsonl");
     write_lines(&path, &[]);
     let mut offset = std::fs::metadata(&path).expect("metadata").len();
-    let mut leftover = Vec::new();
+    let mut lines = LogLineBuffer::default();
 
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -194,9 +195,9 @@ fn log_stream_framing_emits_one_data_frame_per_appended_line() {
     .expect("write event");
     file.flush().expect("flush");
 
-    let events =
-        read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut leftover)
-            .expect("read appended");
+    let events = read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut lines)
+        .expect("read appended")
+        .events;
     assert_eq!(events.len(), 1);
 
     let (event, event_offset) = &events[0];
@@ -223,10 +224,10 @@ fn log_stream_skips_invalid_utf8_instead_of_stalling() {
     std::fs::write(&path, &bytes).expect("write log");
 
     let mut offset = 0;
-    let mut leftover = Vec::new();
-    let events =
-        read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut leftover)
-            .expect("invalid UTF-8 must not fail the read");
+    let mut lines = LogLineBuffer::default();
+    let events = read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut lines)
+        .expect("invalid UTF-8 must not fail the read")
+        .events;
 
     assert_eq!(events.len(), 1, "the valid line after a torn one is served");
     assert_eq!(
@@ -235,9 +236,198 @@ fn log_stream_skips_invalid_utf8_instead_of_stalling() {
         "the stream advances past all bytes"
     );
     assert!(
-        !leftover.is_empty(),
+        !lines.partial.is_empty(),
         "the partial line waits for its newline"
     );
+}
+
+fn policy_line(n: usize) -> String {
+    json!({
+        "timestamp": "2026-04-27T01:00:01Z",
+        "level": "WARN",
+        "target": "orbit.policy.deny",
+        "fields": {"tool": "fs.write", "path": format!("/tmp/{n}")}
+    })
+    .to_string()
+}
+
+#[test]
+fn appended_read_renders_at_most_one_batch_per_call() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    let total = LOG_STREAM_BATCH_EVENTS * 3 + 5;
+    let lines: Vec<String> = (0..total).map(|i| log_line(&format!("step-{i}"))).collect();
+    write_lines(&path, &lines);
+
+    let mut offset = 0;
+    let mut buffer = LogLineBuffer::default();
+    let mut seen = 0;
+    let mut calls = 0;
+    loop {
+        let batch =
+            read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut buffer)
+                .expect("read batch");
+        calls += 1;
+        assert!(
+            batch.events.len() <= LOG_STREAM_BATCH_EVENTS,
+            "one call rendered {} events",
+            batch.events.len()
+        );
+        for (event, _) in &batch.events {
+            assert!(
+                event.message_html.contains(&format!("step-{seen}<")),
+                "events arrive in order: expected step-{seen}, got {}",
+                event.message_html
+            );
+            seen += 1;
+        }
+        if !batch.more {
+            break;
+        }
+        assert_eq!(
+            batch.events.len(),
+            LOG_STREAM_BATCH_EVENTS,
+            "a batch cut short by the event cap reports more"
+        );
+    }
+    assert_eq!(seen, total);
+    assert_eq!(calls, 4, "{total} events take four bounded reads");
+    assert_eq!(offset, file_len(&path));
+}
+
+#[test]
+fn appended_read_yields_after_its_byte_budget_when_nothing_matches() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    let mut lines = Vec::new();
+    let mut bytes = 0u64;
+    while bytes <= LOG_STREAM_BATCH_BYTES * 2 {
+        let line = policy_line(lines.len());
+        bytes += line.len() as u64 + 1;
+        lines.push(line);
+    }
+    lines.push(log_line("after-scan"));
+    write_lines(&path, &lines);
+    let filters =
+        LogFilters::from_query_parts(Some("orbit.job".to_string()), None, None).expect("filters");
+
+    let mut offset = 0;
+    let mut buffer = LogLineBuffer::default();
+    let first =
+        read_appended_log_events(&path, &filters, &mut offset, &mut buffer).expect("first batch");
+    assert!(first.events.is_empty());
+    assert!(first.more, "a scan stopped by its byte budget reports more");
+    assert!(
+        offset <= LOG_STREAM_BATCH_BYTES,
+        "one call scanned {offset} bytes, past the {LOG_STREAM_BATCH_BYTES}-byte budget"
+    );
+
+    let mut matched = Vec::new();
+    loop {
+        let batch =
+            read_appended_log_events(&path, &filters, &mut offset, &mut buffer).expect("batch");
+        matched.extend(batch.events);
+        if !batch.more {
+            break;
+        }
+    }
+    assert_eq!(matched.len(), 1, "records split across budgets reassemble");
+    assert!(matched[0].0.message_html.contains("after-scan"));
+    assert_eq!(matched[0].1, file_len(&path));
+}
+
+#[test]
+fn over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(&path, &[log_line("before")]);
+    let filler = "a".repeat(LOG_STREAM_MAX_RECORD_BYTES / 2 + 1);
+    append(&path, "{\"runaway\":\"");
+
+    let mut offset = 0;
+    let mut buffer = LogLineBuffer::default();
+    let mut delivered = Vec::new();
+    // The record keeps growing without a newline across several polls.
+    for _ in 0..4 {
+        append(&path, &filler);
+        loop {
+            let batch =
+                read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut buffer)
+                    .expect("read");
+            delivered.extend(batch.events);
+            assert!(
+                buffer.partial.capacity() <= LOG_STREAM_MAX_RECORD_BYTES,
+                "partial-line storage grew to {} bytes",
+                buffer.partial.capacity()
+            );
+            if !batch.more {
+                break;
+            }
+        }
+    }
+    assert!(buffer.discarding, "the over-limit record is being skipped");
+    assert_eq!(
+        offset,
+        file_len(&path),
+        "skipped bytes still advance the cursor"
+    );
+
+    append(&path, "\"}\n");
+    append(&path, &format!("{}\n", log_line("after-oversized")));
+    let batch = read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut buffer)
+        .expect("read after newline");
+    delivered.extend(batch.events);
+
+    let steps: Vec<&str> = delivered
+        .iter()
+        .map(|(event, _)| event.message_html.as_str())
+        .collect();
+    assert_eq!(steps.len(), 2, "{steps:?}");
+    assert!(steps[0].contains("before"), "{steps:?}");
+    assert!(
+        steps[1].contains("after-oversized"),
+        "the record after the oversized one is served whole: {steps:?}"
+    );
+    assert!(!buffer.discarding);
+    assert!(buffer.partial.is_empty());
+    assert_eq!(delivered[1].1, file_len(&path));
+}
+
+#[test]
+fn stream_replays_a_log_larger_than_one_batch_and_stops_after_disconnect() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    let total = LOG_STREAM_BATCH_EVENTS * 2 + 10;
+    let lines: Vec<String> = (0..total)
+        .map(|i| log_line(&format!("replay-{i}")))
+        .collect();
+    write_lines(&path, &lines);
+
+    let gate = LogStreamGate::new(1);
+    let permit = gate.try_acquire().expect("stream permit");
+    let mut rx = spawn_log_sse_frames(path.clone(), LogFilters::default(), permit, Some(0));
+    let frames = collect_sse_frames(&mut rx, total);
+    assert_eq!(frames.len(), total, "every replayed record arrives");
+    for (i, frame) in frames.iter().enumerate() {
+        assert!(
+            frame.contains(&format!("replay-{i}<")),
+            "frame {i} out of order: {frame}"
+        );
+    }
+
+    // More history than the channel holds, then the client goes away.
+    let more: Vec<String> = (0..total).map(|i| log_line(&format!("late-{i}"))).collect();
+    append(&path, &format!("{}\n", more.join("\n")));
+    let _ = collect_sse_frames(&mut rx, 1);
+    drop(rx);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while gate.available_permits() == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the replay thread kept running after the client disconnected"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -378,10 +568,10 @@ fn reconnect_with_last_event_id_replays_only_lines_after_offset() {
     );
 
     let mut offset = 0;
-    let mut leftover = Vec::new();
-    let events =
-        read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut leftover)
-            .expect("read all");
+    let mut lines = LogLineBuffer::default();
+    let events = read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut lines)
+        .expect("read all")
+        .events;
     assert_eq!(events.len(), 3);
     let last_event_id = events[0].1.to_string();
 

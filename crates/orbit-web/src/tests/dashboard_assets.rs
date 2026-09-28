@@ -1414,10 +1414,9 @@ expectStable("diagnostics side card", diagBody, diagCards, "implement-one");
     );
 }
 
-#[test]
-fn dashboard_log_tail_resumes_from_snapshot_offset_and_retries_on_close() {
-    run_dashboard_javascript_test(
-        r#"
+/// DOM, timer, `EventSource`, and snapshot-fetch doubles for the log-tail
+/// module; `sources` collects every stream it opens and `tick` yields a turn.
+const LOG_TAIL_HARNESS: &str = r#"
 class Node {
   constructor(id = "") {
     this.id = id;
@@ -1528,6 +1527,14 @@ globalThis.fetch = async (path) => {
 };
 const tick = () => new Promise((resolve) => nativeSetTimeout(resolve, 0));
 const { initLogTail } = await import("./js/log-tail.js");
+"#;
+
+#[test]
+fn dashboard_log_tail_resumes_from_snapshot_offset_and_retries_on_close() {
+    run_dashboard_javascript_test(
+        &[
+            LOG_TAIL_HARNESS,
+            r#"
 initLogTail();
 await tick();
 await tick();
@@ -1542,6 +1549,72 @@ if (!sources[1].url.includes("from=42")) throw new Error(`retry lost resume offs
 sources[1].readyState = EventSource.OPEN;
 sources[1].onopen();
 "#,
+        ]
+        .concat(),
+    );
+}
+
+#[test]
+fn dashboard_log_tail_bounds_the_paused_buffer_and_states_discarded_history() {
+    run_dashboard_javascript_test(
+        &[
+            LOG_TAIL_HARNESS,
+            r#"
+initLogTail();
+await tick();
+await tick();
+const source = sources[0];
+source.readyState = EventSource.OPEN;
+source.onopen();
+const inner = get("logInner");
+const follow = get("log-follow-tail");
+const counter = get("log-buffered-count");
+const message = (row) => row.children[3].textContent;
+follow.listeners.click();
+if (follow.attributes["aria-pressed"] !== "false") throw new Error("Follow did not turn off");
+
+// Far more events than the paused retention cap arrive while Follow is off.
+const FED = 5000;
+for (let i = 0; i < FED; i++) {
+  source.onmessage({
+    lastEventId: String(100 + i),
+    data: JSON.stringify({ ts: "t", source: "job", code: "OK", level: "info", message_html: `line-${i}` }),
+  });
+}
+if (inner.children.length !== 1) throw new Error(`paused events reached the DOM: ${inner.children.length} rows`);
+const counts = (counter.textContent.match(/\d+/g) || []).map(Number);
+if (counter.style.display === "none" || counts.length !== 2) {
+  throw new Error(`the paused counter must state buffered and discarded counts: "${counter.textContent}"`);
+}
+const [buffered, discarded] = counts;
+if (buffered + discarded !== FED) throw new Error(`counter lost events: "${counter.textContent}"`);
+if (buffered >= FED / 10) throw new Error(`paused retention is not bounded: ${buffered} buffered of ${FED}`);
+
+// Resuming Follow renders exactly what was retained — the newest events —
+// with a gap row between them and the older history.
+follow.listeners.click();
+const rows = inner.children;
+if (rows.length !== buffered + 2) throw new Error(`flush rendered ${rows.length} rows for ${buffered} retained events`);
+for (let i = 0; i < buffered; i++) {
+  const expected = `line-${FED - 1 - i}`;
+  if (message(rows[i]) !== expected) throw new Error(`row ${i}: expected ${expected}, got ${message(rows[i])}`);
+}
+const gap = rows[buffered];
+if (gap.dataset.gap !== "true") throw new Error("no discarded-history row below the retained events");
+if (!message(gap).includes(String(discarded))) throw new Error(`gap row does not state the discarded count: "${message(gap)}"`);
+if (message(rows[buffered + 1]) !== "hi") throw new Error("the snapshot row must stay below the gap");
+if (counter.style.display !== "none") throw new Error("the paused counter must hide after the flush");
+
+// The next pause starts a fresh count: a buffer under the cap discards nothing.
+follow.listeners.click();
+source.onmessage({ lastEventId: "9999", data: JSON.stringify({ ts: "t", source: "job", code: "OK", level: "info", message_html: "after" }) });
+const again = (counter.textContent.match(/\d+/g) || []).map(Number);
+if (again.length !== 1 || again[0] !== 1) throw new Error(`a fresh pause must not report discards: "${counter.textContent}"`);
+follow.listeners.click();
+if (inner.children.filter((row) => row.dataset.gap).length !== 1) throw new Error("a flush without discards must not add a gap row");
+"#,
+        ]
+        .concat(),
     );
 }
 
