@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-28
+last_validated: 2026-09-28
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -71,7 +71,7 @@ relations:
   - type: resolves
     target: F2026-05-007
 context_files:
-  - file:crates/orbit-store/src/file/task_store/v2_bundle.rs
+  - file:crates/orbit-store/src/repository/task/v2_bundle.rs
 external_refs: []
 created_by: codex:gpt-5.5
 planned_by: null
@@ -243,7 +243,7 @@ The bundle remains canonical. The registry maintains generated projections from 
 - `task_bundle_tags`: normalized tag rows with AND-style filtering semantics.
 - `task_bundle_relations`: directed `(source_task_id, relation_type, target_id)` rows plus an inverse lookup index for task targets.
 
-Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Full-text search still scans task content until the Phase 5 lexical/semantic indexes land.
+Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly. Task search uses the optional workspace lexical index for BM25 over title, description, plan, execution summary, and acceptance criteria. The bundle matcher supplements those hits with comments, external references, artifact manifest paths, and tasks without indexed chunks; without task chunks, the bundle matcher is the only source. Neither source opens artifact payloads.
 
 That comparison also supplies the metadata candidate selection filters and orders by, so it runs against every registered envelope. To keep it from re-parsing unchanged files, each process holds the parsed envelopes in memory and re-proves one against its file's stamp — filesystem identity, length, and modification time — before reusing it; anything the stamp cannot vouch for is read and parsed again. A stamp is evidence that a file was not rewritten rather than proof that its bytes are unchanged, so it never stands alone: the `updated_at` comparison above still runs on every reused envelope, and explicit reindex re-reads and re-validates every bundle from disk.
 
@@ -315,22 +315,7 @@ The public `Task` DTO should not embed legacy relation fields (`parent_id`, `dep
 
 ## 11. Search and Indexing
 
-Lexical and semantic search should index each logical field independently:
-
-- `title`
-- `description`
-- `acceptance`
-- `plan`
-- `execution_summary`
-- `comments`
-- `external_refs` (system and id)
-- artifact paths plus selected artifact text, when media type permits
-
-This preserves field-aware semantic search while making file boundaries visible in snippets. The embedding index should store field names that match the v2 logical document names; `execution-summary.md` is exposed as `execution_summary` to match the tool/API field.
-
-The current Phase 5 implementation is intentionally asymmetric while indexes are still being wired. Lexical search scans the broader set above. Semantic search indexes task title, description, acceptance, plan, and execution summary; semantic parity for comments, external refs, and artifacts remains Phase 5 follow-up work.
-
-Until generated full-text indexes land, the working implementation performs O(N x files-per-task) lexical scans by reading every registered bundle and any candidate text artifact files. That is acceptable only as a cutover bridge; generated search rows will replace the per-query artifact reads.
+Task search is lexical-only. The optional workspace lexical index stores task chunks for `title`, `description`, `plan`, `execution_summary`, and `acceptance`; FTS5/BM25 ranks those chunks. The bundle matcher supplements indexed hits with `comments`, `external_refs`, artifact manifest paths, and tasks without indexed chunks. Without task chunks, the bundle matcher is the only source. Neither search path opens artifact payloads. `OrbitRuntime::search_reindex` rebuilds task chunks from the task collection. The MCP search tool rejects the retired semantic and embedding-model parameters.
 
 Relations need their own generated index. The bundle stores directed relation entries; local indexes materialize `(source_task_id, relation_type, target_task_id)` and optional inverse views for efficient lineage queries. The initial relation type set is `blocked_by`, `child_of`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`. Types are source-implied: a task that depends on another stores `blocked_by -> dependency`, and a subtask stores `child_of -> parent`. Writers validate relation types, reject self-edges and duplicates, and reject cycles for hierarchy and blocking relation families.
 
@@ -355,7 +340,7 @@ The reset should be a one-time cutover rather than a long-lived compatibility la
 11. Leave any legacy review-thread sidecars outside the active v2 model.
 12. Rewrite `task.yaml` as the v2 envelope without old IDs or embedded prose.
 13. Rewrite task-lock reservations from old IDs to canonical IDs or release stale reservations with an audit event.
-14. Rebuild task tag, semantic, status, terminal-month, and relation indexes from disk.
+14. Rebuild task tag, lexical-search, status, terminal-month, and relation indexes from disk.
 
 The cutover command may emit a human-readable mapping from old IDs to new IDs, but Orbit should not persist that mapping as a lookup surface.
 
