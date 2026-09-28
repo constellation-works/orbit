@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -182,31 +182,104 @@ fn concurrent_writes_never_publish_partial_blob_content() {
     let content = Arc::new(vec![b'x'; 4 * 1024 * 1024]);
     let hash = sha256_hex(&content);
     let path = temp.path().join(&hash[..2]).join(&hash);
+    let active_workers = AtomicUsize::new(0);
+
+    run_concurrent_writes(
+        Arc::clone(&store),
+        Arc::clone(&content),
+        path.clone(),
+        &active_workers,
+        |_, store, content| {
+            assert_eq!(
+                store.write(content).expect("write blob"),
+                sha256_hex(content)
+            );
+        },
+    );
+
+    assert_eq!(std::fs::read(path).expect("final blob"), *content);
+    assert_eq!(active_workers.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn concurrent_writer_panic_stops_workers_and_preserves_cause() {
+    let temp = tempdir().expect("tempdir");
+    let store = Arc::new(BlobStore::new(temp.path()));
+    let content = Arc::new(vec![b'x'; 4 * 1024 * 1024]);
+    let hash = sha256_hex(&content);
+    let path = temp.path().join(&hash[..2]).join(&hash);
+    let active_workers = AtomicUsize::new(0);
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_concurrent_writes(
+            Arc::clone(&store),
+            Arc::clone(&content),
+            path,
+            &active_workers,
+            |writer_index, store, content| {
+                if writer_index == 0 {
+                    panic!("injected writer failure");
+                }
+                store.write(content).expect("write blob");
+            },
+        );
+    }));
+
+    let panic = outcome.expect_err("injected writer panic should fail the fixture");
+    let panic_message = panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .expect("writer panic should retain its message");
+    assert_eq!(panic_message, "injected writer failure");
+    assert_eq!(
+        active_workers.load(Ordering::Acquire),
+        0,
+        "all reader and writer workers should stop before the panic is reported"
+    );
+}
+
+fn run_concurrent_writes<F>(
+    store: Arc<BlobStore>,
+    content: Arc<Vec<u8>>,
+    path: std::path::PathBuf,
+    active_workers: &AtomicUsize,
+    write: F,
+) where
+    F: Fn(usize, &BlobStore, &[u8]) + Sync,
+{
     let complete = Arc::new(AtomicBool::new(false));
-    let remaining_writers = Arc::new(std::sync::atomic::AtomicUsize::new(2));
+    let remaining_writers = Arc::new(AtomicUsize::new(2));
 
     std::thread::scope(|scope| {
-        for _ in 0..2 {
+        let mut writer_handles = Vec::with_capacity(2);
+        for writer_index in 0..2 {
             let store = Arc::clone(&store);
             let content = Arc::clone(&content);
             let complete = Arc::clone(&complete);
             let remaining_writers = Arc::clone(&remaining_writers);
-            scope.spawn(move || {
-                assert_eq!(
-                    store.write(&content).expect("write blob"),
-                    sha256_hex(&content)
-                );
-                if remaining_writers.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    complete.store(true, Ordering::Release);
-                }
-            });
+            let write = &write;
+            writer_handles.push(scope.spawn(move || {
+                let _active = ActiveWorker::new(active_workers);
+                let _completion = WriterCompletion {
+                    remaining_writers,
+                    complete,
+                };
+                write(writer_index, &store, &content);
+            }));
         }
 
         let complete = Arc::clone(&complete);
         let reader_content = Arc::clone(&content);
-        let reader_path = path.clone();
-        scope.spawn(move || {
+        let reader_path = path;
+        let reader_handle = scope.spawn(move || {
+            let _active = ActiveWorker::new(active_workers);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while !complete.load(Ordering::Acquire) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "blob reader must stop when all writers exit"
+                );
                 match std::fs::read(&reader_path) {
                     Ok(observed) => {
                         assert_eq!(observed, *reader_content, "partial final blob was visible")
@@ -214,11 +287,55 @@ fn concurrent_writes_never_publish_partial_blob_content() {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => panic!("read blob: {error}"),
                 }
+                std::thread::yield_now();
             }
         });
-    });
 
-    assert_eq!(std::fs::read(path).expect("final blob"), *content);
+        let mut first_panic = None;
+        for handle in writer_handles {
+            if let Err(panic) = handle.join()
+                && first_panic.is_none()
+            {
+                first_panic = Some(panic);
+            }
+        }
+        if let Err(panic) = reader_handle.join()
+            && first_panic.is_none()
+        {
+            first_panic = Some(panic);
+        }
+        if let Some(panic) = first_panic {
+            std::panic::resume_unwind(panic);
+        }
+    });
+}
+
+struct ActiveWorker<'a>(&'a AtomicUsize);
+
+impl<'a> ActiveWorker<'a> {
+    fn new(active_workers: &'a AtomicUsize) -> Self {
+        active_workers.fetch_add(1, Ordering::AcqRel);
+        Self(active_workers)
+    }
+}
+
+impl Drop for ActiveWorker<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct WriterCompletion {
+    remaining_writers: Arc<AtomicUsize>,
+    complete: Arc<AtomicBool>,
+}
+
+impl Drop for WriterCompletion {
+    fn drop(&mut self) {
+        if self.remaining_writers.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.complete.store(true, Ordering::Release);
+        }
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
