@@ -8,16 +8,22 @@
 // the dashboard uses, so plugin-authored text cannot introduce script or
 // event handlers.
 
-import { el, fetchJson, getWorkspace, isAggregateView, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
 
-// Panel bodies already fetched, keyed `<ns>/<id>`, so a 30 s refresh
-// repaints from the last good read instead of blanking. `panelBodies`
-// names the body still mounted under the retained plugin card.
+// Last good panel read for this workspace visit, keyed
+// `<revision>\0<ns>/<id>`. A 30 s refresh repaints that read instead of
+// blanking. Another visit — including a return to the same workspace —
+// misses, so A's output cannot appear under B while B is pending, failed,
+// or already showing its own read. `panelBodies` names the body still
+// mounted under the retained plugin card. `panelReads` is the newest
+// in-flight read for a cache key; a response that loses the race does not
+// write the cache or that body.
 const panelCache = new Map();
 const panelBodies = new Map();
+const panelReads = new Map();
 let lastPlugins = [];
 const pendingChanges = new Set();
 const changeErrors = new Map();
@@ -45,6 +51,7 @@ export async function fetchAndRenderPlugins() {
 }
 
 function render(plugins) {
+  retainCurrentPanelCache();
   const body = $('plugins-body');
   if (!body) return;
   const count = $('plugins-count');
@@ -163,12 +170,29 @@ function panelNode(plugin, panel) {
     el('span', { class: 'plugin-panel-source', text: panel.tool }),
   ]));
   const body = el('div', { class: 'plugin-panel-body' });
-  renderPanelBody(body, panel, panelCache.get(key));
+  renderPanelBody(body, panel, panelCache.get(panelCacheKey(plugin, panel)));
   node.appendChild(body);
   return node;
 }
 
 const panelKey = (plugin, panel) => `${plugin.name}/${panel.id}`;
+
+function panelCacheKey(plugin, panel) {
+  return `${getWorkspaceRevision()}\0${panelKey(plugin, panel)}`;
+}
+
+// Forget every other visit before painting this one. A late read still
+// carries its own revision and is dropped below; this only keeps the map
+// from handing that visit's payload to the panel on screen.
+function retainCurrentPanelCache() {
+  const prefix = `${getWorkspaceRevision()}\0`;
+  for (const key of panelCache.keys()) {
+    if (!key.startsWith(prefix)) panelCache.delete(key);
+  }
+  for (const key of panelReads.keys()) {
+    if (!key.startsWith(prefix)) panelReads.delete(key);
+  }
+}
 
 // A tile's URL is assigned straight to an anchor, so only the two schemes a
 // hyperlink may carry are drawn. The manifest refuses anything else at
@@ -181,21 +205,31 @@ function isHttpUrl(url) {
 
 async function loadPanel(plugin, panel) {
   const key = panelKey(plugin, panel);
+  const revision = getWorkspaceRevision();
+  const cacheKey = `${revision}\0${key}`;
+  const token = {};
+  panelReads.set(cacheKey, token);
+  let state;
   try {
     const payload = await fetchJson(`/api/plugins/${encodeURIComponent(plugin.name)}/panels/${encodeURIComponent(panel.id)}`);
-    panelCache.set(key, {
+    state = {
       output: payload?.output,
       diagnostic: typeof payload?.diagnostic === 'string' ? payload.diagnostic : null,
       truncated: payload?.truncated === true,
-    });
+    };
   } catch (error) {
-    panelCache.set(key, { error: error.message || String(error) });
+    state = { error: error.message || String(error) };
   }
+  // A→B and A→B→A both move the revision. A newer read on the same visit
+  // replaces the token. Either way the late payload must not land in the
+  // live body or in the cache that body will paint from.
+  if (revision !== getWorkspaceRevision() || panelReads.get(cacheKey) !== token) return;
+  panelCache.set(cacheKey, state);
   // The body bindLivePanelBodies left mounted for this key. The replacement
   // built for an unchanged card is not in the document, so a response must
   // not follow that discarded node.
   const node = panelBodies.get(key);
-  if (node) renderPanelBody(node, panel, panelCache.get(key));
+  if (node) renderPanelBody(node, panel, state);
 }
 
 function renderPanelBody(node, panel, state) {
