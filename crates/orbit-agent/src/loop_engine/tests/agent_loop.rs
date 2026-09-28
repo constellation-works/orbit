@@ -4,6 +4,7 @@ mod run {
     #![allow(missing_docs)]
 
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use orbit_common::OrbitError;
     use orbit_tools::{
@@ -151,6 +152,166 @@ mod run {
         }
     }
 
+    /// Replies with one fixed tool-use response per turn, then `end_turn`.
+    struct ScriptedTransport {
+        first_turn: Vec<ContentBlock>,
+        first_stop: StopReason,
+        calls: Mutex<usize>,
+    }
+
+    impl ScriptedTransport {
+        fn new(first_turn: Vec<ContentBlock>, first_stop: StopReason) -> Self {
+            Self {
+                first_turn,
+                first_stop,
+                calls: Mutex::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().expect("calls mutex")
+        }
+    }
+
+    impl LoopTransport for ScriptedTransport {
+        fn provider(&self) -> &str {
+            "test"
+        }
+
+        fn model(&self) -> &str {
+            "test-model"
+        }
+
+        fn send_turn(&self, _req: &TurnRequest<'_>) -> Result<TurnResponse, TransportError> {
+            let mut calls = self.calls.lock().expect("calls mutex");
+            let call_index = *calls;
+            *calls += 1;
+            let (content, stop_reason) = if call_index == 0 {
+                (self.first_turn.clone(), self.first_stop)
+            } else {
+                (
+                    vec![ContentBlock::Text {
+                        text: "done".to_string(),
+                    }],
+                    StopReason::EndTurn,
+                )
+            };
+            Ok(TurnResponse {
+                content,
+                stop_reason,
+                usage: TurnUsage::default(),
+                raw_request_body: Vec::new(),
+                raw_response_body: Vec::new(),
+                endpoint: String::new(),
+                http_status: 200,
+            })
+        }
+    }
+
+    /// Sleeps on every `orbit.task.show` and records which ids it executed.
+    struct SlowOrbitHost {
+        delay: Duration,
+        executed: Mutex<Vec<String>>,
+    }
+
+    impl SlowOrbitHost {
+        fn new(delay: Duration) -> Self {
+            Self {
+                delay,
+                executed: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn executed(&self) -> Vec<String> {
+            self.executed.lock().expect("executed mutex").clone()
+        }
+    }
+
+    impl OrbitToolHost for SlowOrbitHost {
+        fn execute(
+            &self,
+            action: OrbitBuiltinAction,
+            input: Value,
+            _agent: Option<String>,
+            _model: Option<String>,
+            _reservation_owner: Option<ReservationOwnerContext>,
+        ) -> Result<Value, OrbitError> {
+            assert_eq!(action, OrbitBuiltinAction::TaskShow);
+            let id = input["id"].as_str().unwrap_or_default().to_string();
+            self.executed
+                .lock()
+                .expect("executed mutex")
+                .push(id.clone());
+            std::thread::sleep(self.delay);
+            Ok(json!({ "id": id }))
+        }
+
+        fn task_scope(&self) -> OrbitTaskScope {
+            OrbitTaskScope {
+                orbit_root: None,
+                task_id: None,
+                run_id: None,
+            }
+        }
+    }
+
+    fn task_show_call(call_id: &str, task_id: &str) -> ContentBlock {
+        ContentBlock::ToolUse {
+            id: call_id.to_string(),
+            name: "orbit.task.show".to_string(),
+            input: json!({ "id": task_id }),
+        }
+    }
+
+    fn run_with_slow_host(
+        session: &mut Session,
+        transport: &ScriptedTransport,
+        host: Arc<SlowOrbitHost>,
+    ) -> Result<LoopOutcome, AgentLoopError> {
+        let cfg = AgentLoopConfig::new_for_run("run-test")
+            .with_allowlist(vec!["orbit.task.show".to_string()])
+            .with_wall_clock_timeout(Duration::from_millis(50))
+            .with_max_iterations(3);
+        let mut registry = ToolRegistry::new();
+        registry.register_builtins();
+        let tool_ctx = ToolContext {
+            allowed_tools: vec!["orbit.task.show".to_string()],
+            orbit_host: Some(host),
+            ..Default::default()
+        };
+        AgentLoop::run(
+            session,
+            &cfg,
+            transport,
+            &registry,
+            &tool_ctx,
+            &NullSink,
+            "show the tasks",
+        )
+    }
+
+    /// Returns `(tool_use_id, is_error, parsed content)` for each block of the
+    /// session's final message, which must be a user tool-result turn.
+    fn trailing_tool_results(session: &Session) -> Vec<(String, bool, Value)> {
+        let last = session.history().last().expect("history is not empty");
+        assert_eq!(last.role, MessageRole::User);
+        last.content
+            .iter()
+            .map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => (
+                    tool_use_id.clone(),
+                    *is_error,
+                    serde_json::from_str(content).expect("tool result is json"),
+                ),
+                other => panic!("expected tool_result block, got {other:?}"),
+            })
+            .collect()
+    }
+
     struct FakeOrbitHost;
 
     impl OrbitToolHost for FakeOrbitHost {
@@ -250,5 +411,68 @@ mod run {
             outcome.trace[0].policy_denials,
             vec!["orbit.task.delete".to_string()]
         );
+    }
+
+    #[test]
+    fn expired_budget_stops_later_tool_dispatch() {
+        let mut session = Session::new("test", "test-model", "", None);
+        let transport = ScriptedTransport::new(
+            vec![
+                task_show_call("call-1", "T-a"),
+                task_show_call("call-2", "T-b"),
+            ],
+            StopReason::ToolUse,
+        );
+        let host = Arc::new(SlowOrbitHost::new(Duration::from_millis(150)));
+
+        let result = run_with_slow_host(&mut session, &transport, Arc::clone(&host));
+
+        assert!(
+            matches!(result, Err(AgentLoopError::Timeout { .. })),
+            "expected Timeout, got {result:?}"
+        );
+        assert_eq!(host.executed(), vec!["T-a".to_string()]);
+        assert_eq!(transport.calls(), 1, "no turn may start after expiry");
+
+        let results = trailing_tool_results(&session);
+        assert_eq!(results.len(), 2, "every tool_use keeps a paired result");
+        let (id, is_error, payload) = &results[0];
+        assert_eq!(id, "call-1");
+        assert!(!is_error);
+        assert_eq!(payload["id"], "T-a");
+        let (id, is_error, payload) = &results[1];
+        assert_eq!(id, "call-2");
+        assert!(is_error);
+        assert_eq!(payload["error"]["code"], "wall_clock_timeout");
+    }
+
+    #[test]
+    fn slow_tool_in_final_response_returns_timeout() {
+        let mut session = Session::new("test", "test-model", "", None);
+        let transport = ScriptedTransport::new(
+            vec![
+                ContentBlock::Text {
+                    text: "checking".to_string(),
+                },
+                task_show_call("call-1", "T-a"),
+            ],
+            StopReason::EndTurn,
+        );
+        let host = Arc::new(SlowOrbitHost::new(Duration::from_millis(150)));
+
+        let result = run_with_slow_host(&mut session, &transport, Arc::clone(&host));
+
+        assert!(
+            matches!(result, Err(AgentLoopError::Timeout { .. })),
+            "expected Timeout, got {result:?}"
+        );
+        assert_eq!(host.executed(), vec!["T-a".to_string()]);
+
+        let results = trailing_tool_results(&session);
+        assert_eq!(results.len(), 1);
+        let (id, is_error, payload) = &results[0];
+        assert_eq!(id, "call-1");
+        assert!(!is_error);
+        assert_eq!(payload["id"], "T-a");
     }
 }
