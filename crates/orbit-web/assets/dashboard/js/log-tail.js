@@ -14,8 +14,16 @@ const $ = (id) => document.getElementById(id);
 
 let logStream = null;
 let logBuffered = [];
+// Events dropped from the front of logBuffered while paused, stated in the UI
+// so a gap in the history is never silent.
+let logBufferedDropped = 0;
 let logFollowTail = true;
 let logRows = []; // Keep track to enforce max 200 after 250 limit
+const LOG_ROWS_RETAINED = 200;
+const LOG_ROWS_MAX = 250;
+// A flush keeps at most LOG_ROWS_RETAINED rows, so a paused buffer holding
+// more would only be rendered and thrown away.
+const LOG_BUFFERED_MAX = LOG_ROWS_RETAINED;
 let activeLogFilters = new Set(["all"]);
 let logPanelResizeWired = false;
 const LOG_STREAM_RETRY_MIN_MS = 1000;
@@ -498,6 +506,21 @@ function flushBufferedLogs() {
   const inner = $("logInner");
   if (!inner) return;
   const wasEmpty = logBuffered.length === 0;
+  if (logBufferedDropped > 0) {
+    const gap = renderLogEvent({
+      ts: "",
+      source: "orbit.log",
+      code: "GAP",
+      level: "warn",
+      message_html: "",
+    }, true);
+    gap.dataset.gap = "true";
+    const message = gap.querySelector(".m");
+    if (message) message.textContent = logGapMessage(logBufferedDropped);
+    inner.insertBefore(gap, inner.firstChild);
+    logRows.unshift(gap);
+    setTimeout(() => gap.classList.remove("fresh"), 600);
+  }
   for (const ev of logBuffered) {
     const row = renderLogEvent(ev, true);
     inner.insertBefore(row, inner.firstChild);
@@ -505,6 +528,7 @@ function flushBufferedLogs() {
     setTimeout(() => row.classList.remove("fresh"), 600);
   }
   logBuffered = [];
+  logBufferedDropped = 0;
   const btnBuffered = $("log-buffered-count");
   if (btnBuffered) btnBuffered.style.display = "none";
   enforceLogBounds();
@@ -513,9 +537,30 @@ function flushBufferedLogs() {
   if (stream) stream.scrollTop = 0;
 }
 
+function logGapMessage(dropped) {
+  return `${dropped} older ${dropped === 1 ? "line" : "lines"} discarded while paused`;
+}
+
+// Oldest first: past the cap the oldest buffered event is dropped and counted.
+function bufferPausedLogEvent(ev) {
+  logBuffered.push(ev);
+  if (logBuffered.length > LOG_BUFFERED_MAX) {
+    logBuffered.shift();
+    logBufferedDropped += 1;
+  }
+  const btn = $("log-buffered-count");
+  if (btn) {
+    btn.textContent = logBufferedDropped > 0
+      ? `${logBuffered.length} buffered · ${logBufferedDropped} discarded`
+      : `${logBuffered.length} buffered`;
+    btn.title = logBufferedDropped > 0 ? logGapMessage(logBufferedDropped) : "";
+    btn.style.display = "";
+  }
+}
+
 function enforceLogBounds() {
-  if (logRows.length > 250) {
-    const toRemove = logRows.splice(200);
+  if (logRows.length > LOG_ROWS_MAX) {
+    const toRemove = logRows.splice(LOG_ROWS_RETAINED);
     for (const row of toRemove) {
       row.remove();
     }
@@ -536,6 +581,10 @@ function syncLogFilterPills() {
 function applyLogFilters() {
   let visibleCount = 0;
   for (const row of logRows) {
+    if (row.dataset.gap) {
+      row.style.display = "";
+      continue;
+    }
     const code = row.dataset.code;
     const level = row.dataset.level;
     const lvClass = getLogClass(level, code);
@@ -606,12 +655,7 @@ function connectLogStream() {
         const stream = $("side-dock") ? $("side-dock").querySelector(".log-stream") : document.querySelector(".log-stream");
         if (stream) stream.scrollTop = 0;
       } else {
-        logBuffered.push(ev);
-        const btn = $("log-buffered-count");
-        if (btn) {
-          btn.textContent = `${logBuffered.length} buffered`;
-          btn.style.display = "";
-        }
+        bufferPausedLogEvent(ev);
       }
     } catch (err) {
       console.error("Failed to parse SSE event", err);
