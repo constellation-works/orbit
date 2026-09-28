@@ -10,7 +10,9 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use super::super::*;
-use super::test_support::{body_json, seed_run, write_seeded_run};
+use super::test_support::{
+    assert_isolated_child, body_json, enter_isolated_child, seed_run, write_seeded_run,
+};
 
 pub(super) async fn request_cancel(
     runtime: OrbitRuntime,
@@ -213,6 +215,7 @@ async fn request_crews(runtime: OrbitRuntime) -> Response {
 }
 
 fn runtime_with_custom_crews() -> (tempfile::TempDir, OrbitRuntime) {
+    assert_isolated_child();
     let root = tempfile::tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
@@ -243,6 +246,7 @@ default_crew = "beta"
 }
 
 fn runtime_with_stale_task_crew() -> (tempfile::TempDir, OrbitRuntime, String) {
+    assert_isolated_child();
     let root = tempfile::tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
@@ -472,6 +476,12 @@ async fn job_runs_failed_filter_keeps_older_failures_outside_the_recent_success_
 
 #[tokio::test]
 async fn tasks_with_stale_explicit_crew_fall_back_to_default_projection() {
+    if !enter_isolated_child(
+        module_path!(),
+        "tasks_with_stale_explicit_crew_fall_back_to_default_projection",
+    ) {
+        return;
+    }
     let (_root, runtime, task_id) = runtime_with_stale_task_crew();
 
     let response = request_tasks(runtime.clone()).await;
@@ -498,6 +508,12 @@ async fn tasks_with_stale_explicit_crew_fall_back_to_default_projection() {
 /// no pool covers this task's complexity — rather than emptying the field.
 #[tokio::test]
 async fn patch_task_crew_null_redraws_over_a_stale_explicit_crew() {
+    if !enter_isolated_child(
+        module_path!(),
+        "patch_task_crew_null_redraws_over_a_stale_explicit_crew",
+    ) {
+        return;
+    }
     let (_root, runtime, task_id) = runtime_with_stale_task_crew();
 
     let response = patch_task_body(runtime, &task_id, r#"{"crew":null}"#.to_string()).await;
@@ -542,6 +558,12 @@ async fn extractor_rejections_return_json_errors() {
 
 #[tokio::test]
 async fn crews_endpoint_returns_sorted_runtime_registry() {
+    if !enter_isolated_child(
+        module_path!(),
+        "crews_endpoint_returns_sorted_runtime_registry",
+    ) {
+        return;
+    }
     let (_root, runtime) = runtime_with_custom_crews();
 
     let response = request_crews(runtime).await;

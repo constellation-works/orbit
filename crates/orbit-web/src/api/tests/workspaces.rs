@@ -19,7 +19,9 @@ use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 
 use super::super::*;
-use super::test_support::{body_json, seed_run, write_seeded_run};
+use super::test_support::{
+    assert_isolated_child, body_json, enter_isolated_child, seed_run, write_seeded_run,
+};
 use crate::state::{DashboardState, RegistrySource, WsEntry};
 
 fn get(uri: &str) -> Request<Body> {
@@ -35,6 +37,7 @@ fn get(uri: &str) -> Request<Body> {
 /// and return `(orbit_dir, repo_root)`. The workspace persists after the
 /// runtime is dropped, so global mode can reopen it via `from_roots`.
 pub(super) fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (PathBuf, PathBuf) {
+    assert_isolated_child();
     let repo_root = base.join(name);
     let orbit_dir = repo_root.join(".orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create .orbit");
@@ -127,6 +130,12 @@ async fn tasks_all_in_single_mode_tags_default_workspace() {
 
 #[tokio::test]
 async fn tasks_all_aggregates_active_workspaces_and_skips_inactive() {
+    if !enter_isolated_child(
+        module_path!(),
+        "tasks_all_aggregates_active_workspaces_and_skips_inactive",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -207,6 +216,12 @@ async fn tasks_all_aggregates_active_workspaces_and_skips_inactive() {
 
 #[tokio::test]
 async fn tasks_all_reports_aggregate_total_when_global_limit_truncates() {
+    if !enter_isolated_child(
+        module_path!(),
+        "tasks_all_reports_aggregate_total_when_global_limit_truncates",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -248,6 +263,12 @@ async fn tasks_all_reports_aggregate_total_when_global_limit_truncates() {
 
 #[tokio::test]
 async fn tasks_all_pages_globally_without_per_workspace_omissions() {
+    if !enter_isolated_child(
+        module_path!(),
+        "tasks_all_pages_globally_without_per_workspace_omissions",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -323,6 +344,12 @@ async fn tasks_all_pages_globally_without_per_workspace_omissions() {
 
 #[tokio::test]
 async fn job_runs_all_preserves_workspace_identity_order_bounds_and_unavailable_sources() {
+    if !enter_isolated_child(
+        module_path!(),
+        "job_runs_all_preserves_workspace_identity_order_bounds_and_unavailable_sources",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -431,6 +458,12 @@ async fn job_runs_all_preserves_workspace_identity_order_bounds_and_unavailable_
 /// not after.
 #[tokio::test]
 async fn job_runs_all_selects_top_by_recency_before_per_workspace_limit() {
+    if !enter_isolated_child(
+        module_path!(),
+        "job_runs_all_selects_top_by_recency_before_per_workspace_limit",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -508,6 +541,12 @@ async fn job_runs_all_selects_top_by_recency_before_per_workspace_limit() {
 /// 500 or a panic.
 #[tokio::test]
 async fn workspace_selection_errors_are_clean_4xx_json() {
+    if !enter_isolated_child(
+        module_path!(),
+        "workspace_selection_errors_are_clean_4xx_json",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -577,6 +616,12 @@ async fn workspace_selection_errors_are_clean_4xx_json() {
 
 #[tokio::test]
 async fn artifact_read_uses_selected_workspace_instead_of_server_default() {
+    if !enter_isolated_child(
+        module_path!(),
+        "artifact_read_uses_selected_workspace_instead_of_server_default",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -621,6 +666,12 @@ async fn artifact_read_uses_selected_workspace_instead_of_server_default() {
 /// own task list.
 #[tokio::test]
 async fn cross_workspace_dependency_resolves_global_status_not_missing() {
+    if !enter_isolated_child(
+        module_path!(),
+        "cross_workspace_dependency_resolves_global_status_not_missing",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -791,6 +842,12 @@ async fn task_titles(state: &DashboardState, workspace: &str) -> Vec<String> {
 /// workspace, not the server's default.
 #[tokio::test]
 async fn create_task_with_workspace_param_binds_to_that_workspace() {
+    if !enter_isolated_child(
+        module_path!(),
+        "create_task_with_workspace_param_binds_to_that_workspace",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -847,6 +904,12 @@ async fn create_task_with_workspace_param_binds_to_that_workspace() {
 /// task is created anywhere — never a silent fallback to the default.
 #[tokio::test]
 async fn create_task_with_unknown_workspace_is_404_and_creates_nothing() {
+    if !enter_isolated_child(
+        module_path!(),
+        "create_task_with_unknown_workspace_is_404_and_creates_nothing",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -926,6 +989,7 @@ fn write_registry_with_ship_modes(global_root: &Path, workspaces: &[(&str, &Path
 
 /// A registry-backed state reloading from `<global_root>/workspaces.json`.
 fn registry_state(global_root: &Path) -> DashboardState {
+    assert_isolated_child();
     let source = RegistrySource::new(global_root.join("workspaces.json"), None, None);
     DashboardState::from_registry(global_root.to_path_buf(), source).expect("from_registry")
 }
@@ -971,6 +1035,9 @@ fn open_runtime(state: &DashboardState, id: &str) -> Option<Arc<OrbitRuntime>> {
 /// routable through the workspace-scoped API without a restart.
 #[tokio::test]
 async fn refresh_surfaces_native_workspace_add() {
+    if !enter_isolated_child(module_path!(), "refresh_surfaces_native_workspace_add") {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -999,6 +1066,12 @@ async fn refresh_surfaces_native_workspace_add() {
 /// runtime, without disturbing another workspace's live runtime.
 #[tokio::test]
 async fn refresh_removes_workspace_and_evicts_only_its_runtime() {
+    if !enter_isolated_child(
+        module_path!(),
+        "refresh_removes_workspace_and_evicts_only_its_runtime",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1041,6 +1114,9 @@ async fn refresh_removes_workspace_and_evicts_only_its_runtime() {
 /// subsequent requests through the new validated binding.
 #[tokio::test]
 async fn refresh_rebinds_workspace_to_new_checkout() {
+    if !enter_isolated_child(module_path!(), "refresh_rebinds_workspace_to_new_checkout") {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1089,6 +1165,12 @@ async fn refresh_rebinds_workspace_to_new_checkout() {
 /// evict the cached runtime and rebuild it with the new mode.
 #[tokio::test]
 async fn refresh_rebuilds_runtime_for_ship_mode_only_change() {
+    if !enter_isolated_child(
+        module_path!(),
+        "refresh_rebuilds_runtime_for_ship_mode_only_change",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1133,6 +1215,12 @@ async fn refresh_rebuilds_runtime_for_ship_mode_only_change() {
 /// without rewriting the registry or restarting the dashboard.
 #[tokio::test]
 async fn request_pin_revalidates_vanished_and_repaired_path() {
+    if !enter_isolated_child(
+        module_path!(),
+        "request_pin_revalidates_vanished_and_repaired_path",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1197,6 +1285,12 @@ async fn request_pin_revalidates_vanished_and_repaired_path() {
 /// in-memory snapshot; the previous workspace set stays visible and routable.
 #[tokio::test]
 async fn refresh_retains_last_valid_snapshot_on_malformed_registry() {
+    if !enter_isolated_child(
+        module_path!(),
+        "refresh_retains_last_valid_snapshot_on_malformed_registry",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1222,6 +1316,12 @@ async fn refresh_retains_last_valid_snapshot_on_malformed_registry() {
 /// runtime cache stays idempotent (construction happens off the lock).
 #[test]
 fn concurrent_refresh_and_reads_stay_consistent() {
+    if !enter_isolated_child(
+        module_path!(),
+        "concurrent_refresh_and_reads_stay_consistent",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1277,6 +1377,12 @@ fn runtime_task_titles(runtime: &OrbitRuntime) -> Vec<String> {
 /// stale one. Covers finding P1 (stale runtime publication) deterministically.
 #[test]
 fn stale_build_during_rebind_never_republishes_as_current() {
+    if !enter_isolated_child(
+        module_path!(),
+        "stale_build_during_rebind_never_republishes_as_current",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1369,6 +1475,12 @@ fn stale_build_during_rebind_never_republishes_as_current() {
 /// detailed-health arm of finding P1.
 #[tokio::test]
 async fn detailed_healthz_reflects_refresh_in_one_coherent_generation() {
+    if !enter_isolated_child(
+        module_path!(),
+        "detailed_healthz_reflects_refresh_in_one_coherent_generation",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1439,6 +1551,12 @@ impl std::io::Write for SharedBufWriter {
 /// on disk cannot leak into logs. Covers finding P2's diagnostic-safety arm.
 #[test]
 fn malformed_refresh_emits_credential_safe_diagnostic() {
+    if !enter_isolated_child(
+        module_path!(),
+        "malformed_refresh_emits_credential_safe_diagnostic",
+    ) {
+        return;
+    }
     const SECRET: &str = "ghp_SUPERSECRETtoken0xDEADBEEF";
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -1493,6 +1611,12 @@ fn malformed_refresh_emits_credential_safe_diagnostic() {
 /// operator receives a diagnostic naming the affected checkout.
 #[tokio::test]
 async fn registry_startup_skips_unresolvable_checkout_and_serves_healthy_workspace() {
+    if !enter_isolated_child(
+        module_path!(),
+        "registry_startup_skips_unresolvable_checkout_and_serves_healthy_workspace",
+    ) {
+        return;
+    }
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
