@@ -3668,3 +3668,120 @@ fn dashboard_run_detail_ignores_stale_fetches_after_navigation() {
         include_str!("dashboard_run_detail_stale.mjs"),
     ));
 }
+
+/// Expanding a completed step before /logs resolves must show that payload,
+/// and a later payload, in the detail that is already open.
+#[test]
+fn dashboard_expanded_step_shows_deferred_logs_without_retoggle() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        r#"
+import assert from "node:assert/strict";
+
+const {
+  setActiveRunDetail,
+  setActiveRunLogs,
+  renderRunSteps,
+  getExpandedStepIndices,
+} = await import("./js/run-detail.js");
+
+const step = (index, id) => ({
+  step_index: index,
+  target_type: "agent",
+  target_id: id,
+  state: "ok",
+  duration_ms: 12,
+  exit_code: 0,
+});
+
+const detail = {
+  run: { run_id: "jrun-deferred", job_id: "impl", state: "succeeded" },
+  steps: [step(0, "impl"), step(1, "review")],
+};
+
+const log = (index, id, stdout, stderr = "") => ({
+  run_id: "jrun-deferred",
+  step_index: index,
+  step_id: id,
+  provider: "cli",
+  stdout_preview: stdout,
+  stderr_preview: stderr,
+  stdout_truncated: false,
+  stderr_truncated: false,
+  exit_code: 0,
+  timed_out: false,
+  duration_ms: 12,
+});
+
+const body = () => document.getElementById("run-steps-body");
+const row = (index) => body().children.find((node) => node.dataset.key === `step-${index}`);
+const detailOf = (index) => body().children.find((node) => node.dataset.key === `step-detail-${index}`);
+
+function assertExpanded(index, rowNode) {
+  const current = row(index);
+  assert.equal(current, rowNode, `step ${index} row must stay mounted`);
+  assert.equal(current.getAttribute("aria-expanded"), "true");
+  assert.equal(current.classList.contains("expanded"), true);
+  assert.equal(getExpandedStepIndices().has(index), true);
+  assert.ok(detailOf(index), `step ${index} detail must stay in the document`);
+}
+
+setActiveRunLogs([]);
+setActiveRunDetail(detail);
+renderRunSteps();
+
+assert.equal(row(0).getAttribute("aria-expanded"), "false");
+assert.equal(detailOf(0), undefined);
+
+// The step object does not change. Logs are still in flight.
+row(0).dispatch("click");
+const expandedRow = row(0);
+assertExpanded(0, expandedRow);
+assert.doesNotMatch(detailOf(0).textContent, /alpha-stdout/);
+assert.equal(detailOf(1), undefined);
+
+let resolveLogs;
+const logsReady = new Promise((resolve) => { resolveLogs = resolve; });
+resolveLogs([
+  log(0, "impl", "alpha-stdout"),
+  log(1, "review", "other-step-stdout"),
+]);
+setActiveRunLogs(await logsReady);
+renderRunSteps();
+
+assertExpanded(0, expandedRow);
+const painted = detailOf(0);
+assert.match(painted.textContent, /alpha-stdout/);
+assert.doesNotMatch(painted.textContent, /other-step-stdout/);
+assert.equal(detailOf(1), undefined, "a collapsed neighbour must stay collapsed");
+
+renderRunSteps();
+assert.equal(detailOf(0), painted, "the same logs must keep the open detail node");
+assertExpanded(0, expandedRow);
+
+setActiveRunLogs([
+  log(0, "impl", "beta-stdout", "beta-stderr"),
+  log(1, "review", "other-step-stdout"),
+]);
+renderRunSteps();
+assertExpanded(0, expandedRow);
+assert.match(detailOf(0).textContent, /beta-stdout/);
+assert.match(detailOf(0).textContent, /beta-stderr/);
+assert.doesNotMatch(detailOf(0).textContent, /alpha-stdout/);
+assert.equal(detailOf(1), undefined);
+
+detail.run.knowledge_metrics = { pack: "metrics-arrived" };
+renderRunSteps();
+assertExpanded(0, expandedRow);
+assert.match(detailOf(0).textContent, /metrics-arrived/);
+assert.match(detailOf(0).textContent, /beta-stdout/);
+
+row(1).dispatch("click");
+assertExpanded(0, expandedRow);
+assert.match(detailOf(1).textContent, /other-step-stdout/);
+assert.doesNotMatch(detailOf(1).textContent, /beta-stdout/);
+assert.doesNotMatch(detailOf(1).textContent, /metrics-arrived/);
+"#,
+    ));
+}
