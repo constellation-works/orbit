@@ -3,7 +3,6 @@
 // test setup (e.g. jsonl_layer_at_path) which is allowed for submodules.
 
 use std::{
-    ffi::OsString,
     fs,
     io::{self, Write},
     path::Path,
@@ -20,7 +19,11 @@ use tracing_subscriber::{
 
 use super::super::logging::{RedactingFields, env_filter, jsonl_layer_at_path};
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+// Every environment mutation and every read that depends on it (log path
+// resolution, rotation config the background writer loads from `HOME`) goes
+// through `crate::test_env`'s process-wide guard. A module-local lock would
+// not exclude sibling modules in this binary that also replace `HOME`, such
+// as the home-directory redaction tests.
 
 fn with_test_subscriber_at_path<W>(
     default_filter: &str,
@@ -91,51 +94,18 @@ impl Write for BufferWriter {
     }
 }
 
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: OsString) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-
-    fn remove(key: &'static str) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe {
-            std::env::remove_var(key);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => unsafe {
-                std::env::set_var(self.key, value);
-            },
-            None => unsafe {
-                std::env::remove_var(self.key);
-            },
-        }
-    }
+fn path_str(path: &Path) -> &str {
+    path.to_str().expect("utf-8 temp path")
 }
 
 mod redaction {
-    use std::{ffi::OsString, fmt, io};
+    use std::{fmt, io};
 
     use tempfile::tempdir;
 
     use super::super::super::logging::*;
-    use super::{
-        BufferMakeWriter, ENV_LOCK, EnvVarGuard, read_jsonl_values, with_test_subscriber_at_path,
-    };
+    use super::{BufferMakeWriter, read_jsonl_values, with_test_subscriber_at_path};
+    use crate::test_env::{scoped, unset};
 
     #[derive(Debug)]
     struct SecretDisplayError;
@@ -150,8 +120,7 @@ mod redaction {
 
     #[test]
     fn jsonl_redacting_fields_preserves_typed_values_and_redacts_strings() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -174,8 +143,7 @@ mod redaction {
 
     #[test]
     fn jsonl_redacting_fields_preserves_sensitive_field_names() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -190,8 +158,7 @@ mod redaction {
 
     #[test]
     fn jsonl_redacting_fields_redacts_unstructured_message() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -222,8 +189,7 @@ mod redaction {
             }
         }
 
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -245,8 +211,7 @@ mod redaction {
 
     #[test]
     fn redacting_fields_redacts_bare_error_values() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
         let stderr = BufferMakeWriter::default();
@@ -276,8 +241,7 @@ mod redaction {
 
     #[test]
     fn jsonl_redacting_fields_redacts_byte_values() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -305,8 +269,7 @@ mod redaction {
 
     #[test]
     fn redact_event_text_still_scrubs_sensitive_text() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _secret = EnvVarGuard::set("ORBIT_TEST_TOKEN", OsString::from("super-secret-value"));
+        let _env = scoped([("ORBIT_TEST_TOKEN", Some("super-secret-value"))]);
 
         let redacted = redact_event_text("token is super-secret-value");
 
@@ -316,7 +279,7 @@ mod redaction {
 }
 
 mod subscriber {
-    use std::{ffi::OsString, fs, io};
+    use std::{fs, io};
 
     use regex::Regex;
     use serde_json::Value;
@@ -325,14 +288,14 @@ mod subscriber {
     use tracing_subscriber::{Registry, layer::SubscriberExt};
 
     use super::{
-        BufferMakeWriter, ENV_LOCK, EnvVarGuard, jsonl_layer_at_path, read_jsonl_values,
+        BufferMakeWriter, jsonl_layer_at_path, path_str, read_jsonl_values,
         with_test_subscriber_at_path,
     };
+    use crate::test_env::{scoped, unset};
 
     #[test]
     fn jsonl_layer_honors_rust_log_filter() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::set("RUST_LOG", OsString::from("orbit_common=debug"));
+        let _env = scoped([("RUST_LOG", Some("orbit_common=debug"))]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -350,8 +313,7 @@ mod subscriber {
 
     #[test]
     fn jsonl_event_contains_required_shape_and_fields() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -378,8 +340,7 @@ mod subscriber {
 
     #[test]
     fn jsonl_event_preserves_cli_runner_structured_fields() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
 
@@ -405,8 +366,7 @@ mod subscriber {
 
     #[test]
     fn jsonl_file_appends_to_existing_content() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("orbit.jsonl");
         fs::write(&log_path, "sentinel\n").expect("write sentinel");
@@ -426,8 +386,7 @@ mod subscriber {
     #[cfg(unix)]
     #[test]
     fn jsonl_file_and_created_state_dirs_are_private() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let orbit_dir = dir.path().join(".orbit");
         let state_dir = orbit_dir.join("state");
@@ -446,7 +405,8 @@ mod subscriber {
 
     #[test]
     fn jsonl_layer_does_not_create_or_open_the_file_until_the_first_event() {
-        let _env = ENV_LOCK.lock().expect("lock env");
+        // Mutates nothing; holds the shared guard so no sibling swaps `HOME` mid-test.
+        let _env = unset([]);
         let dir = tempdir().expect("tempdir");
         let log_dir = dir.path().join("logs");
         let log_path = log_dir.join("orbit.jsonl");
@@ -469,11 +429,15 @@ mod subscriber {
 
     #[test]
     fn first_jsonl_event_rolls_an_oversized_active_file() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
         let home = tempdir().expect("home");
-        let _home = EnvVarGuard::set("HOME", home.path().as_os_str().to_owned());
-        let _userprofile = EnvVarGuard::set("USERPROFILE", home.path().as_os_str().to_owned());
+        // The guard outlives `with_test_subscriber_at_path`, which joins the
+        // background writer before returning, so the writer's rotation-config
+        // read always sees this `HOME`.
+        let _env = scoped([
+            ("RUST_LOG", None),
+            ("HOME", Some(path_str(home.path()))),
+            ("USERPROFILE", Some(path_str(home.path()))),
+        ]);
         fs::create_dir_all(home.path().join(".orbit")).expect("orbit dir");
         fs::write(
             home.path().join(".orbit/config.toml"),
@@ -507,8 +471,7 @@ mod subscriber {
 
     #[test]
     fn file_layer_failure_falls_back_to_stderr_layer() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let _env = unset(["RUST_LOG"]);
         let dir = tempdir().expect("tempdir");
         let blocked_parent = dir.path().join("not-a-directory");
         fs::write(&blocked_parent, "file, not dir").expect("write blocking file");
@@ -538,24 +501,25 @@ mod subscriber {
 }
 
 mod path {
-    use std::{ffi::OsString, path::PathBuf};
+    use std::{path::PathBuf, sync::mpsc, thread, time::Duration};
 
     use tempfile::tempdir;
 
-    use super::{ENV_LOCK, EnvVarGuard};
+    use super::path_str;
     use crate::observability::logging::global_jsonl_log_path;
+    use crate::security::redaction::redact_home_dir;
+    use crate::test_env::scoped;
 
     #[test]
     fn managed_child_logs_use_the_registry_root_with_provider_home() {
-        let _env = ENV_LOCK.lock().expect("lock env");
         let provider_home = tempdir().expect("provider home");
         let registry_root = tempdir().expect("registry root");
-        let provider_home_value = provider_home.path().as_os_str().to_owned();
-        let registry_root_value = registry_root.path().as_os_str().to_owned();
-        let _home = EnvVarGuard::set("HOME", provider_home_value);
-        let _managed = EnvVarGuard::set("ORBIT_MANAGED_RUN_CONTEXT", OsString::from("1"));
-        let _run = EnvVarGuard::set("ORBIT_RUN_ID", OsString::from("jrun-logging-path"));
-        let _registry = EnvVarGuard::set("ORBIT_REGISTRY_ROOT", registry_root_value);
+        let _env = scoped([
+            ("HOME", Some(path_str(provider_home.path()))),
+            ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+            ("ORBIT_RUN_ID", Some("jrun-logging-path")),
+            ("ORBIT_REGISTRY_ROOT", Some(path_str(registry_root.path()))),
+        ]);
 
         let expected = PathBuf::from(registry_root.path()).join("state/logs/orbit.jsonl");
         assert_eq!(global_jsonl_log_path().expect("resolve log path"), expected);
@@ -563,30 +527,74 @@ mod path {
 
     #[test]
     fn registry_root_is_ignored_without_managed_run_context() {
-        let _env = ENV_LOCK.lock().expect("lock env");
         let home = tempdir().expect("home");
         let registry_root = tempdir().expect("registry root");
-        let _home = EnvVarGuard::set("HOME", home.path().as_os_str().to_owned());
-        let _managed = EnvVarGuard::remove("ORBIT_MANAGED_RUN_CONTEXT");
-        let _run = EnvVarGuard::remove("ORBIT_RUN_ID");
-        let _registry = EnvVarGuard::set(
-            "ORBIT_REGISTRY_ROOT",
-            registry_root.path().as_os_str().to_owned(),
-        );
+        let _env = scoped([
+            ("HOME", Some(path_str(home.path()))),
+            ("ORBIT_MANAGED_RUN_CONTEXT", None),
+            ("ORBIT_RUN_ID", None),
+            ("ORBIT_REGISTRY_ROOT", Some(path_str(registry_root.path()))),
+        ]);
 
         let expected = home.path().join(".orbit/state/logs/orbit.jsonl");
         assert_eq!(global_jsonl_log_path().expect("resolve log path"), expected);
     }
 
+    /// Controlled overlap with the home-redaction fixture shape: a sibling
+    /// thread that replaces `HOME` must wait for this test's scope, so path
+    /// resolution only ever sees this test's temporary `HOME`, and the
+    /// sibling sees only its own once it runs.
+    #[test]
+    fn log_path_resolution_excludes_a_concurrent_home_redaction_fixture() {
+        let baseline_home = current_home();
+        let home = tempdir().expect("home");
+        let env = scoped([
+            ("HOME", Some(path_str(home.path()))),
+            ("ORBIT_MANAGED_RUN_CONTEXT", None),
+            ("ORBIT_RUN_ID", None),
+            ("ORBIT_REGISTRY_ROOT", None),
+        ]);
+
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let sibling = thread::spawn(move || {
+            let _home = scoped([("HOME", Some("/Users/a"))]);
+            entered_tx.send(()).expect("signal sibling entry");
+            (
+                redact_home_dir("/Users/ab/x"),
+                redact_home_dir("/Users/a/x"),
+            )
+        });
+
+        assert!(
+            entered_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+            "a sibling HOME fixture must not enter while this scope holds the environment"
+        );
+        let expected = home.path().join(".orbit/state/logs/orbit.jsonl");
+        assert_eq!(global_jsonl_log_path().expect("resolve log path"), expected);
+
+        drop(env);
+        let (sibling_boundary, sibling_home) = sibling.join().expect("sibling fixture");
+        assert_eq!(sibling_boundary, "/Users/ab/x");
+        assert_eq!(sibling_home, "~/x");
+        assert_eq!(
+            current_home(),
+            baseline_home,
+            "both scopes must restore the HOME that preceded them"
+        );
+    }
+
+    fn current_home() -> Option<String> {
+        let _env = scoped(std::iter::empty());
+        std::env::var("HOME").ok()
+    }
+
     #[test]
     fn managed_registry_root_must_be_absolute() {
-        let _env = ENV_LOCK.lock().expect("lock env");
-        let _managed = EnvVarGuard::set("ORBIT_MANAGED_RUN_CONTEXT", OsString::from("true"));
-        let _run = EnvVarGuard::set("ORBIT_RUN_ID", OsString::from("jrun-logging-path"));
-        let _registry = EnvVarGuard::set(
-            "ORBIT_REGISTRY_ROOT",
-            OsString::from("relative-registry-root"),
-        );
+        let _env = scoped([
+            ("ORBIT_MANAGED_RUN_CONTEXT", Some("true")),
+            ("ORBIT_RUN_ID", Some("jrun-logging-path")),
+            ("ORBIT_REGISTRY_ROOT", Some("relative-registry-root")),
+        ]);
 
         let error = global_jsonl_log_path().expect_err("relative registry root must be rejected");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
