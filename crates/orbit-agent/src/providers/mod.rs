@@ -24,11 +24,15 @@ pub(crate) mod cursor;
 pub(crate) mod gemini;
 pub mod gemini_http;
 pub(crate) mod grok;
+mod http_body;
 pub(crate) mod mock_agent;
 pub(crate) mod ollama;
 pub mod openai_compat;
 pub(crate) mod opencode;
 pub(crate) mod pi;
+
+#[cfg(test)]
+mod tests;
 
 pub use antigravity::{antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout};
 

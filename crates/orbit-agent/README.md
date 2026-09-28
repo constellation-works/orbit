@@ -70,6 +70,16 @@ crates/orbit-agent/src/loop_engine/
   `cache_content_threshold_turns`, automatically issues a `POST .../cachedContents`
   before generation to cache the multi-turn session.
 
+All three transports read response bodies through a shared byte ceiling
+that applies while reading, so chunked bodies without `Content-Length` are
+bounded as well. A success body above 16 MiB (including a Gemini
+`cachedContents` response) fails with a `TransportError::Decode` naming the
+limit, and a declared `Content-Length` above it is refused before reading.
+For a non-2xx status only the first 64 KiB of the body are read into the
+`BadStatus` / `Auth` diagnostic, with a truncation marker when more
+followed. `max_response_tokens` is only a request hint and does not bound
+the bytes a server returns.
+
 ### OpenAI-compatible config surface
 
 - `OpenAiCompatTransport::hosted(api_key, model)` targets the default

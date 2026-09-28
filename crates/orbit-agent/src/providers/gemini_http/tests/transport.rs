@@ -7,7 +7,11 @@ use reqwest::blocking::Client;
 
 use super::super::transport::{GEMINI_API_KEY_HEADER, GeminiHttpTransport, network_error};
 use crate::loop_engine::transport::{
-    CacheHint, LoopTransport, Message, TransportError, TurnRequest,
+    CacheHint, ContentBlock, LoopTransport, Message, TransportError, TurnRequest, TurnResponse,
+};
+use crate::providers::http_body::{MAX_ERROR_BODY_BYTES, MAX_RESPONSE_BODY_BYTES};
+use crate::providers::tests::http_fixture::{
+    ENDLESS_STREAM_CEILING, FixtureResponse, ServedRequest, serve,
 };
 
 const GEMINI_API_KEY: &str = "AIzaSyDoNotLeakThisGeminiApiKeyValue";
@@ -181,4 +185,111 @@ fn send_turn_counts_thought_tokens_as_output() {
     assert_eq!(response.usage.input_tokens, 100);
     assert_eq!(response.usage.cache_read_input_tokens, 90);
     assert_eq!(response.usage.output_tokens, 5_000);
+}
+
+const GENERATE_OK: &str = r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"cachedContentTokenCount":1}}"#;
+
+/// Sends a two-message turn; `cache_threshold` of `Some(2)` routes it through
+/// `cachedContents` before `generateContent`.
+fn send_to_fixture(
+    responses: Vec<FixtureResponse>,
+    cache_threshold: Option<usize>,
+) -> (Result<TurnResponse, TransportError>, Vec<ServedRequest>) {
+    let (base_url, server) = serve(responses);
+    let transport = GeminiHttpTransport::new(GEMINI_API_KEY, "gemini-test", cache_threshold)
+        .expect("transport")
+        .with_base_url(base_url);
+    let messages = [Message::user_text("earlier"), Message::user_text("hello")];
+    let result = transport.send_turn(&TurnRequest {
+        system: None,
+        messages: &messages,
+        tools: &[],
+        cache_hint: CacheHint::None,
+        max_response_tokens: 0,
+    });
+    (result, server.join().expect("server thread"))
+}
+
+fn assert_refused_as_oversized(result: Result<TurnResponse, TransportError>) {
+    match result {
+        Err(TransportError::Decode(message)) => {
+            assert!(message.contains(&MAX_RESPONSE_BODY_BYTES.to_string()))
+        }
+        Err(other) => panic!("expected oversized-body decode error, got {other}"),
+        Ok(_) => panic!("oversized body was accepted"),
+    }
+}
+
+fn assert_bounded_bad_status(result: Result<TurnResponse, TransportError>, expected: u16) {
+    let Err(TransportError::BadStatus { status, body }) = result else {
+        panic!("expected bad status");
+    };
+    assert_eq!(status, expected);
+    assert!(body.len() < MAX_ERROR_BODY_BYTES + 64);
+}
+
+#[test]
+fn cached_content_flow_decodes_under_limit_responses() {
+    let (result, served) = send_to_fixture(
+        vec![
+            FixtureResponse::json(200, r#"{"name":"cachedContents/abc"}"#),
+            FixtureResponse::json(200, GENERATE_OK),
+        ],
+        Some(2),
+    );
+
+    let response = result.expect("send turn");
+    assert!(
+        served[0]
+            .request_line
+            .starts_with("POST /v1beta/cachedContents ")
+    );
+    assert!(
+        served[1]
+            .request_line
+            .starts_with("POST /v1beta/models/gemini-test:generateContent ")
+    );
+    assert!(matches!(&response.content[..], [ContentBlock::Text { text }] if text == "ok"));
+}
+
+#[test]
+fn oversized_generate_content_success_is_refused_without_draining() {
+    let (result, served) = send_to_fixture(vec![FixtureResponse::endless(200)], None);
+
+    assert_refused_as_oversized(result);
+    assert!(served[0].body_bytes_written < ENDLESS_STREAM_CEILING);
+}
+
+#[test]
+fn oversized_generate_content_error_keeps_a_bounded_body() {
+    let (result, served) = send_to_fixture(vec![FixtureResponse::endless(500)], None);
+
+    assert_bounded_bad_status(result, 500);
+    assert!(served[0].body_bytes_written < ENDLESS_STREAM_CEILING);
+}
+
+#[test]
+fn oversized_cached_content_success_is_refused_without_draining() {
+    let (result, served) = send_to_fixture(vec![FixtureResponse::endless(200)], Some(2));
+
+    assert_refused_as_oversized(result);
+    assert_eq!(
+        served.len(),
+        1,
+        "generateContent must not run after the refusal"
+    );
+    assert!(
+        served[0]
+            .request_line
+            .starts_with("POST /v1beta/cachedContents ")
+    );
+    assert!(served[0].body_bytes_written < ENDLESS_STREAM_CEILING);
+}
+
+#[test]
+fn oversized_cached_content_error_keeps_a_bounded_body() {
+    let (result, served) = send_to_fixture(vec![FixtureResponse::endless(503)], Some(2));
+
+    assert_bounded_bad_status(result, 503);
+    assert!(served[0].body_bytes_written < ENDLESS_STREAM_CEILING);
 }
