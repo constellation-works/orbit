@@ -89,7 +89,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These nine YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -104,7 +104,17 @@ definition of the same name.
   each actionable finding is filed as a durable Orbit task, and a clean review
   is a successful no-op (ORB-10950).
 - `code-review` — disabled-by-default six-hourly review of commits merged
-  since the previous sweep's recorded cursor.
+  since the previous sweep's recorded cursor. Its cursor selector requires the
+  `auto-task:code-review` provenance tag, so only a minted sweep can be the
+  cursor task.
+- `full-code-review` — disabled-by-default, minted on demand (its monthly cron
+  stays off until enabled). The minted coordinator pins one integration-branch
+  commit, partitions the tree into areas of roughly 90k lines along crate and
+  module boundaries, and files one area-review chore per area tagged
+  `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
+  complexity or below with no pinned crew. Area reviewers read the whole area
+  at that commit and file findings as `bug`s tagged `code-review` +
+  `full-code-review`.
 - `doc-duties` — disabled-by-default daily validation of the oldest tracked
   documentation. Existing `last_validated` dates take precedence; documents
   without the key use git last-touched dates and completed task summaries for
@@ -155,6 +165,9 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-12931 — Added the disabled weekly `run-failure-patterns` default that
   mines unfiled recurring run failures.
 - ORB-12932 — Added the disabled weekly, report-only `backlog-hygiene` default.
+- ORB-13636 — Added the disabled `full-code-review` coordinator default and
+  keyed the `code-review` cursor selector on its provenance tag after
+  hand-filed full-review chores shadowed the last real sweep.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
