@@ -7,10 +7,13 @@ use std::path::Path;
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_tools::ToolRegistry;
-use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy};
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
+use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy, auto_task_tag};
 
+use crate::OrbitRuntime;
 use crate::application::auto_tasks::{
-    BASE_BRANCH_PLACEHOLDER, DEFAULT_AUTO_TASK_FILES, render_default_auto_task,
+    BASE_BRANCH_PLACEHOLDER, DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, definition_path,
+    render_default_auto_task,
 };
 
 /// Every embedded default parses, uses its filename identity, and remains
@@ -31,6 +34,7 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         "code-review",
         "doc-duties",
         "friction-curation",
+        "full-code-review",
         "qa-sweep",
         "run-failure-patterns",
         "security-review",
@@ -442,6 +446,109 @@ fn code_review_default_is_portable_cursor_driven_and_inert() {
     assert!(
         !definition.template.acceptance_criteria.is_empty(),
         "code-review must declare acceptance criteria"
+    );
+}
+
+/// The full review is expensive, so it ships inert and minted on demand. Its
+/// coordinator must never look like a `code-review` sweep, or the sweep would
+/// take it as its cursor task.
+#[test]
+fn full_code_review_default_is_inert_and_outside_the_sweep_selector() {
+    let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(name, _)| *name == "full-code-review")
+        .expect("full-code-review default");
+    let definition = parse_auto_task_yaml(yaml).expect("parse full-code-review");
+
+    assert!(!definition.enabled, "definition must ship disabled");
+    assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
+    assert_ne!(
+        definition.template.complexity,
+        Some(TaskComplexity::XHard),
+        "full-code-review must not be minted as xhard"
+    );
+    assert!(
+        definition
+            .template
+            .tags
+            .iter()
+            .any(|tag| tag == "full-code-review")
+    );
+    assert!(
+        !definition
+            .template
+            .tags
+            .iter()
+            .any(|tag| tag == "code-review"),
+        "the coordinator must not carry the code-review sweep's tag"
+    );
+    assert!(
+        !yaml.contains("/home/") && !yaml.contains("/Users/") && !yaml.contains("agent-main"),
+        "default must stay workspace-generic"
+    );
+    assert!(!definition.template.acceptance_criteria.is_empty());
+
+    let (_, code_review) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(name, _)| *name == "code-review")
+        .expect("code-review default");
+    let cursor = parse_auto_task_yaml(&render_default_auto_task(code_review, "main"))
+        .expect("parse code-review")
+        .skip_if_unchanged
+        .expect("code-review ships the precondition")
+        .cursor;
+    assert!(
+        cursor
+            .tags
+            .iter()
+            .any(|tag| *tag == auto_task_tag("code-review")),
+        "the sweep cursor must key on the provenance only a minted sweep carries"
+    );
+}
+
+/// Seeded as shipped, the definition is listed and mints a backlog
+/// coordinator carrying its own provenance, not the sweep's.
+#[test]
+fn full_code_review_default_is_listed_and_mints_on_demand() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(name, _)| *name == "full-code-review")
+        .expect("full-code-review default");
+    let local_dir = &runtime.paths().local_dir;
+    std::fs::create_dir_all(auto_tasks_dir(local_dir)).expect("auto-task directory");
+    std::fs::write(
+        definition_path(local_dir, "full-code-review"),
+        render_default_auto_task(yaml, "main").as_bytes(),
+    )
+    .expect("seed full-code-review");
+
+    let listed = runtime.auto_task_list().expect("list");
+    assert!(
+        listed
+            .iter()
+            .any(|definition| definition.name == "full-code-review" && !definition.enabled)
+    );
+
+    let minted = runtime
+        .auto_task_mint("full-code-review")
+        .expect("mint full-code-review");
+    assert_eq!(minted.status, TaskStatus::Backlog);
+    assert_eq!(minted.task_type, TaskType::Chore);
+    assert_eq!(minted.complexity, Some(TaskComplexity::Medium));
+    for tag in [
+        "full-code-review".to_string(),
+        "no-diff-expected".to_string(),
+        auto_task_tag("full-code-review"),
+    ] {
+        assert!(minted.tags.contains(&tag), "minted task lacks {tag}");
+    }
+    assert!(
+        !minted
+            .tags
+            .iter()
+            .any(|tag| tag == "code-review" || *tag == auto_task_tag("code-review")),
+        "the coordinator must never match the code-review sweep selector"
     );
 }
 

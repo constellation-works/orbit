@@ -1,0 +1,121 @@
+schemaVersion: 1
+name: full-code-review
+description: Whole-codebase white-box review at one pinned integration-branch commit, fanned out as one review chore per area
+enabled: false
+schedule:
+  cron: 0 6 1 * *
+template:
+  title: Coordinate a full codebase review
+  description: |-
+    Coordinate a whole-codebase white-box review of this workspace at one pinned
+    commit of its integration branch. You do not review code yourself: you pin
+    the commit, partition the tree into review areas, and file one area-review
+    task per area. The durable output is those filed tasks; the execution summary
+    is the audit trail. Narrative-only output does not count as delivery.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface. List area reviews already in flight with
+      `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["full-code-review","no-diff-expected"],"model":"<agent-family>"}'`.
+      File an area review with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["full-code-review","no-diff-expected"],"context_files":["dir:<area directory>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Do not use direct lifecycle CLI subcommands; they skip agent provenance.
+    - Area tasks carry exactly the tags `full-code-review` and `no-diff-expected`.
+      Never tag one `code-review`: completed `code-review` chores are the
+      incremental review sweep's cursor records, and an area review there would
+      be mistaken for a sweep.
+    - Area tasks have complexity `hard` at most, never `xhard`, and no `crew`,
+      so each is routed by automatic selection.
+    - If area reviews from an earlier full review are still open, do not file a
+      second set. Record their IDs in the execution summary and finish.
+
+    ## Pin the commit
+
+    Fetch the workspace's integration branch and record the full 40-character
+    SHA of its tip. Every area task names this SHA; reviewers read the tree as it
+    stands there, so later merges cannot shift an area under them.
+
+    ## Partition the tree
+
+    Measure tracked lines per directory at the pinned SHA, for example with
+    `git archive <sha> -- <directory> | tar -xO | wc -l`. Group directories
+    into review areas of roughly 90,000 lines or fewer, following package, crate
+    and module boundaries: never split one module across areas, and split an
+    oversized package along its top-level modules. Group small, closely related
+    directories into one area. Every tracked source directory belongs to
+    exactly one area. Vendored, generated and lockfile-only content may be
+    excluded; name each exclusion.
+
+    ## File one area review per area
+
+    Title each task `Full review: <area name> @ <short SHA>`. Its description
+    carries the brief below, with the pinned SHA and the area's directories
+    filled in. Set `context_files` to the area's `dir:` selectors. Use `hard`
+    for areas holding concurrency, persistence, security boundaries or process
+    control, and `medium` otherwise.
+
+    Area brief:
+
+    > Review `<directories>` in full as it stands at commit `<full SHA>` on
+    > `<integration branch>`. Read the whole area, not a diff; read from that
+    > commit (`git show <sha>:<path>`) if the checkout has moved.
+    >
+    > Look for:
+    > - correctness: logic errors, wrong edge cases, broken invariants between
+    >   callers and callees;
+    > - error handling: swallowed or mislabelled errors, panics reachable from
+    >   input, partial writes left behind on failure;
+    > - concurrency: races, lock ordering, locks held across awaits, unbounded
+    >   or leaked tasks;
+    > - security boundaries: path traversal, injection, trust of unvalidated
+    >   input, secrets in logs or output;
+    > - resource bounds: unbounded buffers, queues, retries, recursion or file
+    >   growth;
+    > - conformance to the repository's documented standards: its agent guide,
+    >   contributing guide, standards documents and lint configuration;
+    > - tests that do not test what they claim: assertions that cannot fail,
+    >   fixtures that bypass the code under test, names that promise behavior
+    >   the body never exercises.
+    >
+    > Verify every candidate against the code at the pinned SHA; a line that
+    > looks wrong but is guarded elsewhere is not a finding. Before filing,
+    > search for existing coverage with
+    > `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
+    > and skip anything an open `code-review` task already tracks. File each
+    > confirmed finding as its own task with
+    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review","full-code-review"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`,
+    > citing `file:line` evidence at the pinned SHA. Skip nitpicks. An area with
+    > no confirmed findings is a successful no-op; do not invent work. Record
+    > the SHA, what was read, and each filed task ID in the execution summary.
+
+    Give each area task these acceptance criteria: the whole area was read at
+    the pinned SHA; every filed finding is verified, non-duplicate, a `bug`
+    tagged `code-review` and `full-code-review` with `file:line` evidence at
+    that SHA; a clean area succeeds as a no-op.
+
+    ## Finish
+
+    Finish once every area task is filed. Record in the execution summary the
+    integration branch and pinned SHA, the area table (area name, directories,
+    measured line count, complexity) with any exclusions, and each area's task
+    ID.
+  acceptance_criteria:
+  - One integration-branch commit was pinned by full SHA and every area task names it.
+  - The tracked tree is partitioned into areas of roughly 90,000 lines or fewer along package and module boundaries, with every exclusion named.
+  - Each area has exactly one filed `chore` tagged `full-code-review` and `no-diff-expected` (never `code-review`), complexity `hard` at most, no crew, `context_files` set to the area's directories, and a `spawned_from` relation to this task.
+  - The execution summary records the pinned SHA, the area table and every area task ID.
+  task_type: chore
+  tags:
+  - full-code-review
+  - no-diff-expected
+  priority: medium
+  complexity: medium
+  # The portable system lane is seeded per machine and compatibility-aliased
+  # for configs written before that crew existed.
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-27T00:00:00Z
+updated_by: system
+updated_at: 2026-09-27T00:00:00Z

@@ -85,7 +85,7 @@ YAML rather than through a CLI flag — suppresses that mint:
 skip_if_unchanged:
   ref: agent-main                      # integration branch whose tip is compared
   cursor:
-    tags: [code-review, no-diff-expected]
+    tags: [code-review, no-diff-expected, auto-task:code-review]
     legacy_tags: [code-review-sweep, no-diff-expected]
 ```
 
@@ -102,6 +102,10 @@ and the dashboard name the reason and both SHAs.
 It **fails open**: no completed sweep, a missing or malformed cursor, an
 unresolvable ref or commit, or any probe failure mints as before and records
 why. A precondition that cannot be answered never stops a sweep.
+
+Include the definition's `auto-task:<name>` provenance tag in `cursor.tags`:
+only tasks minted from the definition carry it, so a hand-filed chore that
+happens to share the other tags can never become the cursor task.
 
 The shipped `code-review` and `qa-sweep` defaults carry the block against the
 workspace's base branch. Delivery-triggered definitions do not need it — they
@@ -187,9 +191,9 @@ as `skipped` with a reason naming the plugin. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The nine seeded definitions
+## The ten seeded definitions
 
-`orbit workspace init` seeds all nine, disabled, except any you deleted (see
+`orbit workspace init` seeds all ten, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -214,6 +218,15 @@ plugin being removed.
   candidate finding against the live code, files the non-duplicate ones as tasks
   tagged `code-review`, and records the new last-reviewed commit in its execution
   summary — that cursor is the next sweep's window start.
+- **`full-code-review`** (`medium`) — on demand (`orbit auto-task mint
+  full-code-review`); its monthly cron stays off until you enable it. The minted
+  task is a coordinator: it pins the integration branch's tip, splits the tree
+  into review areas of roughly 90k lines along package and module boundaries,
+  and files one area-review chore per area, tagged `full-code-review` and
+  `no-diff-expected` (never `code-review`), at `hard` complexity or below with
+  no pinned crew. Each area reviewer reads its whole area at that commit and
+  files confirmed findings as bugs tagged `code-review` and `full-code-review`;
+  a clean area is a successful no-op.
 - **`delivery-qa`** (`hard`) — exercises each frozen delivery batch and records
   typed coverage evidence.
 - **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and

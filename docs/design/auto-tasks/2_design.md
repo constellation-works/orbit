@@ -199,7 +199,7 @@ precondition that closes that gap:
 skip_if_unchanged:
   ref: agent-main                      # integration branch whose tip is compared
   cursor:
-    tags: [code-review, no-diff-expected]
+    tags: [code-review, no-diff-expected, auto-task:code-review]
     legacy_tags: [code-review-sweep, no-diff-expected]
 ```
 
@@ -213,8 +213,11 @@ or `Unknown`:
   rename does not reset the cursor. Newer `created_at` wins and the
   lexicographically smaller id breaks a tie. The chore filter is load-bearing:
   a `bug` finding filed by the sweep shares its tags and never records a
-  cursor. This mirrors the selection the sweep templates describe, which
-  remains the single description of the rule.
+  cursor. The `auto-task:<name>` provenance tag in `cursor.tags` is load-bearing
+  too: only minted sweeps carry it, so a hand-filed or full-review chore that
+  shares the other tags cannot become the cursor task. This mirrors the
+  selection the sweep templates describe, which remains the single
+  description of the rule.
 - **Cursor value.** The `sweep-cursor.json` task artifact
   (`{ schema_version: 1, ref, cursor }`), written by the sweep templates. It is
   a structured record, never prose parsed out of an execution summary.

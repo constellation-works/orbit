@@ -15,7 +15,7 @@ template:
     ## Rules and command surfaces
 
     - Use the registered Orbit tool surface. Find the newest current-name sweep with
-      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["code-review","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["code-review","no-diff-expected","auto-task:code-review"],"limit":1,"model":"<agent-family>"}'`
       and the newest legacy-name sweep with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["code-review-sweep","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`.
       Both tag filters use AND semantics. Compare the first result from each
@@ -23,7 +23,10 @@ template:
       winning an equal timestamp, and read the selected sweep's cursor with
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       A finding is a `bug` tagged only `code-review`, so it is never a sweep
-      candidate even when it completed after the selected sweep.
+      candidate even when it completed after the selected sweep. The
+      `auto-task:code-review` provenance tag is carried only by tasks minted from
+      this definition, so a hand-filed or full-review chore that shares the
+      other tags never displaces a real sweep's cursor.
       Search existing coverage with
       `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
       and list open review work with
@@ -129,6 +132,7 @@ skip_if_unchanged:
     tags:
     - code-review
     - no-diff-expected
+    - auto-task:code-review
     legacy_tags:
     - code-review-sweep
     - no-diff-expected

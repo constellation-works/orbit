@@ -71,6 +71,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/friction-curation.yaml"),
     ),
     (
+        "full-code-review",
+        include_str!("../../../assets/auto_tasks/full-code-review.yaml"),
+    ),
+    (
         "qa-sweep",
         include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
     ),

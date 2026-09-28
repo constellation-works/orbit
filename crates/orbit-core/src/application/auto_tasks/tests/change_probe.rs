@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use orbit_automation::auto_tasks::scheduler::ChangeProbe;
+use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::workflow::{SWEEP_CURSOR_ARTIFACT, SkipIfUnchanged, SweepCursorSelector};
 use serde_json::json;
@@ -14,6 +15,7 @@ use crate::OrbitRuntime;
 use crate::application::auto_tasks::change_probe::{
     newest_completed_sweep, probe_change_since_last_sweep, read_cursor, select_sweep,
 };
+use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 fn runtime() -> OrbitRuntime {
@@ -136,6 +138,81 @@ fn legacy_tags_are_consulted_only_when_the_current_tags_select_nothing() {
             .expect("selection")
             .map(|task| task.id.to_string()),
         Some(current)
+    );
+}
+
+/// The shipped `code-review` definition's precondition, rendered for this
+/// module's `agent-main` fixtures.
+fn shipped_code_review_precondition() -> SkipIfUnchanged {
+    let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(name, _)| *name == "code-review")
+        .expect("code-review default");
+    parse_auto_task_yaml(&render_default_auto_task(yaml, "agent-main"))
+        .expect("parse code-review")
+        .skip_if_unchanged
+        .expect("code-review ships the precondition")
+}
+
+/// A whole-codebase review files done chores tagged `code-review` +
+/// `no-diff-expected`; one newer than the last real sweep once became the
+/// cursor task and blocked the next sweep for want of a cursor. The shipped
+/// selector keys on the provenance tag only a minted sweep carries.
+#[test]
+fn a_newer_full_review_chore_never_shadows_an_older_minted_sweep() {
+    let runtime = runtime();
+    let shipped = shipped_code_review_precondition();
+    let sweep = completed_sweep(
+        &runtime,
+        &["code-review", "no-diff-expected", "auto-task:code-review"],
+        None,
+    );
+    completed_sweep(
+        &runtime,
+        &["code-review", "no-diff-expected", "full-review"],
+        None,
+    );
+    let full_code_review = completed_sweep(
+        &runtime,
+        &["code-review", "no-diff-expected", "full-code-review"],
+        None,
+    );
+
+    // Control: without the provenance tag the newest full-review chore wins.
+    let unmarked = precondition(&["code-review", "no-diff-expected"], &[]);
+    assert_eq!(
+        newest_completed_sweep(&runtime, &unmarked)
+            .expect("selection")
+            .map(|task| task.id.to_string()),
+        Some(full_code_review),
+        "fixture must create full-review chores newer than the sweep"
+    );
+
+    assert_eq!(
+        newest_completed_sweep(&runtime, &shipped)
+            .expect("selection")
+            .map(|task| task.id.to_string()),
+        Some(sweep)
+    );
+}
+
+/// A workspace whose only real sweeps predate the rename still resolves them
+/// through the legacy selector, even beside a newer full-review chore.
+#[test]
+fn a_full_review_chore_does_not_hide_the_legacy_sweep() {
+    let runtime = runtime();
+    let legacy = completed_sweep(&runtime, &["code-review-sweep", "no-diff-expected"], None);
+    completed_sweep(
+        &runtime,
+        &["code-review", "no-diff-expected", "full-code-review"],
+        None,
+    );
+
+    assert_eq!(
+        newest_completed_sweep(&runtime, &shipped_code_review_precondition())
+            .expect("selection")
+            .map(|task| task.id.to_string()),
+        Some(legacy)
     );
 }
 
