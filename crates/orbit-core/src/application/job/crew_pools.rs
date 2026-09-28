@@ -175,8 +175,8 @@ impl OrbitRuntime {
     /// provenance the pool was captured from. `None` when no pool covers the
     /// complexity, which is what sends both callers to the default chain.
     ///
-    /// A disabled crew (`[crews.<name>] enabled = false`) is never drawn. A
-    /// pool whose members are all disabled is treated exactly like an empty
+    /// A disabled crew (`[crews.<name>] enabled = false`) is never drawn.
+    /// A pool whose members are all disabled is treated exactly like an empty
     /// pool and also returns `None`, so the task falls through to
     /// `workflow.default_crew` — and dispatch refuses that too if it is
     /// disabled. Enabled state is read from the current configuration, not the
@@ -345,7 +345,9 @@ impl OrbitRuntime {
             .and_then(Value::as_str)
             .and_then(non_empty);
         let (candidates, source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
-        if let [only] = candidates.as_slice() {
+        if let [only] = candidates.as_slice()
+            && only.weight > 0
+        {
             return enforce_crew_allowlist(Some(allowlist), &only.crew, origin);
         }
         permitted_candidates(candidates, &source, Some(allowlist)).map(|_| ())
@@ -412,10 +414,13 @@ fn permitted_candidates(
     source: &str,
     allowlist: Option<&CrewAllowlist>,
 ) -> Result<Vec<CrewCandidate>, OrbitError> {
-    if candidates.len() == 1 {
-        enforce_crew_allowlist(allowlist, &candidates[0].crew, source)?;
+    if let [only] = candidates.as_slice()
+        && only.weight > 0
+    {
+        enforce_crew_allowlist(allowlist, &only.crew, source)?;
         return Ok(candidates);
     }
+    let has_positive_weight = candidates.iter().any(|candidate| candidate.weight > 0);
     let names = candidates
         .iter()
         .map(|candidate| candidate.crew.name.as_str())
@@ -428,8 +433,13 @@ fn permitted_candidates(
         })
         .collect::<Vec<_>>();
     if permitted.is_empty() {
+        let reason = if has_positive_weight {
+            "has no member permitted by this run's crew allowlist"
+        } else {
+            "has no member with a weight above 0"
+        };
         return Err(OrbitError::InvalidInput(format!(
-            "crew pool from {source} [{names}] has no member permitted by this run's crew allowlist"
+            "crew pool from {source} [{names}] {reason}"
         )));
     }
     Ok(permitted)
@@ -444,7 +454,13 @@ fn weighted_draw<'a>(
     random: &mut impl FnMut() -> Result<u64, OrbitError>,
 ) -> Result<&'a CrewCandidate, OrbitError> {
     if let [only] = candidates {
-        return Ok(only);
+        return if only.weight > 0 {
+            Ok(only)
+        } else {
+            Err(OrbitError::InvalidInput(format!(
+                "crew pool from {source} has no member with a weight above 0"
+            )))
+        };
     }
     let total = candidates
         .iter()
