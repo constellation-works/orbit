@@ -34,18 +34,25 @@ const POOL_KEYS: [&str; 4] = [
     "xhard_complexity_crews",
 ];
 
+/// The static template leaves every agent-dependent choice to the seed: it
+/// defines no crew tables and names no crew or pool, and carries no retired
+/// section.
 #[test]
 fn default_template_keeps_agent_dependent_sections_out() {
-    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("default_crew ="));
-    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("system_crew ="));
-    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("[crews."));
-    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("[duel"));
-    assert!(DEFAULT_CONFIG_TEMPLATE.contains("[execution.env]"));
-    assert!(DEFAULT_CONFIG_TEMPLATE.contains("[execution.codex]"));
-    assert!(DEFAULT_CONFIG_TEMPLATE.contains("[scoring]"));
-    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("[graph]"));
-    assert!(DEFAULT_CONFIG_TEMPLATE.contains("[workflow]"));
-    assert!(DEFAULT_CONFIG_TEMPLATE.contains("base_branch = \"main\""));
+    let parsed = parsed_config(DEFAULT_CONFIG_TEMPLATE);
+
+    assert!(crew_names(&parsed).is_empty());
+    for key in ["default_crew", "system_crew"].into_iter().chain(POOL_KEYS) {
+        assert!(
+            workflow_value(&parsed, key).is_none(),
+            "workflow.{key} is written only by a seed"
+        );
+    }
+    assert!(parsed.get("duel").is_none());
+    assert!(parsed.get("graph").is_none());
+
+    let resolved = load_seeded_config(DEFAULT_CONFIG_TEMPLATE);
+    assert_eq!(resolved.workflow_base_branch, "main");
 }
 
 /// A seed is the only thing that produces crew tables. Without one the file is
@@ -58,9 +65,10 @@ fn no_seed_writes_the_static_template_and_keeps_built_in_crews() {
     assert!(seed_default_config(&path, None).expect("seed"));
     let contents = std::fs::read_to_string(&path).expect("read");
 
-    assert!(!contents.contains("[crews"));
-    assert!(!contents.contains("default_crew ="));
-    assert!(!contents.contains("complexity_crews ="));
+    assert_eq!(
+        parsed_config(&contents),
+        parsed_config(DEFAULT_CONFIG_TEMPLATE)
+    );
     let resolved = load_seeded_config(&contents);
     assert_eq!(resolved.crews, crate::resolved::default_crews());
     assert_eq!(resolved.default_crew.as_deref(), Some("opus"));
@@ -83,16 +91,6 @@ fn claude_and_codex_seed_names_real_crews_and_empty_pools() {
     assert_workflow_str(&parsed, "default_crew", Some("opus"));
     assert_workflow_str(&parsed, "system_crew", Some("luna"));
     assert_empty_pools(&parsed);
-    assert!(!contents.contains("[crews.custom]"));
-    assert!(!contents.contains("[crews.system]"));
-    assert!(
-        contents.contains("an empty pool routes that\n# complexity to `default_crew`"),
-        "the pool comment must explain the empty-pool fallback:\n{contents}"
-    );
-    assert!(
-        contents.contains("`name` or `name:weight`"),
-        "the pool comment must explain the entry grammar:\n{contents}"
-    );
 
     let resolved = load_seeded_config(&contents);
     assert_eq!(resolved.default_crew.as_deref(), Some("opus"));
