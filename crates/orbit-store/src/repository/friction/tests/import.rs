@@ -6,7 +6,9 @@ use orbit_types::record::FrictionStatus;
 
 use super::super::{FrictionListFilter, FrictionUpdateParams};
 use super::support::{add_params, at, friction_store, legacy_record, store};
-use crate::workflow::friction::export_workspace_frictions;
+use crate::workflow::friction::{
+    export_workspace_frictions, import_with_canonicalizer, import_workspace_frictions,
+};
 
 #[test]
 fn a_fresh_database_with_no_legacy_tree_imports_nothing() {
@@ -24,6 +26,92 @@ fn a_fresh_database_with_no_legacy_tree_imports_nothing() {
             .expect("list")
             .is_empty()
     );
+}
+
+/// A source that exists but is not a directory, or sits under a regular file,
+/// is "nothing to import" just like a missing one.
+#[test]
+fn a_non_directory_source_imports_nothing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_source = temp.path().join("ws_one");
+    fs::write(&file_source, "not a directory\n").expect("file source");
+    let shared = store(temp.path());
+
+    for source in [file_source.clone(), file_source.join("nested")] {
+        let report = import_workspace_frictions(&shared, "ws_one", &source)
+            .expect("a non-directory source is not an import failure");
+        assert_eq!(report.discovered, 0, "{}", source.display());
+        assert!(!report.already_complete, "{}", source.display());
+    }
+}
+
+/// A corpus root that cannot be resolved for any reason other than being
+/// absent must fail the import without a completion marker; otherwise the
+/// zero-record marker keeps the corpus from ever importing once access
+/// returns (ORB-13608).
+#[test]
+fn a_corpus_root_io_failure_commits_no_marker_and_retries_after_recovery() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("ws_one");
+    legacy_record(&source, "F2026-05-001", "codex", FrictionStatus::Open);
+    let shared = store(temp.path());
+
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::Other,
+    ] {
+        let error = import_with_canonicalizer(&shared, "ws_one", &source, |_| {
+            Err(std::io::Error::new(kind, "injected corpus-root failure"))
+        })
+        .expect_err("a corpus-root I/O failure must fail the import");
+        let message = error.to_string();
+        assert!(
+            message.contains(&source.display().to_string())
+                && message.contains("injected corpus-root failure"),
+            "the error must name the corpus root and its cause: {message}"
+        );
+        assert_no_partial_import(temp.path(), "ws_one");
+    }
+
+    let report = import_workspace_frictions(&shared, "ws_one", &source)
+        .expect("the same root imports once it resolves");
+    assert_eq!(report.discovered, 1);
+    assert_eq!(report.imported, 1);
+    assert!(!report.already_complete);
+}
+
+/// The same guarantee against a real permission failure on an ancestor.
+#[cfg(unix)]
+#[test]
+fn a_permission_denied_corpus_root_retries_after_access_is_restored() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let parent = temp.path().join("locked");
+    let source = parent.join("ws_one");
+    legacy_record(&source, "F2026-05-001", "codex", FrictionStatus::Open);
+    let shared = store(temp.path());
+
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o000)).expect("lock parent");
+    // A privileged runner ignores directory modes; there is nothing to deny.
+    let denied = fs::canonicalize(&source).is_err();
+    let result = import_workspace_frictions(&shared, "ws_one", &source);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("unlock parent");
+    if !denied {
+        return;
+    }
+
+    let error = result.expect_err("an inaccessible corpus root must fail the import");
+    assert!(
+        error.to_string().contains(&source.display().to_string()),
+        "the error must name the corpus root: {error}"
+    );
+    assert_no_partial_import(temp.path(), "ws_one");
+
+    let report = import_workspace_frictions(&shared, "ws_one", &source)
+        .expect("the same root imports once access is restored");
+    assert_eq!(report.discovered, 1);
+    assert_eq!(report.imported, 1);
 }
 
 /// A workspace whose legacy friction tree is reached through a symlinked

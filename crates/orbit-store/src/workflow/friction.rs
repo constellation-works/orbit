@@ -15,15 +15,14 @@
 //! re-materialize the live corpus beside them for inspection.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
-use crate::driver::file::friction_store::{
-    friction_record_paths, read_record_at, validated_friction_root, write_record_at,
-};
+use crate::driver::file::friction_store::{friction_record_paths, read_record_at, write_record_at};
 
 use crate::contracts::{FrictionListFilter, StoredFrictionRecord};
 use crate::repository::friction::queries::upsert_record;
@@ -60,6 +59,19 @@ pub fn import_workspace_frictions(
     workspace_id: &str,
     source_root: &Path,
 ) -> Result<FrictionImportReport, OrbitError> {
+    import_with_canonicalizer(store, workspace_id, source_root, |path| {
+        std::fs::canonicalize(path)
+    })
+}
+
+/// [`import_workspace_frictions`] with the corpus-root canonicalization
+/// injectable, so tests can reproduce an I/O failure resolving the root.
+pub(crate) fn import_with_canonicalizer(
+    store: &Store,
+    workspace_id: &str,
+    source_root: &Path,
+    canonicalize: impl Fn(&Path) -> io::Result<PathBuf>,
+) -> Result<FrictionImportReport, OrbitError> {
     let source_key = source_key(source_root);
     if let Some(report) =
         store.with_read_connection(|conn| completed_marker(conn, workspace_id, &source_key))?
@@ -74,7 +86,14 @@ pub fn import_workspace_frictions(
         if let Some(report) = completed_marker(conn, workspace_id, &source_key)? {
             return Ok(report);
         }
-        run_import(conn, workspace_id, source_root, &source_key)
+        let canonical_root = resolve_import_root(source_root, &canonicalize)?;
+        run_import(
+            conn,
+            workspace_id,
+            source_root,
+            canonical_root.as_deref(),
+            &source_key,
+        )
     })
 }
 
@@ -122,19 +141,56 @@ fn completed_marker(
     }))
 }
 
+/// Resolve the legacy corpus root, following symlinks the same way
+/// `Path::is_dir` does.
+///
+/// A missing or non-directory source is "nothing to import" (`Ok(None)`)
+/// exactly as it is for the caller that reports `report.discovered == 0` —
+/// not a hard error. Any other failure (permission denied on an ancestor, a
+/// symlink loop, an I/O error) is propagated: committing a zero-record marker
+/// for a corpus that is only temporarily unreadable would make the import
+/// report complete and never retry once access returns.
+fn resolve_import_root(
+    source_root: &Path,
+    canonicalize: impl Fn(&Path) -> io::Result<PathBuf>,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let absent = |error: &io::Error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+        )
+    };
+    let canonical_root = match canonicalize(source_root) {
+        Ok(root) => root,
+        Err(error) if absent(&error) => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "resolve friction corpus root {}: {error}",
+                source_root.display()
+            )));
+        }
+    };
+    match std::fs::metadata(&canonical_root) {
+        Ok(metadata) if metadata.is_dir() => Ok(Some(canonical_root)),
+        Ok(_) => Ok(None),
+        Err(error) if absent(&error) => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "inspect friction corpus root {}: {error}",
+            canonical_root.display()
+        ))),
+    }
+}
+
 fn run_import(
     conn: &Connection,
     workspace_id: &str,
     source_root: &Path,
+    canonical_root: Option<&Path>,
     source_key: &str,
 ) -> Result<FrictionImportReport, OrbitError> {
-    // `validated_friction_root` follows symlinks the same way `Path::is_dir`
-    // does, so a missing or non-directory source is "nothing to import" here
-    // exactly as it is for the caller that reports `report.discovered == 0`
-    // — not a hard error. A resolved root is kept so every record location
-    // below is checked against the same canonical path the walk used.
-    let canonical_root = validated_friction_root(source_root).ok();
-    let paths = match &canonical_root {
+    // A resolved root is kept so every record location below is checked
+    // against the same canonical path the walk used.
+    let paths = match canonical_root {
         Some(root) => friction_record_paths(root)?,
         None => Vec::new(),
     };
@@ -147,7 +203,7 @@ fn run_import(
     // the ID set used to detect a collision inside this source tree. `paths`
     // is only non-empty when `canonical_root` resolved, so the two stay in
     // lockstep without an unreachable-error branch.
-    if let Some(corpus_root) = canonical_root.as_deref() {
+    if let Some(corpus_root) = canonical_root {
         for path in &paths {
             let stored = read_record_at(path)?;
             let record = stored.record;
