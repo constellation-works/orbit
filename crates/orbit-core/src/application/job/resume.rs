@@ -30,11 +30,13 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, JobV2, PipelineState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
+use crate::application::job::pipeline::{
+    PipelineInvokeResult, PipelineSubmission, SubmittedDefinition,
+};
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
@@ -62,6 +64,16 @@ pub(crate) struct ResumePlan {
     /// The batch id the reused checkpoints will keep handing to delivery steps.
     /// `None` when nothing is reused (`worktree_setup` re-runs and re-claims).
     pub(crate) checkpoint_batch_id: Option<String>,
+    /// Definition pinned beside the source run. `None` for a catalog-backed
+    /// source, which keeps resolving `source.job_id` at admission.
+    pub(crate) pinned_definition: Option<PinnedRunDefinition>,
+}
+
+/// Exact job definition a snapshot-backed run must keep across resumes.
+#[derive(Clone)]
+pub(crate) struct PinnedRunDefinition {
+    pub(crate) spec: JobV2,
+    pub(crate) yaml: String,
 }
 
 impl OrbitRuntime {
@@ -187,7 +199,16 @@ impl OrbitRuntime {
                 .values()
                 .any(|step_state| *step_state == JobRunState::Success)
         });
-        self.load_v2_job_asset_by_name(&source.job_id)?;
+        // [ORB-13559] A direct-YAML run already pinned its definition. Requiring
+        // a catalog asset here would refuse a resume after the source file is
+        // gone, and a later catalog submission would let a different same-name
+        // asset replace that snapshot. Catalog-backed runs still resolve by name.
+        let pinned_definition = self
+            .read_run_definition_snapshot(&source.run_id)?
+            .map(|(spec, yaml)| PinnedRunDefinition { spec, yaml });
+        if pinned_definition.is_none() {
+            self.load_v2_job_asset_by_name(&source.job_id)?;
+        }
         let lineage = self.resume_lineage_run_ids(&source)?;
         let checkpoint_batch_id = resume_state.as_ref().and_then(checkpoint_ownership_id);
         let attempt = source.attempt.saturating_add(1);
@@ -199,6 +220,7 @@ impl OrbitRuntime {
             resume_state,
             lineage,
             checkpoint_batch_id,
+            pinned_definition,
         })
     }
 
@@ -395,6 +417,10 @@ impl OrbitRuntime {
     /// admit exactly one. Once that run is terminal, resuming is allowed again
     /// and chains from the run the caller names — its checkpoints and attempt
     /// number — not from the lineage's latest attempt.
+    ///
+    /// [ORB-13559] A snapshot-backed source copies its pinned definition onto
+    /// the new run, so a later retry of that run keeps the same YAML. A
+    /// catalog-backed source still resolves its job name from the catalog.
     pub fn submit_resume_run(
         &self,
         source_run_id: &str,
@@ -408,9 +434,21 @@ impl OrbitRuntime {
         // still reads as running and would otherwise refuse the resume that
         // exists to recover it.
         self.reconcile_stale_job_runs(Some(&job_id))?;
-        self.submit_persisted_pipeline_run(PipelineSubmission {
-            resume: Some(&plan),
-            ..PipelineSubmission::catalog(&job_id, plan.input.clone(), actor)
-        })
+        let pinned = plan.pinned_definition.clone();
+        let input = plan.input.clone();
+        match &pinned {
+            Some(pinned) => self.submit_persisted_pipeline_run(PipelineSubmission {
+                definition: SubmittedDefinition::Snapshot {
+                    spec: &pinned.spec,
+                    yaml: &pinned.yaml,
+                },
+                resume: Some(&plan),
+                ..PipelineSubmission::catalog(&job_id, input, actor)
+            }),
+            None => self.submit_persisted_pipeline_run(PipelineSubmission {
+                resume: Some(&plan),
+                ..PipelineSubmission::catalog(&job_id, input, actor)
+            }),
+        }
     }
 }

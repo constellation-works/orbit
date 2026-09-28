@@ -290,15 +290,20 @@ impl OrbitRuntime {
             ))
         })
     }
-    /// The definition a persisted run must execute: its own snapshot when the
-    /// submission pinned one, otherwise the catalog asset named by the run.
-    pub(crate) fn resolve_run_definition(
+    /// The YAML pinned beside `run_id`, when this run has one.
+    ///
+    /// Direct-path submission writes the snapshot so a later worker — and a
+    /// later resume — executes that definition. A missing file means the run
+    /// is catalog-backed. A present file that cannot be read or parsed is an
+    /// error: resume must not silently substitute a catalog asset of the same
+    /// name.
+    pub(crate) fn read_run_definition_snapshot(
         &self,
-        run: &JobRun,
-    ) -> Result<(PathBuf, JobV2), OrbitError> {
-        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, &run.run_id)?;
+        run_id: &str,
+    ) -> Result<Option<(JobV2, String)>, OrbitError> {
+        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, run_id)?;
         if !snapshot.is_file() {
-            return self.load_v2_job_asset_by_name(&run.job_id);
+            return Ok(None);
         }
         let yaml = std::fs::read_to_string(&snapshot).map_err(|error| {
             OrbitError::InvalidInput(format!("read {}: {error}", snapshot.display()))
@@ -306,7 +311,19 @@ impl OrbitRuntime {
         let asset = load_job_asset(&yaml).map_err(|error| {
             OrbitError::InvalidInput(format!("load {}: {error}", snapshot.display()))
         })?;
-        Ok((snapshot, asset.spec))
+        Ok(Some((asset.spec, yaml)))
+    }
+    /// The definition a persisted run must execute: its own snapshot when the
+    /// submission pinned one, otherwise the catalog asset named by the run.
+    pub(crate) fn resolve_run_definition(
+        &self,
+        run: &JobRun,
+    ) -> Result<(PathBuf, JobV2), OrbitError> {
+        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, &run.run_id)?;
+        if let Some((spec, _)) = self.read_run_definition_snapshot(&run.run_id)? {
+            return Ok((snapshot, spec));
+        }
+        self.load_v2_job_asset_by_name(&run.job_id)
     }
     /// [ORB-10965] Record a duplicate Start that was dropped without a second
     /// execution.

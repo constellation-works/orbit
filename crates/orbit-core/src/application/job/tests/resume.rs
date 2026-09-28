@@ -18,7 +18,7 @@ use serde_json::json;
 
 use crate::OrbitRuntime;
 use crate::application::job::JobRunListParams;
-use crate::application::job::pipeline::worker_command_override;
+use crate::application::job::pipeline::{run_definition_snapshot_path, worker_command_override};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::exec::{test_runtime, v2_events};
@@ -903,4 +903,308 @@ fn concurrent_resumes_of_one_source_create_exactly_one_run() {
         .expect("one racer is refused");
     assert_eq!(live_resume_of(loser), (source.clone(), admitted[0].clone()));
     assert_eq!(resumes_of(&runtime, &source), admitted);
+}
+
+/// Hold the detached worker open. Resume submission spawns one, and these
+/// tests execute the resumed run in-process before that stand-in exits.
+struct HeldWorker;
+
+impl HeldWorker {
+    fn install() -> Self {
+        worker_command_override::set(["sh", "-c", "sleep 60"]);
+        Self
+    }
+}
+
+impl Drop for HeldWorker {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
+}
+
+fn direct_resume_yaml(name: &str) -> String {
+    format!(
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: {name}
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: effect
+      spec:
+        type: deterministic
+        action: sleep
+        config: {{}}
+    - id: tail
+      spec:
+        type: deterministic
+        action: sleep
+        config: {{}}
+"#
+    )
+}
+
+fn catalog_replacement_yaml(name: &str) -> String {
+    format!(
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: {name}
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: catalog_replacement
+      spec:
+        type: deterministic
+        action: sleep
+        config: {{}}
+"#
+    )
+}
+
+fn snapshot_yaml(runtime: &OrbitRuntime, run_id: &str) -> Option<String> {
+    let path =
+        run_definition_snapshot_path(&runtime.paths().job_runs_dir, run_id).expect("snapshot path");
+    path.is_file()
+        .then(|| std::fs::read_to_string(&path).expect("read definition snapshot"))
+}
+
+fn audit_step_ids(runtime: &OrbitRuntime, run_id: &str, event_type: &str) -> Vec<String> {
+    v2_events(runtime, run_id, event_type)
+        .iter()
+        .map(|row| {
+            let payload: serde_json::Value =
+                serde_json::from_str(&row.payload_json).expect("payload");
+            payload["step_id"].as_str().unwrap_or_default().to_string()
+        })
+        .collect()
+}
+
+/// A direct submission whose first step already succeeded, then failed.
+/// The source file is removed afterwards; the pinned snapshot remains.
+fn seed_failed_direct_run(runtime: &OrbitRuntime, root: &Path, name: &str) -> (String, String) {
+    let yaml = direct_resume_yaml(name);
+    let source = root.join(format!("{name}.yaml"));
+    std::fs::write(&source, &yaml).expect("write direct job yaml");
+    let submitted = runtime
+        .submit_job_run(
+            &source.display().to_string(),
+            json!({"seconds": 0}),
+            Some("test"),
+        )
+        .expect("direct submission pins a definition");
+    <OrbitRuntime as RuntimeHost>::checkpoint_step(
+        runtime,
+        &submitted.run_id,
+        0,
+        "effect",
+        &json!({"effect": "once"}),
+        &std::collections::BTreeMap::new(),
+    )
+    .expect("checkpoint the completed side effect");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&submitted.run_id, Utc::now(), std::process::id())
+        .expect("mark source running");
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&submitted.run_id, JobRunState::Failed, Utc::now(), Some(1))
+        .expect("fail the direct run");
+    std::fs::remove_file(&source).expect("remove the original job file");
+    (submitted.run_id, yaml)
+}
+
+fn assert_effect_not_replayed(runtime: &OrbitRuntime, run_id: &str) {
+    let skipped = audit_step_ids(runtime, run_id, "step.skipped");
+    let started = audit_step_ids(runtime, run_id, "step.started");
+    assert!(
+        skipped.contains(&"effect".to_string()),
+        "the completed side effect is skipped: skipped={skipped:?} started={started:?}"
+    );
+    assert!(
+        !started.contains(&"effect".to_string()),
+        "a completed side effect is not replayed: started={started:?}"
+    );
+    assert!(
+        started.contains(&"tail".to_string()),
+        "the resumed run continues with the pinned definition's remaining step: started={started:?}"
+    );
+    assert!(
+        !started.iter().any(|id| id == "catalog_replacement")
+            && !skipped.iter().any(|id| id == "catalog_replacement"),
+        "a same-name catalog definition does not execute: skipped={skipped:?} started={started:?}"
+    );
+    let state = runtime
+        .read_run_state(run_id)
+        .expect("read resumed state")
+        .expect("resumed state exists");
+    assert_eq!(
+        state.step_outputs.get(&0),
+        Some(&json!({"effect": "once"})),
+        "the checkpointed side effect output is preserved, not overwritten by a replay"
+    );
+}
+
+/// [ORB-13559] A failed direct-YAML run resumes from its persisted definition
+/// after the source file is gone and the name is absent from the catalog.
+#[test]
+fn direct_yaml_resume_uses_the_pinned_definition_after_the_source_file_is_removed() {
+    let (root, runtime, _repo_root, _global_root) = test_runtime();
+    let _worker = HeldWorker::install();
+    let name = "qa_direct_resume";
+    let (source_run_id, yaml) = seed_failed_direct_run(&runtime, root.path(), name);
+    let missing = runtime
+        .load_v2_job_asset_by_name(name)
+        .expect_err("the job name is not in the catalog");
+    assert!(
+        missing.to_string().contains(name),
+        "the refusal must name the missing job: {missing}"
+    );
+
+    let resumed = runtime
+        .submit_resume_run(&source_run_id, Some("test"), None)
+        .expect("resume from the pinned snapshot");
+    assert_eq!(
+        snapshot_yaml(&runtime, &resumed.run_id).as_deref(),
+        Some(yaml.as_str()),
+        "the resumed run keeps the source definition, not a catalog lookup"
+    );
+
+    runtime
+        .execute_pipeline_run_worker(&resumed.run_id)
+        .expect("worker continues the resumed run");
+    let finished = runtime
+        .show_job_run(&resumed.run_id)
+        .expect("show resumed run");
+    assert_eq!(finished.state, JobRunState::Success);
+    assert_effect_not_replayed(&runtime, &resumed.run_id);
+}
+
+/// [ORB-13559] Installing a different catalog job of the same name cannot
+/// replace the snapshot, including when the resumed run itself is resumed.
+#[test]
+fn a_same_name_catalog_definition_cannot_replace_the_snapshot_on_a_second_resume() {
+    let (root, runtime, _repo_root, _global_root) = test_runtime();
+    let _worker = HeldWorker::install();
+    let name = "qa_direct_resume_again";
+    let (source_run_id, yaml) = seed_failed_direct_run(&runtime, root.path(), name);
+
+    let first = runtime
+        .submit_resume_run(&source_run_id, Some("test"), None)
+        .expect("first resume copies the snapshot");
+    assert_eq!(
+        snapshot_yaml(&runtime, &first.run_id).as_deref(),
+        Some(yaml.as_str())
+    );
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&first.run_id, Utc::now(), std::process::id())
+        .expect("mark first resume running");
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&first.run_id, JobRunState::Failed, Utc::now(), Some(1))
+        .expect("fail the first resume without replaying its checkpoint");
+
+    let jobs_dir = runtime.paths().jobs_dir.clone();
+    std::fs::create_dir_all(&jobs_dir).expect("create catalog dir");
+    std::fs::write(
+        jobs_dir.join(format!("{name}.yaml")),
+        catalog_replacement_yaml(name),
+    )
+    .expect("install a conflicting catalog definition");
+    let (catalog_path, catalog_spec) = runtime
+        .load_v2_job_asset_by_name(name)
+        .expect("the conflicting catalog entry resolves by name");
+    assert_eq!(catalog_spec.steps.len(), 1);
+    assert_eq!(catalog_spec.steps[0].id, "catalog_replacement");
+
+    let second = runtime
+        .submit_resume_run(&first.run_id, Some("test"), None)
+        .expect("second resume still uses the copied snapshot");
+    assert_eq!(
+        snapshot_yaml(&runtime, &second.run_id).as_deref(),
+        Some(yaml.as_str()),
+        "the second resume does not adopt the catalog definition"
+    );
+    let (resolved_path, resolved_spec) = runtime
+        .resolve_run_definition(
+            &runtime
+                .show_job_run(&second.run_id)
+                .expect("show second resume"),
+        )
+        .expect("resolve the second resume");
+    assert_ne!(resolved_path, catalog_path);
+    assert_eq!(resolved_spec.steps.len(), 2);
+    assert_eq!(resolved_spec.steps[0].id, "effect");
+    assert_eq!(resolved_spec.steps[1].id, "tail");
+
+    runtime
+        .execute_pipeline_run_worker(&second.run_id)
+        .expect("worker continues the second resume");
+    assert_effect_not_replayed(&runtime, &second.run_id);
+}
+
+/// Catalog-backed resume keeps resolving the catalog asset and still skips
+/// steps the source already completed.
+#[test]
+fn catalog_backed_resume_still_resolves_the_catalog_and_skips_completed_steps() {
+    let (_root, runtime, _repo_root, global_root) = test_runtime();
+    let _worker = HeldWorker::install();
+    let jobs_dir = global_root.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    write_delivery_tail_job(
+        &jobs_dir.join("qa_resume_catalog.yaml"),
+        "qa_resume_catalog",
+    );
+    let task_id = seed_task(&runtime, "catalog resume fixture");
+    let source = seed_failed_delivery_run(&runtime, "qa_resume_catalog", &task_id, None);
+    assert!(
+        snapshot_yaml(&runtime, &source).is_none(),
+        "a catalog submission does not pin a definition snapshot"
+    );
+
+    let resumed = runtime
+        .submit_resume_run(&source, Some("test"), None)
+        .expect("catalog resume is admitted");
+    assert!(
+        snapshot_yaml(&runtime, &resumed.run_id).is_none(),
+        "a catalog-backed resume does not invent a definition snapshot"
+    );
+    let (catalog_path, _) = runtime
+        .load_v2_job_asset_by_name("qa_resume_catalog")
+        .expect("catalog asset");
+    let run = runtime.show_job_run(&resumed.run_id).expect("show resume");
+    let (resolved_path, _) = runtime
+        .resolve_run_definition(&run)
+        .expect("catalog resume resolves by name");
+    assert_eq!(resolved_path, catalog_path);
+
+    runtime
+        .execute_pipeline_run_worker(&resumed.run_id)
+        .expect("worker continues the catalog resume");
+    let skipped = audit_step_ids(&runtime, &resumed.run_id, "step.skipped");
+    let started = audit_step_ids(&runtime, &resumed.run_id, "step.started");
+    assert!(skipped.contains(&"worktree".to_string()));
+    assert!(
+        skipped.contains(&"implement_bundle".to_string()),
+        "an already-successful step is not replayed: skipped={skipped:?}"
+    );
+    assert!(!started.contains(&"implement_bundle".to_string()));
+    assert!(started.contains(&"push".to_string()));
+    let state = runtime
+        .read_run_state(&resumed.run_id)
+        .expect("read catalog resume state")
+        .expect("state exists");
+    assert_eq!(
+        state.step_outputs.get(&0),
+        Some(&json!({"job_run_id": source, "batch_id": source, "workspace_path": "/tmp/wt"})),
+        "the catalog resume preserves the checkpointed output"
+    );
 }

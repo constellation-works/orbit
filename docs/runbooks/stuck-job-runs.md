@@ -220,7 +220,13 @@ reconcile any uncertain merge, and do not ship the same task again. See
 [distributed-drain setup](./distributed-drain.md).
 
 Resume starts a new linked run with `attempt + 1` and `retry_source_run_id` set.
-Checkpointed steps are skipped and their outputs are replayed into the pipeline:
+Checkpointed steps are skipped and their outputs are replayed into the pipeline.
+
+A run submitted from a direct job YAML file keeps that definition. Resume copies
+the snapshot stored beside the source run onto the new run, and a later resume
+of that new run copies it again. Deleting the original file, or installing a
+catalog job with the same name, does not change which definition the resumed
+run executes. A catalog-backed run still resolves its job name from the catalog.
 
 ```text
 $ orbit job resume jrun-20260704-0927-2
