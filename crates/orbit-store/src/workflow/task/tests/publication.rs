@@ -1,6 +1,13 @@
 use std::collections::BTreeMap;
 
-use orbit_types::task::TASK_EVENTS_FILE_NAME;
+use orbit_common::OrbitError;
+use orbit_types::task::{TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus};
+use sha2::Digest;
+
+use crate::driver::file::task_bundle::{
+    BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, TaskDocumentV2,
+    inject_bundle_write_faults,
+};
 
 use super::*;
 
@@ -681,4 +688,243 @@ fn publication_deny_patterns_match_newline_segments() {
     }
 
     publish("ws_pub_nl_notes", "notes/a\nb", "secrets/**").expect("non-matching newline path");
+}
+
+fn status_event(event_id: &str, from: TaskStatus, to: TaskStatus) -> TaskEventRowV2 {
+    TaskEventRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        event_id: event_id.to_string(),
+        at: Utc.with_ymd_and_hms(2026, 8, 30, 2, 0, 0).unwrap(),
+        by: "codex".to_string(),
+        event_type: "status_changed".to_string(),
+        note: None,
+        from_status: Some(from),
+        to_status: Some(to),
+    }
+}
+
+/// Apply a lifecycle transition the way the task repository does: event append
+/// first, envelope republish as the commit point, all under the bundle lock.
+/// `between` runs after the append, while the bundle is torn on disk.
+fn transition_to_in_progress(
+    store: &TaskBundleStoreV2,
+    task_id: &str,
+    between: impl FnOnce(),
+) -> Result<(), OrbitError> {
+    store.with_bundle_write_lock(task_id, || {
+        let mut envelope = read_bundle_at(&store.bundle_path(task_id)?)?.envelope;
+        store.append_event(
+            task_id,
+            &status_event("EV-0002", TaskStatus::Backlog, TaskStatus::InProgress),
+        )?;
+        between();
+        store.rewrite_document(task_id, TaskDocumentV2::Description, "updated description")?;
+        envelope.status = TaskStatus::InProgress;
+        envelope.title = "updated title".to_string();
+        store.rewrite_envelope(task_id, &envelope)
+    })
+}
+
+fn published_bundle(destination: &Path, task_id: &str) -> TaskBundleV2 {
+    read_bundle_at(&destination.join(PUBLICATION_TASKS_DIR_NAME).join(task_id))
+        .expect("read published bundle")
+}
+
+/// ORB-13607: publication used to read canonical bundles without the writer's
+/// lock, so a transition caught between its event append and envelope publish
+/// failed as corruption or published a mixed revision.
+#[test]
+fn publication_waits_for_in_flight_task_update_and_captures_the_new_bundle() {
+    let root = TempDir::new().unwrap();
+    let registry = open_registry(root.path());
+    let workspace_id = "ws_pub_overlap_update";
+    let binding = bind(&registry, root.path(), workspace_id);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        workspace_id,
+        &make_bundle("ORB-00001", "original title", Vec::new()),
+    );
+
+    let (torn_tx, torn_rx) = std::sync::mpsc::sync_channel(0);
+    let writer_root = root.path().to_path_buf();
+    let writer_binding = binding.clone();
+    let writer = std::thread::spawn(move || {
+        let registry = open_registry(&writer_root);
+        let store = bundle_store(&registry, &writer_binding);
+        transition_to_in_progress(&store, "ORB-00001", || {
+            torn_tx.send(()).expect("signal torn bundle");
+            // Publication starts now and must wait for the commit below; the
+            // pause only widens the window an unlocked reader would hit.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        })
+    });
+    torn_rx.recv().expect("writer reached the torn state");
+
+    let destination = root.path().join("snapshot");
+    build_publication_snapshot(
+        &registry,
+        &destination,
+        metadata(workspace_id),
+        &policy(AttachmentPolicyKind::Fail),
+        None,
+    )
+    .expect("publication must wait for the writer, not report corruption");
+    writer
+        .join()
+        .expect("writer thread")
+        .expect("writer commits");
+
+    let published = published_bundle(&destination, "ORB-00001");
+    assert_eq!(published, store.read_bundle("ORB-00001").unwrap());
+    assert_eq!(published.envelope.status, TaskStatus::InProgress);
+    assert_eq!(published.envelope.title, "updated title");
+    assert_eq!(published.description, "updated description");
+    assert_eq!(published.events.len(), 2);
+}
+
+/// Records every scanner input and, on the first call, replaces the task's
+/// only artifact and transitions the task — the overlap a publication used to
+/// turn into a copy that no longer matched its manifest.
+struct ReplacingScanner<'a> {
+    store: &'a TaskBundleStoreV2,
+    seen: std::cell::RefCell<Vec<Vec<u8>>>,
+}
+
+impl AttachmentSensitivityScanner for ReplacingScanner<'_> {
+    fn scan(
+        &self,
+        input: AttachmentScanInput<'_>,
+    ) -> Result<AttachmentScanOutcome, AttachmentScanFailure> {
+        let first = self.seen.borrow().is_empty();
+        self.seen.borrow_mut().push(input.bytes.to_vec());
+        if first {
+            self.store
+                .with_bundle_write_lock(input.task_id, || {
+                    let entry =
+                        seed_artifact_blob(self.store, input.task_id, input.path, b"new", "codex");
+                    self.store.rewrite_artifact_manifest(
+                        input.task_id,
+                        &ArtifactManifestV2 {
+                            schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                            files: vec![entry],
+                        },
+                    )
+                })
+                .expect("replace artifact during scan");
+            transition_to_in_progress(self.store, input.task_id, || {})
+                .expect("update task during scan");
+        }
+        Ok(AttachmentScanOutcome::Clear)
+    }
+}
+
+#[test]
+fn artifact_replacement_during_scan_publishes_the_captured_scanned_bytes() {
+    let root = TempDir::new().unwrap();
+    let registry = open_registry(root.path());
+    let workspace_id = "ws_pub_overlap_artifact";
+    let binding = bind(&registry, root.path(), workspace_id);
+    let store = bundle_store(&registry, &binding);
+    let captured = seed_artifacts(
+        &store,
+        &registry,
+        workspace_id,
+        "ORB-00001",
+        &[("result.txt", b"original")],
+    );
+    let before = store.read_bundle("ORB-00001").unwrap();
+
+    let scanner = ReplacingScanner {
+        store: &store,
+        seen: std::cell::RefCell::new(Vec::new()),
+    };
+    let destination = root.path().join("snapshot");
+    let outcome = build_publication_snapshot(
+        &registry,
+        &destination,
+        metadata(workspace_id),
+        &policy(AttachmentPolicyKind::Include),
+        Some(&scanner),
+    )
+    .expect("a replacement after capture must not reject the snapshot");
+    assert_eq!(outcome.included_attachment_bytes, 8);
+
+    let published = published_bundle(&destination, "ORB-00001");
+    assert_eq!(
+        published, before,
+        "snapshot must be the complete old bundle"
+    );
+    let manifest = published.artifact_manifest.expect("published manifest");
+    assert_eq!(manifest.files, captured);
+    let copied = fs::read(
+        destination
+            .join(PUBLICATION_TASKS_DIR_NAME)
+            .join("ORB-00001")
+            .join(TASK_ARTIFACTS_DIR_NAME)
+            .join(&manifest.files[0].blob),
+    )
+    .unwrap();
+    assert_eq!(copied, b"original");
+    assert_eq!(
+        format!("{:x}", sha2::Sha256::digest(&copied)),
+        manifest.files[0].sha256
+    );
+    assert_eq!(*scanner.seen.borrow(), vec![copied]);
+
+    let canonical = store.read_bundle("ORB-00001").unwrap();
+    assert_eq!(canonical.envelope.status, TaskStatus::InProgress);
+    assert_ne!(canonical.artifact_manifest.unwrap().files, captured);
+}
+
+#[test]
+fn publication_recovers_an_interrupted_write_and_releases_the_bundle_lock() {
+    use std::io::Write as _;
+
+    let root = TempDir::new().unwrap();
+    let registry = open_registry(root.path());
+    let workspace_id = "ws_pub_pending";
+    let binding = bind(&registry, root.path(), workspace_id);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        workspace_id,
+        &make_bundle("ORB-00001", "interrupted", Vec::new()),
+    );
+    let before = store.read_bundle("ORB-00001").unwrap();
+    let bundle_dir = store.bundle_path("ORB-00001").unwrap();
+
+    // A writer that died mid-append: pending record retained, partial JSONL
+    // row on disk, envelope never republished.
+    store
+        .with_bundle_write_lock("ORB-00001", || {
+            let pending = PendingWriteGuard::begin(&bundle_dir)?;
+            fs::OpenOptions::new()
+                .append(true)
+                .open(bundle_dir.join(TASK_EVENTS_FILE_NAME))?
+                .write_all(b"{\"schema_version\":")?;
+            inject_bundle_write_faults(&[BundleWriteFault::DuringCompensation]);
+            drop(pending);
+            Ok(())
+        })
+        .expect("leave interrupted write state");
+    assert!(bundle_dir.join(PENDING_WRITE_FILE_NAME).is_file());
+
+    let destination = root.path().join("snapshot");
+    build_publication_snapshot(
+        &registry,
+        &destination,
+        metadata(workspace_id),
+        &policy(AttachmentPolicyKind::Fail),
+        None,
+    )
+    .expect("publication recovers the aborted write");
+
+    assert_eq!(published_bundle(&destination, "ORB-00001"), before);
+    assert!(!bundle_dir.join(PENDING_WRITE_FILE_NAME).exists());
+    assert_eq!(store.read_bundle("ORB-00001").unwrap(), before);
+    transition_to_in_progress(&store, "ORB-00001", || {})
+        .expect("publication released the bundle lock");
 }

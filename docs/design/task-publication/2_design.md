@@ -216,6 +216,12 @@ Task bundles have per-bundle durability rather than one workspace-wide read
 transaction. A v1 publication is therefore a validated set of individually
 consistent bundle observations, not a claim that every task was captured at
 the same instant. A later publication converges on newer owner state.
+Each bundle observation is taken under the task's canonical bundle lock, the
+same lock lifecycle writes and artifact replacement hold, and its admitted
+attachment bytes are copied inside that observation; the sensitivity scanner
+then reads the staged copy that publishes, so a concurrent update yields the
+whole old or the whole new bundle. An interrupted write's pending record is
+recovered under the exclusive lock before the bundle is observed again.
 
 ## 5. Compare-and-Swap and Competing Writers
 
