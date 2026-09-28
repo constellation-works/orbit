@@ -33,6 +33,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Prepare a Linux Host for Sandboxed Dispatch](./runbooks/linux-sandbox.md) | Install and verify the Bubblewrap host prerequisite that Orbit's Linux sandbox fails closed without. |
 | [Inspect and Retain Logs](./runbooks/logging.md) | Locate, filter, rotate, and retain Orbit process and routine-sweep logs. |
 | [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
+| [Post-v0.24.0 release survey](./runbooks/release-survey-v0.24.0.md) | Post-v0.24.0 release survey and breaking-change handoff. |
 | [Post-v0.18.0 release survey](./runbooks/release-survey.md) | Post-v0.18.0 release survey and breaking-change handoff. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
 | [Inventory and Protect Orbit State](./runbooks/state-and-backup.md) | Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations. |
