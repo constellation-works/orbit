@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use orbit_search::bm25_top_k;
+
 use super::*;
 
 #[test]
@@ -370,4 +372,172 @@ fn filtered_out_top_matches_do_not_starve_the_task_page() {
         .map(|hit| hit.id.as_deref())
         .collect();
     assert_eq!(ids, [Some(open.as_str())]);
+}
+
+/// Twelve tasks whose title and description both repeat the query terms
+/// outrank the one task that holds them apart, so the whole first BM25 page
+/// belongs to tasks `rejected` shapes out of the filter.
+const STARVING_QUERY: &str = "quartz telescope";
+
+fn seed_filter_starvation(
+    runtime: &OrbitRuntime,
+    rejected: impl Fn(&mut TaskCreateParams),
+    eligible: impl Fn(&mut TaskCreateParams),
+) -> String {
+    let create = |title: String, description: &str, shape: &dyn Fn(&mut TaskCreateParams)| {
+        let mut params = TaskCreateParams {
+            actor: "test".to_string(),
+            parent_id: None,
+            title,
+            description: description.to_string(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: String::new(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            repo_root: None,
+            created_by: Some("test".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: Vec::new(),
+        };
+        shape(&mut params);
+        runtime
+            .stores()
+            .task_records()
+            .create(params)
+            .expect("create task")
+            .id
+    };
+    for index in 0..12 {
+        create(
+            format!("quartz telescope quartz telescope {index}"),
+            "quartz telescope",
+            &rejected,
+        );
+    }
+    let eligible = create(
+        "quartz routing telescope".to_string(),
+        "ordinary body",
+        &eligible,
+    );
+
+    let index = runtime.stores().lexical_index().store().expect("index");
+    let ranking =
+        bm25_top_k(index, STARVING_QUERY, Some(SOURCE_KIND_TASK), None, 100).expect("full ranking");
+    let position = ranking
+        .iter()
+        .position(|hit| hit.source_id == eligible)
+        .expect("FTS matches the non-adjacent terms");
+    assert!(
+        position >= 10,
+        "fixture must bury the eligible task beneath the first ten chunks, found at {position}"
+    );
+    eligible
+}
+
+fn search_one(runtime: &OrbitRuntime, params: GlobalSearchParams) -> Vec<String> {
+    runtime
+        .global_search(GlobalSearchParams {
+            query: Some(STARVING_QUERY.to_string()),
+            kind: GlobalSearchKind::Task,
+            limit: 1,
+            ..params
+        })
+        .expect("search tasks")
+        .results
+        .into_iter()
+        .filter_map(|hit| hit.id)
+        .collect()
+}
+
+/// The bundle matcher reads `quartz telescope` as one contiguous needle and
+/// misses `quartz routing telescope`, so only BM25 paging past the
+/// filtered-out first page can find the eligible task.
+#[test]
+fn status_filter_pages_bm25_past_rejected_chunks() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let eligible =
+        seed_filter_starvation(&runtime, |params| params.status = TaskStatus::Done, |_| {});
+
+    assert_eq!(
+        search_one(&runtime, GlobalSearchParams::default()),
+        [eligible]
+    );
+}
+
+#[test]
+fn tag_filter_pages_bm25_past_rejected_chunks() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let eligible = seed_filter_starvation(
+        &runtime,
+        |_| {},
+        |params| params.tags = vec!["optics".to_string()],
+    );
+
+    let params = GlobalSearchParams {
+        tags: vec!["optics".to_string()],
+        ..Default::default()
+    };
+    assert_eq!(search_one(&runtime, params), [eligible]);
+}
+
+#[test]
+fn path_filter_pages_bm25_past_rejected_chunks() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let eligible = seed_filter_starvation(
+        &runtime,
+        |params| params.context_files = vec!["file:src/other.rs".to_string()],
+        |params| params.context_files = vec!["file:src/optics/router.rs".to_string()],
+    );
+
+    let params = GlobalSearchParams {
+        path: Some("src/optics/router.rs".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(search_one(&runtime, params), [eligible]);
+}
+
+/// Consecutive bounded pages reproduce the single ranked query hit for hit,
+/// including the absolute rank, so paging cannot reorder or drop matches.
+#[test]
+fn bm25_pages_concatenate_to_the_top_k_ranking() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    seed_filter_starvation(&runtime, |_| {}, |_| {});
+    let index = runtime.stores().lexical_index().store().expect("index");
+
+    let ranking =
+        bm25_top_k(index, STARVING_QUERY, Some(SOURCE_KIND_TASK), None, 100).expect("full ranking");
+    let mut paged = Vec::new();
+    for offset in (0..).step_by(7) {
+        let page = bm25_page(
+            index,
+            STARVING_QUERY,
+            Some(SOURCE_KIND_TASK),
+            None,
+            offset,
+            7,
+        )
+        .expect("page");
+        assert!(page.len() <= 7, "a page never exceeds its limit");
+        let last = page.len() < 7;
+        paged.extend(page);
+        if last {
+            break;
+        }
+    }
+
+    assert!(ranking.len() > 14, "fixture spans several pages");
+    assert_eq!(paged, ranking);
 }

@@ -24,8 +24,10 @@ restores and removes stale sources.
 
 Search quotes whitespace-separated query terms individually and joins them with
 FTS5 AND, preserving non-adjacent matching. BM25 chunk order rolls up to first-hit
-task order. Core appends bundle substring matches for unindexed tasks, comments,
-external references, and artifact manifest paths, then applies existing filters.
+task order. Core reads the ranking in bounded pages and applies status, tag, and
+path filters as it goes, so filtered-out chunks cannot starve the result page.
+It then appends bundle substring matches for unindexed tasks, comments, external
+references, and artifact manifest paths.
 Federation interleaves per-workspace rankings and attributes each hit.
 
 The index retains `semantic.db` for persisted-path compatibility. The first

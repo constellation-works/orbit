@@ -21,6 +21,21 @@ pub fn bm25_top_k(
     field: Option<&str>,
     limit: usize,
 ) -> Result<Vec<Bm25Hit>, OrbitError> {
+    bm25_page(store, query, kind, field, 0, limit)
+}
+
+/// One page of the BM25 ranking: at most `limit` hits after skipping the
+/// first `offset`. Ties on rank break by chunk id, so consecutive pages over
+/// an unchanged index concatenate to exactly the `bm25_top_k` order, and
+/// `rank` stays the absolute position in that order.
+pub fn bm25_page(
+    store: &LexicalStore,
+    query: &str,
+    kind: Option<&str>,
+    field: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<Bm25Hit>, OrbitError> {
     if query.trim().is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
@@ -46,19 +61,34 @@ pub fn bm25_top_k(
                 WHERE corpus_fts MATCH ?1
                     AND (?2 IS NULL OR chunks.source_kind = ?2)
                     AND (?3 IS NULL OR chunks.field = ?3)
-                ORDER BY rank
-                LIMIT ?4
+                ORDER BY rank, chunks.id
+                LIMIT ?4 OFFSET ?5
             "#,
         )
         .map_err(fts_err)?;
     let mut rows = stmt
-        .query(params![match_query, kind, field, limit as i64])
+        .query(params![
+            match_query,
+            kind,
+            field,
+            sql_count(limit),
+            sql_count(offset)
+        ])
         .map_err(fts_err)?;
-    collect_hits(&mut rows, &mut hits)?;
+    collect_hits(&mut rows, offset, &mut hits)?;
     Ok(hits)
 }
 
-fn collect_hits(rows: &mut rusqlite::Rows<'_>, hits: &mut Vec<Bm25Hit>) -> Result<(), OrbitError> {
+/// SQLite binds integers as `i64`; saturate rather than wrap a huge count.
+fn sql_count(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+fn collect_hits(
+    rows: &mut rusqlite::Rows<'_>,
+    offset: usize,
+    hits: &mut Vec<Bm25Hit>,
+) -> Result<(), OrbitError> {
     while let Some(row) = rows
         .next()
         .map_err(|error| OrbitError::Store(error.to_string()))?
@@ -76,7 +106,7 @@ fn collect_hits(rows: &mut rusqlite::Rows<'_>, hits: &mut Vec<Bm25Hit>) -> Resul
             rowid: row
                 .get(3)
                 .map_err(|error| OrbitError::Store(error.to_string()))?,
-            rank: hits.len() + 1,
+            rank: offset.saturating_add(hits.len()).saturating_add(1),
         });
     }
     Ok(())

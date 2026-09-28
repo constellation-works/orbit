@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use orbit_common::OrbitError;
-use orbit_search::{SOURCE_KIND_TASK, bm25_top_k};
+use orbit_search::{SOURCE_KIND_TASK, bm25_page};
 use orbit_store::friction_store::FrictionListFilter;
 
 use crate::OrbitRuntime;
@@ -248,7 +248,9 @@ impl OrbitRuntime {
     ///
     /// Only tasks `accepts` admits count toward the candidate budget, so a
     /// status, tag or path filter cannot starve the page when the best
-    /// lexical matches are all filtered out.
+    /// lexical matches are all filtered out: BM25 is read in bounded pages,
+    /// continuing past rejected chunks until the budget fills or the ranking
+    /// runs out.
     fn lexical_task_candidates(
         &self,
         query: &str,
@@ -261,22 +263,38 @@ impl OrbitRuntime {
         if let Ok(index) = self.stores().lexical_index().store()
             && index.has_source_kind(SOURCE_KIND_TASK)?
         {
-            // BM25 ranks chunks, while this branch returns tasks. Overfetch by
-            // the number of task fields normally indexed, then keep the first
-            // occurrence of each task in BM25 order.
-            let chunk_limit = candidate_limit.saturating_mul(5).max(candidate_limit);
-            for hit in bm25_top_k(index, query, Some(SOURCE_KIND_TASK), None, chunk_limit)? {
-                if !seen.insert(hit.source_id.clone()) {
-                    continue;
+            // BM25 ranks chunks, while this branch returns tasks. Size each
+            // page by the number of task fields normally indexed, then keep
+            // the first occurrence of each task in BM25 order.
+            let page_size = candidate_limit.saturating_mul(5).max(candidate_limit);
+            let mut offset = 0;
+            loop {
+                let page = bm25_page(
+                    index,
+                    query,
+                    Some(SOURCE_KIND_TASK),
+                    None,
+                    offset,
+                    page_size,
+                )?;
+                let exhausted = page.len() < page_size;
+                for hit in page {
+                    if !seen.insert(hit.source_id.clone()) {
+                        continue;
+                    }
+                    if let Ok(task) = self.get_task(&hit.source_id)
+                        && accepts(&task)
+                    {
+                        candidates.push((lexical_task_hit(&task), task));
+                    }
+                    if candidates.len() == candidate_limit {
+                        return Ok(candidates);
+                    }
                 }
-                if let Ok(task) = self.get_task(&hit.source_id)
-                    && accepts(&task)
-                {
-                    candidates.push((lexical_task_hit(&task), task));
+                if exhausted {
+                    break;
                 }
-                if candidates.len() == candidate_limit {
-                    return Ok(candidates);
-                }
+                offset += page_size;
             }
         }
 
