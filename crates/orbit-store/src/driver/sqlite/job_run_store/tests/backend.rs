@@ -1,14 +1,18 @@
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, TimeZone, Utc};
 use orbit_types::workflow::{
-    JobRunState, JobTargetType, KnowledgeRunMetrics, PipelineState, RunIdRole, run_id_role,
+    JobRun, JobRunState, JobTargetType, KnowledgeRunMetrics, PipelineState, RunIdRole, run_id_role,
 };
+use rusqlite::TransactionBehavior;
 use tempfile::TempDir;
 
 use super::super::SqliteJobRunStore;
+use super::super::queries::{next_run_id_conn, upsert_job_run_for_workspace_conn};
 use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunStepParams, JobRunStoreBackend,
@@ -222,6 +226,220 @@ fn same_minute_siblings_and_children_get_role_marked_ids() {
         .collect::<Vec<_>>();
     assert_eq!(linked, vec![child.run_id.clone()]);
     assert!(!linked.contains(&second.run_id));
+}
+
+/// A fixed submission minute, so every allocation below competes for one stem.
+fn fixed_minute() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 9, 27, 17, 20, 0)
+        .single()
+        .expect("valid minute")
+}
+
+/// Mint a pending run of `role` at `minute` through the store's allocator and
+/// insert it in the same transaction, as every submission path does.
+fn insert_at(store: &Store, role: RunIdRole, minute: DateTime<Utc>) -> String {
+    store
+        .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let run_id = next_run_id_conn(&tx.tx, "ws_a", role, minute)?;
+            let run = JobRun {
+                executed_on: None,
+                run_id: run_id.clone(),
+                job_id: "job-a".to_string(),
+                attempt: 1,
+                state: JobRunState::Pending,
+                scheduled_at: minute,
+                started_at: None,
+                finished_at: None,
+                duration_ms: None,
+                created_at: minute,
+                pid: None,
+                pid_start_time: None,
+                input: None,
+                retry_source_run_id: None,
+                knowledge_metrics: None,
+                resolved_crew: None,
+                crew_model: None,
+                steps: Vec::new(),
+            };
+            upsert_job_run_for_workspace_conn(&tx.tx, "ws_a", &run, None)?;
+            Ok(run_id)
+        })
+        .expect("allocate run")
+}
+
+fn finish(backend: &SqliteJobRunStore, run_id: &str) {
+    let at = Utc::now();
+    assert!(
+        backend
+            .mark_job_run_running(run_id, at, 42)
+            .expect("running")
+            .owns_execution()
+    );
+    assert!(
+        backend
+            .finalize_job_run(run_id, JobRunState::Success, at, Some(1))
+            .expect("finalize")
+    );
+}
+
+fn reopen(db_path: &Path) -> (Store, SqliteJobRunStore) {
+    let store = Store::open(db_path).expect("reopen store");
+    let backend = SqliteJobRunStore::new(store.clone(), "ws_a");
+    (store, backend)
+}
+
+/// [ORB-13599] Archive and delete remove the run row, and the allocator used
+/// to probe only live rows, so the next run of that role in the same minute
+/// took the removed run's id. The id stays reserved across a reopen, for both
+/// roles and both removals.
+#[test]
+fn archived_or_deleted_run_ids_are_never_reallocated() {
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("orbit.db");
+    let minute = fixed_minute();
+    let mut minted = Vec::new();
+
+    for role in [RunIdRole::TopLevel, RunIdRole::Child] {
+        for delete in [false, true] {
+            let (store, backend) = reopen(&db_path);
+            let removed = insert_at(&store, role, minute);
+            finish(&backend, &removed);
+            if delete {
+                backend.delete_job_run(&removed).expect("delete");
+            } else {
+                backend.archive_job_run(&removed).expect("archive");
+            }
+            assert!(backend.get_job_run(&removed).expect("read").is_none());
+            drop((store, backend));
+
+            let (store, _) = reopen(&db_path);
+            let next = insert_at(&store, role, minute);
+            assert_ne!(next, removed, "{role} id reused after removal");
+            assert_eq!(run_id_role(&next), Some(role));
+            minted.extend([removed, next]);
+        }
+    }
+
+    let unique = minted.iter().collect::<HashSet<_>>();
+    assert_eq!(
+        unique.len(),
+        minted.len(),
+        "every id minted once: {minted:?}"
+    );
+}
+
+/// [ORB-13599] An automation action key and a parent's child dispatch outlive
+/// the run they name. After that run is removed, neither may resolve to a run
+/// minted later in the same minute.
+#[test]
+fn stale_run_references_never_resolve_to_a_later_run() {
+    let store = Store::open_in_memory().expect("store");
+    let backend = SqliteJobRunStore::new(store.clone(), "ws_a");
+    let input = serde_json::json!({"task_ids": ["T-1"]});
+
+    let keyed = backend
+        .insert_automation_job_run("job-a", input.clone(), "action-1")
+        .expect("automation run");
+    finish(&backend, &keyed.run_id);
+    backend.archive_job_run(&keyed.run_id).expect("archive");
+    let later = insert_at(&store, RunIdRole::TopLevel, keyed.created_at);
+    assert_ne!(later, keyed.run_id);
+    assert_eq!(
+        backend.automation_job_for_key("action-1").expect("key"),
+        Some(keyed.run_id.clone())
+    );
+    assert!(
+        backend
+            .insert_automation_job_run("job-a", input, "action-1")
+            .is_err(),
+        "a replayed key fails closed instead of adopting another run"
+    );
+
+    let parent = insert_at(&store, RunIdRole::TopLevel, fixed_minute());
+    backend
+        .write_run_state(
+            &parent,
+            &PipelineState::new(parent.clone(), "job-a".to_string(), serde_json::json!({})),
+        )
+        .expect("seed parent state");
+    let admit = || match backend
+        .admit_child_job_run(&ChildJobRunAdmissionParams {
+            parent_run_id: parent.clone(),
+            parent_step_id: Some("leaf_invoke".to_string()),
+            job_id: "job-b".to_string(),
+            action: "invoke_detached".to_string(),
+            blocking: false,
+            attempt: 1,
+            scheduled_at: fixed_minute(),
+            input: None,
+        })
+        .expect("admit child")
+    {
+        ChildJobRunAdmissionOutcome::Admitted(child) => child.run_id,
+        other => panic!("parent was admitting, got {other:?}"),
+    };
+    let first_child = admit();
+    finish(&backend, &first_child);
+    backend.delete_job_run(&first_child).expect("delete child");
+    let second_child = admit();
+
+    assert_ne!(second_child, first_child);
+    let dispatched = backend
+        .read_run_state(&parent)
+        .expect("read parent state")
+        .expect("parent state")
+        .child_dispatches
+        .into_iter()
+        .map(|dispatch| dispatch.child_run_id)
+        .collect::<Vec<_>>();
+    assert_eq!(dispatched, vec![first_child.clone(), second_child]);
+    assert!(backend.get_job_run(&first_child).expect("read").is_none());
+}
+
+/// [ORB-13599] Racing allocators on separate connections, both roles, one
+/// minute, with a removed run's id already reserved: every id is distinct.
+#[test]
+fn concurrent_allocations_in_one_minute_skip_removed_ids() {
+    const RACERS: usize = 8;
+    let temp = TempDir::new().expect("tempdir");
+    let db_path = temp.path().join("orbit.db");
+    let (store, backend) = reopen(&db_path);
+    let removed =
+        [RunIdRole::TopLevel, RunIdRole::Child].map(|role| insert_at(&store, role, fixed_minute()));
+    for run_id in &removed {
+        backend.delete_job_run(run_id).expect("delete");
+    }
+    let stores = (0..RACERS)
+        .map(|_| Store::open(&db_path).expect("racer store"))
+        .collect::<Vec<_>>();
+    let barrier = Arc::new(Barrier::new(RACERS));
+
+    let racers = stores
+        .into_iter()
+        .enumerate()
+        .map(|(index, store)| {
+            let barrier = Arc::clone(&barrier);
+            let role = if index % 2 == 0 {
+                RunIdRole::TopLevel
+            } else {
+                RunIdRole::Child
+            };
+            thread::spawn(move || {
+                barrier.wait();
+                insert_at(&store, role, fixed_minute())
+            })
+        })
+        .collect::<Vec<_>>();
+    let minted = racers
+        .into_iter()
+        .map(|racer| racer.join().expect("racer thread"))
+        .collect::<Vec<_>>();
+
+    let unique = minted.iter().collect::<HashSet<_>>();
+    assert_eq!(unique.len(), RACERS, "racers minted duplicates: {minted:?}");
+    for run_id in &removed {
+        assert!(!unique.contains(run_id), "removed id {run_id} reallocated");
+    }
 }
 
 #[test]

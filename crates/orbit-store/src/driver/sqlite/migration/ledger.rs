@@ -322,12 +322,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_brokered_call,
     },
+    // Run ids were probed only against live `job_runs` rows, so archiving or
+    // deleting a run freed its id for the next submission in that minute while
+    // automation keys, audit rows and parent dispatch records still named it.
+    Migration {
+        version: 33,
+        name: "job_run_id_allocations",
+        // An older allocator ignores the reservations and can mint a freed id
+        // again, handing a stale reference an unrelated run.
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::apply_job_run_id_allocations,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 32;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 33;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

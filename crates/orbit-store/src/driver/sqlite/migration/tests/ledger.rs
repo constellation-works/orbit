@@ -325,6 +325,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0032".to_string(),
                 "audit_brokered_call".to_string()
             ),
+            (
+                "migration.v0033".to_string(),
+                "job_run_id_allocations".to_string()
+            ),
         ]
     );
 }
@@ -747,7 +751,7 @@ fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     );
     assert_eq!(
         applied.last().map(|migration| migration.name.as_str()),
-        Some("audit_brokered_call")
+        Some("job_run_id_allocations")
     );
     let connection = store.connection();
     let conn = connection.lock().expect("connection");
