@@ -567,11 +567,8 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
     let routines = orbit_dir.join("routines");
     std::fs::create_dir_all(&routines).expect("routines");
     let path = routines.join("fixture.yaml");
-    std::fs::write(
-        &path,
-        "schemaVersion: 1\nname: fixture\nenabled: true\ntrigger: {cron: '* * * * *'}\ntarget: job:noop\n",
-    )
-    .expect("definition");
+    let original = "schemaVersion: 1\nname: fixture\ndescription: keep this text\n# operator note\nenabled: true # reviewed\ntrigger: {cron: '* * * * *'}\ntarget: job:noop\n";
+    std::fs::write(&path, original).expect("definition");
     let now = Utc::now();
     let registry = WorkspaceRegistry {
         workspaces: vec![Workspace {
@@ -636,6 +633,44 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
         }))).await;
         assert_eq!(wrong.status(), StatusCode::CONFLICT);
         assert_eq!(body_json(wrong).await["code"], "workspace_mismatch");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read round trip"),
+            original,
+            "a disable/enable round trip must keep every other byte, comments included"
+        );
+
+        let stale_target = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(serde_json::json!({
+            "name":"fixture", "source":"alpha", "target":"job:retired", "machine_name":"dashboard-test", "expected_enabled":true, "enabled":false
+        }))).await;
+        assert_eq!(stale_target.status(), StatusCode::CONFLICT);
+        let refused = body_json(stale_target).await;
+        assert_eq!(refused["code"], "target_mismatch", "{refused}");
+        assert_eq!(refused["actual_target"], "job:noop", "{refused}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read after stale target"),
+            original,
+            "a stale target selection must not write"
+        );
+
+        let audit = body_json(routine_request(state.clone(), "/audit?workspace=alpha&limit=100", None).await).await;
+        let toggles: Vec<&serde_json::Value> = audit
+            .as_array()
+            .expect("audit rows")
+            .iter()
+            .filter(|event| event["target_type"] == "routine.toggle")
+            .collect();
+        let with_status = |status: &str| toggles.iter().filter(|event| event["status"] == status).count();
+        assert_eq!(with_status("success"), 2, "only the two changed toggles succeed: {audit}");
+        assert_eq!(
+            with_status("failure"),
+            4,
+            "two stale states, the workspace mismatch, and the stale target are refusals: {audit}"
+        );
+        assert!(
+            toggles.iter().any(|event| event["status"] == "failure"
+                && event["error_message"].as_str().is_some_and(|message| message.starts_with("target_mismatch"))),
+            "the stale target refusal must be audited: {audit}"
+        );
 
         // Enter the canonical clock handler, but reject an invalid cadence before
         // native service writes. Actual service mutation belongs to Core's fake-runner tests.

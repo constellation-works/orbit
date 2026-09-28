@@ -10,6 +10,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::contracts::RoutineFireRecord;
+use orbit_types::workflow::RoutineTarget;
 
 use super::RoutineMachineIdentity;
 use super::due::{next_occurrence, parse_cron};
@@ -191,7 +192,7 @@ pub(crate) fn next_scheduled_occurrence(cron: &str, now: &DateTime<Local>) -> Op
 }
 
 /// Optimistic outcome for a versioned routine-definition toggle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutineToggleOutcome {
     /// The definition was atomically changed.
     Changed,
@@ -199,12 +200,17 @@ pub enum RoutineToggleOutcome {
     Unchanged,
     /// The caller's expected state was stale, so no write occurred.
     Conflict { actual_enabled: bool },
+    /// The definition now dispatches a different target than the one the
+    /// caller selected, so no write occurred.
+    TargetConflict { actual_target: RoutineTarget },
 }
 
 /// Change only the typed `enabled` field of a routine definition.
 ///
 /// The path comes from a freshly loaded [`LoadedRoutine`], never from a
-/// transport payload. The surgical edit preserves comments and field ordering;
+/// transport payload. That routine is also the caller's selection: a file
+/// retargeted since it was loaded is refused before its `enabled` state is
+/// considered. The surgical edit preserves comments and field ordering;
 /// the rewritten document is parsed and compared before the atomic rename so a
 /// toggle cannot accidentally alter any other routine behavior.
 pub fn set_routine_enabled(
@@ -222,6 +228,11 @@ pub fn set_routine_enabled(
             routine.definition.name,
             current.name
         )));
+    }
+    if current.target != routine.definition.target {
+        return Ok(RoutineToggleOutcome::TargetConflict {
+            actual_target: current.target,
+        });
     }
     if current.enabled != expected_enabled {
         return Ok(RoutineToggleOutcome::Conflict {
