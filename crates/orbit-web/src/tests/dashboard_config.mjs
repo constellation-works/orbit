@@ -12,17 +12,26 @@ const button = (id, label) => descendants(panel(id)).find(node => node.textConte
 const requests = [];
 let workspaceBaseBranch = 'agent-main';
 let refusal = null;
+let emulateMissingWorkspaceConfig = false;
+let workspaceConfig = null;
+const globalConfig = {
+  workflow: { base_branch: 'trunk' },
+  execution: { codex: { sandbox: 'danger-full-access' } },
+};
 
 const effective = () => ({
   scope: 'effective',
   config_set: { authorized: true, reason: null },
   crew_fields: ['enabled', 'provider', 'model', 'effort', 'tags', 'description'],
-  workspace_file_exists: true,
+  workspace_file_exists: !emulateMissingWorkspaceConfig || workspaceConfig !== null,
   write_scope_default: 'workspace',
   layers: {
     built_in: { label: 'built-in' },
     global: { path: '/home/op/.orbit/config.toml', exists: true },
-    workspace: { path: '/repo/.orbit/config.toml', exists: true },
+    workspace: {
+      path: '/repo/.orbit/config.toml',
+      exists: !emulateMissingWorkspaceConfig || workspaceConfig !== null,
+    },
     execution_not_inherited: true,
     not_inherited_keys: ['execution.codex.sandbox'],
   },
@@ -125,10 +134,20 @@ const effective = () => ({
     },
     { token: 'housekeeping', title: 'Housekeeping', blurb: 'logs, scoring, ids, and PR links', key_prefix: null, kind: 'keys', counts: { set: 0, default: 0, unset: 0, total: 0 }, not_inherited: 0, keys: [] },
   ],
-  crews: [
-    { name: 'opus', enabled: true, provider: 'claude', model: 'opus', effort: null, tags: [], description: null, source: 'built-in', referenced_by: ['workflow.default_crew'] },
-    { name: 'grok', enabled: false, provider: 'grok', model: 'grok-4.7', effort: null, tags: [], description: null, source: 'workspace', referenced_by: [] },
-  ],
+  crews: emulateMissingWorkspaceConfig
+    ? [
+        { name: 'opus', enabled: true, provider: 'claude', model: 'opus', effort: null, tags: [], description: null, source: 'built-in', referenced_by: ['workflow.default_crew'] },
+        ...Object.entries(workspaceConfig?.crews || {}).map(([name, crew]) => ({
+          name,
+          ...crew,
+          source: 'workspace',
+          referenced_by: [],
+        })),
+      ]
+    : [
+        { name: 'opus', enabled: true, provider: 'claude', model: 'opus', effort: null, tags: [], description: null, source: 'built-in', referenced_by: ['workflow.default_crew'] },
+        { name: 'grok', enabled: false, provider: 'grok', model: 'grok-4.7', effort: null, tags: [], description: null, source: 'workspace', referenced_by: [] },
+      ],
   paths: [{ label: 'global root', value: '/home/op/.orbit' }],
 });
 
@@ -146,6 +165,15 @@ globalThis.fetch = async (path, options = {}) => {
   if ((options.method || 'GET') !== 'GET') {
     if (refusal) return response({ error: refusal }, 400);
     if (url.pathname.startsWith('/api/config/keys/')) workspaceBaseBranch = body.value;
+    if (emulateMissingWorkspaceConfig && url.pathname.startsWith('/api/config/crews/')) {
+      if (workspaceConfig === null) {
+        if (!body.init) return response({ error: 'workspace config does not exist' }, 400);
+        workspaceConfig = body.init === 'seed-from-global' ? structuredClone(globalConfig) : {};
+      }
+      const name = decodeURIComponent(url.pathname.split('/').at(-1));
+      workspaceConfig.crews ||= {};
+      workspaceConfig.crews[name] = body.fields;
+    }
     return response({ key: 'workflow.base_branch', scope: 'workspace', rows: [] });
   }
   return response(effective());
@@ -258,6 +286,61 @@ await new Promise(resolve => setTimeout(resolve, 0));
 await new Promise(resolve => setTimeout(resolve, 0));
 const opusWrite = requests.slice(opusBefore).find(request => request.method === 'PUT');
 assert(opusWrite && !('enabled' in opusWrite.body.fields), `an untouched toggle is not written, got ${JSON.stringify(opusWrite && opusWrite.body.fields)}`);
+
+// A crew's first write offers the same two initialization choices as key edits,
+// and the selected choice determines the new workspace file before the crew is applied.
+const settle = async () => {
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => setTimeout(resolve, 0));
+};
+for (const [label, init] of [
+  ['Start empty', 'fresh'],
+  ['Copy global policy', 'seed-from-global'],
+]) {
+  emulateMissingWorkspaceConfig = true;
+  workspaceConfig = null;
+  refusal = null;
+  await fetchAndRenderConfig();
+  assert(!effective().workspace_file_exists, 'the first-write scenario starts without a workspace file');
+  button('config-body', '+ Add crew').listeners.click();
+  const fillNewCrew = () => {
+    const textInputs = descendants(panel('config-body')).filter(node => node.type === 'text');
+    assert(textInputs.length >= 3, 'a new crew editor exposes a name, provider, and model input');
+    textInputs[0].value = 'review-bot';
+    textInputs[1].value = 'openai';
+    textInputs[2].value = 'gpt-5.6-sol';
+  };
+  fillNewCrew();
+  const firstWriteStart = requests.length;
+  button('config-body', 'Save').listeners.click({ stopPropagation() {} });
+  await settle();
+  const refusedWrite = requests.slice(firstWriteStart).find(request => request.method === 'PUT');
+  assert(refusedWrite && refusedWrite.body.init === undefined, 'the initial crew write asks before creating a workspace file');
+  const choice = button('config-body', label);
+  assert(choice, `a missing workspace file offers ${label}`);
+  // The refused write re-renders this new-crew form; enter the intended fields
+  // again before retrying so this scenario covers init policy, not draft retention.
+  fillNewCrew();
+  const selectedWriteStart = requests.length;
+  choice.listeners.click({ stopPropagation() {} });
+  await settle();
+  const selectedWrite = requests.slice(selectedWriteStart).find(request => request.method === 'PUT');
+  assert(selectedWrite && selectedWrite.body.init === init, `${label} sends init=${init}`);
+  assert(selectedWrite.body.fields.provider === 'openai', `${label} preserves the intended provider edit`);
+  assert(selectedWrite.body.fields.model === 'gpt-5.6-sol', `${label} preserves the intended model edit`);
+  const expectedConfig = init === 'fresh'
+    ? { crews: { 'review-bot': selectedWrite.body.fields } }
+    : { ...globalConfig, crews: { 'review-bot': selectedWrite.body.fields } };
+  assert(
+    JSON.stringify(workspaceConfig) === JSON.stringify(expectedConfig),
+    `${label} initializes the workspace policy and applies the crew edit, got ${JSON.stringify(workspaceConfig)}`,
+  );
+  assert(
+    withClass('config-body', 'config-crew-row').some(node => node.dataset.key === 'crews.review-bot'),
+    `${label} reloads the resulting crew into the workspace view`,
+  );
+}
+emulateMissingWorkspaceConfig = false;
 
 // A caller without the operator capability sees the rows, not an editor.
 refusal = null;
