@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-09-08
+last_validated: 2026-09-28
 ---
 
 # Spec: Task Bundle V2
@@ -214,7 +214,7 @@ The local registry must maintain generated status and terminal-month views or re
 
 The initial registry projections are:
 
-- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
+- `task_bundle_index(task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity)`. `complexity` is `low`/`medium`/`hard`/`xhard`/`unassessed`, or empty when the envelope left it unset. SQL `NULL` means the row has not been rewritten since the column was added.
 - `task_bundle_tags(task_id, workspace_id, tag)`.
 - `task_bundle_relations(source_task_id, workspace_id, relation_type, target_task_id)`. The physical column name is historical; `produces` and `resolves` rows may store non-task artifact IDs in `target_task_id`.
 
@@ -309,12 +309,12 @@ Cutover from the current pre-reset task schema must:
 6. Render YAML `acceptance_criteria` into `acceptance.md`.
 7. Preserve existing `plan.md`.
 8. Preserve existing `execution-summary.md`.
-10. Convert YAML `history` to `events.jsonl`.
-11. Convert YAML `comments` to `comments.jsonl`.
-12. Preserve any legacy review-thread files as inert sidecars.
-13. Rewrite `task.yaml` with schema version 1 and no old ID aliases.
-14. Rewrite or release active task-lock reservations.
-15. Record generated status, terminal-month, relation, tag, and semantic-index rebuild inputs.
+9. Convert YAML `history` to `events.jsonl`.
+10. Convert YAML `comments` to `comments.jsonl`.
+11. Preserve any legacy review-thread files as inert sidecars.
+12. Rewrite `task.yaml` with schema version 1 and no old ID aliases.
+13. Rewrite or release active task-lock reservations.
+14. Record generated status, terminal-month, relation, tag, and lexical-index rebuild inputs.
 
 Cutover must be idempotent for interrupted local runs. A partially converted task must either repair cleanly on rerun or fail with a diagnostic that names the task ID and incomplete step. The command may emit an old-ID-to-new-ID report for humans, but that report is not a persisted lookup contract.
 
@@ -399,10 +399,12 @@ cargo test -p orbit-web task_response_benchmark -- --ignored --nocapture
 The fixture root must be new and temporary. Omitting it from the store test
 automatically removes the generated corpus after the measurement. To compare
 actual HTTP implementations, archive the baseline commit into a temporary
-directory and add only `api/tests/task_response_bench.rs`, its test-module
+directory and add only
+`crates/orbit-web/src/api/tests/task_response_bench.rs`, its test-module
 registration and the isolated child launcher it calls from
-`api/tests/test_support.rs`. Run that identical harness on the same retained
-corpus, setting the mode label to `baseline`. The harness measures in a child
+`crates/orbit-web/src/api/tests/test_support.rs`. Run that identical harness on
+the same retained corpus, setting the mode label to `baseline`. The harness
+measures in a child
 of the test binary with inherited Orbit authority cleared, and the parent
 re-emits the child's JSON report lines. Build both binaries first, then run
 benchmarks serially without compilation overlap. HTTP measurements include
