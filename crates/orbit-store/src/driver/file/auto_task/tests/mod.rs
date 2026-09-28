@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskCursorState};
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
 use super::{
     cursor_lock_path, cursor_state_path, inject_cursor_save_failures, load_cursor_state,
@@ -125,6 +125,17 @@ fn empty_existing_file_is_malformed_not_a_baseline() {
     assert_eq!(fs::read_to_string(&path).expect("raw"), "");
 }
 
+/// A state dir and a sibling file path outside it, both beneath a temporary
+/// root owned by the calling test, so symlink fixtures never touch shared
+/// paths. The root is removed when the returned guard drops.
+fn state_dir_with_outside_target() -> (TempDir, PathBuf, PathBuf) {
+    let root = tempdir().expect("tempdir");
+    let state_dir = root.path().join("state");
+    fs::create_dir(&state_dir).expect("state dir");
+    let outside_target = root.path().join("outside-auto-tasks.json");
+    (root, state_dir, outside_target)
+}
+
 /// [ORB-11948] A symlinked cursor-state file must not be followed: resolving
 /// through it would let a planted symlink redirect the read outside the
 /// selected state dir (e.g. toward an attacker-controlled path reached via a
@@ -135,13 +146,8 @@ fn empty_existing_file_is_malformed_not_a_baseline() {
 fn load_cursor_state_rejects_a_symlinked_state_file() {
     use std::os::unix::fs::symlink;
 
-    let root = tempdir().expect("tempdir");
-    let path = cursor_state_path(root.path());
-    let outside_target = root
-        .path()
-        .parent()
-        .expect("state dir has parent")
-        .join("outside-auto-tasks.json");
+    let (_root, state_dir, outside_target) = state_dir_with_outside_target();
+    let path = cursor_state_path(&state_dir);
     fs::write(&outside_target, r#"{"definitions":{"leaked":{}}}"#)
         .expect("write file outside state dir");
     symlink(&outside_target, &path).expect("symlink cursor state file");
@@ -151,8 +157,6 @@ fn load_cursor_state_rejects_a_symlinked_state_file() {
         error.to_string().contains("must not be a symlink"),
         "{error}"
     );
-
-    fs::remove_file(&outside_target).expect("cleanup outside target");
 }
 
 /// [ORB-12026] A path with no normal final component names no file, so there is
@@ -250,14 +254,9 @@ fn load_cursor_state_rejects_a_non_regular_state_file() {
 fn load_cursor_state_rejects_a_symlink_swapped_in_after_the_check() {
     use std::os::unix::fs::symlink;
 
-    let root = tempdir().expect("tempdir");
-    let path = cursor_state_path(root.path());
+    let (_root, state_dir, outside_target) = state_dir_with_outside_target();
+    let path = cursor_state_path(&state_dir);
     fs::write(&path, state_json("local")).expect("seed regular state file");
-    let outside_target = root
-        .path()
-        .parent()
-        .expect("state dir has parent")
-        .join("swapped-auto-tasks.json");
     let outside_contents = state_json("leaked");
     fs::write(&outside_target, &outside_contents).expect("write file outside state dir");
 
@@ -278,8 +277,6 @@ fn load_cursor_state_rejects_a_symlink_swapped_in_after_the_check() {
         outside_contents,
         "the outside file must be neither rewritten nor consumed"
     );
-
-    fs::remove_file(&outside_target).expect("cleanup outside target");
 }
 
 #[cfg(unix)]
