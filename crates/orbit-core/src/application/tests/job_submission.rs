@@ -56,6 +56,88 @@ impl Drop for WorkerOverride {
     }
 }
 
+/// How long a held worker waits for its release before exiting on its own, so
+/// a fixture whose test never releases it cannot outlive the test for long.
+const HELD_WORKER_SELF_RELEASE: Duration = Duration::from_secs(15);
+
+/// A worker that stays alive until the test releases it, marking when it
+/// started and — as its last act — when it exited. Dropping the fixture
+/// releases the worker and waits for the startup observer to reap it, so both
+/// a passing and a panicking test leave no child behind.
+struct HeldWorker<'a> {
+    runtime: &'a OrbitRuntime,
+    job_name: &'a str,
+    dir: TempDir,
+    _override: WorkerOverride,
+}
+
+impl<'a> HeldWorker<'a> {
+    fn install(runtime: &'a OrbitRuntime, job_name: &'a str) -> Self {
+        let dir = TempDir::new().expect("held worker dir");
+        let polls = HELD_WORKER_SELF_RELEASE.as_millis() / 50;
+        let script = format!(
+            "cd '{dir}' && : > started && i=0 && \
+             while [ ! -e release ] && [ \"$i\" -lt {polls} ]; do sleep 0.05; i=$((i+1)); done; \
+             : > exited",
+            dir = dir.path().display(),
+        );
+        let _override = WorkerOverride::shell(&script);
+        Self {
+            runtime,
+            job_name,
+            dir,
+            _override,
+        }
+    }
+
+    fn marker(&self, name: &str) -> std::path::PathBuf {
+        self.dir.path().join(name)
+    }
+
+    fn exited(&self) -> bool {
+        self.marker("exited").exists()
+    }
+
+    fn wait_until_started(&self) -> bool {
+        poll_until(Duration::from_secs(10), || self.marker("started").exists())
+    }
+
+    /// Let the worker exit, then wait until the observer has reaped it: it
+    /// terminalizes the run only after collecting the child's exit status.
+    fn release_and_reap(&self) -> bool {
+        if std::fs::write(self.marker("release"), b"").is_err() {
+            return false;
+        }
+        poll_until(HELD_WORKER_SELF_RELEASE + Duration::from_secs(5), || {
+            self.runtime
+                .list_job_runs_observed(JobRunListParams {
+                    job_id: Some(self.job_name.to_string()),
+                    ..Default::default()
+                })
+                .is_ok_and(|runs| runs.iter().all(|run| run.state.is_terminal()))
+        })
+    }
+}
+
+impl Drop for HeldWorker<'_> {
+    fn drop(&mut self) {
+        self.release_and_reap();
+    }
+}
+
+fn poll_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if done() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn job_yaml(name: &str, max_active_runs: u32) -> String {
     format!(
         r#"schemaVersion: 2
@@ -542,7 +624,9 @@ fn submission_refuses_a_subroutine_job() {
 }
 
 /// Guard against the submission quietly waiting: the caller returns while the
-/// worker is still alive.
+/// worker is still alive. The worker cannot exit until the test releases it,
+/// so a submission that waited for it would only return after the worker's
+/// own bounded self-release, with its exit already marked.
 #[test]
 fn submission_returns_while_its_worker_is_still_running() {
     if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
@@ -552,17 +636,29 @@ fn submission_returns_while_its_worker_is_still_running() {
     }
     let (_root, runtime) = test_runtime();
     seed_catalog_job(&runtime, "qa_submit_nonblocking", 1);
-    let _worker = WorkerOverride::shell(IDLE_WORKER);
+    let worker = HeldWorker::install(&runtime, "qa_submit_nonblocking");
 
-    let started = std::time::Instant::now();
     runtime
         .submit_job_run("qa_submit_nonblocking", serde_json::json!({}), Some("test"))
         .expect("submission succeeds");
 
     assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "submission must not block on the worker it started"
+        !worker.exited(),
+        "submission must return before the worker it started exits"
     );
+    assert!(
+        worker.wait_until_started(),
+        "the submitted worker must start"
+    );
+    assert!(
+        !worker.exited(),
+        "the submitted worker must stay alive until released"
+    );
+    assert!(
+        worker.release_and_reap(),
+        "the released worker must exit and be reaped"
+    );
+    assert!(worker.exited(), "the released worker ran to its exit");
 }
 
 #[test]
