@@ -781,7 +781,7 @@ function crewEditor(crew, payload, isNew) {
       ]),
     ]),
     editing.error ? el("div", { class: "config-row-error", text: editing.error }) : null,
-    ...initChoices(payload, () => submitCrew(crew, fields, isNew, "seed-from-global")),
+    ...initChoices(payload, (init) => submitCrew(crew, fields, isNew, init)),
   ]);
   return editor;
 }
