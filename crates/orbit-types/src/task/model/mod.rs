@@ -58,6 +58,8 @@ pub use support::{
     push_external_ref_if_missing,
 };
 
+#[cfg(test)]
+pub(crate) use task::walk_dependencies_to_self;
 pub use task::{
     ExecutionLocation, Task, TaskReferenceIndex, automatic_dispatch_cmp, build_task_status_index,
     deserialize_required_tools, normalize_required_tools, normalize_task_dependencies,
