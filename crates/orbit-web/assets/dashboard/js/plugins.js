@@ -14,8 +14,8 @@ import { renderMarkdown } from './markdown.js';
 const $ = (id) => document.getElementById(id);
 
 // Panel bodies already fetched, keyed `<ns>/<id>`, so a 30 s refresh
-// repaints from the last good read instead of blanking, and the body node
-// each key is currently painted into.
+// repaints from the last good read instead of blanking. `panelBodies`
+// names the body still mounted under the retained plugin card.
 const panelCache = new Map();
 const panelBodies = new Map();
 let lastPlugins = [];
@@ -51,9 +51,29 @@ function render(plugins) {
   if (count) count.textContent = String(plugins.length);
   if (!plugins.length) {
     syncNodes(body, [el('div', { class: 'panel-placeholder', text: 'No plugins are installed on this machine. `orbit plugin add <source>` installs one.' })]);
+    panelBodies.clear();
     return;
   }
   syncNodes(body, plugins.map(pluginCard));
+  // A matching metadata hash keeps the previous card and discards the one
+  // just built. Register the bodies that remain in this container.
+  bindLivePanelBodies(body);
+}
+
+function bindLivePanelBodies(root) {
+  panelBodies.clear();
+  const visit = (node) => {
+    for (const child of node.children || []) {
+      const key = child.dataset && child.dataset.panel;
+      if (key) {
+        const panelBody = Array.from(child.children || []).find(candidate =>
+          String(candidate.className || '').split(/\s+/).includes('plugin-panel-body'));
+        if (panelBody) panelBodies.set(key, panelBody);
+      }
+      visit(child);
+    }
+  };
+  visit(root);
 }
 
 function pluginCard(plugin) {
@@ -143,7 +163,6 @@ function panelNode(plugin, panel) {
     el('span', { class: 'plugin-panel-source', text: panel.tool }),
   ]));
   const body = el('div', { class: 'plugin-panel-body' });
-  panelBodies.set(key, body);
   renderPanelBody(body, panel, panelCache.get(key));
   node.appendChild(body);
   return node;
@@ -172,8 +191,9 @@ async function loadPanel(plugin, panel) {
   } catch (error) {
     panelCache.set(key, { error: error.message || String(error) });
   }
-  // The node this key was painted into, held from the render pass: a panel
-  // body carries no id, and a selector would have to escape a namespace.
+  // The body bindLivePanelBodies left mounted for this key. The replacement
+  // built for an unchanged card is not in the document, so a response must
+  // not follow that discarded node.
   const node = panelBodies.get(key);
   if (node) renderPanelBody(node, panel, panelCache.get(key));
 }
