@@ -64,7 +64,23 @@ pub(super) fn validated_sweep_log_path(global_root: &Path) -> Result<PathBuf, Or
     let canonical_path = match fs::canonicalize(&expected_path) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(expected_path);
+            match fs::symlink_metadata(&expected_path) {
+                Ok(_) => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "sweep log must be a regular file directly under {}",
+                        expected_parent.display()
+                    )));
+                }
+                Err(metadata_error) if metadata_error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(expected_path);
+                }
+                Err(metadata_error) => {
+                    return Err(OrbitError::Io(format!(
+                        "inspect sweep log {}: {metadata_error}",
+                        expected_path.display()
+                    )));
+                }
+            }
         }
         Err(error) => {
             return Err(OrbitError::Io(format!(
