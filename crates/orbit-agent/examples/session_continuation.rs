@@ -73,7 +73,7 @@ fn main() -> ExitCode {
             "{SECRET_FACT} Acknowledge you noted the launch code and nothing else in one short sentence."
         ),
         "What was the launch code I just gave you? Repeat it verbatim.".to_string(),
-        "Spell the launch code out again, letter by letter, separated by dashes.".to_string(),
+        "Repeat the full launch code exactly as previously provided, inserting a dash between every letter and digit.".to_string(),
     ];
 
     let mut saw_cache_hit = false;
@@ -102,12 +102,7 @@ fn main() -> ExitCode {
             saw_cache_hit = true;
         }
 
-        if turn_idx == prompts.len() - 1
-            && outcome
-                .final_message
-                .to_ascii_uppercase()
-                .contains("VIOLET")
-        {
+        if turn_idx == prompts.len() - 1 && contains_full_launch_code(&outcome.final_message) {
             final_mentions_secret = true;
         }
     }
@@ -150,4 +145,39 @@ fn padded_system_prompt() -> String {
         out.push_str(FILLER);
     }
     out
+}
+
+fn contains_full_launch_code(response: &str) -> bool {
+    let normalized: String = response
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|character| character.to_ascii_uppercase())
+        .collect();
+    normalized.contains("VIOLETSWALLOW42")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_full_launch_code;
+
+    #[test]
+    fn accepts_the_full_code_spelled_with_dashes() {
+        assert!(contains_full_launch_code(
+            "The launch code is V-I-O-L-E-T-S-W-A-L-L-O-W-4-2."
+        ));
+    }
+
+    #[test]
+    fn rejects_a_wrong_code() {
+        assert!(!contains_full_launch_code(
+            "The launch code is V-I-O-L-E-T-S-W-A-L-L-O-W-4-3."
+        ));
+    }
+
+    #[test]
+    fn rejects_an_incomplete_code() {
+        assert!(!contains_full_launch_code(
+            "The launch code is V-I-O-L-E-T."
+        ));
+    }
 }
