@@ -183,6 +183,25 @@ fn sweep_log_path_rejects_symlinked_directory() {
     );
 }
 
+#[test]
+fn sweep_log_path_accepts_absent_and_existing_regular_files() {
+    let root = tempdir().expect("create global root");
+    let logs = root.path().join("logs");
+    fs::create_dir(&logs).expect("create log directory");
+    let expected_path = logs.join("sweep.log");
+
+    assert_eq!(
+        validated_sweep_log_path(root.path()).expect("accept absent log"),
+        expected_path
+    );
+
+    fs::write(&expected_path, "existing log").expect("write log file");
+    assert_eq!(
+        validated_sweep_log_path(root.path()).expect("accept regular log"),
+        expected_path
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn sweep_log_path_rejects_symlinked_file() {
@@ -201,6 +220,45 @@ fn sweep_log_path_rejects_symlinked_file() {
         error
             .to_string()
             .contains("sweep log must be a regular file directly under")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn launchd_install_rejects_dangling_log_symlink_before_activation() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create global root");
+    let outside = tempdir().expect("create outside root");
+    let home = tempdir().expect("create home");
+    fs::create_dir(root.path().join("logs")).expect("create log directory");
+    let outside_log = outside.path().join("nonexistent.log");
+    symlink(&outside_log, root.path().join("logs/sweep.log")).expect("create dangling log symlink");
+    let runner = MockRunner::new(vec![Ok(true), Ok(true)]);
+
+    let error = install_clock_with(
+        root.path(),
+        "/opt/orbit/bin/orbit",
+        ClockSettings::default(),
+        ClockPlatform::Launchd,
+        &runner,
+        home.path(),
+    )
+    .expect_err("reject dangling log symlink");
+
+    assert!(
+        error
+            .to_string()
+            .contains("sweep log must be a regular file directly under")
+    );
+    assert!(runner.commands().is_empty(), "manager was not activated");
+    assert!(!outside_log.exists(), "no outside log was created");
+    assert!(
+        !home
+            .path()
+            .join("Library/LaunchAgents/com.orbit.sweep.plist")
+            .exists(),
+        "unit was not written"
     );
 }
 
