@@ -1949,15 +1949,22 @@ fn hold_exclusive_bundle_lock(path: &std::path::Path) -> std::fs::File {
     file
 }
 
-async fn raw_http(
+/// One `Connection: close` exchange over a std socket, bounded by OS socket
+/// timeouts rather than a Tokio timer, so it still returns when the server's
+/// only async worker is blocked.
+#[cfg(unix)]
+fn blocking_http(
     addr: std::net::SocketAddr,
     request: &str,
-) -> Result<(u16, Vec<u8>), std::io::Error> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut stream = tokio::net::TcpStream::connect(addr).await?;
-    stream.write_all(request.as_bytes()).await?;
+    timeout: std::time::Duration,
+) -> std::io::Result<(u16, Vec<u8>)> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    stream.write_all(request.as_bytes())?;
     let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).await?;
+    stream.read_to_end(&mut buf)?;
     let header_end = buf
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -1972,17 +1979,74 @@ async fn raw_http(
     Ok((status, buf[header_end..].to_vec()))
 }
 
-/// Holding the task-bundle flock parks `submit_ship_run` (it `get_task`s under
-/// that lock). Sixteen concurrent ships must not starve `/healthz`.
+/// Descriptors this process holds open on the same file as `reference`,
+/// `reference` included. A ship blocked on the held task-bundle flock keeps
+/// the lock file open while it retries, so the count rises by one for every
+/// request parked inside that acquisition.
 #[cfg(unix)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lock() {
-    use std::time::Duration;
+fn descriptors_open_on(reference: &std::fs::File) -> usize {
+    use std::os::unix::io::AsRawFd;
+    fn identity(fd: libc::c_int) -> Option<(libc::dev_t, libc::ino_t)> {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `stat` is writable storage for one `libc::stat`; `fstat` only
+        // reads the descriptor, and a closed or reused number just fails or
+        // describes another file.
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: `fstat` returned 0, so it initialized `stat`.
+        let stat = unsafe { stat.assume_init() };
+        Some((stat.st_dev, stat.st_ino))
+    }
+    let Some(target) = identity(reference.as_raw_fd()) else {
+        return 0;
+    };
+    let fd_dir = if std::path::Path::new("/proc/self/fd").is_dir() {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let Ok(entries) = std::fs::read_dir(fd_dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+        .filter(|fd| identity(*fd) == Some(target))
+        .count()
+}
 
-    use axum::routing::get;
+const SHIP_REQUESTS: usize = 16;
+
+#[cfg(unix)]
+struct ShipContentionProbe {
+    /// Ship requests observed inside the held lock acquisition before `/healthz`.
+    ships_parked_before_probe: usize,
+    health: Result<(u16, Vec<u8>), String>,
+    health_elapsed: std::time::Duration,
+    /// Every ship request that finished once the lock was released.
+    ships: Vec<std::io::Result<(u16, Vec<u8>)>>,
+}
+
+/// Serve `build_app` on a one-worker runtime, park [`SHIP_REQUESTS`] same-origin
+/// ship requests on an exclusively held task-bundle flock, wait until at least
+/// `parked_ships` of them are observed inside that acquisition, then probe
+/// `/healthz` from a plain thread. Releases the lock and collects every ship
+/// before returning, with every wait bounded independently of the runtime.
+#[cfg(unix)]
+fn probe_healthz_under_ship_contention(
+    build_app: impl FnOnce(Arc<OrbitRuntime>, String) -> axum::Router,
+    parked_ships: usize,
+) -> ShipContentionProbe {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    const HEALTH_DEADLINE: Duration = Duration::from_secs(1);
+    const PARK_DEADLINE: Duration = Duration::from_secs(10);
+    const SHIP_DEADLINE: Duration = Duration::from_secs(20);
 
     substitute_pipeline_worker();
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "task_auto_pipeline");
     let task_id = runtime
         .add_task(TaskAddParams {
             title: "ship lock fixture".to_string(),
@@ -2001,51 +2065,203 @@ async fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lo
                 runtime.data_root().display()
             )
         });
-    let _guard = hold_exclusive_bundle_lock(&lock_path);
+    let guard = hold_exclusive_bundle_lock(&lock_path);
+    let held_only = descriptors_open_on(&guard);
 
-    let state = crate::state::DashboardState::single(Arc::new(runtime));
-    let app = axum::Router::new()
-        .route("/healthz", get(crate::health::healthz))
-        .nest("/api", router())
-        .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test listener");
+    let server = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("build one-worker runtime");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
     let addr = listener.local_addr().expect("local addr");
-    tokio::spawn(async move {
+    let app = build_app(Arc::new(runtime), task_id.clone());
+    server.spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).expect("adopt listener");
         axum::serve(listener, app).await.expect("serve dashboard");
     });
 
+    // Host and Origin share one loopback authority, so origin validation
+    // admits every ship instead of answering 403 before dispatch.
     let ship_body = json!({ "task_ids": [task_id], "mode": "local" }).to_string();
     let ship_request = format!(
-        "POST /api/workflows/ship HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost:3000\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST /api/workflows/ship HTTP/1.1\r\nHost: {addr}\r\nOrigin: http://{addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{ship_body}",
         ship_body.len(),
-        ship_body
     );
-    let mut ships = Vec::new();
-    for _ in 0..16 {
-        let request = ship_request.clone();
-        ships.push(tokio::spawn(async move { raw_http(addr, &request).await }));
-    }
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    let (ship_tx, ship_rx) = mpsc::channel();
+    let ship_threads: Vec<_> = (0..SHIP_REQUESTS)
+        .map(|_| {
+            let request = ship_request.clone();
+            let tx = ship_tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(blocking_http(addr, &request, SHIP_DEADLINE));
+            })
+        })
+        .collect();
+    drop(ship_tx);
 
-    let health = tokio::time::timeout(
-        Duration::from_secs(1),
-        raw_http(
+    let park_deadline = Instant::now() + PARK_DEADLINE;
+    let mut ships_parked_before_probe;
+    loop {
+        ships_parked_before_probe = descriptors_open_on(&guard).saturating_sub(held_only);
+        if ships_parked_before_probe >= parked_ships || Instant::now() >= park_deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let (health_tx, health_rx) = mpsc::channel();
+    let started = Instant::now();
+    let health_thread = std::thread::spawn(move || {
+        let _ = health_tx.send(blocking_http(
             addr,
             "GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        ),
-    )
-    .await
-    .expect("healthz timed out")
-    .expect("healthz request");
-    assert_eq!(health.0, 200, "healthz status");
-    assert_eq!(health.1, b"ok", "healthz body");
+            HEALTH_DEADLINE,
+        ));
+    });
+    let health = match health_rx.recv_timeout(HEALTH_DEADLINE) {
+        Ok(response) => response.map_err(|error| error.to_string()),
+        Err(_) => Err(format!("no response within {HEALTH_DEADLINE:?}")),
+    };
+    let health_elapsed = started.elapsed();
 
-    drop(_guard);
-    for ship in ships {
-        let _ = tokio::time::timeout(Duration::from_secs(5), ship).await;
+    drop(guard);
+    let ship_deadline = Instant::now() + SHIP_DEADLINE;
+    let mut ships = Vec::with_capacity(SHIP_REQUESTS);
+    while ships.len() < SHIP_REQUESTS {
+        let remaining = ship_deadline.saturating_duration_since(Instant::now());
+        match ship_rx.recv_timeout(remaining) {
+            Ok(result) => ships.push(result),
+            Err(_) => break,
+        }
     }
+    // Every thread is bounded by its socket timeouts; joining only the ones
+    // that reported keeps a stuck request from hanging the test process.
+    health_thread.join().expect("health probe thread");
+    if ships.len() == SHIP_REQUESTS {
+        for thread in ship_threads {
+            thread.join().expect("ship request thread");
+        }
+    }
+    server.shutdown_timeout(Duration::from_secs(5));
+
+    ShipContentionProbe {
+        ships_parked_before_probe,
+        health,
+        health_elapsed,
+        ships,
+    }
+}
+
+/// Holding the task-bundle flock parks `submit_ship_run` (it `get_task`s under
+/// that lock). Sixteen concurrent ships must not starve `/healthz`.
+#[cfg(unix)]
+#[test]
+fn healthz_answers_within_one_second_while_sixteen_ships_wait_on_bundle_lock() {
+    use axum::routing::get;
+
+    let probe = probe_healthz_under_ship_contention(
+        |runtime, _task_id| {
+            axum::Router::new()
+                .route("/healthz", get(crate::health::healthz))
+                .nest("/api", router())
+                .with_state(crate::state::DashboardState::single(runtime))
+        },
+        SHIP_REQUESTS,
+    );
+
+    assert_eq!(
+        probe.ships_parked_before_probe, SHIP_REQUESTS,
+        "every ship must be parked on the held bundle lock before /healthz is probed"
+    );
+    let (status, body) = probe.health.expect("healthz answered during contention");
+    assert_eq!(status, 200, "healthz status");
+    assert_eq!(body, b"ok", "healthz body");
+    assert!(
+        probe.health_elapsed < std::time::Duration::from_secs(1),
+        "healthz took {:?}",
+        probe.health_elapsed
+    );
+    assert_eq!(
+        probe.ships.len(),
+        SHIP_REQUESTS,
+        "every ship request must finish once the lock is released"
+    );
+    let statuses: Vec<u16> = probe
+        .ships
+        .into_iter()
+        .map(|ship| ship.expect("ship response").0)
+        .collect();
+    assert!(
+        statuses.iter().all(|status| matches!(status, 200 | 409)),
+        "ships must reach the handler, not an origin or transport rejection: {statuses:?}"
+    );
+    assert!(
+        statuses.contains(&200),
+        "at least one ship must submit once the lock is released: {statuses:?}"
+    );
+}
+
+/// The contention probe must fail, not hang, when ship work runs synchronously
+/// on the sole async worker instead of the blocking pool.
+#[cfg(unix)]
+#[test]
+fn healthz_contention_probe_detects_ship_work_on_the_async_worker() {
+    use axum::routing::{get, post};
+
+    let probe = probe_healthz_under_ship_contention(
+        |runtime, task_id| {
+            let ship_runtime = Arc::clone(&runtime);
+            let blocking_ship = move || {
+                let runtime = Arc::clone(&ship_runtime);
+                let task_ids = vec![task_id.clone()];
+                async move {
+                    // Deliberately synchronous: parks the worker on the bundle lock.
+                    match runtime.submit_ship_run(
+                        orbit_core::ShipMode::Local,
+                        None,
+                        &task_ids,
+                        orbit_core::CompletionPolicy::Review,
+                        &[],
+                        Some("dashboard"),
+                        None,
+                        orbit_types::workflow::JobRunTrigger::dashboard(),
+                    ) {
+                        Ok(_) => StatusCode::OK,
+                        Err(_) => StatusCode::CONFLICT,
+                    }
+                }
+            };
+            axum::Router::new()
+                .route("/healthz", get(crate::health::healthz))
+                .route("/api/workflows/ship", post(blocking_ship))
+                .with_state(crate::state::DashboardState::single(runtime))
+        },
+        1,
+    );
+
+    assert!(
+        probe.ships_parked_before_probe >= 1,
+        "a ship must be parked on the held bundle lock before /healthz is probed"
+    );
+    assert!(
+        probe.health.is_err(),
+        "healthz must not answer while the sole worker is blocked: {:?}",
+        probe.health
+    );
+    assert!(
+        probe.health_elapsed < std::time::Duration::from_secs(2),
+        "the probe must give up promptly, took {:?}",
+        probe.health_elapsed
+    );
+    assert_eq!(
+        probe.ships.len(),
+        SHIP_REQUESTS,
+        "every ship request must finish once the lock is released"
+    );
 }
 
 #[tokio::test]
