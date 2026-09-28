@@ -118,6 +118,11 @@ spec:
 
 #[test]
 fn fresh_job_seeding_copies_every_canonical_asset() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &fresh_job_seeding_copies_every_canonical_asset,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let jobs_dir = root.path().join("resources/jobs");
     seed_default_jobs(&jobs_dir, false).expect("seed canonical jobs");
@@ -135,6 +140,11 @@ fn fresh_job_seeding_copies_every_canonical_asset() {
 
 #[test]
 fn job_reseeding_preserves_local_concurrency_override() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &job_reseeding_preserves_local_concurrency_override,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let jobs_dir = root.path().join("resources/jobs");
     seed_default_jobs(&jobs_dir, false).expect("seed canonical jobs");
@@ -168,6 +178,11 @@ fn job_reseeding_preserves_local_concurrency_override() {
 
 #[test]
 fn workspace_default_named_job_does_not_run_when_workflow_invoked_by_name() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_default_named_job_does_not_run_when_workflow_invoked_by_name,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let job_name = "task_auto_pipeline";
     let global_job = global_root.join("resources/jobs/task_auto_pipeline.yaml");
@@ -219,6 +234,11 @@ fn default_activity_catalog() -> V2ActivityCatalog {
 /// or build a worktree itself.
 #[test]
 fn ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admission() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admission,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "ci_failure_sweep_pipeline").then_some(*yaml))
@@ -296,6 +316,11 @@ fn ci_failure_sweep_pipeline_pilots_proposed_findings_before_authorized_admissio
 
 #[test]
 fn dependabot_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &dependabot_sweep_pipeline_is_two_deterministic_steps_and_single_flight,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "dependabot_alert_sweep_pipeline").then_some(*yaml))
@@ -405,6 +430,11 @@ fn assert_schema_properties(schema: &Value, fields: &[&str]) {
 
 #[test]
 fn schema_property_check_does_not_accept_a_yaml_comment_as_a_field() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &schema_property_check_does_not_accept_a_yaml_comment_as_a_field,
+    )) {
+        return;
+    }
     let yaml = r#"schemaVersion: 2
 kind: Activity
 metadata:
@@ -432,6 +462,11 @@ spec:
 
 #[test]
 fn seeded_recovery_assets_omit_retired_role() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &seeded_recovery_assets_omit_retired_role,
+    )) {
+        return;
+    }
     for name in ["step_failure_recovery", "pr_conflict_recovery"] {
         let seeded = DEFAULT_ACTIVITY_FILES
             .iter()
@@ -490,6 +525,11 @@ fn assert_step_condition_tokens_are_paths(step: &orbit_types::workflow::JobV2Ste
 
 #[test]
 fn default_job_target_refs_resolve_against_default_activities() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &default_job_target_refs_resolve_against_default_activities,
+    )) {
+        return;
+    }
     let catalog = default_activity_catalog();
 
     for (job_name, yaml) in DEFAULT_JOB_FILES {
@@ -506,6 +546,11 @@ fn default_job_target_refs_resolve_against_default_activities() {
 /// and the `all` join turns that into a whole-run failure.
 #[test]
 fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_pilot_pipeline").then_some(*yaml))
@@ -642,6 +687,11 @@ fn task_pilot_pipeline_resolves_system_crew_and_bounded_partial_join_partitions(
 /// on which agent CLIs happen to be installed on the machine running the test.
 #[test]
 fn task_pilot_dispatch_resolves_a_crew_with_no_codex_crew_configured() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_pilot_dispatch_resolves_a_crew_with_no_codex_crew_configured,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global = root.path().join("global");
     let workspace = root.path().join("workspace");
@@ -715,6 +765,11 @@ backend = "cli"
 /// job added to the chain without the forwarding line fails here.
 #[test]
 fn auto_drain_dispatch_chain_declares_and_forwards_the_crew_allowlist() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &auto_drain_dispatch_chain_declares_and_forwards_the_crew_allowlist,
+    )) {
+        return;
+    }
     /// job name -> does it dispatch a child that must inherit the window?
     const CHAIN: &[(&str, bool)] = &[
         ("workspace_auto_pipeline", true),
@@ -761,6 +816,11 @@ fn auto_drain_dispatch_chain_declares_and_forwards_the_crew_allowlist() {
 /// override invisible to the run input.
 #[test]
 fn system_crew_dispatch_is_refused_when_the_run_window_excludes_it() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &system_crew_dispatch_is_refused_when_the_run_window_excludes_it,
+    )) {
+        return;
+    }
     let root = tempdir().expect("create tempdir");
     let global = root.path().join("global");
     let workspace = root.path().join("workspace");
@@ -879,6 +939,11 @@ backend = "cli"
 /// so their first use cannot inherit the same skew.
 #[test]
 fn default_catalog_deterministic_actions_are_registered_in_the_runtime() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &default_catalog_deterministic_actions_are_registered_in_the_runtime,
+    )) {
+        return;
+    }
     let (_root, runtime, _global_root, _workspace_root) = test_runtime();
     let catalog = default_activity_catalog();
 
@@ -916,6 +981,11 @@ fn default_catalog_deterministic_actions_are_registered_in_the_runtime() {
 /// catalog-load gate; no shipped job is exempted from it.
 #[test]
 fn default_jobs_only_read_step_output_from_always_run_steps() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &default_jobs_only_read_step_output_from_always_run_steps,
+    )) {
+        return;
+    }
     let catalog = default_activity_catalog();
 
     for (job_name, yaml) in DEFAULT_JOB_FILES {
@@ -933,6 +1003,11 @@ fn default_jobs_only_read_step_output_from_always_run_steps() {
 
 #[test]
 fn local_task_pipeline_commits_before_merge_and_reconciles_with_local_base() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &local_task_pipeline_commits_before_merge_and_reconciles_with_local_base,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_local_pipeline").then_some(*yaml))
@@ -997,6 +1072,11 @@ fn local_task_pipeline_commits_before_merge_and_reconciles_with_local_base() {
 
 #[test]
 fn task_shipment_implementers_pin_workspace_and_repo_roots_to_the_worktree() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_shipment_implementers_pin_workspace_and_repo_roots_to_the_worktree,
+    )) {
+        return;
+    }
     for job_name in ["task_local_pipeline", "task_pr_pipeline"] {
         let yaml = DEFAULT_JOB_FILES
             .iter()
@@ -1028,6 +1108,11 @@ fn task_shipment_implementers_pin_workspace_and_repo_roots_to_the_worktree() {
 
 #[test]
 fn task_shipment_commit_steps_use_the_worktree_base_checkpoint() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_shipment_commit_steps_use_the_worktree_base_checkpoint,
+    )) {
+        return;
+    }
     for job_name in ["task_local_pipeline", "task_pr_pipeline"] {
         let yaml = DEFAULT_JOB_FILES
             .iter()
@@ -1060,6 +1145,11 @@ fn task_shipment_commit_steps_use_the_worktree_base_checkpoint() {
 
 #[test]
 fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_pr_pipeline").then_some(*yaml))
@@ -1170,6 +1260,11 @@ fn pr_pipeline_models_handoff_phases_as_ordered_activity_checkpoints() {
 
 #[test]
 fn gate_pipeline_releases_reservation_before_child_success_guard() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &gate_pipeline_releases_reservation_before_child_success_guard,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
@@ -1269,6 +1364,11 @@ fn gate_pipeline_releases_reservation_before_child_success_guard() {
 
 #[test]
 fn auto_pipeline_checks_gate_results_after_fan_in() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &auto_pipeline_checks_gate_results_after_fan_in,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
@@ -1329,6 +1429,11 @@ fn auto_pipeline_checks_gate_results_after_fan_in() {
 /// run's crew restriction even though the later gate still enforces it.
 #[test]
 fn auto_pipeline_list_backlog_step_forwards_allowed_crews() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &auto_pipeline_list_backlog_step_forwards_allowed_crews,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
@@ -1358,6 +1463,11 @@ fn auto_pipeline_list_backlog_step_forwards_allowed_crews() {
 
 #[test]
 fn shipped_supervision_budgets_are_composed_and_bounded() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &shipped_supervision_budgets_are_composed_and_bounded,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
@@ -1445,6 +1555,11 @@ fn shipped_supervision_budgets_are_composed_and_bounded() {
 /// on a checkout with no usable `origin`.
 #[test]
 fn gate_pipeline_threads_auto_push_instead_of_pinning_it() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &gate_pipeline_threads_auto_push_instead_of_pinning_it,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
@@ -1501,6 +1616,11 @@ fn gate_pipeline_threads_auto_push_instead_of_pinning_it() {
 
 #[test]
 fn workspace_ship_pipeline_waits_for_workspace_auto_sequencer() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_ship_pipeline_waits_for_workspace_auto_sequencer,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "workspace_ship_pipeline").then_some(*yaml))
@@ -1545,6 +1665,11 @@ fn workspace_ship_pipeline_waits_for_workspace_auto_sequencer() {
 
 #[test]
 fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "workspace_auto_pipeline").then_some(*yaml))
@@ -1648,6 +1773,11 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
 
 #[test]
 fn default_jobs_template_only_declared_agent_loop_handoffs() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &default_jobs_template_only_declared_agent_loop_handoffs,
+    )) {
+        return;
+    }
     let agent_activity_names = DEFAULT_ACTIVITY_FILES
         .iter()
         .filter_map(|(name, yaml)| {
@@ -1712,6 +1842,11 @@ fn default_jobs_template_only_declared_agent_loop_handoffs() {
 
 #[test]
 fn default_job_conditions_keep_comparisons_outside_template_tokens() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &default_job_conditions_keep_comparisons_outside_template_tokens,
+    )) {
+        return;
+    }
     for (name, yaml) in DEFAULT_JOB_FILES {
         let asset = load_job_asset(yaml).unwrap_or_else(|err| {
             panic!("default job {name} should parse before condition checks: {err}")
@@ -1724,6 +1859,11 @@ fn default_job_conditions_keep_comparisons_outside_template_tokens() {
 
 #[test]
 fn task_shipment_jobs_resolve_default_recovery_activity() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_shipment_jobs_resolve_default_recovery_activity,
+    )) {
+        return;
+    }
     let catalog = default_activity_catalog();
 
     for job_name in ["task_local_pipeline", "task_pr_pipeline"] {
@@ -1777,6 +1917,11 @@ fn task_shipment_jobs_resolve_default_recovery_activity() {
 
 #[test]
 fn orchestration_jobs_do_not_enable_generic_recovery() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &orchestration_jobs_do_not_enable_generic_recovery,
+    )) {
+        return;
+    }
     for job_name in [
         "task_auto_pipeline",
         "task_gate_pipeline",
@@ -1922,6 +2067,11 @@ fn collect_value_strings<'a>(value: Option<&'a Value>, out: &mut Vec<&'a str>) {
 
 #[test]
 fn workspace_job_overrides_global_default_in_catalog_listing() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_job_overrides_global_default_in_catalog_listing,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let global_job = global_root.join("resources/jobs/task_auto_pipeline.yaml");
     let workspace_job = workspace_root.join("resources/jobs/task_auto_pipeline.yaml");
@@ -1943,6 +2093,11 @@ fn workspace_job_overrides_global_default_in_catalog_listing() {
 
 #[test]
 fn job_listing_prefers_workspace_over_global() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &job_listing_prefers_workspace_over_global,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let workspace_dir = workspace_root.join("resources/jobs");
     let global_dir = global_root.join("resources/jobs");
@@ -1963,6 +2118,11 @@ fn job_listing_prefers_workspace_over_global() {
 
 #[test]
 fn job_execution_prefers_global_over_workspace() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &job_execution_prefers_global_over_workspace,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let workspace_dir = workspace_root.join("resources/jobs");
     let global_dir = global_root.join("resources/jobs");
@@ -1994,6 +2154,11 @@ fn job_execution_prefers_global_over_workspace() {
 
 #[test]
 fn catalog_reference_layers_use_named_execution_definition() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &catalog_reference_layers_use_named_execution_definition,
+    )) {
+        return;
+    }
     for job_name in ["custom", "task_auto_pipeline"] {
         let (_root, runtime, global_root, workspace_root) = test_runtime();
         let global_job = global_root.join(format!("resources/jobs/{job_name}.yaml"));
@@ -2035,6 +2200,11 @@ fn catalog_reference_layers_use_named_execution_definition() {
 
 #[test]
 fn explicit_default_named_job_reports_explicit_provenance() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &explicit_default_named_job_reports_explicit_provenance,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let job_name = "task_auto_pipeline";
     let global_job = global_root.join("resources/jobs/task_auto_pipeline.yaml");
@@ -2073,6 +2243,11 @@ fn explicit_default_named_job_reports_explicit_provenance() {
 
 #[test]
 fn workspace_job_overrides_global_default_in_catalog_lookup_but_not_execution_lookup() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &workspace_job_overrides_global_default_in_catalog_lookup_but_not_execution_lookup,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let global_job = global_root.join("resources/jobs/task_auto_pipeline.yaml");
     let workspace_job = workspace_root.join("resources/jobs/task_auto_pipeline.yaml");
@@ -2094,6 +2269,11 @@ fn workspace_job_overrides_global_default_in_catalog_lookup_but_not_execution_lo
 
 #[test]
 fn execution_name_index_matches_named_execution_lookup() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &execution_name_index_matches_named_execution_lookup,
+    )) {
+        return;
+    }
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let workspace_dir = workspace_root.join("resources/jobs");
     let global_dir = global_root.join("resources/jobs");
@@ -2151,6 +2331,11 @@ fn execution_name_index_matches_named_execution_lookup() {
 /// copy to distinguish it from.
 #[test]
 fn execution_name_index_matches_named_execution_lookup_with_shared_root() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &execution_name_index_matches_named_execution_lookup_with_shared_root,
+    )) {
+        return;
+    }
     let root = tempdir().expect("tempdir");
     let shared_root = root.path().join("shared");
     std::fs::create_dir_all(&shared_root).expect("create shared root");
@@ -2184,6 +2369,11 @@ fn execution_name_index_matches_named_execution_lookup_with_shared_root() {
 
 #[test]
 fn duplicate_jobs_within_one_catalog_directory_remain_invalid() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &duplicate_jobs_within_one_catalog_directory_remain_invalid,
+    )) {
+        return;
+    }
     let (_root, runtime, _global_root, workspace_root) = test_runtime();
     let jobs_dir = workspace_root.join("resources/jobs");
     write_job(&jobs_dir.join("first.yaml"), "duplicate_job", "first", 1);
@@ -2206,6 +2396,11 @@ fn duplicate_jobs_within_one_catalog_directory_remain_invalid() {
 
 #[test]
 fn malformed_job_assets_do_not_hide_healthy_jobs_in_a_shared_root() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &malformed_job_assets_do_not_hide_healthy_jobs_in_a_shared_root,
+    )) {
+        return;
+    }
     let root = tempdir().expect("tempdir");
     let shared_root = root.path().join("shared");
     std::fs::create_dir_all(&shared_root).expect("create shared root");
@@ -2267,6 +2462,11 @@ fn malformed_job_assets_do_not_hide_healthy_jobs_in_a_shared_root() {
 
 #[test]
 fn malformed_on_disk_shipped_job_does_not_use_embedded_spec() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &malformed_on_disk_shipped_job_does_not_use_embedded_spec,
+    )) {
+        return;
+    }
     let root = tempdir().expect("tempdir");
     let shared_root = root.path().join("shared");
     std::fs::create_dir_all(&shared_root).expect("create shared root");
@@ -2293,6 +2493,11 @@ fn malformed_on_disk_shipped_job_does_not_use_embedded_spec() {
 /// its own `input.completion` to its children.
 #[test]
 fn completion_policy_defaults_to_review_and_propagates_across_job_boundaries() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &completion_policy_defaults_to_review_and_propagates_across_job_boundaries,
+    )) {
+        return;
+    }
     fn job(name: &str) -> JobV2 {
         let yaml = DEFAULT_JOB_FILES
             .iter()
@@ -2387,6 +2592,11 @@ fn completion_policy_defaults_to_review_and_propagates_across_job_boundaries() {
 /// is ordered after both the merge and the push.
 #[test]
 fn local_pipeline_completes_tasks_only_after_merge_and_push() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &local_pipeline_completes_tasks_only_after_merge_and_push,
+    )) {
+        return;
+    }
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_local_pipeline").then_some(*yaml))
@@ -2438,6 +2648,11 @@ fn local_pipeline_completes_tasks_only_after_merge_and_push() {
 /// authorization, and routes no-diff work down a path that needs no PR.
 #[test]
 fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr,
+    )) {
+        return;
+    }
     let job_name = "task_pr_pipeline";
     let yaml = DEFAULT_JOB_FILES
         .iter()
@@ -2502,6 +2717,11 @@ fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() 
 /// are asserted for what they must *not* contain, not only for their phases.
 #[test]
 fn claimed_leaf_definitions_stop_at_the_typed_handoff() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &claimed_leaf_definitions_stop_at_the_typed_handoff,
+    )) {
+        return;
+    }
     let catalog = default_activity_catalog();
     for job_name in ["task_claimed_local_pipeline", "task_claimed_pr_pipeline"] {
         let yaml = DEFAULT_JOB_FILES
@@ -2598,6 +2818,11 @@ fn collect_step_targets(steps: &[JobV2Step], out: &mut Vec<String>) {
 /// [ORB-13625], never by a public ship submission.
 #[test]
 fn public_ship_input_cannot_name_a_claimed_leaf() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &public_ship_input_cannot_name_a_claimed_leaf,
+    )) {
+        return;
+    }
     use orbit_types::workflow::ShipMode;
 
     for mode in [ShipMode::Pr, ShipMode::Local] {

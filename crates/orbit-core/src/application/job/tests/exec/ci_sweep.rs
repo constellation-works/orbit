@@ -200,6 +200,11 @@ impl RuntimeHost for ScriptedCiSweepHost<'_> {
 
 #[test]
 fn ci_sweep_parent_fails_for_stale_pilot_after_independent_pilot_applies() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_sweep_parent_fails_for_stale_pilot_after_independent_pilot_applies,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_ci_catalogs(&global_root);
     let host = ScriptedCiSweepHost::new(&runtime);
@@ -232,6 +237,11 @@ fn ci_sweep_parent_fails_for_stale_pilot_after_independent_pilot_applies() {
 
 #[test]
 fn ci_sweep_parent_keeps_a_genuinely_empty_pilot_batch_as_a_successful_no_op() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_sweep_parent_keeps_a_genuinely_empty_pilot_batch_as_a_successful_no_op,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root, global_root) = test_runtime();
     seed_ci_catalogs(&global_root);
     let host = ScriptedCiSweepHost::new(&runtime).empty();
@@ -302,6 +312,11 @@ fn submit_input(runtime: &OrbitRuntime, input: Value) -> Value {
 
 #[test]
 fn ci_sweep_named_submission_carries_registered_integration_to_collect_and_pilots() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_sweep_named_submission_carries_registered_integration_to_collect_and_pilots,
+    )) {
+        return;
+    }
     let (_root, runtime, repo, _global) = bound_runtime(Some("agent-main"));
     let shadow = repo.join(".orbit/resources/jobs/ci_failure_sweep_pipeline.yaml");
     std::fs::create_dir_all(shadow.parent().expect("shadow parent")).expect("shadow directory");
@@ -340,6 +355,11 @@ fn ci_sweep_named_submission_carries_registered_integration_to_collect_and_pilot
 
 #[test]
 fn ci_sweep_named_submission_honors_explicit_run_and_trusted_job_overrides() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_sweep_named_submission_honors_explicit_run_and_trusted_job_overrides,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo, global) = bound_runtime(Some("agent-main"));
     let job = global.join("resources/jobs/ci_failure_sweep_pipeline.yaml");
     let yaml = std::fs::read_to_string(&job).expect("read trusted job");
@@ -374,6 +394,11 @@ fn ci_sweep_named_submission_honors_explicit_run_and_trusted_job_overrides() {
 
 #[test]
 fn ci_sweep_named_submission_reports_missing_or_invalid_authority() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_sweep_named_submission_reports_missing_or_invalid_authority,
+    )) {
+        return;
+    }
     for branch in [
         None,
         Some(""),
@@ -410,6 +435,11 @@ fn ci_sweep_named_submission_reports_missing_or_invalid_authority() {
 
 #[test]
 fn ci_sweep_named_submission_uses_explicit_config_without_registration() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ci_sweep_named_submission_uses_explicit_config_without_registration,
+    )) {
+        return;
+    }
     let (_root, runtime, _repo, global) = super::test_runtime_with_workspace_config(
         "[workflow]\nbase_branch = \"configured-integration\"\n",
     );

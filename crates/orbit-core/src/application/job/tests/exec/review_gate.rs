@@ -514,6 +514,11 @@ pub(super) fn positions(calls: &[String], names: &[&str]) -> Vec<usize> {
 
 #[test]
 fn before_pr_pass_with_repairs_publishes_only_the_settled_candidate() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &before_pr_pass_with_repairs_publishes_only_the_settled_candidate,
+    )) {
+        return;
+    }
     let pipeline = pipeline(GATED_CONFIG);
     let implementation = pipeline.head();
     let host = ScriptedReviewHost::new(
@@ -584,6 +589,11 @@ fn before_pr_pass_with_repairs_publishes_only_the_settled_candidate() {
 
 #[test]
 fn before_pr_changes_required_blocks_the_task_without_opening_a_pr() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &before_pr_changes_required_blocks_the_task_without_opening_a_pr,
+    )) {
+        return;
+    }
     let pipeline = pipeline(GATED_CONFIG);
     let host = ScriptedReviewHost::new(
         &pipeline,
@@ -643,6 +653,11 @@ fn before_pr_changes_required_blocks_the_task_without_opening_a_pr() {
 
 #[test]
 fn none_and_after_landing_policies_never_start_a_reviewer() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &none_and_after_landing_policies_never_start_a_reviewer,
+    )) {
+        return;
+    }
     for policy in ["none", "after-landing"] {
         let config = format!(
             "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"implementer\"\n[operation]\nreview_policy = \"{policy}\"\n"

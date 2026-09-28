@@ -12,6 +12,11 @@ use super::{resolved_job, seed_default_catalogs, test_runtime, try_execute_job};
 /// new branch, push, PR or merge work under either completion policy.
 #[test]
 fn already_landed_pipeline_routes_verified_evidence_without_a_new_delivery() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &already_landed_pipeline_routes_verified_evidence_without_a_new_delivery,
+    )) {
+        return;
+    }
     for completion in ["review", "done"] {
         let (_root, runtime, repo_root, global_root) = test_runtime();
         seed_default_catalogs(&global_root);

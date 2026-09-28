@@ -117,6 +117,11 @@ fn admit(runtime: &OrbitRuntime, parent: &str, task: &Task, ticket: u64) -> Valu
 
 #[test]
 fn complexity_pools_override_matching_config_and_select_independently_without_weighting() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &complexity_pools_override_matching_config_and_select_independently_without_weighting,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         r#"
 [workflow]
@@ -172,6 +177,11 @@ xhard_complexity_crews = ["fable"]
 /// back to the default crew chain rather than stranding the task.
 #[test]
 fn xhard_pool_overrides_config_and_an_empty_pool_falls_back_to_the_default_chain() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &xhard_pool_overrides_config_and_an_empty_pool_falls_back_to_the_default_chain,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) =
         test_runtime_with_workspace_config("[workflow]\nxhard_complexity_crews = [\"sol\"]\n");
     let overridden = coordinator(&runtime, json!({"xhard_complexity_crews": ["fable"]}));
@@ -205,6 +215,11 @@ fn xhard_pool_overrides_config_and_an_empty_pool_falls_back_to_the_default_chain
 /// is routed to `default_crew`, at creation and at admission alike.
 #[test]
 fn the_seeded_empty_pools_route_every_complexity_to_the_default_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &the_seeded_empty_pools_route_every_complexity_to_the_default_crew,
+    )) {
+        return;
+    }
     let seeded = tempfile::tempdir().expect("seed dir");
     let seeded_path = seeded.path().join("config.toml");
     orbit_config::seed_default_config(
@@ -263,6 +278,11 @@ const COMPLEXITIES_UNDER_TEST: [TaskComplexity; 4] = [
 
 #[test]
 fn explicit_task_crews_empty_pools_and_unassessed_tasks_preserve_fallback() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &explicit_task_crews_empty_pools_and_unassessed_tasks_preserve_fallback,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
     );
@@ -314,6 +334,11 @@ fn explicit_task_crews_empty_pools_and_unassessed_tasks_preserve_fallback() {
 
 #[test]
 fn pool_constraints_filter_candidates_and_diagnose_disjoint_or_explicit_crews() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pool_constraints_filter_candidates_and_diagnose_disjoint_or_explicit_crews,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     let parent = coordinator(
         &runtime,
@@ -363,6 +388,11 @@ fn pool_constraints_filter_candidates_and_diagnose_disjoint_or_explicit_crews() 
 
 #[test]
 fn selection_survives_persistence_reopen_same_task_children_and_resume_without_reroll() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &selection_survives_persistence_reopen_same_task_children_and_resume_without_reroll,
+    )) {
+        return;
+    }
     let (_root, runtime, repo, global) = test_runtime_with_workspace_config("");
     let parent = coordinator(
         &runtime,
@@ -418,6 +448,11 @@ fn selection_survives_persistence_reopen_same_task_children_and_resume_without_r
 
 #[test]
 fn unknown_blank_and_wrong_shape_pools_fail_before_admission() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &unknown_blank_and_wrong_shape_pools_fail_before_admission,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     for bad in [
         json!(["missing"]),
@@ -445,6 +480,11 @@ fn unknown_blank_and_wrong_shape_pools_fail_before_admission() {
 
 #[test]
 fn random_sampling_rejects_biased_ticket_and_propagates_entropy_failure() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &random_sampling_rejects_biased_ticket_and_propagates_entropy_failure,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     let parent = coordinator(
         &runtime,
@@ -480,6 +520,11 @@ fn random_sampling_rejects_biased_ticket_and_propagates_entropy_failure() {
 
 #[test]
 fn children_draw_independently_and_system_jobs_keep_their_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &children_draw_independently_and_system_jobs_keep_their_crew,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     let parent = coordinator(
         &runtime,
@@ -531,6 +576,11 @@ fn children_draw_independently_and_system_jobs_keep_their_crew() {
 /// draws. An explicit run-input crew and `task.crew` still win outright.
 #[test]
 fn explicit_run_crew_wins_and_ordinary_ship_admission_draws_from_the_matching_pool() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &explicit_run_crew_wins_and_ordinary_ship_admission_draws_from_the_matching_pool,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
     );
@@ -590,6 +640,11 @@ fn explicit_run_crew_wins_and_ordinary_ship_admission_draws_from_the_matching_po
 /// filters the pool and diagnoses a disjoint one exactly as `run auto` does.
 #[test]
 fn ship_coordinator_policy_filters_pools_and_holds_each_task_selection() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_coordinator_policy_filters_pools_and_holds_each_task_selection,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
     );
@@ -703,6 +758,11 @@ fn ship_coordinator(runtime: &OrbitRuntime, mut input: Value) -> String {
 /// for the creation-time assignment: an unassessed task falls to the default.
 #[test]
 fn exempt_no_diff_expected_tasks_route_on_their_crew_or_the_workspace_default() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &exempt_no_diff_expected_tasks_route_on_their_crew_or_the_workspace_default,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) =
         test_runtime_with_workspace_config("[workflow]\nmedium_complexity_crews = [\"grok\"]\n");
     let parent = coordinator(&runtime, json!({}));
@@ -756,6 +816,11 @@ fn no_diff_expected_task(runtime: &OrbitRuntime, crew: Option<&str>) -> Task {
 /// must win exactly its share, in cumulative name order.
 #[test]
 fn weighted_pools_select_each_crew_for_exactly_its_share_of_the_tickets() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &weighted_pools_select_each_crew_for_exactly_its_share_of_the_tickets,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         "[workflow]\nmedium_complexity_crews = [\"grok:70\", \"opus:10\", \"sol:20\"]\n",
     );
@@ -803,6 +868,11 @@ fn weighted_pools_select_each_crew_for_exactly_its_share_of_the_tickets() {
 /// nor stand in for a pool the allowlist has otherwise emptied.
 #[test]
 fn allowlists_renormalise_over_permitted_members_and_never_draw_a_parked_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &allowlists_renormalise_over_permitted_members_and_never_draw_a_parked_crew,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     let parent = coordinator(
         &runtime,
@@ -865,6 +935,11 @@ fn admit_allowed(
 /// as it did when the pool was written.
 #[test]
 fn a_legacy_named_pool_resumes_inherits_and_draws_uniformly() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_legacy_named_pool_resumes_inherits_and_draws_uniformly,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     let inherited = task(&runtime, TaskComplexity::Medium, None);
     let sibling = task(&runtime, TaskComplexity::Medium, None);
@@ -924,6 +999,11 @@ fn a_legacy_named_pool_resumes_inherits_and_draws_uniformly() {
 /// complexity and records the draw's provenance.
 #[test]
 fn task_creation_draws_its_crew_from_the_complexity_pool() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_creation_draws_its_crew_from_the_complexity_pool,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         r#"
 [workflow]
@@ -959,6 +1039,11 @@ hard_complexity_crews = ["sol"]
 /// explicit crew is stored as given with source `explicit`.
 #[test]
 fn task_creation_falls_back_to_the_default_crew_and_keeps_an_explicit_one() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &task_creation_falls_back_to_the_default_crew_and_keeps_an_explicit_one,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) =
         test_runtime_with_workspace_config("[workflow]\nmedium_complexity_crews = [\"grok\"]\n");
 
@@ -985,6 +1070,11 @@ fn task_creation_falls_back_to_the_default_crew_and_keeps_an_explicit_one() {
 /// crew comes from the same creation-time pool draw as any other task.
 #[test]
 fn an_auto_task_template_without_a_crew_mints_a_pool_drawn_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_auto_task_template_without_a_crew_mints_a_pool_drawn_crew,
+    )) {
+        return;
+    }
     use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
     use crate::application::auto_tasks::crud::AutoTaskAddParams;
@@ -1025,6 +1115,11 @@ fn an_auto_task_template_without_a_crew_mints_a_pool_drawn_crew() {
 /// editing the complexity alone leaves the crew alone.
 #[test]
 fn clearing_the_crew_redraws_and_a_complexity_edit_does_not() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &clearing_the_crew_redraws_and_a_complexity_edit_does_not,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         r#"
 [workflow]
@@ -1078,6 +1173,11 @@ hard_complexity_crews = ["sol"]
 /// asserted the same transition stamped a crew.
 #[test]
 fn the_in_progress_transition_never_changes_the_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &the_in_progress_transition_never_changes_the_crew,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
     );
@@ -1184,6 +1284,11 @@ provider = "codex"
 /// member, at creation and at admission alike.
 #[test]
 fn a_disabled_crew_is_never_drawn_from_a_pool() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_disabled_crew_is_never_drawn_from_a_pool,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(DISABLED_POOL_CONFIG);
     let parent = coordinator(&runtime, json!({}));
     for ticket in 0..8 {
@@ -1212,6 +1317,11 @@ fn a_disabled_crew_is_never_drawn_from_a_pool() {
 /// like an empty pool and routes to `workflow.default_crew`.
 #[test]
 fn an_all_disabled_pool_falls_through_to_the_default_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &an_all_disabled_pool_falls_through_to_the_default_crew,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(DISABLED_POOL_CONFIG);
     let parent = coordinator(&runtime, json!({}));
     let admitted = admit(
@@ -1237,6 +1347,11 @@ fn an_all_disabled_pool_falls_through_to_the_default_crew() {
 /// Explicit selection and a positive singleton keep their weight-one behavior.
 #[test]
 fn a_zero_weight_singleton_left_by_disabled_filtering_is_never_drawn() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_zero_weight_singleton_left_by_disabled_filtering_is_never_drawn,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(PARKED_SINGLETON_POOL_CONFIG);
 
     let creation = runtime.add_task(TaskAddParams {
@@ -1327,6 +1442,11 @@ fn a_zero_weight_singleton_left_by_disabled_filtering_is_never_drawn() {
 /// and the command that enables it; nothing is substituted.
 #[test]
 fn admission_refuses_a_task_pinned_to_a_disabled_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &admission_refuses_a_task_pinned_to_a_disabled_crew,
+    )) {
+        return;
+    }
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(DISABLED_POOL_CONFIG);
     let parent = coordinator(&runtime, json!({}));
     let pinned = task(&runtime, TaskComplexity::Medium, Some("sol"));

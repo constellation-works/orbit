@@ -92,6 +92,7 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // would be enough to disarm routing today; clearing the whole envelope
     // keeps the fixture correct if that coupling ever changes.
     "ORBIT_MANAGED_RUN_CONTEXT",
+    "ORBIT_WORKER_CONTEXT_REQUIRED",
     "ORBIT_RUN_ID",
     "ORBIT_TASK_ID",
     "ORBIT_ACTIVE_TASK_ID",

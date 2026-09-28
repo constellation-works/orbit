@@ -72,6 +72,11 @@ impl PipelineWaitClock for FixtureWaitClock {
 
 #[test]
 fn pipeline_wait_preserves_durable_terminal_evidence_on_first_snapshot() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_wait_preserves_durable_terminal_evidence_on_first_snapshot,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
 
     for state in [
@@ -162,6 +167,11 @@ fn pipeline_wait_preserves_durable_terminal_evidence_on_first_snapshot() {
 
 #[test]
 fn pipeline_wait_deadline_keeps_active_run_distinct_from_durable_timeout() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_wait_deadline_keeps_active_run_distinct_from_durable_timeout,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
@@ -208,6 +218,11 @@ fn pipeline_wait_deadline_keeps_active_run_distinct_from_durable_timeout() {
 
 #[test]
 fn pipeline_wait_caps_sleep_at_deadline_and_skips_sleep_for_zero_timeout() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_wait_caps_sleep_at_deadline_and_skips_sleep_for_zero_timeout,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let long_poll_run = runtime
         .stores()
@@ -264,6 +279,11 @@ fn pipeline_wait_caps_sleep_at_deadline_and_skips_sleep_for_zero_timeout() {
 
 #[test]
 fn pipeline_wait_caps_non_divisible_poll_budget_at_deadline() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_wait_caps_non_divisible_poll_budget_at_deadline,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
@@ -376,6 +396,11 @@ fn add_backlog_task(runtime: &OrbitRuntime) -> String {
 
 #[test]
 fn pipeline_worker_command_discovers_registered_workspace_from_cwd() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_command_discovers_registered_workspace_from_cwd,
+    )) {
+        return;
+    }
     let workspace = Path::new("/registered/workspace");
     let mut command = Command::new("orbit");
 
@@ -404,6 +429,11 @@ fn pipeline_worker_command_discovers_registered_workspace_from_cwd() {
 
 #[test]
 fn pipeline_worker_command_forwards_explicit_root_to_the_detached_worker() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_command_forwards_explicit_root_to_the_detached_worker,
+    )) {
+        return;
+    }
     let workspace = Path::new("/registered/workspace");
     let pinned_root = Path::new("/tmp/custom-orbit");
     let mut command = Command::new("orbit");
@@ -432,6 +462,11 @@ fn pipeline_worker_command_forwards_explicit_root_to_the_detached_worker() {
 
 #[test]
 fn pipeline_worker_profile_file_is_none_without_inherited_coverage_env() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_profile_file_is_none_without_inherited_coverage_env,
+    )) {
+        return;
+    }
     assert_eq!(
         pipeline_worker_profile_file(Path::new("/tmp/logs"), "jrun-child", None)
             .expect("profile path validation"),
@@ -446,6 +481,11 @@ fn pipeline_worker_profile_file_is_none_without_inherited_coverage_env() {
 
 #[test]
 fn pipeline_worker_profile_file_rewrites_inherited_coverage_dump_under_the_worker_log_dir() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_profile_file_rewrites_inherited_coverage_dump_under_the_worker_log_dir,
+    )) {
+        return;
+    }
     assert_eq!(
         pipeline_worker_profile_file(
             Path::new("/tmp/logs"),
@@ -459,6 +499,11 @@ fn pipeline_worker_profile_file_rewrites_inherited_coverage_dump_under_the_worke
 
 #[test]
 fn pipeline_worker_paths_reject_run_id_path_syntax() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_paths_reject_run_id_path_syntax,
+    )) {
+        return;
+    }
     for run_id in ["../outside", r"nested\outside", ".", ""] {
         assert!(
             pipeline_worker_log_path(Path::new("/tmp/logs"), run_id).is_err(),
@@ -482,6 +527,11 @@ fn pipeline_worker_paths_reject_run_id_path_syntax() {
 
 #[test]
 fn pipeline_worker_paths_preserve_safe_run_id_stems() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_paths_preserve_safe_run_id_stems,
+    )) {
+        return;
+    }
     assert_eq!(
         pipeline_worker_log_path(Path::new("/tmp/logs"), "jrun-child.1")
             .expect("worker log path validation"),
@@ -491,6 +541,11 @@ fn pipeline_worker_paths_preserve_safe_run_id_stems() {
 
 #[test]
 fn configure_pipeline_worker_stdio_creates_missing_log_directory_after_validation() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_creates_missing_log_directory_after_validation,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let logs_dir = root.path().join("missing-logs");
     let mut command = Command::new("true");
@@ -511,6 +566,11 @@ fn configure_pipeline_worker_stdio_creates_missing_log_directory_after_validatio
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_rejects_symlinked_log_directory,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let outside = root.path().join("outside");
     let logs_dir = root.path().join("logs");
@@ -537,6 +597,11 @@ fn configure_pipeline_worker_stdio_rejects_symlinked_log_directory() {
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let authority = root.path().join("authority");
     let held_authority = root.path().join("held-authority");
@@ -568,6 +633,11 @@ fn configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority()
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_keeps_directory_effects_on_opened_inode() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_keeps_directory_effects_on_opened_inode,
+    )) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
 
     let root = TempDir::new().expect("tempdir");
@@ -624,6 +694,11 @@ fn configure_pipeline_worker_stdio_keeps_directory_effects_on_opened_inode() {
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects,
+    )) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
 
     let root = TempDir::new().expect("tempdir");
@@ -662,6 +737,11 @@ fn configure_pipeline_worker_stdio_rejects_final_file_symlink_without_effects() 
 #[cfg(unix)]
 #[test]
 fn configure_pipeline_worker_stdio_accepts_symlinked_ancestor_of_log_directory() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_accepts_symlinked_ancestor_of_log_directory,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let real = root.path().join("real");
     std::fs::create_dir_all(real.join("state")).expect("create real state directory");
@@ -688,6 +768,11 @@ fn configure_pipeline_worker_stdio_accepts_symlinked_ancestor_of_log_directory()
 
 #[test]
 fn configure_pipeline_worker_stdio_creates_missing_intermediate_log_directories() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_creates_missing_intermediate_log_directories,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let logs_dir = root.path().join("state").join("logs");
     let mut command = Command::new("true");
@@ -707,6 +792,11 @@ fn configure_pipeline_worker_stdio_creates_missing_intermediate_log_directories(
 
 #[test]
 fn configure_pipeline_worker_stdio_rejects_traversal_in_log_directory() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &configure_pipeline_worker_stdio_rejects_traversal_in_log_directory,
+    )) {
+        return;
+    }
     let root = TempDir::new().expect("tempdir");
     let logs_dir = root.path().join("nested").join("..").join("logs");
     let mut command = Command::new("true");
@@ -733,6 +823,11 @@ fn configure_pipeline_worker_stdio_rejects_traversal_in_log_directory() {
 
 #[test]
 fn pipeline_worker_root_override_is_none_in_the_default_split_root_layout() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_root_override_is_none_in_the_default_split_root_layout,
+    )) {
+        return;
+    }
     let paths = WorkspacePaths::new(
         PathBuf::from("/repo"),
         PathBuf::from("/repo/.orbit"),
@@ -743,6 +838,11 @@ fn pipeline_worker_root_override_is_none_in_the_default_split_root_layout() {
 
 #[test]
 fn pipeline_worker_root_override_forwards_a_pinned_global_store() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &pipeline_worker_root_override_forwards_a_pinned_global_store,
+    )) {
+        return;
+    }
     let paths = WorkspacePaths::new(
         PathBuf::from("/repo"),
         PathBuf::from("/tmp/custom-orbit"),
@@ -771,6 +871,11 @@ fn canonical_worker_log_path(runtime: &OrbitRuntime, run_id: &str) -> PathBuf {
 #[cfg(unix)]
 #[test]
 fn worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
@@ -840,6 +945,11 @@ fn worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic() {
 #[cfg(unix)]
 #[test]
 fn routine_style_detached_worker_is_claimed_within_ownership_window() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &routine_style_detached_worker_is_claimed_within_ownership_window,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
@@ -893,6 +1003,11 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
 
 #[test]
 fn observer_read_counts_isolate_identical_run_ids_in_independent_stores() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &observer_read_counts_isolate_identical_run_ids_in_independent_stores,
+    )) {
+        return;
+    }
     let (_first_root, first) = test_runtime();
     let (_second_root, second) = test_runtime();
     let run = first
@@ -926,6 +1041,11 @@ fn observer_read_counts_isolate_identical_run_ids_in_independent_stores() {
 #[cfg(unix)]
 #[test]
 fn claimed_sleeping_worker_does_not_keep_polling_the_run_store() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &claimed_sleeping_worker_does_not_keep_polling_the_run_store,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let _worker = WorkerOverride::shell("sleep 3");
     let run = runtime
@@ -979,6 +1099,11 @@ fn claimed_sleeping_worker_does_not_keep_polling_the_run_store() {
 /// second PID cannot replace an already-running owner.
 #[test]
 fn duplicate_worker_cannot_replace_the_persisted_owner() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &duplicate_worker_cannot_replace_the_persisted_owner,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
@@ -1025,6 +1150,11 @@ fn duplicate_worker_cannot_replace_the_persisted_owner() {
 
 #[test]
 fn mixed_crew_validation_after_start_terminalizes_without_admitting_tasks() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &mixed_crew_validation_after_start_terminalizes_without_admitting_tasks,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime_with_named_crews();
     let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
@@ -1134,6 +1264,11 @@ spec:
 /// child pipeline for the dispatch-time provider gate.
 #[test]
 fn explicit_ship_crew_allowlist_admits_only_configured_permitted_crews() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &explicit_ship_crew_allowlist_admits_only_configured_permitted_crews,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime_with_named_crews();
     let _worker = WorkerOverride::shell("exit 0");
     let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
@@ -1333,6 +1468,11 @@ fn wait_for_log_contains(path: &Path, expected: &str) -> String {
 
 #[test]
 fn long_lived_worker_reopens_and_applies_compatible_pending_schema() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &long_lived_worker_reopens_and_applies_compatible_pending_schema,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let store = runtime.sqlite_store().expect("open store fixture");
     {
@@ -1385,6 +1525,11 @@ fn long_lived_worker_reopens_and_applies_compatible_pending_schema() {
 
 #[test]
 fn newer_schema_fails_before_worker_claims_or_executes() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &newer_schema_fails_before_worker_claims_or_executes,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = runtime
         .stores()
@@ -1461,6 +1606,11 @@ spec:
 /// step carries an error at all.
 #[test]
 fn routine_dispatch_workspace_mismatch_fails_the_run_before_it_executes() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &routine_dispatch_workspace_mismatch_fails_the_run_before_it_executes,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_sleep_job(&runtime, "task_gate_pipeline");
     let mismatched_dir = "/completely/unrelated/workspace/.orbit";
@@ -1517,6 +1667,11 @@ fn routine_dispatch_workspace_mismatch_fails_the_run_before_it_executes() {
 /// its steps normally, proving the new check is not a blanket refusal.
 #[test]
 fn routine_dispatch_workspace_match_lets_the_run_execute() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &routine_dispatch_workspace_match_lets_the_run_execute,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     seed_sleep_job(&runtime, "task_gate_pipeline");
     let matching_dir = runtime.paths().orbit_dir.to_string_lossy().into_owned();
@@ -1537,6 +1692,11 @@ fn routine_dispatch_workspace_match_lets_the_run_execute() {
 
 #[test]
 fn existing_pipeline_worker_executable_path_is_preserved() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &existing_pipeline_worker_executable_path_is_preserved,
+    )) {
+        return;
+    }
     let dir = TempDir::new().expect("tempdir");
     let executable = dir.path().join("orbit (deleted)");
     std::fs::write(&executable, "replacement").expect("write executable fixture");
@@ -1550,6 +1710,11 @@ fn existing_pipeline_worker_executable_path_is_preserved() {
 #[cfg(target_os = "linux")]
 #[test]
 fn deleted_current_executable_resolves_to_replaced_installed_path() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &deleted_current_executable_resolves_to_replaced_installed_path,
+    )) {
+        return;
+    }
     let dir = TempDir::new().expect("tempdir");
     let installed = dir.path().join("orbit");
     std::fs::write(&installed, "replacement").expect("write replacement executable");
@@ -1571,6 +1736,11 @@ fn deleted_current_executable_resolves_to_replaced_installed_path() {
 /// harness has. This prevents the 2026-09-23 recursive worker fork bomb.
 #[test]
 fn worker_command_refuses_an_unmarked_process_at_any_path() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &worker_command_refuses_an_unmarked_process_at_any_path,
+    )) {
+        return;
+    }
     let harness = std::env::current_exe().expect("running test harness path");
     for path in [
         harness,
@@ -1596,6 +1766,11 @@ fn worker_command_refuses_an_unmarked_process_at_any_path() {
 
 #[test]
 fn marked_worker_command_admits_any_executable_path() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &marked_worker_command_admits_any_executable_path,
+    )) {
+        return;
+    }
     for orbit in [
         "/home/operator/.orbit/bin/orbit",
         "/checkout/target/debug/orbit",
@@ -1639,6 +1814,11 @@ fn marked_worker_command_admits_any_executable_path() {
 /// surface in the picture.
 #[test]
 fn ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let selected_task_id = add_backlog_task(&runtime);
     let in_flight = runtime
@@ -1691,6 +1871,11 @@ fn ship_submission_refuses_a_task_already_carried_by_a_non_terminal_run() {
 /// delivery. The real shared submission path must still accept that task.
 #[test]
 fn ship_submission_accepts_a_task_listed_by_non_delivery_runs() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_accepts_a_task_listed_by_non_delivery_runs,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let _worker = WorkerOverride::shell("exit 0");
     seed_task_auto_pipeline(&runtime);
@@ -1734,6 +1919,11 @@ fn ship_submission_accepts_a_task_listed_by_non_delivery_runs() {
 
 #[test]
 fn ship_submission_refuses_a_task_carried_by_a_drain_child() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_refuses_a_task_carried_by_a_drain_child,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let task_id = add_backlog_task(&runtime);
     let gate = runtime
@@ -1777,6 +1967,11 @@ fn ship_submission_refuses_a_task_carried_by_a_drain_child() {
 /// test from spawning a detached pipeline worker.
 #[test]
 fn ship_submission_guard_is_scoped_to_the_selected_tasks() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_guard_is_scoped_to_the_selected_tasks,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let in_flight_task_id = add_backlog_task(&runtime);
     let unrelated_task_id = add_backlog_task(&runtime);
@@ -1824,6 +2019,11 @@ fn ship_submission_guard_is_scoped_to_the_selected_tasks() {
 /// and cannot leave an orphaned worker/run behind.
 #[test]
 fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let missing_id = "ORB-99999".to_string();
 
@@ -1860,6 +2060,11 @@ fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
 /// is a size hint, and there is no supervisor pipeline to route it to.
 #[test]
 fn ship_submission_admits_a_tagged_root_and_its_child_alike() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_admits_a_tagged_root_and_its_child_alike,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let tagged_root = runtime
         .add_task(TaskAddParams {
@@ -1900,6 +2105,11 @@ fn ship_submission_admits_a_tagged_root_and_its_child_alike() {
 
 #[test]
 fn ship_submission_mixed_explicit_selection_identifies_the_missing_task() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_mixed_explicit_selection_identifies_the_missing_task,
+    )) {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let existing_id = add_backlog_task(&runtime);
     let missing_id = "ORB-99999".to_string();
@@ -2013,6 +2223,11 @@ fn submitted_ship_base(runtime: &OrbitRuntime, base: Option<&str>) -> serde_json
 
 #[test]
 fn ship_submission_without_base_uses_the_registered_workspace_branch() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_without_base_uses_the_registered_workspace_branch,
+    )) {
+        return;
+    }
     let (_root, runtime) = runtime_with_base_branch("main", Some("agent-main"));
     let _worker = WorkerOverride::shell("exit 0");
 
@@ -2022,6 +2237,11 @@ fn ship_submission_without_base_uses_the_registered_workspace_branch() {
 
 #[test]
 fn ship_submission_without_base_falls_back_to_workflow_config_without_a_binding() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_without_base_falls_back_to_workflow_config_without_a_binding,
+    )) {
+        return;
+    }
     let (_root, runtime) = runtime_with_base_branch("agent-main", None);
     let _worker = WorkerOverride::shell("exit 0");
 
@@ -2031,6 +2251,11 @@ fn ship_submission_without_base_falls_back_to_workflow_config_without_a_binding(
 
 #[test]
 fn ship_submission_explicit_base_overrides_the_registered_workspace_branch() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_explicit_base_overrides_the_registered_workspace_branch,
+    )) {
+        return;
+    }
     let (_root, runtime) = runtime_with_base_branch("main", Some("agent-main"));
     let _worker = WorkerOverride::shell("exit 0");
 
