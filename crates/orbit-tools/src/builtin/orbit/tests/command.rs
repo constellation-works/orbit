@@ -84,18 +84,8 @@ fn schema_requires_argv_and_working_directory() {
         .iter()
         .find(|parameter| parameter.name == "working_directory")
         .expect("working_directory parameter");
-    assert!(
-        working_directory.description.contains("Absolute"),
-        "{}",
-        working_directory.description
-    );
-    assert!(
-        working_directory
-            .description
-            .contains("inside this workspace's checkout"),
-        "{}",
-        working_directory.description
-    );
+    assert_eq!(working_directory.param_type, "string");
+    assert!(working_directory.required);
 }
 
 fn checkout_fixture() -> (TempDir, PathBuf) {

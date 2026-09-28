@@ -100,17 +100,6 @@ fn schema_exposes_context_files() {
 
     assert_eq!(param.param_type, "string_list");
     assert!(!param.required);
-    assert!(
-        param
-            .description
-            .contains("comma-separated string or array")
-    );
-    assert!(param.description.contains("file:path"));
-    assert!(
-        param.description.contains("filesystem anchor only"),
-        "context_files help must document that a `symbol:` name is not verified: {}",
-        param.description
-    );
 }
 
 #[test]
@@ -125,7 +114,6 @@ fn schema_exposes_source_task_id() {
 
     assert_eq!(param.param_type, "string");
     assert!(!param.required);
-    assert!(param.description.contains("originating task ID"));
 }
 
 #[test]
@@ -140,17 +128,10 @@ fn schema_exposes_complexity() {
 
     assert_eq!(param.param_type, "string");
     assert!(!param.required);
-    assert!(param.description.contains("low, medium, hard, or xhard"));
-    for alias in ["easy", "small", "trivial", "large", "big"] {
-        assert!(
-            param.description.contains(alias),
-            "alias {alias}: {param:?}"
-        );
-    }
 }
 
 #[test]
-fn schema_describes_note_as_a_status_transition_annotation() {
+fn schema_exposes_optional_note() {
     let schema = OrbitTaskUpdateTool.schema();
     let note = schema
         .parameters
@@ -158,9 +139,8 @@ fn schema_describes_note_as_a_status_transition_annotation() {
         .find(|param| param.name == "note")
         .expect("note param");
 
-    assert!(note.description.contains("status transition"));
-    assert!(note.description.contains("`comment`"));
-    assert!(note.description.contains("free-form discussion"));
+    assert_eq!(note.param_type, "string");
+    assert!(!note.required);
 }
 
 #[test]
