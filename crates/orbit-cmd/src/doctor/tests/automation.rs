@@ -293,6 +293,13 @@ fn auto_task_artifact_summary_counts_missing_and_stale_defaults_in_one_populatio
     )
     .expect("seed workspace auto-tasks");
     let auto_tasks_dir = workspace_root.join("auto_tasks");
+    // The population is whatever this binary ships; pinning its size would
+    // turn every new shipped auto-task into a red test.
+    let shipped = fs::read_dir(&auto_tasks_dir)
+        .expect("list seeded auto-tasks")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "yaml"))
+        .count();
 
     for name in ["backlog-hygiene", "doc-duties", "run-failure-patterns"] {
         fs::remove_file(auto_tasks_dir.join(format!("{name}.yaml")))
@@ -332,8 +339,9 @@ fn auto_task_artifact_summary_counts_missing_and_stale_defaults_in_one_populatio
     let row = status_of(&results, "artifacts-auto-tasks");
     assert_eq!(row.status, WorkspaceDoctorStatus::Error, "{row:?}");
     assert!(
-        row.message
-            .contains("9 of 9 auto-tasks need attention (3 missing, 6 stale)"),
+        row.message.contains(&format!(
+            "9 of {shipped} auto-tasks need attention (3 missing, 6 stale)"
+        )),
         "{row:?}"
     );
 }
