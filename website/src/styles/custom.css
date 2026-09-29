@@ -322,18 +322,6 @@ html:not([data-has-sidebar]) header.header {
   text-wrap: pretty;
 }
 
-/* Visually hidden text remains available to screen readers. */
-.orbit-sr-only {
-  border: 0;
-  clip-path: inset(50%);
-  height: 1px;
-  overflow: hidden;
-  padding: 0;
-  position: absolute;
-  white-space: nowrap;
-  width: 1px;
-}
-
 .orbit-hero-actions {
   display: flex;
   flex-wrap: wrap;
@@ -813,16 +801,23 @@ a.orbit-card:focus-visible {
   outline-offset: 2px;
 }
 
-a.orbit-card:hover h3,
-a.orbit-card:focus-visible h3 {
+a.orbit-card:hover :is(h2, h3),
+a.orbit-card:focus-visible :is(h2, h3) {
   color: var(--sl-color-text-accent);
 }
 
-.orbit-card h3 {
+/* Cards on the landing page sit under an H2 section heading, so they use H3;
+   cards on pages without one (src/pages/tasks) use H2 to keep the outline
+   unbroken. Both look the same, and the doubled selector beats Starlight's
+   prose H2 spacing (`.sl-markdown-content h2`). */
+.orbit-card h3,
+.sl-markdown-content .orbit-card h2 {
+  border: 0;
   font-family: var(--sl-font);
   font-size: 1.0625rem;
   font-weight: 600;
   margin: 0;
+  padding: 0;
   transition: color 120ms ease;
 }
 
@@ -903,7 +898,15 @@ a.orbit-card:focus-visible h3 {
 .orbit-footer-inner {
   display: grid;
   gap: 2rem;
-  grid-template-columns: minmax(0, 1.4fr) repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 4fr);
+}
+
+/* One "Footer" landmark holds the four link groups, so assistive tech lists a
+   single navigation region instead of four short ones. */
+.orbit-footer-nav {
+  display: grid;
+  gap: 2rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .orbit-footer-brand-block p {
@@ -919,7 +922,7 @@ a.orbit-card:focus-visible h3 {
   font-weight: 650;
 }
 
-.orbit-footer nav {
+.orbit-footer-group {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -946,11 +949,11 @@ a.orbit-card:focus-visible h3 {
 
 @media (max-width: 54rem) {
   .orbit-footer-inner {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .orbit-footer-brand-block {
-    grid-column: 1 / -1;
+  .orbit-footer-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1711,7 +1714,7 @@ a.orbit-card:focus-visible h3 {
    they are dropped entirely when the reader asks for reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   .orbit-card,
-  .orbit-card h3,
+  .orbit-card :is(h2, h3),
   .orbit-stack-layer,
   .orbit-stack-name {
     transition: none;
