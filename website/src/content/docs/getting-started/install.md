@@ -81,10 +81,10 @@ cd <repo>
 orbit workspace init
 ```
 
-`orbit init` asks for two things it can never change later on this machine: a
-host name, and a **task-id prefix** of 2–5 uppercase letters that namespaces
-every task ID this machine allocates. Supply them up front for an unattended
-setup:
+`orbit init` asks for two things: a **machine name**, which you can rename later
+with `orbit config set --global machine.name <value>`, and a **task-id prefix**
+of 2–5 uppercase letters that namespaces every task ID this machine allocates
+and can never change. Supply them up front for an unattended setup:
 
 ```bash
 orbit init --non-interactive --machine-name build-01 --task-prefix ORB
@@ -175,7 +175,7 @@ it:
 ```bash
 orbit update --check          # report what is available, change nothing
 orbit update                  # install the newest published release
-orbit update --version 0.19.0 # install one exact release
+orbit update --version X.Y.Z  # install one exact release
 ```
 
 The download is verified against the signed release checksum manifest before

@@ -37,10 +37,22 @@ The bounded one-year policy deliberately omits `includeSubDomains` and `preload`
 the repository does not establish HTTPS readiness or operational ownership for
 every subdomain.
 
+The same file also sets `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, and
+a restrictive `Permissions-Policy` for every route, and serves `/_astro/*` (the
+content-hashed build assets) with a one-year `immutable` `Cache-Control`. It sets
+no `Content-Security-Policy`: pages carry small inline scripts, so a CSP would
+need hashes or nonces first.
+
 HTTP-to-HTTPS redirection is owned by the externally managed Cloudflare zone,
 not by the Pages artifact. Daniel owns the corresponding post-publication
 checks for HSTS and redirects. See the [website validation runbook](../docs/runbooks/website-validation.md)
 for local evidence and manual-publication verification.
+
+`public/robots.txt` allows all crawlers and points at the sitemap index Astro
+generates from the `site` URL. The social-preview image is `public/og-image.png`
+(1200x630), rendered from `public/og-image.svg` because most platforms do not
+render SVG previews; regenerate the PNG whenever the SVG changes.
 
 Every published page is authored by hand under `src/content/docs/`, with two
 exceptions under `src/pages/`: `/changelog/` renders the repository's tracked

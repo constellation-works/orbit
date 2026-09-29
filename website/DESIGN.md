@@ -70,7 +70,7 @@ No display font. No serif anywhere. Both families ship as npm packages
 
 - **Logo:** a single thin ring with an offset dot. Must be legible at 16px favicon size.
 - **Section dividers** in long pages: 1px rule with a small ring glyph centered.
-- **Landing page only:** one slow-rotating orbit diagram in the hero. Respects `prefers-reduced-motion`.
+- **Landing page:** the hero carries a static session preview (see 3.5), not an orbit diagram. No animation.
 - No starfields, parallax, planet illustrations, or animation anywhere inside docs content.
 
 ### 3.4 Layout
@@ -173,7 +173,7 @@ Each section has an index page that lists its children with one-line description
 
 - **Framework:** [Astro Starlight](https://starlight.astro.build)
 - **Search:** Pagefind (built into Starlight, static, offline, no third-party account)
-- **Content:** MDX in `src/content/docs/`
+- **Content:** Markdown (`.md`) in `src/content/docs/`
 - **Styling:** Starlight's CSS custom properties, overridden in a single `custom.css`
 - **Hosting:** The public edge and DNS are on Cloudflare. Daniel manually
   publishes the static output; the `orbit-cli.com` DNS remains externally
@@ -209,7 +209,7 @@ Nextra is reserved for a future scenario where interactive React widgets become 
 
 1. **Versioning.** Starlight supports versioned docs via directory structure. Add it when release-specific documentation becomes necessary.
 2. **Architecture detail.** Crate boundaries and dependency direction are contributor material, not published here; they live in the repository's `ARCHITECTURE.md`. Revisit only if a public extension surface makes them user-facing.
-3. **Logo design.** Ring-with-offset-dot concept agreed; actual SVG not yet drawn.
+3. **Logo refinement.** The ring-with-offset-dot logo ships as `src/assets/orbit-logo-light.svg` and `orbit-logo-dark.svg`. Revisit only if it fails legibility at 16px favicon size.
 4. **Analytics.** Plausible (privacy-respecting) or none at all? Default to none unless there's a decision to measure something specific.
 
 ---

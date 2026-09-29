@@ -18,7 +18,7 @@
   </g>
   <g transform="translate(80 100)" fill="#EDEDEF" font-family="Inter, system-ui, sans-serif">
     <text font-size="96" font-weight="700" letter-spacing="-2">Orbit</text>
-    <text y="54" font-size="28" font-weight="500" fill="#9B9BA3">A self-hosted runtime for fleets of coding agents.</text>
+    <text y="54" font-size="28" font-weight="500" fill="#9B9BA3">A local-first runtime for coding agents.</text>
   </g>
   <g transform="translate(80 520)" fill="#9B9BA3" font-family="Inter, system-ui, sans-serif" font-size="22">
     <text>orbit-cli.com</text>
