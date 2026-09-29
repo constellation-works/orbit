@@ -140,6 +140,31 @@ pub fn compile_glob_regex(rule: &str) -> Result<Regex, regex::Error> {
     compile_filesystem_regex(&format!("^{body}$"))
 }
 
+/// Longest normalized rule, in bytes, that [`validate_glob_rule`] accepts
+/// without compiling it.
+///
+/// Every character outside the glob operators is escaped, so a translated rule
+/// is always valid regex syntax; the only way [`compile_glob_regex`] can fail
+/// is the compiled-size limit, and 512 bytes of the costliest operator
+/// (`?`, a Unicode class) stay far below it. The bound is pinned by a test that
+/// compiles worst-case rules of exactly this length.
+pub(crate) const UNCOMPILED_VALIDATION_MAX_BYTES: usize = 512;
+
+/// Whether `rule` (already normalized, `!` prefix removed) is a glob
+/// [`compile_glob_regex`] accepts.
+///
+/// Policy validation runs on every runtime open and only needs the answer, but
+/// building a regex for it costs more than the rest of a short command
+/// (dozens of rules across the default policy, each validated more than once).
+/// Rules up to [`UNCOMPILED_VALIDATION_MAX_BYTES`] cannot fail, so only longer
+/// ones are compiled.
+pub(crate) fn validate_glob_rule(rule: &str) -> Result<(), regex::Error> {
+    if rule.len() <= UNCOMPILED_VALIDATION_MAX_BYTES {
+        return Ok(());
+    }
+    compile_glob_regex(rule).map(drop)
+}
+
 /// Translate a glob pattern into an *unanchored* regex body, honoring the
 /// segment-aware operators (`**/`, `**`, `*`, `?`) and escaping every other
 /// character. Callers wrap the result in anchors (`^`…`$`) and any suffix.

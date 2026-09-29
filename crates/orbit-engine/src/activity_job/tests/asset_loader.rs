@@ -273,3 +273,93 @@ fn load_activity_asset_keeps_loading_an_empty_tool_allowlist() {
 
     assert!(orbit_types::workflow::activity_tool_policy_deprecation(&asset.spec).is_some());
 }
+
+/// A plain scalar that reads as a number is still text where the schema says
+/// text. Typed parsing takes it verbatim; going through an untyped document
+/// first would turn it into a number and refuse it.
+#[test]
+fn load_activity_asset_keeps_number_like_scalars_in_text_fields() {
+    let yaml = agent_loop_activity_yaml("versioned", "    - orbit.task.show\n")
+        .replace("Test agent loop.", "2024");
+
+    let asset = load_activity_asset(&yaml).expect("number-like text fields load as text");
+
+    assert_eq!(asset.spec.description, "2024");
+}
+
+#[test]
+fn load_job_asset_keeps_number_like_scalars_in_text_fields() {
+    let yaml = r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: 2024
+  description: 1.0
+spec:
+  state: enabled
+  steps:
+    - id: only
+      target: activity:anything
+"#;
+
+    let asset = load_job_asset(yaml).expect("number-like names load as text");
+
+    assert_eq!(asset.name, "2024");
+}
+
+#[test]
+fn asset_syntax_errors_keep_their_source_position() {
+    let yaml = "schemaVersion: 2\nkind: Job\nmetadata: [unclosed\n";
+
+    let error = load_job_asset(yaml).expect_err("malformed YAML must fail");
+
+    assert!(matches!(error, AssetLoadError::HeaderParse(_)), "{error:?}");
+    assert!(error.to_string().contains("line"), "{error}");
+}
+
+#[test]
+fn asset_type_errors_keep_their_source_position() {
+    let yaml = agent_loop_activity_yaml("typed", "    - orbit.task.show\n")
+        .replace("type: agent_loop", "type: [not, a, string]");
+
+    let error = load_activity_asset(&yaml).expect_err("a mistyped field must fail");
+
+    assert!(matches!(error, AssetLoadError::Parse(_)), "{error:?}");
+    assert!(error.to_string().contains("line"), "{error}");
+}
+
+#[test]
+fn retired_and_unknown_schema_versions_are_reported_before_the_body_is_read() {
+    let retired = load_activity_asset("schemaVersion: 1\nkind: Activity\nspec: not-a-mapping\n")
+        .expect_err("schemaVersion 1 is retired");
+    assert!(
+        matches!(retired, AssetLoadError::RetiredVersion(1)),
+        "{retired:?}"
+    );
+
+    let unknown = load_job_asset("schemaVersion: 9\nkind: Job\nspec: not-a-mapping\n")
+        .expect_err("schemaVersion 9 is unknown");
+    assert!(
+        matches!(unknown, AssetLoadError::UnsupportedVersion(9)),
+        "{unknown:?}"
+    );
+
+    let duplicated = load_activity_asset("schemaVersion: 1\nkind: Activity\nkind: Job\n")
+        .expect_err("a retired asset stays retired whatever else is wrong with it");
+    assert!(
+        matches!(duplicated, AssetLoadError::RetiredVersion(1)),
+        "{duplicated:?}"
+    );
+}
+
+#[test]
+fn a_kind_mismatch_is_reported_for_a_well_formed_asset_of_the_wrong_kind() {
+    let yaml = agent_loop_activity_yaml("misfiled", "    - orbit.task.show\n")
+        .replace("kind: Activity", "kind: Job");
+
+    let error = load_activity_asset(&yaml).expect_err("a job is not an activity");
+
+    assert!(
+        matches!(error, AssetLoadError::KindMismatch { .. }),
+        "{error:?}"
+    );
+}

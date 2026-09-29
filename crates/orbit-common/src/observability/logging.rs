@@ -50,7 +50,7 @@ use tracing::{
     field::{Field, Visit},
     span,
 };
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
     field::{RecordFields, VisitOutput},
@@ -491,6 +491,15 @@ fn managed_registry_root() -> io::Result<Option<PathBuf>> {
     Ok(Some(root))
 }
 
+/// Lines the background writer may lag behind before new ones are dropped.
+///
+/// The queue is preallocated slot by slot when the layer is built, so the
+/// `tracing_appender` default of 128 000 lines costs milliseconds of
+/// initialization in every process, including one-shot commands that log
+/// nothing. Orbit emits lines at human scale and the writer drains them as they
+/// arrive, so a few thousand absorb any realistic burst.
+pub(super) const JSONL_QUEUE_LINES: usize = 4_096;
+
 // Visible to sibling-layout logging tests so file-layer behavior can be
 // exercised without nesting tests under this source file.
 pub(super) fn jsonl_layer_at_path<S>(
@@ -499,7 +508,9 @@ pub(super) fn jsonl_layer_at_path<S>(
 where
     S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
-    let (writer, guard) = tracing_appender::non_blocking(LazyJsonlWriter::new(path.to_path_buf()));
+    let (writer, guard) = NonBlockingBuilder::default()
+        .buffered_lines_limit(JSONL_QUEUE_LINES)
+        .finish(LazyJsonlWriter::new(path.to_path_buf()));
     let layer = fmt::layer()
         .event_format(RedactingJsonEventFormat)
         .fmt_fields(RedactingFields::json())

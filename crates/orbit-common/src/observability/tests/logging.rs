@@ -287,6 +287,7 @@ mod subscriber {
     use tracing::Dispatch;
     use tracing_subscriber::{Registry, layer::SubscriberExt};
 
+    use super::super::super::logging::JSONL_QUEUE_LINES;
     use super::{
         BufferMakeWriter, jsonl_layer_at_path, path_str, read_jsonl_values,
         with_test_subscriber_at_path,
@@ -401,6 +402,27 @@ mod subscriber {
         assert_eq!(mode(&orbit_dir), 0o700);
         assert_eq!(mode(&state_dir), 0o700);
         assert_eq!(mode(&log_dir), 0o700);
+    }
+
+    #[test]
+    fn jsonl_layer_keeps_a_burst_that_fits_its_queue_even_before_the_writer_starts() {
+        let _env = unset(["RUST_LOG"]);
+        let dir = tempdir().expect("tempdir");
+        let log_path = dir.path().join("orbit.jsonl");
+        // Deterministic whatever the writer thread's scheduling: the whole
+        // burst fits the queue, so nothing may be dropped.
+        let burst = JSONL_QUEUE_LINES / 2;
+
+        with_test_subscriber_at_path("info", &log_path, io::sink, || {
+            for sequence in 0..burst {
+                tracing::info!(sequence, "burst");
+            }
+        });
+
+        let values = read_jsonl_values(&log_path);
+        assert_eq!(values.len(), burst);
+        let last = values.last().expect("last event");
+        assert_eq!(last["fields"]["sequence"], burst - 1);
     }
 
     #[test]

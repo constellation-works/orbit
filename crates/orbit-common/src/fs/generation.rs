@@ -72,6 +72,7 @@ use crate::OrbitError;
 
 mod handoff;
 mod identity;
+mod image_digest;
 mod registry;
 
 pub use handoff::{
@@ -142,6 +143,7 @@ const SWITCH_PENDING: &str = "a generation switch is pending";
 const ADMISSION_LOCK: &str = ".generation-admission.lock";
 const GENERATION_LOCK: &str = ".generation.lock";
 const COMPAT_RECORD: &str = ".generation-compat.json";
+const IMAGE_DIGEST_CACHE: &str = ".generation-image-digest.json";
 const CLOCK_HOLD: &str = ".generation-clock-hold.json";
 
 #[derive(Serialize, Deserialize)]
@@ -285,6 +287,7 @@ fn generation_record_name(name: &str) -> Result<&'static str, OrbitError> {
         ADMISSION_LOCK => Ok(ADMISSION_LOCK),
         GENERATION_LOCK => Ok(GENERATION_LOCK),
         COMPAT_RECORD => Ok(COMPAT_RECORD),
+        IMAGE_DIGEST_CACHE => Ok(IMAGE_DIGEST_CACHE),
         _ => Err(refusal("invalid generation record name")),
     }
 }
@@ -514,6 +517,14 @@ fn hash_executable(mut file: File) -> Result<String, OrbitError> {
 
 /// Digest the running inode, even after its installed path has been replaced.
 pub fn process_generation() -> Result<&'static str, OrbitError> {
+    process_digest(None)
+}
+
+/// [`process_generation`], remembering the digest under `root` between
+/// processes for as long as the running image's file identity is unchanged
+/// (see [`image_digest`]). Whichever call runs first fixes the process's
+/// digest; later calls return it.
+fn process_digest(cache_root: Option<&Path>) -> Result<&'static str, OrbitError> {
     static DIGEST: OnceLock<Result<String, String>> = OnceLock::new();
     DIGEST
         .get_or_init(|| {
@@ -524,7 +535,10 @@ pub fn process_generation() -> Result<&'static str, OrbitError> {
             let result = (|| {
                 let mut file = File::open(path.map_err(refusal)?).map_err(refusal)?;
                 verify_running_image(&mut file)?;
-                hash_executable(file)
+                let cache = cache_root.and_then(|root| {
+                    validated_generation_record_path(root, IMAGE_DIGEST_CACHE).ok()
+                });
+                image_digest::digest_with_cache(cache.as_deref(), file, hash_executable)
             })();
             result.map_err(|e: OrbitError| e.to_string())
         })
@@ -657,7 +671,7 @@ impl GenerationGuard {
         F: FnOnce() -> Result<u32, OrbitError>,
     {
         let participant = Participant {
-            digest: process_generation()?,
+            digest: process_digest(Some(root))?,
             identity,
             role,
             access,

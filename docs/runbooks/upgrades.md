@@ -250,6 +250,11 @@ Admission grants no permission: workspace selection, operator/agent capability,
 remote caller and managed-run checks all still run. On Linux the executable digest
 comes from `/proc/self/exe`, including a deleted running inode; on macOS the native
 Mach-O image UUID must match the loaded image before the opened descriptor is hashed.
+Hashing a whole binary dominates a short command, so the digest is remembered in
+`.generation-image-digest.json` (a disposable cache, safe to delete) keyed by the
+image's device, inode, size, mtime and ctime. Any rewrite or replacement changes the
+key and is re-hashed; an image modified within the last two seconds is never
+recorded, so a same-tick rewrite cannot alias an earlier entry.
 OS locks release on exit or crash (and on exec, which is how a handover leaves);
 never unlink `.generation.lock`, `.generation-admission.lock`,
 `.generation-compat.json`, `.generation-pending.json` or `.generation-participants/`
