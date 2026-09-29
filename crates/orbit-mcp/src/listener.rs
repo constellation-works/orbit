@@ -37,6 +37,13 @@ pub const DEFAULT_MAX_MCP_SESSIONS: usize = 64;
 /// trying again, instead of spinning or giving up.
 const ACCEPT_EXHAUSTION_BACKOFF: Duration = Duration::from_millis(250);
 
+/// How long an accepted connection may stay silent before the listener drops
+/// it. The peer must send the first byte of a JSON object promptly: a real
+/// client writes `initialize` immediately, while a peer that connects and sends
+/// nothing would otherwise hold one of the session permits indefinitely, and
+/// enough of them starve every legitimate client.
+const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// How far a listener is allowed to be reachable.
 ///
 /// The listener authenticates no one: a local process that reaches the socket
@@ -60,6 +67,7 @@ pub struct McpListener {
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
     sessions: Arc<Semaphore>,
+    first_byte_timeout: Duration,
 }
 
 impl McpListener {
@@ -83,7 +91,15 @@ impl McpListener {
             host,
             trusted_context,
             sessions: Arc::new(Semaphore::new(DEFAULT_MAX_MCP_SESSIONS)),
+            first_byte_timeout: FIRST_BYTE_TIMEOUT,
         })
+    }
+
+    /// Replace how long an accepted connection may stay silent before it is
+    /// closed and its session slot released.
+    pub fn with_first_byte_timeout(mut self, timeout: Duration) -> Self {
+        self.first_byte_timeout = timeout;
+        self
     }
 
     /// The address actually bound, including any kernel-assigned port.
@@ -136,7 +152,13 @@ impl McpListener {
                 Arc::clone(&self.host),
                 self.session_context_for(peer),
             );
-            tokio::spawn(serve_connection(server, stream, peer, permit));
+            tokio::spawn(serve_connection(
+                server,
+                stream,
+                peer,
+                permit,
+                self.first_byte_timeout,
+            ));
         }
     }
 
@@ -173,19 +195,30 @@ async fn serve_connection(
     stream: TcpStream,
     peer: SocketAddr,
     _permit: OwnedSemaphorePermit,
+    first_byte_timeout: Duration,
 ) {
     // rmcp ignores unparsable lines. An HTTP request line and its headers are
     // unparsable, but JSON-RPC lines in a POST body are not. Check the first
     // byte without consuming it so only a JSON object can start a session.
+    // The wait is bounded because this task holds a session permit: a silent
+    // peer must not keep it.
     let mut first = [0];
-    match stream.peek(&mut first).await {
-        Ok(1) if first[0] == b'{' => {}
-        Ok(_) => {
+    match tokio::time::timeout(first_byte_timeout, stream.peek(&mut first)).await {
+        Ok(Ok(1)) if first[0] == b'{' => {}
+        Ok(Ok(_)) => {
             tracing::debug!(peer = %peer, "mcp listener rejected non-JSON framing");
             return;
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             tracing::debug!(peer = %peer, error = %error, "mcp listener could not read first byte");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(
+                peer = %peer,
+                timeout_ms = first_byte_timeout.as_millis() as u64,
+                "mcp listener closed a connection that sent nothing"
+            );
             return;
         }
     }

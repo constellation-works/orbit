@@ -1,6 +1,29 @@
-//! Bind-policy tests for the MCP TCP listener.
+//! Bind-policy and idle-peer tests for the MCP TCP listener.
 
 use super::*;
+
+use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+
+struct NoTools;
+
+impl McpHost for NoTools {
+    fn list_mcp_tool_definitions(
+        &self,
+    ) -> Result<Vec<orbit_types::tool::McpToolDefinition>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        _input: Value,
+        _session_context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Err(OrbitError::InvalidInput(format!("no tool {name}")))
+    }
+}
 
 fn addr(text: &str) -> SocketAddr {
     text.parse().expect("socket address")
@@ -35,4 +58,78 @@ fn non_loopback_addresses_are_refused_before_the_socket_opens() {
 #[test]
 fn explicit_exposure_allows_a_non_loopback_bind() {
     assert!(ensure_bind_allowed(addr("0.0.0.0:7879"), ListenerExposure::AnyInterface).is_ok());
+}
+
+#[tokio::test]
+async fn a_peer_that_sends_nothing_is_disconnected_and_releases_its_slot() {
+    let listener = McpListener::bind(
+        addr("127.0.0.1:0"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(NoTools),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_first_byte_timeout(Duration::from_millis(100));
+    let bound = listener.local_addr().expect("bound address");
+    let sessions = Arc::clone(&listener.sessions);
+    let server = tokio::spawn(listener.serve());
+
+    let mut idle = TcpStream::connect(bound).await.expect("connect");
+    let mut buf = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(10), idle.read(&mut buf))
+        .await
+        .expect("the listener must close a silent connection instead of holding it");
+    assert!(
+        matches!(read, Ok(0) | Err(_)),
+        "a silent peer gets no data, only a close: {read:?}"
+    );
+
+    // The slot came back, so silent peers cannot exhaust the session ceiling.
+    // The accept loop keeps one permit in hand while it waits for the next
+    // connection, so a fully idle listener shows one fewer than the ceiling.
+    let released = tokio::time::timeout(Duration::from_secs(10), async {
+        while sessions.available_permits() != DEFAULT_MAX_MCP_SESSIONS - 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        released.is_ok(),
+        "the idle peer's session permit must be released"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_peer_that_starts_a_json_object_promptly_is_not_dropped_by_the_first_byte_timeout() {
+    let listener = McpListener::bind(
+        addr("127.0.0.1:0"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(NoTools),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_first_byte_timeout(Duration::from_millis(200));
+    let bound = listener.local_addr().expect("bound address");
+    let server = tokio::spawn(listener.serve());
+
+    let mut client = TcpStream::connect(bound).await.expect("connect");
+    client
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
+"#,
+        )
+        .await
+        .expect("send initialize");
+    let mut buf = [0u8; 1];
+    let read = tokio::time::timeout(Duration::from_secs(10), client.read(&mut buf))
+        .await
+        .expect("initialize is answered");
+    assert!(
+        matches!(read, Ok(1)),
+        "an initialize reply must arrive: {read:?}"
+    );
+    server.abort();
 }
