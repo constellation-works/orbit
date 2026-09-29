@@ -11,7 +11,8 @@
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
 //! is zero, so a leaf that finishes after the window still has its handoff
-//! delivered by the drain that admitted it.
+//! delivered: by the leaf's own bound worker as it ends, by any later settle
+//! pass, or by this drain's next iteration, whichever gets there first.
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;

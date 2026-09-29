@@ -151,6 +151,9 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   as the owner's `execution_summary`.
 - `step_failure_recovery` treats the implement step's output as the claimed task's summary of
   record and has only repair-and-retry: no direct delivery, resume or review transition.
+- `pr_conflict_recovery` (the `sync_base` rebase hook) carries the same contract in its prompt: it
+  identifies the task from `task_id` and `failed_step_input`, never reads the owner's task
+  record, and treats an unreachable owner task store as no reason to stop.
 
 This is what makes a follower leaf work under the agent sandbox, which denies `~/.ssh` and so
 leaves a sandboxed agent no route to a remote owner. The sandbox is not relaxed and the agent is
