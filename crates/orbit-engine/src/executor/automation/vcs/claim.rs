@@ -21,6 +21,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::text::floor_char_boundary;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
@@ -782,10 +783,7 @@ fn bounded_summary(text: &str) -> String {
     if text.len() <= MAX_HANDOFF_SUMMARY_BYTES {
         return text.to_string();
     }
-    let mut cut = MAX_HANDOFF_SUMMARY_BYTES;
-    while cut > 0 && !text.is_char_boundary(cut) {
-        cut -= 1;
-    }
+    let cut = floor_char_boundary(text, MAX_HANDOFF_SUMMARY_BYTES);
     format!(
         "{}\n\n[summary truncated to {cut} of {} bytes]",
         &text[..cut],
@@ -810,10 +808,7 @@ pub(super) fn capture(stdout: &str, stderr: &str) -> String {
     if combined.len() <= MAX_CAPTURED_OUTPUT_BYTES {
         return combined;
     }
-    let mut cut = MAX_CAPTURED_OUTPUT_BYTES;
-    while cut > 0 && !combined.is_char_boundary(cut) {
-        cut -= 1;
-    }
+    let cut = floor_char_boundary(&combined, MAX_CAPTURED_OUTPUT_BYTES);
     format!(
         "[truncated to {cut} of {} bytes]\n{}",
         combined.len(),

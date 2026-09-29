@@ -1,5 +1,6 @@
 //! Snapshot field readers shared across CI failure filing.
 
+use orbit_common::text::floor_char_boundary;
 use serde_json::Value;
 
 /// Read a snapshot field as a display string, accepting the numeric spellings
@@ -23,10 +24,7 @@ pub(super) fn truncate_bytes(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();
     }
-    let mut end = max_bytes;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = floor_char_boundary(value, max_bytes);
     format!(
         "{}\n[... truncated at {max_bytes} B for the task description; the full excerpt is in \
          the sweep run's step output ...]",

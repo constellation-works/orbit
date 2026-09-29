@@ -6,6 +6,7 @@
 //! the caller still binds the evidence to the provider's failed-job metadata.
 
 use orbit_common::security::redaction::redact_all;
+use orbit_common::text::floor_char_boundary;
 use serde_json::{Value, json};
 
 use super::MAX_CHECKOUT_LOG_SCAN_BYTES;
@@ -202,10 +203,7 @@ impl Command {
             String::new()
         };
         let (text, retained) = if assertion_payload && total_bytes > ASSERTION_PREFIX_BYTES {
-            let mut end = ASSERTION_PREFIX_BYTES.min(line.len());
-            while !line.is_char_boundary(end) {
-                end -= 1;
-            }
+            let mut end = floor_char_boundary(line, ASSERTION_PREFIX_BYTES);
             // Never cut a secret-shaped token before redaction can recognize
             // it. Drop the final partial whitespace-delimited token instead.
             if !line[..end].ends_with(char::is_whitespace) {

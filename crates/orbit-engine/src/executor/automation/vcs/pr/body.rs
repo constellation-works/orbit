@@ -1,3 +1,4 @@
+use orbit_common::text::floor_char_boundary;
 use orbit_types::task::Task;
 
 use crate::context::PrConfig;
@@ -69,15 +70,7 @@ pub(super) fn bound_pr_body(body: String, tasks: &[Task]) -> String {
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
-    if value.len() <= max_bytes {
-        return value;
-    }
-
-    let mut end = max_bytes;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
+    &value[..floor_char_boundary(value, max_bytes)]
 }
 
 pub(super) fn build_single_task_pr_body(
