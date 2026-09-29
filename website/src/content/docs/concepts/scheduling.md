@@ -45,7 +45,7 @@ minute by default. That is a deliberate trade: minute granularity is a floor
 and event triggers are not possible, but there is no long-lived process to
 supervise, and a wedged pass costs one minute, not the scheduler.
 
-The clock is host infrastructure, configured per machine and never versioned.
+The clock is host infrastructure, configured per machine, not per repository.
 Pausing it stops scheduled ticks; a manual `orbit clock tick` still works, and no
 individual routine's state changes.
 
@@ -57,9 +57,9 @@ package manager made.
 
 ## Routine
 
-A routine is a **versioned trigger**. It is one YAML file under
-`.orbit/routines/`, committed to the repository, that says which job fires and on
-what cadence:
+A routine is a **declarative trigger**. It is one YAML file under
+`.orbit/routines/` (per-user state, git-ignored with the rest of `.orbit/`) that
+says which job fires and on what cadence:
 
 ```yaml
 schemaVersion: 1
@@ -109,10 +109,10 @@ Invariants that shape how routines behave:
   registered owner checkout and an enabled clock, each against its own store.
   Registration is the opt-in; to keep a routine off a machine, pause it there.
   A `state` trigger is the exception: only its `owner_machine` evaluates it.
-- **Versioned enable, host-local pause.** `enabled` lives in the file and is a
-  reviewed change; `orbit routine pause` is a per-host override that is never
-  synced and survives reboots. Use pause for "not on this machine right now",
-  and `enabled: false` to retire a routine everywhere.
+- **Enable in the file, pause per host.** `enabled` lives in the definition
+  file, so turning a routine on is a deliberate edit; `orbit routine pause` is a
+  host-local override that survives reboots. Use pause for "not on this machine
+  right now", and `enabled: false` to retire a routine.
 - **Missed slots collapse.** When a host was asleep through several due slots,
   `missed_run: skip` waits for the next natural slot and `catch_up_once` fires a
   single make-up run. Neither replays every missed tick.
@@ -122,10 +122,11 @@ Invariants that shape how routines behave:
 - **Seeded disabled.** `orbit workspace init` writes a default set — task
   pilot, ship sweep, worktree GC, CI and dependency alert
   sweeps — every one `enabled: false`, and `orbit workspace sync` refreshes
-  them. Enabling unattended agent work is an explicit, versioned decision.
+  them. Enabling unattended agent work is an explicit decision.
 
-All scheduler state — last fire, cursor, pause, run history — is host-local.
-Two hosts sharing a repository share the definitions and nothing else.
+All scheduler state — last fire, cursor, pause, run history — is host-local, and
+so are the definition files under `.orbit/`: two hosts sharing a repository do
+not share them through git.
 
 ## Auto-task
 
@@ -157,8 +158,8 @@ Invariants that shape how auto-tasks behave:
 - **Catch-up collapses.** A downtime gap mints one make-up task, not one per
   missed slot.
 - **Seeded disabled.** Orbit embeds a small default catalog — QA sweep,
-  friction curation, security review, code review, delivery code review,
-  delivery QA, backlog hygiene, doc duties, and run-failure patterns —
+  friction curation, security review, code review, full code review, delivery
+  code review, delivery QA, backlog hygiene, doc duties, and run-failure patterns —
   materialized by `orbit workspace init` with `enabled: false`
   and refreshed by `orbit workspace sync`. Seeding never mints a task.
 
@@ -174,7 +175,7 @@ kinds of thing.
 | Question | Which job, when? | Which chore becomes a task? |
 | Fires through | `orbit clock tick` | `orbit clock tick` in-process |
 | Lives in | `.orbit/routines/*.yaml` | `.orbit/auto_tasks/*.yaml` |
-| Adding one means | A new versioned trigger | A new definition, no new trigger |
+| Adding one means | A new trigger file | A new definition, no new trigger |
 | Output | A run in job history | A task in the backlog |
 
 A routine is the right tool when the work is a fixed pipeline — ship what is

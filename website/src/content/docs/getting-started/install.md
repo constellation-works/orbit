@@ -84,10 +84,11 @@ orbit workspace init
 `orbit init` asks for two things: a **machine name**, which you can rename later
 with `orbit config set --global machine.name <value>`, and a **task-id prefix**
 of 2–5 uppercase letters that namespaces every task ID this machine allocates
-and can never change. Supply them up front for an unattended setup:
+and can never change (`ORB` and `ADR` are reserved). Supply them up front for an
+unattended setup:
 
 ```bash
-orbit init --non-interactive --machine-name build-01 --task-prefix ORB
+orbit init --non-interactive --machine-name build-01 --task-prefix ABC
 ```
 
 It also seeds `~/.orbit/config.toml` with crews for the provider CLIs it

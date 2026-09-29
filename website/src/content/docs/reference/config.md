@@ -31,7 +31,7 @@ orbit config path              # which file is in effect
 orbit config show              # values, with source provenance and derived paths
 orbit config get workflow.default_crew
 orbit config set workflow.default_crew opus
-orbit config keys              # every settable key
+orbit config keys              # every key, with type and description
 ```
 
 ## Crews
@@ -178,7 +178,11 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
 | `workflow.required_validation_commands` | array&lt;string&gt; | Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted. |
 | `workflow.distributed_completion` | string | How far this owner takes a distributed execution claim's accepted handoff: `review` (default) waits for an operator's Approve handoff; `done` has the owner authorize and land it through its landing job, as `orbit run auto --complete` does for its own tasks. |
+| `workflow.task_pilot_freshness.material_fields` | array&lt;string&gt; | Task inputs whose edit makes an accepted task-pilot assessment stale: any of title, description, criteria, plan, selectors, tags, crew, tools, type, complexity, relations, dependencies, instructions (default: title, description, criteria, plan, selectors). A routine's `trigger.state.freshness` overrides it. |
+| `workflow.task_pilot_freshness.source_sensitivity` | string | Whether a branch-head move makes an accepted task-pilot assessment stale: `ignore` (default), `context_files` (only when the head changed a path the task's selectors name), or `any`. A routine's `trigger.state.freshness` overrides it. |
+| `machine.name` | string | Global only. This machine's display name. The one `[machine]` value you can change: `orbit config set --global machine.name <value>`. |
 | `machine.worker_containment` | bool | Global only. Run each detached pipeline worker in its own systemd user scope bounded by the `machine.worker_*` limits (default `true`; Linux with a user manager, otherwise workers launch unbounded with a warning). |
+| `machine.worker_containment_strict` | bool | Global only. Refuse detached worker launches when a systemd user scope is unavailable. Requires `machine.worker_containment = true`; default `false` keeps warn-and-launch. `orbit run auto --strict-worker-containment` overrides it for one drain. |
 | `machine.worker_memory_high` | string | Global only. Worker scope `MemoryHigh=`: size such as `6G`, percentage of RAM, or `infinity` (default `40%`). |
 | `machine.worker_memory_max` | string | Global only. Worker scope `MemoryMax=`, same grammar (default `50%`). |
 | `machine.worker_tasks_max` | integer | Global only. Worker scope `TasksMax=` (default `4096`). |
@@ -189,6 +193,7 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `execution.env.pass` | array&lt;string&gt; | Environment variable names allow-listed for passthrough into agent subprocesses. |
 | `execution.codex.sandbox` | string | Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. |
 | `execution.codex.approval_policy` | string | Codex approval policy: `untrusted`, `on-request`, or `never`. |
+| `plugin.legacy_callback_identity` | bool | Deprecated. Also accept the environment token and process ancestry as a plugin callback credential; off by default. Removed in the next release. |
 | `runtime.log_max_file_mb` | integer | Roll the active JSONL log past this size. Must be ≥ 1 and ≤ `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer | Total size budget across JSONL log archives; oldest pruned first. |
 | `runtime.log_retention_days` | integer | Delete JSONL log archives older than this. |
@@ -197,6 +202,9 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `operation.review_reviewer_starts` | integer | Fresh reviewer invocations allowed per delivery candidate lineage (1–10, default 2). |
 | `operation.review_repair_cycles` | integer | Reviewer repair/validation cycles allowed per delivery candidate lineage (0–10, default 2). |
 | `operation.review_minutes` | integer | Before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1–1440, default 30). |
+
+`orbit config keys` also lists `machine.id` and `machine.task_prefix`. Both are
+written once by `orbit init` and are not settable.
 
 Named crew fields are also settable as `crews.<name>.<field>` (`model`,
 `provider`, `effort`, `description`, `tags`). Example:

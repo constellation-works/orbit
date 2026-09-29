@@ -27,6 +27,7 @@ before the subcommand.
 | `orbit init` | Initialize the global Orbit root, this machine's `[machine]` identity, task-id prefix, and default skills. |
 | `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`; `--force` reconciles an already registered workspace. |
 | `orbit workspace list` \| `show` \| `sync` \| `role` | Inspect registered workspaces, converge managed artifacts, and validate this checkout's role. |
+| `orbit workspace source-remote show` \| `rebind` | Show the registered portable source-repository identity, or replace the source remote after a repository transfer (`rebind --remote <URL>`; use `--dry-run` first). |
 | `orbit workspace publication bind` \| `show` \| `rebind` \| `remove` | Manage the owner-local binding to a dedicated task-publication repository. See [Publish and Restore Tasks](../../how-to/task-publication/). |
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
@@ -66,7 +67,7 @@ Plugins install once per machine; a repository commits only its
 
 | Command | Purpose |
 |---|---|
-| `orbit friction add` \| `list` \| `show` \| `stats` \| `tags` \| `update` \| `resolve` | Report and triage friction records. |
+| `orbit friction add` \| `list` \| `show` \| `stats` \| `tags` \| `update` \| `resolve` \| `rehome` | Report and triage friction records. `rehome <id> --to-workspace <workspace>` moves a record into the registered workspace that owns it. |
 | `orbit search <query>` | Search tasks and frictions using lexical matching; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `--all-workspaces` searches every active workspace on this machine; task fields use FTS5 BM25 with non-adjacent term matching. |
 | `orbit search reindex` | Rebuild the lexical task index after imports or restores; reports task and chunk counts. |
 
@@ -136,6 +137,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit clock repair` | Rewrite the installed clock unit when it names a missing, moved, or stale program, then re-register it. Run automatically as the last `orbit update` convergence step. |
 | `orbit routine init [--install-clock]` | Read this machine's identity and optionally install the OS clock unit. |
 | `orbit auto-task add` \| `list` \| `show` \| `update` \| `toggle` \| `mint` | Define recurring auto-task templates and mint from them. |
+| `orbit auto-task delete` \| `restore` | Delete a definition with its scheduler cursor and delivery consumer state (`--force` even while a minted task is open), or reinstate a deleted shipped default with its shipped content. A deleted shipped default stays out of later reseeds. |
 | `orbit auto-task recover` \| `reset` | Preview or apply audited repair of a delivery consumer: `recover` unsticks one stalled by a settings change and keeps its coverage debt; `reset` forgets the debt and re-baselines at the branch head. |
 
 See [Schedule Recurring Work](../../how-to/recurring-work/).

@@ -145,6 +145,14 @@ status:
 | **archive** | Any status except `archived`. |
 | **comment** | Always. |
 
+On the owner of a [distributed drain](../distributed-drain/), the detail of a
+task this workspace holds an execution claim for also carries a **distributed
+execution** panel: the claim's state and the accepted handoff. **approve** on a
+`review` task with a handed-off claim sends **Approve handoff** for the exact
+candidate you were shown. **Revoke authority** and **Recover claim → blocked** /
+**Recover claim → backlog** ask for a reason. A replica shows claim state as held
+by its owner, and refuses all three actions.
+
 Status and crew dropdowns on the row are editable with a concrete workspace
 selected, or for an aggregate row that includes its explicit owner. A row
 without that owner stays read-only in **All workspaces**.
@@ -249,7 +257,7 @@ labels itself.
 The pane opens with a **Next hour** strip: every routine whose next slot
 falls in the coming hour, drawn solid when it will fire and hollow when the
 routine is paused (its slot is skipped, not queued). Each row is one
-versioned routine from the selected workspace: a switch, the name and the
+routine definition from the selected workspace: a switch, the name and the
 job it runs (linked into **Jobs**), its cadence in words with the cron under
 it, the next fire as a relative time, and the last run with its outcome,
 duration and run link. A routine that is enabled but not effective carries
@@ -351,10 +359,12 @@ orbit run job worktree_gc_pipeline --workspace orbit
 The auto-drain card is the first card in the Tasks dock's **Drain** mode,
 above Locked files. Top to bottom:
 
-- **Header** — a cyan dot and the live window's run (short id; the full id
-  is in its title, and it opens the run) while a window is live, otherwise
-  `idle`. Time left is shown for a window started from this browser; the
-  readiness snapshot does not carry the deadline of one started elsewhere.
+- **Header** — the state and the live window's run (short id; the full id
+  is in its title, and it opens the run). The state is **Draining** while the
+  window admits work, with the time left and `N running / M admitted`;
+  **Winding down · N workers still running** once admissions have stopped; and
+  `idle` when no window is live. The deadline is stamped by the server, so it
+  shows for a window started from the CLI as well as from this browser.
 - **Capacity** — `N running · limit M`, the free slots, a bar that shows any
   runs over the limit, and one sentence on what a window started now would
   do: admit up to N tasks, or admit nothing until N running tasks finish.
@@ -369,8 +379,14 @@ above Locked files. Top to bottom:
 - **When a task finishes** — **Stop at review** (the default) or **Mark
   done**, which turns amber.
 - **Start … window** submits `orbit run auto` with those settings after a
-  confirmation. **Stop** stops new admissions on the live window
-  (`orbit run auto --stop`); admitted workers keep running.
+  confirmation (**Start another … window** while one is already draining).
+  **Stop** stops new admissions on the live window (`orbit run auto --stop`);
+  admitted workers keep running. Once admissions have stopped, or with no
+  window live, the button reads **Settle pending** and delivers any pull
+  settlement recorded on this replica that has not reached its owner (see
+  [Set Up a Distributed Drain](../distributed-drain/#6-stop-cancel-and-settle)).
+  Stop and Settle pending need an operator session, like Start with **Mark
+  done**.
 
 Start and Stop results appear in the card's status line. The snapshot is
 read-only: nothing is reserved or started until you start a window.
@@ -475,8 +491,10 @@ Two independent gates still apply:
 1. **Workspace scope.** Aggregate view and inactive workspaces are
    read-only, even for an operator.
 2. **Operator capability** for Operations controls (routine/auto-task
-   toggle, mint, job run, clock, auto-drain completion) and for
-   Config writes. The
+   toggle, mint, job run, clock, auto-drain completion, and auto-drain
+   Stop / Settle pending), for Config writes, for plugin enable and
+   disable, and for the owner's handoff approve, revoke, and claim-recovery
+   actions on a distributed task. The
    server resolves the same capability vocabulary as the CLI. A local
    interactive terminal counts as an operator session. `orbit web serve
    --operator` grants the same capability without a TTY or
@@ -511,7 +529,7 @@ ship, workspace claim held).
 | Mint created a second open task | Expected: manual mint ignores dedupe. The card's **Open duplicate** field says so before you confirm. |
 | Ship returns 409 `ship_run_in_flight` | That task already has a non-terminal ship run. Open the named `run_id`. |
 | 409 `workspace_claim_held` | Another operator holds the workspace claim. Wait for expiry or inspect the holder; do not retry in a loop. |
-| Top-bar **Failed runs** disagrees with Diagnostics → Errors | Different denominators. See [Runs and errors](#runs-and-errors). |
+| Top-bar **Failed runs** disagrees with Health → Errors | Different denominators. See [Runs and errors](#runs-and-errors). |
 | Config save returns "no workspace config exists yet" | Expected on the first write: choose **Copy global policy** or **Start empty** on the row. |
 | Config save returns an admission error | The value is refused by the same rule `orbit config set` applies; the message names the accepted values. |
 | Stale workspace list after `orbit workspace init` | A running server reloads `workspaces.json` on the next request after that file's mtime or length changes; click **Refresh**. A malformed refresh keeps the last good snapshot. |

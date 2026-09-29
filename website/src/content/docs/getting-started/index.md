@@ -36,7 +36,8 @@ orbit init
 ```
 
 `orbit init` asks for a machine name and a task-ID prefix of 2–5 uppercase
-letters, such as `ABC`. Neither can change later on this machine. It also
+letters, such as `ABC`. The prefix cannot change later on this machine; the
+machine name can be renamed. It also
 detects your agent CLIs and seeds a crew for each.
 
 ## 3. Register a repository and connect your agent

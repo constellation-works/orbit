@@ -26,7 +26,7 @@ use an explicit replica registration, with the actual owner's machine ID:
 ```bash
 orbit workspace init --role replica --owner <owner-machine-id>
 orbit workspace show
-orbit workspace role <workspace-id> replica
+orbit workspace role <workspace-id> replica --owner <owner-machine-id>
 ```
 
 `workspace role` validates or reasserts an existing role; it is not a takeover
