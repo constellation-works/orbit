@@ -102,3 +102,48 @@ refreshFails = false;
 nextResponse = () => response({ run_id: "jrun-next" });
 await press(action("jrun-broken", "run-resume"));
 assert(errors().length === 0, `a new action clears the old error: ${errors().map((node) => node.textContent)}`);
+
+// Cancelling a claimed leaf fails its claim on the owner, so the confirmation
+// says so and names the owner task; an ordinary run's prompt is unchanged.
+// Prompts return null so nothing is posted: only the confirmation is under test.
+const prompts = [];
+window.prompt = (text) => { prompts.push(text); return null; };
+const requests = [];
+const claim = { task_id: "ORB-4242", claim_id: "claim-1", owner: "owner-mac/ws", drain_run_id: "jrun-drain", settlement_phase: "launched", refusal: null, guidance: "" };
+const { buildCancelRunButton } = await import("./js/runs.js");
+const cancelPrompt = async (run) => {
+  prompts.length = 0;
+  const button = buildCancelRunButton(run, body);
+  await press(button);
+  assert(prompts.length === 1, `one confirmation is shown: ${prompts.length}`);
+  assert(!button.disabled, "declining the confirmation leaves the button armed");
+  return prompts[0];
+};
+const leafBase = { workspace_id: "alpha", run_id: "jrun-leaf", job_id: "task_claimed_pr_pipeline", state: "running" };
+
+// Run detail: the claim is carried on the run the cancel button is given.
+const detailPrompt = await cancelPrompt({ ...leafBase, pull_claim: claim });
+assert(detailPrompt.includes("Cancel jrun-leaf?") && detailPrompt.includes("Add a reason (optional):"), `existing wording kept: ${detailPrompt}`);
+assert(/fails that claim on owner-mac\/ws/.test(detailPrompt) && detailPrompt.includes("task ORB-4242") && detailPrompt.includes("owner's task is blocked"), `claimed leaf confirmation names the owner claim: ${detailPrompt}`);
+const noTaskPrompt = await cancelPrompt({ ...leafBase, pull_claim: { ...claim, task_id: null } });
+assert(noTaskPrompt.includes("owner's task is blocked") && !noTaskPrompt.includes("task null"), `no owner task, no invented name: ${noTaskPrompt}`);
+
+// An explicit null claim (run detail of an ordinary run) keeps the plain prompt
+// and asks nothing more of the server.
+globalThis.fetch = async (url) => { requests.push(String(url)); return response({ run: {}, pull_claim: claim }); };
+requests.length = 0;
+assert(await cancelPrompt({ ...leafBase, job_id: "ship", pull_claim: null }) === "Cancel jrun-leaf? Add a reason (optional):", "an ordinary run's prompt is unchanged");
+assert(await cancelPrompt({ workspace_id: "alpha", run_id: "jrun-plain", job_id: "ship", state: "running" }) === "Cancel jrun-plain? Add a reason (optional):", "a list row of an ordinary job is not looked up");
+assert(requests.length === 0, `no detail read for ordinary runs: ${requests}`);
+
+// A list row carries no claim; a claimed-leaf job's row reads the run detail once.
+const listPrompt = await cancelPrompt(leafBase);
+assert(requests.length === 1 && requests[0].startsWith("/api/runs/jrun-leaf") && requests[0].includes("workspace=alpha"), `list row reads its scoped detail: ${requests}`);
+assert(listPrompt.includes("task ORB-4242") && listPrompt.includes("fails that claim"), `list-row claimed leaf confirmation: ${listPrompt}`);
+
+// The detail says it is not a claim, or cannot be read: plain prompt, still cancellable.
+globalThis.fetch = async () => response({ run: {}, pull_claim: null });
+assert(await cancelPrompt(leafBase) === "Cancel jrun-leaf? Add a reason (optional):", "a leaf job run with no admission keeps the plain prompt");
+globalThis.fetch = async () => response({ error: "boom" }, 500);
+const unreadable = await cancelPrompt(leafBase);
+assert(unreadable === "Cancel jrun-leaf? Add a reason (optional):", `an unreadable claim does not block or alter the prompt: ${unreadable}`);

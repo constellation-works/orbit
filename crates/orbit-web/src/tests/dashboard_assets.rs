@@ -2501,7 +2501,8 @@ if (!prompts.at(-1).includes("Cancel drain jrun-auto?") || prompts.at(-1).includ
 /// A run action's outcome has to reach the operator: a refused action's error
 /// must survive the table's next re-render, a cancel or resume that succeeded
 /// must not be reported as failed because the refresh after it did, and each
-/// row's buttons must name their run.
+/// row's buttons must name their run. Cancelling a claimed follower leaf must
+/// say it fails the claim on the owner.
 #[test]
 fn dashboard_run_actions_report_failures_and_stale_refreshes_truthfully() {
     run_dashboard_javascript_test(include_str!("dashboard_runs_actions.mjs"));

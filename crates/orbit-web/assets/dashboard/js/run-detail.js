@@ -263,7 +263,9 @@ export function renderRunDetailMeta() {
     actions.appendChild(lineage);
   }
   if (run.run_id) actions.appendChild(buildReplayRunButton(run, wrap));
-  if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton(run, wrap));
+  // The claim rides beside the run in the detail payload; the cancel
+  // confirmation reads it off the run it is handed.
+  if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, wrap));
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);

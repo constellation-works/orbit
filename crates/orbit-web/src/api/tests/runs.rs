@@ -1574,6 +1574,31 @@ fn run_detail_keeps_the_child_link_after_the_parent_terminalizes() {
     assert_eq!(detail["run"]["waiting_on_locks"], Value::Null);
 }
 
+/// The dashboard's cancel confirmation reads `pull_claim` to warn that
+/// cancelling a claimed leaf fails the owner's claim. An ordinary run has no
+/// admission, so the field must be present and null (not absent), or the
+/// dashboard cannot tell "no claim" from "payload predates the field".
+#[test]
+fn run_detail_reports_no_pull_claim_for_an_ordinary_run() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run = seed_run(
+        &runtime,
+        "jrun-web-ordinary",
+        "workspace_auto_pipeline",
+        JobRunState::Running,
+    );
+    write_seeded_run(&runtime, &run);
+
+    let detail = job_run_detail_to_json(&runtime, &run);
+
+    let object = detail.as_object().expect("detail is an object");
+    assert_eq!(
+        object.get("pull_claim"),
+        Some(&Value::Null),
+        "a run that executes no owner claim carries an explicit null pull_claim"
+    );
+}
+
 #[test]
 fn a_terminal_run_never_projects_an_unfinished_step_as_still_running() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
