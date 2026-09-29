@@ -333,12 +333,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::apply_job_run_id_allocations,
     },
+    // Per-job newest-first reads sorted every run the job ever had, and the
+    // retry children read scanned the workspace for want of an index that
+    // orders by `created_at`. Both are pure `CREATE INDEX IF NOT EXISTS`,
+    // which an older binary ignores.
+    Migration {
+        version: 34,
+        name: "job_runs_job_created_and_retry_indexes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_job_runs_job_created_and_retry_indexes,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 33;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 34;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

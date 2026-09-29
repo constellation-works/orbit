@@ -92,18 +92,7 @@ impl Store {
         workspace_id: &str,
         query: &JobRunQuery,
     ) -> Result<Vec<JobRun>, OrbitError> {
-        let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
-        let order_clause = job_run_order_sql(query.order_by);
-        let mut sql = format!(
-            "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
-             duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
-             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model), executed_on_json \
-             FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
-        );
-        if let Some(limit) = query.limit {
-            sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
-            params.push(Box::new(limit as i64));
-        }
+        let (sql, params) = job_run_list_sql(workspace_id, query);
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
         let conn = self.read()?;
@@ -316,12 +305,9 @@ pub(super) fn get_job_run_for_workspace_conn(
     run_id: &str,
 ) -> Result<Option<JobRun>, OrbitError> {
     let mut stmt = conn
-        .prepare(
-            "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
-             duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
-             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model), executed_on_json \
-             FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
-        )
+        .prepare(&format!(
+            "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2"
+        ))
         .map_err(|e| OrbitError::Store(e.to_string()))?;
     let mut run = match stmt.query_row(rusqlite::params![workspace_id, run_id], row_to_job_run) {
         Ok(run) => run,
@@ -332,7 +318,7 @@ pub(super) fn get_job_run_for_workspace_conn(
     Ok(Some(run))
 }
 
-fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
+pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
     let attempt: i64 = row.get(2)?;
     let state_raw: String = row.get(3)?;
     let scheduled_raw: String = row.get(4)?;
@@ -364,6 +350,30 @@ fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
         steps: Vec::new(),
     })
 }
+
+/// The run-row `SELECT` and its bound parameters for a [`JobRunQuery`]:
+/// filter, order, and `LIMIT`. Steps are read separately.
+pub(super) fn job_run_list_sql(
+    workspace_id: &str,
+    query: &JobRunQuery,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let (where_clause, mut params) = job_run_filter_sql(workspace_id, query);
+    let order_clause = job_run_order_sql(query.order_by);
+    let mut sql = format!(
+        "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
+    );
+    if let Some(limit) = query.limit {
+        sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
+        params.push(Box::new(limit as i64));
+    }
+    (sql, params)
+}
+
+/// Columns [`row_to_job_run`] reads, in its order.
+pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
+     started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
+     retry_source_run_id, knowledge_metrics_json, resolved_crew, \
+     COALESCE(crew_model, implementer_model), executed_on_json";
 
 /// `WHERE` clause and bound parameters for a [`JobRunQuery`] on `job_runs`,
 /// shared by the list, count, and duration reads so the three cannot drift.
@@ -412,7 +422,7 @@ fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
 }
 
 /// Steps for a page of runs in one query per chunk instead of one per run.
-fn read_steps_for_runs(
+pub(super) fn read_steps_for_runs(
     conn: &rusqlite::Connection,
     workspace_id: &str,
     run_ids: &[String],

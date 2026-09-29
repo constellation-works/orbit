@@ -334,19 +334,8 @@ impl PullDrain<'_> {
         destination: &PullDestination,
         run_id: &str,
     ) -> Result<usize, OrbitError> {
-        Ok(self
-            .jobs
-            .local_pull_admissions()?
-            .iter()
-            .filter(|record| {
-                record.destination == *destination
-                    && record.request.run_context.run_id == run_id
-                    && record.phase == LocalPullPhase::Settled
-                    && record.refusal.is_none()
-            })
-            .rev()
-            .take_while(|record| matches!(record.settlement, Some(ClaimMutation::Fail(_))))
-            .count())
+        self.jobs
+            .consecutive_failed_local_pull_settlements(destination, run_id)
     }
 
     fn update(

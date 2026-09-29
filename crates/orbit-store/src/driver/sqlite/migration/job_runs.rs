@@ -37,6 +37,47 @@ pub(super) fn apply_job_runs_created_index(conn: &Connection) -> Result<(), Orbi
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// v34 `job_runs_job_created_and_retry_indexes`: cover the two per-workspace
+/// reads that had no index of their own.
+///
+/// - `(workspace_id, job_id, created_at DESC, run_id ASC)` serves every
+///   per-job newest-first read (the job history, the keyed-submission window,
+///   the catalog's last run per job). The older `(workspace_id, job_id,
+///   scheduled_at DESC)` index narrows to the job but cannot order by
+///   `created_at`, so each such read sorted every run the job had ever had.
+/// - `(workspace_id, retry_source_run_id, created_at, run_id)` serves the
+///   retry children read, which orders by `created_at, run_id`, and the
+///   retry-lineage walk, which needs only the two-column prefix. Only the
+///   automation feature indexed `retry_source_run_id`, and on that two-column
+///   index the planner still preferred scanning the workspace in `created_at`
+///   order for the children read, so a resume or an incident lookup walked
+///   every run to find a handful of children. The automation index stays; it
+///   is a prefix of this one and costs nothing to leave.
+///
+/// Like v19, this indexes only the current `job_runs` shape; a legacy table is
+/// left to open time.
+pub(super) fn apply_job_runs_job_created_and_retry_indexes(
+    conn: &Connection,
+) -> Result<(), OrbitError> {
+    if !table_has_column(conn, "job_runs", "workspace_id")?
+        || !table_has_column(conn, "job_runs", "job_id")?
+        || !table_has_column(conn, "job_runs", "created_at")?
+        || !table_has_column(conn, "job_runs", "retry_source_run_id")?
+    {
+        return Ok(());
+    }
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_job_runs_ws_job_created
+            ON job_runs(workspace_id, job_id, created_at DESC, run_id ASC);
+
+            CREATE INDEX IF NOT EXISTS idx_job_runs_ws_retry_created
+            ON job_runs(workspace_id, retry_source_run_id, created_at ASC, run_id ASC);
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
 pub(super) fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitError> {
     if !table_exists(conn, "job_runs")? {
         return Ok(());
