@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 
 use orbit_common::OrbitError;
+use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimMutation,
     JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
@@ -802,10 +803,7 @@ fn terminal_failure_summary_with(
             .map(str::trim)
             .filter(|message| !message.is_empty())
         {
-            let mut cut = message.len().min(MAX_FAILURE_EXCERPT_BYTES);
-            while cut > 0 && !message.is_char_boundary(cut) {
-                cut -= 1;
-            }
+            let cut = floor_char_boundary(message, MAX_FAILURE_EXCERPT_BYTES);
             summary.push_str("\nError: ");
             summary.push_str(&message[..cut]);
             if cut < message.len() {

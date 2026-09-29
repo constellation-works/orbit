@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
 use serde_json::Value;
@@ -241,10 +242,7 @@ fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
 /// or below the budget, so a multi-byte character is dropped rather than split.
 fn truncate_comment_body(message: &str) -> String {
     let budget = MAX_TASK_COMMENTS_BYTES.saturating_sub(COMMENT_TRUNCATION_MARKER.len());
-    let mut cut = budget.min(message.len());
-    while cut > 0 && !message.is_char_boundary(cut) {
-        cut -= 1;
-    }
+    let cut = floor_char_boundary(message, budget);
     format!("{}{COMMENT_TRUNCATION_MARKER}", &message[..cut])
 }
 

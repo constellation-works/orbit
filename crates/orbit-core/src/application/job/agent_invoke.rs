@@ -31,6 +31,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::text::floor_char_boundary;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::JobRun;
@@ -420,11 +421,7 @@ fn bounded_preview(text: &str) -> String {
     if text.len() <= RESULT_PREVIEW_LIMIT_BYTES {
         return text.to_string();
     }
-    let mut end = RESULT_PREVIEW_LIMIT_BYTES;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    text[..floor_char_boundary(text, RESULT_PREVIEW_LIMIT_BYTES)].to_string()
 }
 
 fn require_non_empty<'a>(value: &'a str, field: &str) -> Result<&'a str, OrbitError> {
