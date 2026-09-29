@@ -20,7 +20,13 @@
 //  * approving and revoking send the exact candidate the operator was shown,
 //    with a replay identity, and repaint from the state they produced;
 //  * a refused action is honest: a stale conflict re-reads, and an uncertain
-//    merge is left alone.
+//    merge is left alone;
+//  * a decision is made once: the panel locks while a request is in flight,
+//    destructive actions confirm first, a retry replays the same identity, and
+//    the operator sees the outcome even when the detail is rebuilt under it;
+//  * the panel never shows more certainty than it has: cached claim state
+//    expires, a settled claim reads released rather than expired, and a failed
+//    read says so with a way to retry.
 
 // Runs against the shipped modules in both the Node DOM harness and Chromium,
 // so the assertions are plain functions rather than a Node import.
@@ -128,6 +134,13 @@ const consoleReads = [];
 let workspaceConsoles = null;
 let holdConsoleReads = false;
 const heldConsoleReads = [];
+let failConsoleReads = 0; // fail this many upcoming console reads
+let holdPost = null; // a promise the next POSTs wait on
+const confirms = [];
+let confirmAnswer = true;
+// Both harnesses have a `window`; the dashboard asks it before destructive
+// owner actions.
+window.confirm = (message) => { confirms.push(String(message)); return confirmAnswer; };
 
 const respond = (payload, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -142,6 +155,10 @@ globalThis.fetch = async (path, options = {}) => {
   if (method === "GET") {
     const workspace = url.searchParams.get("workspace");
     consoleReads.push({ path: url.pathname, workspace });
+    if (failConsoleReads > 0) {
+      failConsoleReads -= 1;
+      return respond({ error: "claims unavailable" }, 500);
+    }
     const payload = (workspaceConsoles && workspaceConsoles[workspace]) || consoleBody;
     if (holdConsoleReads) {
       return new Promise((resolve, reject) => {
@@ -152,6 +169,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   const body = options.body ? JSON.parse(options.body) : null;
   sent.push({ path: url.pathname, body });
+  if (holdPost) await holdPost;
   if (nextAction) {
     const refusal = nextAction;
     nextAction = null;
@@ -161,13 +179,15 @@ globalThis.fetch = async (path, options = {}) => {
 };
 
 const distributed = await import("./js/distributed.js");
-const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation } = distributed;
+const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation, CONSOLE_TTL_MS } = distributed;
 const { setWorkspace } = await import("./js/common.js");
 await import("./js/tasks.js");
 
-const mount = async (taskId = "ORB-2") => {
+const mount = async (taskId = "ORB-2", options = {}) => {
   invalidateDistributedConsole();
-  const block = buildDistributedBlock(taskId);
+  confirms.length = 0;
+  confirmAnswer = true;
+  const block = buildDistributedBlock(taskId, options);
   await settle();
   return block;
 };
@@ -210,7 +230,7 @@ const mount = async (taskId = "ORB-2") => {
   assert.ok(text.includes("still protected"), text);
 
   // A typed not-required disposition, said plainly.
-  assert.ok(text.includes("not_required (policy none)"), text);
+  assert.ok(text.includes("not required · policy none"), text);
   assert.ok(text.includes("this is not a code review"), text);
 
   // Candidate, base and validation evidence are all present and exact.
@@ -223,6 +243,21 @@ const mount = async (taskId = "ORB-2") => {
   // Authority and landing are separate facts, and merged is not deployed.
   assert.ok(text.includes("waits for explicit owner approval"), text);
   assert.ok(text.includes("no landing attempt has been reserved"), text);
+
+  // Enums read as words, with the server's summary kept as the note. Raw
+  // identifiers are not headlines.
+  for (const raw of ["handed_off", "handoff_accepted", "not_authorized", "not_required"]) {
+    assert.ok(!text.includes(raw), `raw enum ${raw} leaked into the panel: ${text}`);
+  }
+  assert.ok(text.includes("handed off"), text);
+  assert.ok(text.includes("handoff accepted"), text);
+  assert.ok(text.includes("awaiting approval"), text);
+  assert.ok(text.includes("not started"), text);
+
+  // Several claims for one task (a retry after recovery) are told apart by id
+  // and creation time.
+  assert.ok(text.includes("claim claim-1"), text);
+  assert.ok(text.includes("created 2026-09-18T00:00:00+00:00"), text);
 }
 
 {
@@ -490,6 +525,29 @@ const mount = async (taskId = "ORB-2") => {
   assert.ok(block.querySelector(".claim-warning.uncertain-merge"), "an unresolved intent is surfaced");
   assert.ok(block.textContent.includes("reconcile it against the provider"), block.textContent);
 
+  // The owner would refuse both, so neither is offered as a live control — and
+  // the reason is visible text, not a tooltip.
+  const revoke = button(block, "Revoke authority");
+  const recover = recoveryButton(block, "blocked");
+  assert.ok(revoke && revoke.disabled, "revoke is disabled while a merge is uncertain");
+  assert.ok(recover && recover.disabled, "recover is disabled while a merge is uncertain");
+  const reasons = Array.from(block.querySelectorAll(".claim-action-denied")).map((node) => node.textContent);
+  assert.ok(reasons.length >= 2 && reasons.every((text) => text.includes("uncertain merge")), JSON.stringify(reasons));
+  press(revoke);
+  press(recover);
+  await settle();
+  assert.equal(sent.length, 0, "a disabled action sends nothing");
+  assert.equal(confirms.length, 0, "a disabled action does not even ask");
+}
+
+{
+  // The intent can also appear after the panel was rendered. Then the backend
+  // is the boundary, and its refusal is reported with its remedy and left alone.
+  sent.length = 0;
+  const authorized = claim();
+  authorized.handoff.authority = { state: "authorized", summary: "completion authority recorded", authorization_id: "auth-1", recorded_at: null };
+  consoleBody = console_([authorized]);
+  const block = await mount();
   nextAction = {
     status: 409,
     body: {
@@ -502,11 +560,13 @@ const mount = async (taskId = "ORB-2") => {
   press(button(block, "Revoke authority"));
   await settle();
 
-  assert.equal(sent.length, 1, "the refusal is the backend's, not a disabled button");
-  assert.ok(block.querySelector(".claim-feedback.uncertain"), block.textContent);
+  assert.equal(sent.length, 1, "the refusal is the backend's");
+  const feedback = block.querySelector(".claim-feedback.uncertain");
+  assert.ok(feedback, block.textContent);
+  assert.equal(feedback.getAttribute("role"), "alert");
   assert.ok(block.textContent.includes("unresolved external merge intent"), block.textContent);
-  // Still refused, still shown: nothing here quietly resolves the intent.
-  assert.ok(block.querySelector(".claim-warning.uncertain-merge"), block.textContent);
+  assert.ok(block.textContent.includes("reconcile the recorded merge intent"), `the remedy is shown: ${block.textContent}`);
+  assert.ok(!button(block, "Revoke authority").disabled, "a refused action releases the panel for the operator's next decision");
 }
 
 // --- a session without operator authority is told why ------------------------
@@ -524,11 +584,13 @@ const mount = async (taskId = "ORB-2") => {
   // `title` is the reflected property in both harnesses; the stub DOM sets it
   // as a property rather than an attribute.
   assert.ok(String(denied.title).includes("operator"), String(denied.title));
+  // ...and the reason is not tooltip-only: it is text an operator can read.
+  assert.ok(denied.textContent.includes("requires operator"), denied.textContent);
   // Inspection is unaffected: read-only provenance is not an operator action.
   assert.ok(block.textContent.includes("machine hm_follower"), block.textContent);
 }
 
-// --- a replica checkout says where the state lives ---------------------------
+// --- a replica checkout stays out of every task detail ---------------------------
 
 {
   consoleBody = {
@@ -541,8 +603,8 @@ const mount = async (taskId = "ORB-2") => {
     capabilities: { handoff_approve: { authorized: true, reason: null }, handoff_revoke: { authorized: true, reason: null }, claim_recover: { authorized: true, reason: null } },
   };
   const block = await mount();
-  assert.equal(block.style.display, "", "a replica says so rather than rendering nothing");
-  assert.ok(block.textContent.includes("owned by machine 'hm_owner'"), block.textContent);
+  // The replica note would repeat on every task; the block stays hidden.
+  assert.equal(block.style.display, "none", "a replica shows no per-task block");
   assert.equal(buttons(block).length, 0, "a replica offers no owner action");
 }
 
@@ -563,10 +625,28 @@ const mount = async (taskId = "ORB-2") => {
   // Already authorized (an operator, or the owner's completion policy): the
   // landing job completes it, and approving again is not offered as success.
   const authorized = claim();
-  authorized.handoff = { ...authorized.handoff, authority: { ...authorized.handoff.authority, state: "authorized" } };
+  authorized.handoff = {
+    ...authorized.handoff,
+    authority: { state: "authorized", summary: "completion authority recorded; the owner landing job carries it from here" },
+  };
   consoleBody = console_([authorized]);
   const decided = await distributed.claimedReviewApproval("ORB-2");
   assert.ok(decided.refusal && decided.refusal.includes("landing job"), JSON.stringify(decided));
+
+  // Each decided state says what is true of it. A revoked handoff is not
+  // finished by any landing job, and the server's own summary wins when present.
+  const decidedWith = async (authority) => {
+    const target = claim();
+    target.handoff = { ...target.handoff, authority };
+    consoleBody = console_([target]);
+    return (await distributed.claimedReviewApproval("ORB-2")).refusal;
+  };
+  const revokedSummary = "completion authority was withdrawn; the task stays in review";
+  assert.equal(await decidedWith({ state: "revoked", summary: revokedSummary }), revokedSummary);
+  const revokedFallback = await decidedWith({ state: "revoked" });
+  assert.ok(revokedFallback.includes("withdrawn") && !revokedFallback.includes("landing job"), revokedFallback);
+  const completed = await decidedWith({ state: "completed" });
+  assert.ok(completed.includes("already landed") && !completed.includes("landing job"), completed);
 
   // Still running: nothing to approve yet.
   consoleBody = console_([claim({ phase: "running", handoff: null })]);
@@ -578,6 +658,283 @@ const mount = async (taskId = "ORB-2") => {
   assert.equal(await distributed.claimedReviewApproval("ORB-2"), null);
   consoleBody = console_([]);
   assert.equal(await distributed.claimedReviewApproval("ORB-2"), null);
+}
+
+// --- destructive actions ask first ------------------------------------------
+
+{
+  sent.length = 0;
+  const authorized = claim();
+  authorized.handoff.authority = { state: "authorized", summary: "completion authority recorded", authorization_id: "auth-1", recorded_at: null };
+  consoleBody = console_([authorized]);
+  const block = await mount();
+
+  // Declined: nothing is sent, and the panel is still usable.
+  confirmAnswer = false;
+  reasonInput(block).value = "superseded";
+  press(button(block, "Revoke authority"));
+  await settle();
+  assert.equal(confirms.length, 1, "revoking asks first");
+  assert.ok(confirms[0].includes("ORB-2"), `the confirmation names the task: ${confirms[0]}`);
+  assert.ok(/withdraws? (completion )?authority/i.test(confirms[0]), `the confirmation names the effect: ${confirms[0]}`);
+  press(recoveryButton(block, "backlog"));
+  await settle();
+  assert.equal(confirms.length, 2, "recovering asks first");
+  assert.ok(confirms[1].includes("ORB-2") && confirms[1].includes("backlog"), confirms[1]);
+  assert.ok(confirms[1].includes("fences"), `the confirmation names the effect: ${confirms[1]}`);
+  assert.equal(sent.length, 0, "a declined confirmation sends nothing");
+  assert.ok(!button(block, "Revoke authority").disabled, "declining leaves the panel usable");
+
+  // Accepted: the same click now goes through.
+  confirmAnswer = true;
+  press(button(block, "Revoke authority"));
+  await settle();
+  assert.equal(sent.length, 1, "an accepted confirmation sends the decision");
+  assert.equal(sent[0].path, "/api/distributed/handoffs/handoff1/revoke");
+
+  // Approving does not need a confirmation: it records authority, it does not
+  // withdraw or fence anything.
+  confirms.length = 0;
+  consoleBody = console_([claim()]);
+  const fresh = await mount();
+  press(button(fresh, "Approve handoff"));
+  await settle();
+  assert.equal(confirms.length, 0, "approving does not ask");
+}
+
+// --- one decision, one request -------------------------------------------------
+
+{
+  sent.length = 0;
+  consoleBody = console_([claim()]);
+  const block = await mount();
+  const approve = button(block, "Approve handoff");
+  const recover = recoveryButton(block, "blocked");
+  const approved = claim();
+  approved.handoff.authority = { state: "authorized", summary: "completion authority recorded", authorization_id: "auth-1", recorded_at: null };
+  consoleBody = console_([approved]);
+
+  let release;
+  holdPost = new Promise((resolve) => { release = resolve; });
+  press(approve);
+  press(approve);
+  await settle();
+
+  assert.equal(sent.length, 1, "a double click posts once");
+  // Every control in the panel is locked while the decision is in flight, and
+  // the operator can see why.
+  assert.ok(approve.disabled && recover.disabled, "all claim actions are disabled while a request is in flight");
+  assert.ok(approve.textContent.includes("working"), approve.textContent);
+  assert.equal(block.querySelector(".claim-actions").getAttribute("data-busy"), "true");
+  press(recover);
+  await settle();
+  assert.equal(sent.length, 1, "another action cannot start while one is in flight");
+  assert.equal(confirms.length, 0, "a locked action does not ask");
+
+  holdPost = null;
+  release();
+  await settle();
+  assert.equal(sent.length, 1);
+  assert.ok(button(block, "Revoke authority"), "the panel repaints from the state the decision produced");
+}
+
+{
+  // A retry of the same decision replays: it carries the same identity. A
+  // different decision (another reason or another status) is a new request.
+  sent.length = 0;
+  consoleBody = console_([claim({ phase: "running", handoff: null })]);
+  const block = await mount();
+  reasonInput(block).value = "host was rebuilt";
+  nextAction = { status: 500, body: { error: "owner temporarily unavailable" } };
+  press(recoveryButton(block, "blocked"));
+  await settle();
+  assert.ok(block.querySelector(".claim-feedback.error"), "a failed decision is reported");
+  assert.ok(!recoveryButton(block, "blocked").disabled, "a failed decision releases the panel");
+
+  press(recoveryButton(block, "blocked"));
+  await settle();
+  assert.equal(sent.length, 2);
+  assert.ok(sent[0].body.request_id, "the decision carries an identity");
+  assert.equal(sent[1].body.request_id, sent[0].body.request_id, "retrying the same decision replays its identity");
+
+  consoleBody = console_([claim({ phase: "running", handoff: null })]);
+  const other = await mount();
+  reasonInput(other).value = "a different reason";
+  press(recoveryButton(other, "backlog"));
+  await settle();
+  assert.ok(sent[2].body.request_id !== sent[0].body.request_id, "a different decision is a different request");
+}
+
+// --- claim state does not go stale -------------------------------------------
+
+{
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    consoleBody = console_([claim()]);
+    const first = await mount();
+    assert.ok(button(first, "Approve handoff"), "the first read offers approval");
+    const reads = consoleReads.length;
+
+    // Inside the window, rows share one read.
+    clock += 1000;
+    const shared = buildDistributedBlock("ORB-2");
+    await settle();
+    assert.equal(consoleReads.length, reads, "a detail opened inside the window reuses the read");
+    assert.ok(button(shared, "Approve handoff"));
+
+    // The owner approves elsewhere; the dashboard's own refresh never re-reads
+    // claims, so only expiry stops the panel offering a decision that is over.
+    const approved = claim();
+    approved.handoff.authority = { state: "authorized", summary: "completion authority recorded elsewhere", authorization_id: "auth-9", recorded_at: null };
+    consoleBody = console_([approved]);
+    clock += CONSOLE_TTL_MS + 1;
+    const later = buildDistributedBlock("ORB-2");
+    await settle();
+    assert.equal(consoleReads.length, reads + 1, "a detail opened after the window re-reads");
+    assert.ok(!button(later, "Approve handoff"), "the stale approve button is gone");
+    assert.ok(later.textContent.includes("completion authority recorded elsewhere"), later.textContent);
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+// --- the operator sees the outcome, from the state it produced -----------------
+
+{
+  sent.length = 0;
+  consoleBody = console_([claim()]);
+  const readsAtChange = [];
+  let rebuilt = null;
+  const block = await mount("ORB-2", {
+    // The dashboard refreshes its task list, which rebuilds this detail.
+    onTaskChanged: () => {
+      readsAtChange.push(consoleReads.length);
+      rebuilt = buildDistributedBlock("ORB-2");
+    },
+  });
+  const before = consoleReads.length;
+  const approved = claim();
+  approved.handoff.authority = { state: "authorized", summary: "completion authority recorded", authorization_id: "auth-1", recorded_at: null };
+  consoleBody = console_([approved]);
+
+  press(button(block, "Approve handoff"));
+  await settle();
+
+  assert.equal(readsAtChange.length, 1);
+  assert.equal(readsAtChange[0], before + 1, "the console is re-read before the task list is told to refresh");
+  assert.ok(rebuilt, "the detail was rebuilt");
+  assert.ok(!button(rebuilt, "Approve handoff"), "the rebuilt detail never renders the pre-action state with live buttons");
+  assert.ok(button(rebuilt, "Revoke authority"));
+  // Feedback survives the rebuild: it is in the block the operator now sees.
+  assert.ok(rebuilt.querySelector(".claim-feedback.ok"), "the rebuilt detail carries the decision's outcome");
+  assert.ok(block.querySelector(".claim-feedback.ok"), "and so does the original if it is still on the page");
+}
+
+{
+  // A refusal also reaches the block the operator is looking at.
+  sent.length = 0;
+  consoleBody = console_([claim()]);
+  let rebuilt = null;
+  const block = await mount("ORB-2", { onTaskChanged: () => { rebuilt = buildDistributedBlock("ORB-2"); } });
+  nextAction = { status: 400, body: { error: "candidate not found", code: "no_candidate", remedy: "push the candidate branch and try again" } };
+  press(button(block, "Approve handoff"));
+  await settle();
+  assert.ok(block.querySelector(".claim-feedback.error"), block.textContent);
+  assert.ok(block.textContent.includes("push the candidate branch"), `the remedy is rendered: ${block.textContent}`);
+  assert.equal(rebuilt, null, "a refusal changes nothing, so the task list is not refreshed");
+}
+
+{
+  // The action went through but the follow-up read failed. One message, not a
+  // green confirmation beside a red error, and a way to try again.
+  sent.length = 0;
+  consoleBody = console_([claim()]);
+  const block = await mount();
+  const approved = claim();
+  approved.handoff.authority = { state: "authorized", summary: "completion authority recorded", authorization_id: "auth-1", recorded_at: null };
+  consoleBody = console_([approved]);
+  failConsoleReads = 1;
+  press(button(block, "Approve handoff"));
+  await settle();
+
+  assert.equal(sent.length, 1);
+  assert.ok(!block.querySelector(".claim-feedback.ok"), "no success banner beside a failed read");
+  const notes = Array.from(block.querySelectorAll(".claim-feedback"));
+  assert.equal(notes.length, 1, `one message, got ${notes.length}: ${block.textContent}`);
+  assert.equal(notes[0].getAttribute("role"), "alert");
+  assert.ok(notes[0].textContent.includes("decision recorded"), "the decision that went through is not hidden");
+  assert.ok(notes[0].textContent.includes("claims unavailable"), notes[0].textContent);
+  const retry = block.querySelector("button.claim-retry");
+  assert.ok(retry, "a failed read offers retry");
+  press(retry);
+  await settle();
+  assert.ok(button(block, "Revoke authority"), "retry re-reads and repaints");
+  assert.ok(!block.querySelector("button.claim-retry"), "the error is gone once the read works");
+}
+
+{
+  // An initial read failure is the same: an alert and a retry, not a dead message.
+  consoleBody = console_([claim()]);
+  invalidateDistributedConsole();
+  failConsoleReads = 1;
+  const block = buildDistributedBlock("ORB-2");
+  await settle();
+  assert.equal(block.style.display, "", "a failed read is shown");
+  const alert = block.querySelector(".claim-feedback.error");
+  assert.ok(alert && alert.getAttribute("role") === "alert", "the failure is announced as an alert");
+  assert.ok(alert.textContent.includes("claims unavailable"), alert.textContent);
+  press(block.querySelector("button.claim-retry"));
+  await settle();
+  assert.ok(button(block, "Approve handoff"), "retry recovers the panel");
+}
+
+// --- a settled claim is history, not a warning ---------------------------------
+
+{
+  const landed = claim({ phase: "landed", unsettled: false, footprint_protected: false });
+  landed.handoff.authority = { state: "completed", summary: "authority was consumed by a verified merge", authorization_id: "auth-1", recorded_at: null };
+  consoleBody = console_([landed]);
+  const block = await mount();
+  const text = block.textContent;
+  assert.ok(text.includes("released"), `a settled reservation reads released: ${text}`);
+  assert.ok(!text.includes("expired"), `a settled claim's reservation is not shown as expired: ${text}`);
+  assert.ok(!text.includes("still live"), `the live-claim note does not apply to a settled claim: ${text}`);
+  assert.equal(block.querySelector(".claim-line.expired"), null, "no expired styling on a settled claim");
+  assert.equal(buttons(block).length, 0, "nothing to decide on a landed claim");
+}
+
+// --- times and empty fields ------------------------------------------------------
+
+{
+  // Times use the page's own formatter, passed in rather than imported.
+  consoleBody = console_([claim()]);
+  const block = await mount("ORB-2", { formatTime: (value) => `fmt(${value})` });
+  assert.ok(block.textContent.includes("expired fmt(2026-09-19T00:00:00+00:00)"), block.textContent);
+  assert.ok(block.textContent.includes("created fmt(2026-09-18T00:00:00+00:00)"), block.textContent);
+}
+
+{
+  // Absent fields read as absent, not as the word "undefined" or a dangling dash.
+  const sparse = claim({ phase_summary: "", reservation: { expired: false } });
+  consoleBody = console_([sparse]);
+  const block = await mount();
+  const text = block.textContent;
+  assert.ok(!text.includes("undefined"), `no field prints "undefined": ${text}`);
+  assert.ok(text.includes("no expiry recorded"), text);
+  assert.ok(!/handed off\s*—/.test(text), `an empty summary leaves no dangling dash: ${text}`);
+}
+
+{
+  // An event this build has no word for stays readable.
+  consoleBody = console_([claim({ last_event: "claim_bound" }), claim({ claim_id: "claim-2", last_event: "claim_made_up_event" })]);
+  const block = await mount();
+  const text = block.textContent;
+  assert.ok(text.includes("run bound") && !text.includes("claim_bound"), text);
+  assert.ok(text.includes("claim made up event"), text);
+  assert.equal(block.querySelectorAll(".claim-panel").length, 2, "each claim gets its own panel");
+  assert.ok(text.includes("claim claim-2"), "a second claim is told apart by its header");
 }
 
 globalThis.distributedTestsPassed = true;

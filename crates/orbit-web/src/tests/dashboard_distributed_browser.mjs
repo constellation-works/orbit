@@ -143,7 +143,7 @@ try {
     'machine hm_9ca6004473492f06 · name runner-2',
     'inspect this run on machine hm_9ca6004473492f06',
     'expiry is not revocation',
-    'not_required (policy none)',
+    'not required · policy none',
     'this is not a code review',
     'pull request #2367',
     'waits for explicit owner approval',
@@ -160,6 +160,14 @@ try {
   ]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await assertNoOverflow(`claim-panel-${viewport.name}`);
+    if (viewport.width <= 480) {
+      // Labels stack above values on a phone-width column instead of squeezing
+      // a machine id into what is left of a two-column grid.
+      const columns = await page.evaluate(
+        () => getComputedStyle(document.querySelector('.claim-line')).gridTemplateColumns.trim().split(/\s+/).length,
+      );
+      if (columns !== 1) throw new Error(`claim lines must stack at ${viewport.name}px, got ${columns} columns`);
+    }
     await capture(`claim-panel-${viewport.name}`);
   }
   await page.setViewportSize({ width: 1440, height: 1000 });

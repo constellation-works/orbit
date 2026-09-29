@@ -93,6 +93,17 @@
   font-size: 12px;
 }
 .claim-panel:last-child { margin-bottom: 0; }
+.claim-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.claim-header .claim-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
+.claim-header .claim-created { color: var(--fg-mute); font-size: 11px; }
 .claim-line {
   display: grid;
   grid-template-columns: minmax(90px, 140px) 1fr;
@@ -110,6 +121,12 @@
 .claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 11px; }
 .claim-line.expired > .value { color: var(--state-failed); }
 .claim-line.remote > .value { color: var(--fg-dim); }
+.claim-line.released > .value { color: var(--fg-mute); }
+/* Labels stack above values once the detail column is too narrow for two
+   columns; a 90px label track leaves a machine id or selector unreadable. */
+@media (max-width: 480px) {
+  .claim-line { grid-template-columns: 1fr; gap: 2px; }
+}
 .claim-note {
   grid-column: 1 / -1;
   color: var(--fg-mute);
@@ -164,7 +181,18 @@
   font-size: 11px;
   cursor: pointer;
 }
-.claim-action:hover { color: var(--fg); border-color: var(--fg-dim); }
+.claim-action:hover:not(:disabled) { color: var(--fg); border-color: var(--fg-dim); }
+.claim-action:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Revoke and Recover withdraw authority or fence an attempt, so they carry
+   the same destructive treatment as a reject. */
+.claim-action.revoke,
+.claim-action.recover { color: #e7b8b1; }
+.claim-action.revoke:hover:not(:disabled),
+.claim-action.recover:hover:not(:disabled) {
+  border-color: #5a2a27;
+  background: var(--danger-wash);
+  color: var(--danger-fg);
+}
 .claim-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .claim-reason {
   background: var(--bg);
@@ -180,7 +208,12 @@
 
 /* An unauthorized action is explained, not hidden: the operator learns
    why, and the server refuses the call either way. */
-.claim-action-denied { color: var(--fg-mute); font-size: 11px; font-style: italic; }
+.claim-action-denied {
+  color: var(--fg-mute);
+  font-size: 11px;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
 .claim-feedback {
   padding: 6px 10px;
   margin-bottom: 8px;
@@ -192,6 +225,8 @@
 .claim-feedback.error { border-left-color: var(--state-failed); }
 .claim-feedback.stale { border-left-color: var(--state-running); }
 .claim-feedback.uncertain { border-left-color: var(--state-failed); }
+.claim-feedback .claim-note { margin-top: 2px; }
+.claim-retry { margin-bottom: 8px; }
 
 .step-row {
   display: grid;

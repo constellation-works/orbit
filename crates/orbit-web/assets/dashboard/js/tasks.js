@@ -1768,6 +1768,7 @@ function buildTaskDetail(task, context) {
   leftCol.appendChild(
     buildDistributedBlock(task.id, {
       onTaskChanged: () => refreshTasks(context),
+      formatTime: (value) => fmtAbsTimeValue(context, value),
     }),
   );
 
@@ -2440,13 +2441,18 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     });
     if (!res.ok) {
       let msg = `${kind} failed: HTTP ${res.status}`;
+      let remedy = null;
       try {
         const errBody = await res.json();
         if (errBody && errBody.error) msg = `${kind} failed: ${errBody.error}`;
+        // A typed refusal (the handoff approval's stale or uncertain-merge
+        // conflicts) names what to do next; dropping it leaves the operator
+        // with a refusal and no way forward.
+        if (errBody && typeof errBody.remedy === "string" && errBody.remedy) remedy = errBody.remedy;
       } catch (_) {
         /* keep generic msg */
       }
-      throw new Error(msg);
+      throw Object.assign(new Error(msg), remedy ? { remedy } : {});
     }
     if (opts.collapseOnSuccess !== false) expandedTaskIds.delete(task.id);
     if (opts.successNotice) taskActionNotice = opts.successNotice;
@@ -2456,6 +2462,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
     if (opts.onFailure) opts.onFailure();
     const errEl = el("div", { class: "action-error", text: String(err.message || err) });
+    if (err && err.remedy) errEl.appendChild(el("div", { class: "action-error-remedy", text: err.remedy }));
     detail.prepend(errEl);
   }
 }
