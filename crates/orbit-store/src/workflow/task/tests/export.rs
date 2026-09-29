@@ -491,3 +491,40 @@ fn export_refuses_a_symlink_inside_a_bundle_without_packing_its_target() {
         "refused export must not create an archive"
     );
 }
+
+/// A bundle root that is itself a link is refused too: tar resolves the root
+/// it is handed, so exporting it would pack the target directory's files.
+#[cfg(unix)]
+#[test]
+fn export_refuses_a_linked_bundle_root_without_packing_its_target() {
+    let src = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let ws = "export-linked-root-abcdef";
+    let registry = open_registry(src.path());
+    let binding = bind(&registry, src.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "linked root", Vec::new()),
+    );
+
+    // Move the real bundle aside, plant a credential in it, and leave a link
+    // to it where the bundle lives.
+    let bundle = store.bundle_path("ORB-00000").unwrap();
+    let elsewhere = src.path().join("elsewhere");
+    fs::rename(&bundle, &elsewhere).unwrap();
+    let secret_bytes = b"host-credential-must-not-leave";
+    fs::write(elsewhere.join("credentials"), secret_bytes).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &bundle).unwrap();
+
+    let error = export_tasks(&registry, ws, ExportSelection::All, &archive, exported_at())
+        .expect_err("a linked bundle root must not be exported");
+
+    assert!(error.to_string().contains("ORB-00000"), "{error}");
+    assert!(
+        !archive.exists(),
+        "refused export must not create an archive"
+    );
+}

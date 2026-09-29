@@ -106,11 +106,19 @@ impl CallSecrets {
     /// failed process. The backend was handed the values and can print them;
     /// the caller it reports to must not be able to read them there.
     pub(crate) fn mask_delivered(&self, text: &str) -> String {
+        // Longest first, so a secret that contains another is masked whole
+        // rather than leaving the rest of it readable.
+        let mut values: Vec<&str> = self
+            .0
+            .iter()
+            .flat_map(BTreeMap::values)
+            .map(|secret| secret.value.as_str())
+            .filter(|value| !value.is_empty())
+            .collect();
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
         let mut masked = text.to_string();
-        for secret in self.0.iter().flat_map(BTreeMap::values) {
-            if !secret.value.is_empty() {
-                masked = masked.replace(&secret.value, "[secret]");
-            }
+        for value in values {
+            masked = masked.replace(value, "[secret]");
         }
         masked
     }

@@ -151,13 +151,26 @@ fn append_bundle_tree_level<W: std::io::Write>(
 ///
 /// A bundle is written only by Orbit, so a link inside one was planted. The
 /// archive leaves the machine; following the link would pack whatever it
-/// points at, such as a credential file, into it.
+/// points at, such as a credential file, into it. The bundle root is held to
+/// the same rule: tar resolves the root it is handed, so a linked root would
+/// pack its target's files under the bundle's name.
 fn reject_linked_entries(task_id: &str, dir: &Path) -> Result<(), OrbitError> {
+    let root = std::fs::symlink_metadata(dir).map_err(map_io("inspect bundle directory"))?;
+    if !root.file_type().is_dir() {
+        return Err(OrbitError::Store(format!(
+            "cannot export task '{task_id}': {} is not a directory",
+            dir.display()
+        )));
+    }
+    reject_linked_children(task_id, dir)
+}
+
+fn reject_linked_children(task_id: &str, dir: &Path) -> Result<(), OrbitError> {
     for entry in std::fs::read_dir(dir).map_err(map_io("read bundle directory"))? {
         let entry = entry.map_err(map_io("read bundle directory"))?;
         let file_type = entry.file_type().map_err(map_io("inspect bundle entry"))?;
         if file_type.is_dir() {
-            reject_linked_entries(task_id, &entry.path())?;
+            reject_linked_children(task_id, &entry.path())?;
         } else if !file_type.is_file() {
             return Err(OrbitError::Store(format!(
                 "cannot export task '{task_id}': {} is not a regular file",

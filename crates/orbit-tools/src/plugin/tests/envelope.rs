@@ -383,6 +383,22 @@ fn declared_secrets_ride_the_request_on_both_surfaces() {
     }
 }
 
+/// Relayed backend text never shows any part of a delivered secret, even when
+/// one secret value contains another and sorts after it by name.
+#[test]
+fn masking_hides_a_secret_that_contains_another_secret_whole() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = RecordingSource::holding(&[
+        ("api_token", "abc", "v1"),
+        ("refresh_token", "abcdef", "v1"),
+    ]);
+    let secrets = CallSecrets::resolve(&secret_spec(temp.path(), source)).expect("resolve");
+
+    let masked = secrets.mask_delivered("auth failed for abcdef and abc");
+
+    assert_eq!(masked, "auth failed for [secret] and [secret]");
+}
+
 /// A plugin that declares no secrets has no `secrets` key at all, and one that
 /// declares some but has none set gets an empty object.
 #[test]

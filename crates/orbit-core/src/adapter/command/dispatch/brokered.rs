@@ -61,6 +61,8 @@ impl RunDispatch {
     /// caller's spelling of it. The worktree is the agent's to write, so a
     /// link that resolved inside it here could be repointed before the backend
     /// starts; the call runs, and is audited, at the resolved path instead.
+    /// The path is not held open, so a directory swapped along it before the
+    /// spawn still moves the backend; this narrows the window, not closes it.
     fn checked_cwd(
         &self,
         cwd: &Path,
