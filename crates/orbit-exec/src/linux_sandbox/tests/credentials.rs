@@ -31,8 +31,18 @@ fn home_fixture() -> HomeFixture {
     }
 }
 
+/// The denies resolved from a fixture `home`, limited to entries under it.
+/// The absolute system keychain trees exist on a macOS host running these
+/// tests, so leaving them in would make the outcome depend on the host.
+fn home_denies(home: &Path) -> Vec<CredentialReadDeny> {
+    credential_read_denies(Some(home.as_os_str()), None)
+        .into_iter()
+        .filter(|deny| deny.path.starts_with(home))
+        .collect()
+}
+
 fn denies(fixture: &HomeFixture) -> Vec<CredentialReadDeny> {
-    credential_read_denies(Some(fixture.home.as_os_str()), None)
+    home_denies(&fixture.home)
 }
 
 fn no_mounts() -> Result<Vec<MountEntry>, OrbitError> {
@@ -108,7 +118,7 @@ fn a_symlinked_credential_dir_masks_its_real_location() {
 fn nothing_existing_emits_no_mount_and_never_reads_the_mount_table() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("empty-home");
-    let denies = credential_read_denies(Some(home.as_os_str()), None);
+    let denies = home_denies(&home);
     let read = Cell::new(false);
     let mut out = vec!["--die-with-parent".to_string()];
 

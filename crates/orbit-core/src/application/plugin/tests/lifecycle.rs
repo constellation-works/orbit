@@ -881,7 +881,7 @@ fn enter_fake_fetch_child(test: &str) -> bool {
     std::fs::write(
         &curl,
         format!(
-            "#!/bin/sh\nset -eu\nout=''\nprev=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '--output' ]; then out=$arg; fi\n  prev=$arg\ndone\n[ -n \"$out\" ] || exit 2\n[ -f {archive} ] || exit 22\ncat {archive} > \"$out\"\n",
+            "#!/bin/sh\nset -eu\nout=''\nprev=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '--output' ]; then out=$arg; fi\n  prev=$arg\ndone\n[ -n \"$out\" ] || exit 2\n[ -f {archive} ] || exit 22\nif [ \"$out\" = '-' ]; then cat {archive}; else cat {archive} > \"$out\"; fi\n",
             archive = quote(&archive),
         ),
     )
