@@ -265,6 +265,19 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
             .inspect_active_task_reservations(workspace_orbit_dir, workspace_id)
     }
 
+    fn inspect_active_task_reservation(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        reservation_id: &str,
+    ) -> Result<Option<ActiveTaskReservation>, OrbitError> {
+        self.store.inspect_active_task_reservation(
+            workspace_orbit_dir,
+            workspace_id,
+            reservation_id,
+        )
+    }
+
     fn list_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,

@@ -489,3 +489,50 @@ fn workspace_shadow_of_a_shipped_activity_keeps_existing_catalog_precedence() {
     };
     assert_eq!(spec.tool_policy_mode(), ActivityToolPolicyMode::Deny);
 }
+
+/// In the single-root layout the global and workspace activity directories
+/// are the same path. It must be listed (and therefore parsed) once, and it
+/// must keep the global layer's rules so a shipped default seeded there still
+/// resolves.
+#[test]
+fn shared_root_activity_directory_is_layered_once_and_keeps_global_rules() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let shared_root = root.path().join("shared");
+    std::fs::create_dir_all(&shared_root).expect("create shared root");
+    let runtime =
+        crate::OrbitRuntime::from_roots(&shared_root, &shared_root).expect("build test runtime");
+    let activities_dir = shared_root.join("resources/activities");
+    write_activity(
+        &activities_dir.join("pr_open.yaml"),
+        "pr_open",
+        "shared description",
+    );
+    write_activity(
+        &activities_dir.join("custom_step.yaml"),
+        "custom_step",
+        "custom description",
+    );
+
+    let same_dir_entries = runtime
+        .v2_activity_catalog_paths()
+        .into_iter()
+        .filter(|path| path.canonicalize().ok() == activities_dir.canonicalize().ok())
+        .count();
+    assert_eq!(same_dir_entries, 1, "one shared directory is one layer");
+
+    let catalog = runtime.v2_activity_catalog().expect("activity catalog");
+    assert_eq!(
+        catalog
+            .get("pr_open")
+            .expect("shipped default in shared root resolves")
+            .description,
+        "shared description"
+    );
+    assert_eq!(
+        catalog
+            .get("custom_step")
+            .expect("custom activity in shared root resolves")
+            .description,
+        "custom description"
+    );
+}

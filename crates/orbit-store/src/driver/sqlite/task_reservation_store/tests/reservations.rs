@@ -304,3 +304,107 @@ fn reservation_ids_are_unique_within_a_clock_tick() {
     assert!(first.reserved && second.reserved);
     assert_ne!(first.reservation_id, second.reservation_id);
 }
+
+#[test]
+fn inspect_single_reservation_matches_bulk_visibility_and_scope() {
+    let store = Store::open_in_memory().expect("open store");
+    let mut first = reserve_params("file:src/a.rs");
+    first.owner_run_id = Some("jrun-a".to_string());
+    let first_id = store
+        .reserve_task_reservation(&first)
+        .expect("reserve first")
+        .reservation_id
+        .expect("first id");
+    let second_id = store
+        .reserve_task_reservation(&reserve_params("file:src/b.rs"))
+        .expect("reserve second")
+        .reservation_id
+        .expect("second id");
+
+    let found = store
+        .inspect_active_task_reservation("/workspace/.orbit", None, &first_id)
+        .expect("inspect one")
+        .expect("first is active");
+    let bulk = store
+        .inspect_active_task_reservations("/workspace/.orbit", None)
+        .expect("inspect all")
+        .into_iter()
+        .find(|reservation| reservation.reservation_id == first_id)
+        .expect("bulk has first");
+    assert_eq!(found, bulk);
+    assert_eq!(found.owner_run_id.as_deref(), Some("jrun-a"));
+
+    // Another workspace's scope must not see the row.
+    assert!(
+        store
+            .inspect_active_task_reservation("/other/.orbit", Some("other-abcdef"), &first_id)
+            .expect("inspect other scope")
+            .is_none()
+    );
+    assert!(
+        store
+            .inspect_active_task_reservation("/workspace/.orbit", None, "reservation-missing")
+            .expect("inspect missing")
+            .is_none()
+    );
+
+    // A released reservation disappears; its sibling is untouched.
+    store
+        .release_task_reservation(&TaskReservationReleaseParams {
+            workspace_orbit_dir: "/workspace/.orbit".to_string(),
+            workspace_id: None,
+            reservation_id: first_id.clone(),
+            release_reason: TaskReservationReleaseReason::Explicit,
+            release_metadata_json: None,
+        })
+        .expect("release first");
+    assert!(
+        store
+            .inspect_active_task_reservation("/workspace/.orbit", None, &first_id)
+            .expect("inspect released")
+            .is_none()
+    );
+    assert!(
+        store
+            .inspect_active_task_reservation("/workspace/.orbit", None, &second_id)
+            .expect("inspect sibling")
+            .is_some()
+    );
+}
+
+#[test]
+fn inspect_single_reservation_hides_expired_rows_without_mutating() {
+    let store = Store::open_in_memory().expect("open store");
+    let id = store
+        .reserve_task_reservation(&reserve_params("file:src/a.rs"))
+        .expect("reserve")
+        .reservation_id
+        .expect("id");
+    {
+        let conn = store.connection();
+        let guard = conn.lock().expect("conn lock");
+        guard
+            .execute(
+                "UPDATE task_reservations SET expires_at = '2000-01-01T00:00:00+00:00'
+                 WHERE reservation_id = ?1",
+                params![id],
+            )
+            .expect("expire row");
+    }
+    assert!(
+        store
+            .inspect_active_task_reservation("/workspace/.orbit", None, &id)
+            .expect("inspect expired")
+            .is_none()
+    );
+    let conn = store.connection();
+    let guard = conn.lock().expect("conn lock");
+    let released_at: Option<String> = guard
+        .query_row(
+            "SELECT released_at FROM task_reservations WHERE reservation_id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .expect("read row");
+    assert!(released_at.is_none(), "inspection must stay read-only");
+}

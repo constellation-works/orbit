@@ -460,6 +460,16 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<Vec<ActiveTaskReservation>, OrbitError>;
 
+    /// Read one active reservation by id with the visibility of
+    /// [`Self::inspect_active_task_reservations`]; `None` when it is gone,
+    /// released, expired, or outside the workspace.
+    fn inspect_active_task_reservation(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        reservation_id: &str,
+    ) -> Result<Option<ActiveTaskReservation>, OrbitError>;
+
     fn list_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,

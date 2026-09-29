@@ -16,7 +16,7 @@ use crate::{
     TaskReservationScope,
 };
 use orbit_common::OrbitError;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl Store {
     /// Inspect active reservations through a pooled read connection. Unlike
@@ -57,6 +57,41 @@ impl Store {
                 );
             }
             Ok(reservations)
+        })
+    }
+
+    /// Read one active reservation by id through a pooled read connection,
+    /// with the same visibility as [`Self::inspect_active_task_reservations`]:
+    /// scoped to the workspace, not released, not expired, and never mutating.
+    /// `None` when the reservation is gone, released, expired, or belongs to
+    /// another workspace.
+    pub fn inspect_active_task_reservation(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        reservation_id: &str,
+    ) -> Result<Option<ActiveTaskReservation>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let now = crate::now_string();
+            let sql = format!(
+                "SELECT {}
+                 FROM task_reservations
+                 WHERE {}
+                   AND reservation_id = ?4
+                   AND released_at IS NULL
+                   AND expires_at > ?3",
+                select_reservation_columns(),
+                reservation_scope_clause(TaskReservationScope::Files),
+            );
+            conn.query_row(
+                &sql,
+                params![workspace_id, workspace_orbit_dir, now, reservation_id],
+                reservation_row,
+            )
+            .optional()
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .map(super::rows::ReservationRow::into_active)
+            .transpose()
         })
     }
 

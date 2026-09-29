@@ -129,3 +129,23 @@ fn catalog_tool_allowlist_validation_rejects_unknown_tools() {
     assert!(text.contains("constellation_survey"), "{text}");
     assert!(text.contains("orbit.state.get"), "{text}");
 }
+
+#[test]
+fn job_catalog_take_consumes_the_entry_with_its_source() {
+    let dir = tempdir().expect("tempdir");
+    write(
+        &dir.path().join("first.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: first\nspec:\n  state: enabled\n  kind: workflow\n  max_active_runs: 7\n  steps: []\n",
+    );
+    let mut catalog = V2JobCatalog::new();
+    catalog
+        .load_dir_prefer_existing(dir.path())
+        .expect("load jobs");
+
+    let (path, spec) = catalog.take("first").expect("first job present");
+    assert_eq!(path, dir.path().join("first.yaml"));
+    assert_eq!(spec.max_active_runs, 7);
+    assert!(catalog.take("first").is_none(), "take consumes the entry");
+    assert!(catalog.get("first").is_none());
+    assert!(catalog.iter().next().is_none());
+}

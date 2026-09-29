@@ -236,7 +236,7 @@ impl OrbitRuntime {
 
     pub fn show_job_catalog_entry(&self, job_id: &str) -> Result<JobCatalogEntry, OrbitError> {
         let dirs = self.v2_job_asset_dirs();
-        let (v2_jobs, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
+        let (mut v2_jobs, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
         let selected_path = v2_jobs.get(job_id).map(|(path, _)| path.to_path_buf());
         if let Some(diagnostic) = diagnostics
             .into_iter()
@@ -244,11 +244,11 @@ impl OrbitRuntime {
         {
             return Err(diagnostic.error);
         }
-        if let Some((path, spec)) = v2_jobs.get(job_id) {
+        if let Some((path, spec)) = v2_jobs.take(job_id) {
             return Ok(JobCatalogEntry {
                 job_id: job_id.to_string(),
-                path: path.to_path_buf(),
-                spec: spec.clone(),
+                path,
+                spec,
             });
         }
         Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
@@ -455,7 +455,7 @@ impl OrbitRuntime {
         job_id: &str,
     ) -> Result<(PathBuf, JobV2), OrbitError> {
         let dirs = self.v2_job_asset_dirs_for_execution(job_id);
-        let (catalog, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
+        let (mut catalog, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
         let selected_path = catalog.get(job_id).map(|(path, _)| path.to_path_buf());
         if let Some(diagnostic) = diagnostics
             .into_iter()
@@ -463,8 +463,8 @@ impl OrbitRuntime {
         {
             return Err(diagnostic.error);
         }
-        if let Some((path, spec)) = catalog.get(job_id) {
-            return Ok((path.to_path_buf(), spec.clone()));
+        if let Some(resolved) = catalog.take(job_id) {
+            return Ok(resolved);
         }
         Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
