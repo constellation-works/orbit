@@ -350,11 +350,6 @@ const REHOME: FrictionOperation = FrictionOperation {
     cli_render: CliRender::Record,
 };
 
-/// Borrow the whole registry.
-pub fn friction_operations() -> &'static [FrictionOperation] {
-    FRICTION_OPERATIONS
-}
-
 /// Look up a friction operation by its short verb name.
 pub fn friction_operation(name: &str) -> Option<&'static FrictionOperation> {
     find_by_name(FRICTION_OPERATIONS, name)

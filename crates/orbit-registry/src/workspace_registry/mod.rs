@@ -15,7 +15,7 @@ pub use io::{
     ReadOnlyRegistryLoad, global_orbit_dir, load_registry, load_registry_from,
     load_registry_from_read_only, load_registry_from_read_only_with_machine,
     load_registry_from_with_machine, registry_file_fingerprint, registry_path, registry_path_for,
-    save_registry, save_registry_to, with_registry_lock,
+    save_registry_to, with_registry_lock,
 };
 pub use publication::{
     bind_publication, bind_publication_by_id, find_publication_binding,

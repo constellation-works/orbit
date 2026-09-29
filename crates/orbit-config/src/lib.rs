@@ -38,7 +38,7 @@
 //! depends on no higher layer. In particular it does not know about
 //! `orbit-core` path discovery (callers supply an explicit [`ConfigRoots`]),
 //! about `orbit-engine` (PR settings are exposed as config-owned
-//! [`PrSettings`] and translated at composition time), or about a terminal
+//! `PrSettings` and translated at composition time), or about a terminal
 //! (host detection and interactive prompting belong to the CLI init adapter,
 //! which hands this crate an explicit [`ConfigSeed`]).
 //!
@@ -63,10 +63,10 @@
 mod crew_pools;
 mod layering;
 mod memory_limit;
-pub mod operation;
+mod operation;
 mod persistence;
 mod plugin_enablement;
-pub mod plugins;
+mod plugins;
 mod raw;
 mod registry;
 mod resolved;
@@ -82,36 +82,26 @@ use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::security::redaction::redact_home_dir;
 
 pub use crew_pools::{
-    CanonicalCrewPool, ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool,
-    canonical_crew_pool_entries,
+    ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
 };
 pub use layering::{
-    ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,
-    EffectiveConfigValue, ShadowReason, ShadowedConfigValue, load_effective_config,
+    ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
+    load_effective_config,
 };
 pub use memory_limit::{MemoryLimit, MemoryUnit};
-pub use operation::{
-    OPERATION_POLICY_VERSION, OperationField, OperationLayer, OperationLayerSource,
-    OperationPolicy, ReviewPolicy,
-};
+pub use operation::{OPERATION_POLICY_VERSION, OperationPolicy, ReviewPolicy};
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
-    PLUGIN_ENABLEMENT_TABLE, load_workspace_plugin_enablement, plugin_enablement_key,
-    workspace_config_sets_policy,
+    load_workspace_plugin_enablement, plugin_enablement_key, workspace_config_sets_policy,
 };
-pub use plugins::{
-    PLUGIN_CONFIG_PREFIX, PluginConfigSchema, PluginFieldKey, parse_plugin_field_key,
-    plugin_config_schema, register_plugin_config_schemas, registered_plugin_namespaces,
-};
+pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use registry::{
-    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot,
-    GLOBAL_ONLY_KEY_PREFIX, MachineSettings, WorkerContainmentSettings, admit_config_key,
-    admit_settable_config_key, config_key_options, describe as describe_config_key,
-    is_global_only_key,
+    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, MachineSettings,
+    WorkerContainmentSettings, admit_config_key, config_key_options,
+    describe as describe_config_key,
 };
 pub use resolved::{
-    CodexExecutionPolicy, DisabledLaneCrew, ExecutionEnvPolicy, IgnoredCrewProperty, PrSettings,
-    ResolvedConfig, disabled_crew_message,
+    CodexExecutionPolicy, ExecutionEnvPolicy, ResolvedConfig, disabled_crew_message,
 };
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};
@@ -215,10 +205,6 @@ fn validated_machine_settings_path(global_root: &Path) -> Result<Option<PathBuf>
 /// Validate the effective (workspace-over-global) `config.toml` without
 /// exposing the internal [`ResolvedConfig`] shape. Used by the workspace
 /// doctor in `orbit-cmd` [ORB-10016].
-pub fn validate_layered_config(roots: &ConfigRoots) -> Result<(), OrbitError> {
-    ResolvedConfig::load(roots).map(|_| ())
-}
-
 /// Store-database path resolved from the layered config. Used by the
 /// runtime-less `orbit migrate --dry-run` inspection in `orbit-cmd`
 /// [ORB-10016].

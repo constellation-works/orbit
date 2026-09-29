@@ -7,7 +7,6 @@ use orbit_store::compose::{global_executor_def_store, global_policy_def_store};
 use orbit_store::friction_store;
 use orbit_types::workspace::{DEFAULT_BASE_BRANCH, WorkspacePaths};
 
-use crate::OrbitRuntime;
 use crate::application::executor::seed_default_executors;
 use crate::application::job::seed_default_jobs;
 use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
@@ -80,15 +79,6 @@ pub struct InitOptions {
     /// the built-in crew registry. Ignored when config.toml already exists —
     /// init remains idempotent.
     pub config_seed: Option<ConfigSeed>,
-}
-
-impl OrbitRuntime {
-    pub fn init_workspace_with_options(
-        &self,
-        options: InitOptions,
-    ) -> Result<InitResult, OrbitError> {
-        init_workspace_at_root(&self.data_root(), options)
-    }
 }
 
 /// Ensures both global and workspace roots are bootstrapped.

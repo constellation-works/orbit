@@ -1,15 +1,10 @@
-//! Invocation-result types, error-code constants, and workflow-failure /
-//! interruption helpers.
+//! Workflow-failure / interruption status events and history-note helpers.
 
 use orbit_common::text::floor_char_boundary;
 use orbit_types::task::TaskStatus;
-use orbit_types::telemetry::InvocationTrace;
-use serde_json::Value;
 
 use super::hosts::TaskAutomationUpdate;
 
-pub const AGENT_INVOCATION_FAILED: &str = "AGENT_INVOCATION_FAILED";
-pub const AGENT_TIMEOUT: &str = "AGENT_TIMEOUT";
 pub const WORKFLOW_RUN_FAILED_EVENT: &str = "workflow_run_failed";
 /// Status event for a task blocked because its run was reconciled
 /// `interrupted` (the worker died under it). Distinct from
@@ -136,12 +131,4 @@ pub fn blocked_workflow_interruption_update(
         )),
         ..TaskAutomationUpdate::default()
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ActivityInvocationResult {
-    pub response_json: Option<Value>,
-    pub invocation_trace: InvocationTrace,
-    pub exit_code: Option<i32>,
-    pub duration_ms: u64,
 }

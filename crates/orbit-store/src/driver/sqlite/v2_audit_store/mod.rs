@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 
 use crate::{Store, parse_timestamp};
@@ -161,22 +160,6 @@ impl Store {
             }
         }
         Ok(present)
-    }
-
-    pub fn prune_v2_audit_events_older_than(
-        &self,
-        workspace_id: &str,
-        ts: &DateTime<Utc>,
-    ) -> Result<usize, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        conn.execute(
-            "DELETE FROM v2_audit_events WHERE workspace_id = ?1 AND ts < ?2",
-            rusqlite::params![workspace_id, ts.to_rfc3339()],
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))
     }
 }
 

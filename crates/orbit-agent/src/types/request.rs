@@ -37,10 +37,4 @@ impl AgentRequest {
             verbose: false,
         }
     }
-
-    /// Set the verbose flag on this request.
-    pub fn with_verbose(mut self, verbose: bool) -> Self {
-        self.verbose = verbose;
-        self
-    }
 }

@@ -396,10 +396,3 @@ pub fn parse_duration_seconds(raw: &str) -> Result<u64, OrbitError> {
         OrbitError::InvalidInput(format!("duration '{raw}' is too large to represent"))
     })
 }
-
-/// An optional duration field, parsed with [`parse_duration_seconds`].
-pub fn optional_duration_seconds(input: &Value, key: &str) -> Result<Option<u64>, OrbitError> {
-    optional_string(input, key)?
-        .map(|raw| parse_duration_seconds(&raw))
-        .transpose()
-}

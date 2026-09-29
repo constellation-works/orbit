@@ -11,7 +11,6 @@ use super::{
     AgentSummary, RecentSummary, ScoreboardInputs, ScoreboardSummary, TopToolCall,
     WorkflowRunCount, select_notable_completions, snapshot_coverage,
 };
-use crate::AuditToolCallCountsByRole;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
@@ -20,6 +19,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(test)]
 pub fn generate_summary(
     scoreboard_dir: &Path,
     tasks: &[Task],
@@ -27,10 +27,11 @@ pub fn generate_summary(
     generate_summary_with_inputs(scoreboard_dir, tasks, &ScoreboardInputs::default())
 }
 
+#[cfg(test)]
 pub fn generate_summary_with_audit_tool_calls(
     scoreboard_dir: &Path,
     tasks: &[Task],
-    audit_tool_calls: &[AuditToolCallCountsByRole],
+    audit_tool_calls: &[crate::AuditToolCallCountsByRole],
 ) -> Result<ScoreboardSummary, OrbitError> {
     generate_summary_with_inputs(
         scoreboard_dir,

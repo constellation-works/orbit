@@ -87,28 +87,23 @@ pub use orbit_tools::prepare_remote_task_artifact_put;
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::distributed::{
-    DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal, PullSettlementEntry,
-    WorkspacePullRequest,
+    DrainEntryPoint, DrainEntryRefusal, PullSettlementEntry, WorkspacePullRequest,
 };
 pub use application::job::{
-    AgentInvokeRequest, AgentInvokeSubmission, CatalogReferenceLayer, DrainAdmissionsStopChange,
-    DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWorkerLimitChange,
-    DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, RemainingDrainChild,
+    AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest, DrainWorkerLimitRequest,
+    PipelineInvokeResult, PipelineWaitEntry,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
-pub use application::search::{
-    GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, HitWorkspace, WorkspaceSearchReport,
-    task_selectors_contain_path,
-};
-pub use application::task::{LockContentionHotspot, LockContentionReport};
+pub use application::search::{GlobalSearchHit, GlobalSearchKind, GlobalSearchParams};
+pub use application::task::LockContentionReport;
 pub use application::workflow::{
     CompletionPolicy, ShipMode, build_ship_input, find_workflow, resolved_ship_mode,
 };
 pub use application::workspace_sync::{
-    ManagedArtifactOutcome, ManagedArtifactScope, ManagedArtifactSyncAction,
-    WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,
+    ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
+    reconcile_workspace_managed_artifacts,
 };
 pub use context::ActorIdentity;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
@@ -126,26 +121,23 @@ pub use orbit_store::{
 pub use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,
     TaskReferenceIndex, TaskStatus, TaskType, resolve_task_dependencies, resolve_task_relations,
-    task_dependencies_ready, task_dependencies_ready_with_index,
+    task_dependencies_ready_with_index,
 };
 pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
 pub use orbit_types::workflow::{
-    AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, ExecutorDef, JobRun,
-    JobRunState, JobRunStep, JobTargetType,
+    AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRun, JobRunState,
+    JobRunStep, JobTargetType,
 };
 pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
 // the dashboard's incident, audit-summary, and scoreboard surfaces.
 pub use orbit_store::{
-    CASCADE_WINDOW_SECS, FailureClass, FailureIncident, FailureIncidentQuery,
-    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
-    PropagationLink, is_failure_only_diagnostic_surface,
+    FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
+    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
+    is_failure_only_diagnostic_surface,
 };
 // Routine fire records surfaced by the dashboard's routine-health JSON API.
 pub use orbit_store::{RoutineFireRecord, RoutineFireState};
-pub use runtime::engine::{
-    OrchestratorInvocationMetrics, OrchestratorInvocationMetricsBucket,
-    OrchestratorMetricsBucketKind,
-};
+pub use runtime::engine::{OrchestratorInvocationMetrics, OrchestratorMetricsBucketKind};
 pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
-pub use runtime::{OrbitRuntime, WorkspaceRootHint, WorkspaceRuntimeBinding};
+pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

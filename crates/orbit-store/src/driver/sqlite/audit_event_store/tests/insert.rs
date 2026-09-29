@@ -4,8 +4,7 @@ use std::collections::BTreeSet;
 
 use super::sample_params;
 use crate::AuditEventFilter;
-use crate::AuditInvocationFields;
-use crate::contracts::AuditEventInsertParams;
+use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
 
 #[test]
 fn insert_then_read_round_trips_correlation_fields() {

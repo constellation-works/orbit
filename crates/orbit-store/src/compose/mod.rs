@@ -95,14 +95,6 @@ pub fn workspace_friction_store(
     )?))
 }
 
-pub fn workspace_friction_store_from_path(
-    database: &std::path::Path,
-    workspace_id: impl Into<String>,
-    files_root: impl Into<PathBuf>,
-) -> Result<Arc<dyn FrictionStoreBackend>, orbit_common::OrbitError> {
-    workspace_friction_store(Store::open(database)?, workspace_id, files_root)
-}
-
 /// Prove the store database is open-able *and writable by this binary*.
 ///
 /// Callers use this before work that must write (the pipeline worker's

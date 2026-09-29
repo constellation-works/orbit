@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 use chrono::Utc;
-use orbit_agent::loop_engine::audit::{AuditSink, LoopAuditEvent};
+use orbit_agent::loop_engine::audit::AuditSink;
 use orbit_common::OrbitError;
 use orbit_types::workflow::activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
@@ -400,22 +400,9 @@ impl V2AuditWriter {
             .ok_or(WriteError::SnapshotUnavailable)
     }
 
-    /// Access to the inner loop-level sink for the loop engine to emit
-    /// http.*/tool.call.* events through. Returns a cloned `Arc` so callers
-    /// (e.g. `EnforcedAuditSink`) can share ownership without lifetime
-    /// gymnastics.
-    pub fn inner_sink(&self) -> Arc<dyn AuditSink> {
-        Arc::clone(&self.inner)
-    }
-
     /// Proxy: write a blob via the inner sink (sha256-based, per §7.4 / §12 Q11).
     pub fn write_blob(&self, content: &[u8]) -> String {
         self.inner.write_blob(content)
-    }
-
-    /// Proxy: emit a loop-level event through the inner sink.
-    pub fn emit_loop_event(&self, event: &LoopAuditEvent) {
-        self.inner.emit(event);
     }
 
     fn next_event_id(&self) -> Result<String, WriteError> {

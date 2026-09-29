@@ -19,7 +19,6 @@ pub use path_match::task_selectors_contain_path;
 pub(crate) use types::empty_whitespace_query_note;
 pub use types::{
     GlobalSearchHit, GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
-    HitWorkspace, WorkspaceSearchReport,
 };
 
 use self::convert::{fill_task_record_fields, lexical_task_hit};

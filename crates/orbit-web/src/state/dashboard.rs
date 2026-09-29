@@ -514,13 +514,13 @@ impl DashboardState {
     /// - **No build under lock.** Eviction only drops cache entries; runtimes
     ///   are (re)built lazily in `resolve_runtime`, never here and never while a
     ///   registry/cache lock is held.
-    #[cfg_attr(not(test), expect(dead_code))]
+    #[cfg(test)]
     pub(crate) fn refresh(&self) {
         self.reload_registry(true);
     }
 
     /// `force` bypasses the registry and checkout fingerprint gates so explicit
-    /// [`DashboardState::refresh`] still re-validates checkouts even when
+    /// `DashboardState::refresh` still re-validates checkouts even when
     /// `workspaces.json` and the checkout paths themselves are unchanged. The
     /// request path (`pin`) passes `false`.
     fn reload_registry(&self, force: bool) {

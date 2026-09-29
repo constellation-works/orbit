@@ -121,6 +121,7 @@ fn protocol_violation_message(error: OrbitError) -> String {
     }
 }
 
+#[cfg(test)]
 pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponseParseResult {
     ParsedStdout::parse(&exec_result.stdout).parse_and_validate(exec_result)
 }
@@ -141,6 +142,7 @@ pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
 /// Returns `None` when stdout cannot be parsed, carries no recognizable
 /// envelope, or discovery exhausts its work bound. Validating APIs fail that
 /// last case closed instead of treating it as absent.
+#[cfg(test)]
 pub fn peek_response_status(stdout: &str) -> Option<String> {
     ParsedStdout::parse(stdout).peek_response_status()
 }
@@ -154,6 +156,7 @@ pub fn peek_response_status(stdout: &str) -> Option<String> {
 /// closed, while treating unavailable error details as a generic diagnostic.
 /// The returned error is present only when both its code and message are
 /// non-empty strings.
+#[cfg(test)]
 pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFailure> {
     ParsedStdout::parse(stdout).peek_declared_response_failure()
 }
@@ -175,6 +178,7 @@ pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFa
 /// here would make a `status: "failed"` envelope indistinguishable from a
 /// missing one — which is precisely the distinction this predicate exists to
 /// draw.
+#[cfg(test)]
 pub fn response_envelope_protocol_check(stdout: &str) -> Result<(), OrbitError> {
     ParsedStdout::parse(stdout).response_envelope_protocol_check()
 }
@@ -298,7 +302,7 @@ fn parse_json_envelope(
 
 // Visible through the `response` module to sibling-layout tests; keeping this private
 // would require nesting tests back under `envelope`.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(in crate::types) fn synthesize_response(
     exec_result: &ExecutionResult,
 ) -> Option<(AgentResponseEnvelope, AgentResponseStatus, InvocationTrace)> {
@@ -412,7 +416,7 @@ fn exit_zero_terminal_failure(
 // is what made claude show as zero tokens on the scoreboard.
 // Visible through the `response` module to sibling-layout tests; this is a narrow
 // crate-internal seam for fallback trace behavior.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(in crate::types) fn synthesize_trace(exec_result: &ExecutionResult) -> InvocationTrace {
     synthesize_trace_from_parsed(exec_result, &ParsedStdout::parse(&exec_result.stdout))
 }

@@ -4,9 +4,10 @@
 use tempfile::tempdir;
 
 use super::{roots, write_config};
+use crate::registry::admit_settable_config_key;
 use crate::{
     ConfigScope, ConfigStore, MachineSettings, MemoryLimit, MemoryUnit, ResolvedConfig,
-    WorkerContainmentSettings, admit_settable_config_key, load_machine_settings,
+    WorkerContainmentSettings, load_machine_settings,
 };
 
 const IDENTITY: &str =

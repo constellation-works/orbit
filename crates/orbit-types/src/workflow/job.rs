@@ -336,12 +336,6 @@ pub struct AgentResponseEnvelope {
     pub duration_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentCommitRequest {
-    pub message: String,
-    pub files: Vec<String>,
-}
-
 /// A single step within a job definition.
 ///
 /// `Default::default()` matches serde defaults for all fields:

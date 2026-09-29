@@ -63,17 +63,3 @@ pub fn home_dir() -> Result<PathBuf, OrbitError> {
 pub fn workspace_relative_paths_overlap(left: &str, right: &str) -> bool {
     overlaps(left, right)
 }
-
-pub fn normalize_workspace_relative_path(path: &str) -> Option<&str> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let normalized = trimmed.trim_end_matches('/');
-    if normalized.is_empty() {
-        return None;
-    }
-
-    Some(normalized)
-}

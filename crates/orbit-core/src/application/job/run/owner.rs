@@ -331,7 +331,6 @@ pub(super) fn running_run_owner_stale_reason(run: &JobRun) -> Option<OwnerIdenti
 }
 
 #[cfg(not(unix))]
-#[allow(dead_code)]
 pub(super) fn running_run_owner_stale_reason(_run: &JobRun) -> Option<()> {
     None
 }

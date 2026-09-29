@@ -25,7 +25,6 @@
 //! - [`ToolContext`] — per-call context: cwd, allowed-tool allowlist, workspace root boundary
 //! - [`require_str`] — helper to extract and validate string fields from tool input JSON
 //! - [`check_exec_result`] — helper to turn a failed [`ExecutionResult`] into an `OrbitError`
-//! - Timeout constants: [`TIMEOUT_FAST_MS`], [`TIMEOUT_DEFAULT_MS`], [`TIMEOUT_SLOW_MS`], [`TIMEOUT_LONG_MS`]
 //!
 //! # Registry contents
 //! The builtin registry wires together the standard Orbit tool families:
@@ -47,26 +46,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_policy::PolicyEngine;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_types::tool::ToolSchema;
 
-/// Fast operation timeout (1 s). Used for local command resolution (e.g. `which`).
-pub const TIMEOUT_FAST_MS: u64 = 1_000;
-
 /// Default network operation timeout (15 s). Used for most GitHub API calls
 /// and Orbit CLI commands where a quick response is expected.
-pub const TIMEOUT_DEFAULT_MS: u64 = 15_000;
+pub(crate) const TIMEOUT_DEFAULT_MS: u64 = 15_000;
 
 /// Slow operation timeout (30 s). Used for git network operations and PR creation,
 /// which may involve larger payloads or slower remotes.
-pub const TIMEOUT_SLOW_MS: u64 = 30_000;
+pub(crate) const TIMEOUT_SLOW_MS: u64 = 30_000;
 
 /// Long operation timeout (60 s). Used for `gh pr checkout`, which clones or
 /// fetches a branch and may transfer significant data over the network.
-pub const TIMEOUT_LONG_MS: u64 = 60_000;
+pub(crate) const TIMEOUT_LONG_MS: u64 = 60_000;
 
 pub use registry::{ToolRegistry, canonical_builtin_mcp_tool_definitions};
 
@@ -463,12 +459,4 @@ pub fn check_exec_result(
             result.stderr.trim()
         )))
     }
-}
-
-pub fn map_input_from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Value {
-    let mut map = Map::new();
-    for (key, value) in pairs {
-        map.insert(key, Value::String(value));
-    }
-    Value::Object(map)
 }

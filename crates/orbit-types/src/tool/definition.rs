@@ -127,10 +127,6 @@ impl ToolSessionContext {
         }
     }
 
-    pub fn has_capability(&self, capability: McpCapability) -> bool {
-        self.effective_capabilities.contains(&capability)
-    }
-
     /// The caller label an SSH-originated session forwarded, for attribution.
     ///
     /// Absent on a local session, whose [`Self::caller_machine_id`] is the

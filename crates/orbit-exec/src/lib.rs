@@ -38,37 +38,34 @@
 //! - [`InheritedFd`] — an open descriptor handed to the child at a fixed
 //!   number, which is how a plugin backend receives its callback credential
 //! - [`EnvironmentMode`], [`StdinMode`] — environment and stdin control
-//! - [`physical_with_missing_tail`] / [`create_write_root`] — the one
-//!   resolution a granted path gets, shared by the layer that validates it
-//!   and the layer that compiles the rule for it
+//! - [`physical_with_missing_tail`] — the one resolution a granted path
+//!   gets, shared by the layer that validates it and the layer that compiles
+//!   the rule for it
 //!
 //! # Dependency direction
 //! `orbit-types` → `orbit-exec` → orbit-tools
 
-pub mod credential_paths;
-pub mod linux_landlock;
-pub mod linux_sandbox;
-pub mod macos_sandbox;
-pub mod path_identity;
-pub mod process;
-pub mod result;
-pub mod runner;
-pub mod sandbox;
+mod credential_paths;
+mod linux_landlock;
+mod linux_sandbox;
+mod macos_sandbox;
+mod path_identity;
+mod process;
+mod result;
+mod runner;
+mod sandbox;
 mod supervision;
 
 pub use credential_paths::default_credential_read_denies;
 pub use linux_landlock::{
-    HOST_READ_ENV_VARS, LandlockBoundary, LandlockGrant, LandlockPathGrant, LandlockProbeOutcome,
-    LandlockReadBoundary, MINIMUM_LANDLOCK_ABI, NETWORK_LANDLOCK_ABI, WRITE_LANDLOCK_ABI,
-    grants_read, landlock_unavailable_message, linux_landlock_boundary_grants,
-    linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
-    spawn_under_linux_landlock_boundary,
+    LandlockBoundary, LandlockPathGrant, NETWORK_LANDLOCK_ABI, WRITE_LANDLOCK_ABI, grants_read,
+    linux_landlock_boundary_grants, linux_landlock_read_boundary, probe_landlock,
+    spawn_under_linux_landlock, spawn_under_linux_landlock_boundary,
 };
 pub use linux_sandbox::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
-    LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
-    LinuxBwrapSpawnRequest, PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind,
-    WriteGrant, bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message,
+    LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest,
+    UnsatisfiedWriteGrant, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
     compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority, existing_glob_matches,
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
     probe_bwrap, spawn_under_linux_bwrap,
@@ -76,15 +73,15 @@ pub use linux_sandbox::{
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
     append_macos_network_access, append_macos_read_boundary, append_macos_subpath_mask,
-    claude_state_dir_from_env, compile_macos_sandbox_profile, grok_state_dir_from_env,
-    macos_login_keychain_access, sandbox_exec_available, sandbox_exec_path,
-    sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
+    claude_state_dir_from_env, compile_macos_sandbox_profile, macos_login_keychain_access,
+    sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
+    sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
-pub use path_identity::{create_write_root, lexical_normalize, physical_with_missing_tail};
+pub use path_identity::{lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
-    EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,
-    run_process_streaming_stdout, supervise_child, supervise_child_cancellable,
+    EnvironmentMode, ExecRequest, StdinMode, run_process, run_process_streaming_stdout,
+    supervise_child, supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};

@@ -215,13 +215,6 @@ pub fn delivery_job_selection(tags: &[String]) -> Result<Option<&str>, TaskError
     Ok(selected)
 }
 
-pub fn build_task_status_index(tasks: &[Task]) -> BTreeMap<OrbitId, TaskStatus> {
-    tasks
-        .iter()
-        .map(|task| (task.id.clone(), task.status))
-        .collect::<BTreeMap<_, _>>()
-}
-
 pub fn resolve_task_dependencies(
     task: &Task,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
@@ -335,22 +328,6 @@ impl TaskReferenceIndex {
         }
         !self.known_prefixes.contains(target_prefix)
     }
-}
-
-/// Whether a missing valid task target belongs to a prefix this status
-/// projection cannot verify. The source prefix is always local for its task;
-/// prefixes on projected task IDs cover additional locally registered legacy
-/// or migrated partitions.
-pub fn task_reference_is_not_verifiable_here(
-    task: &Task,
-    target: &str,
-    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
-) -> bool {
-    TaskReferenceIndex::from_status_index(status_by_id).is_not_verifiable_here(
-        task,
-        target,
-        status_by_id,
-    )
 }
 
 pub fn task_dependencies_ready(task: &Task, status_by_id: &BTreeMap<OrbitId, TaskStatus>) -> bool {

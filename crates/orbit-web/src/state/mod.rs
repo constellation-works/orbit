@@ -93,7 +93,7 @@ pub(crate) type ClockStatusObserver =
 /// One registered workspace the dashboard can serve.
 ///
 /// `orbit_dir` is the workspace's `.orbit` directory — the value passed to
-/// [`RegisteredRuntimeFactory::open_resolved_checkout`] as the workspace root. Active
+/// [`RegisteredRuntimeFactory::open_resolved_checkout_for`] as the workspace root. Active
 /// entries carry the complete runtime binding resolved from the logical
 /// workspace and local checkout. Inactive entries — whether their checkout path
 /// is stale or its identity cannot be read — keep no binding: they are listed

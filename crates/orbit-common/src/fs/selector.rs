@@ -69,14 +69,6 @@ pub enum Selector {
 }
 
 impl Selector {
-    /// Parse a list of selector strings.
-    pub fn parse_many(raw_selectors: &[String]) -> Result<Vec<Self>, SelectorParseError> {
-        raw_selectors
-            .iter()
-            .map(|selector| selector.parse())
-            .collect()
-    }
-
     /// Return the filesystem anchor path for this selector, or an empty string
     /// for selector forms that do not carry filesystem anchors.
     pub fn path(&self) -> &str {
@@ -114,19 +106,6 @@ impl Selector {
             Self::Symbol { .. } => ParsedScopeKind::Symbol,
             Self::Module { .. } => ParsedScopeKind::Module,
             Self::Command { .. } => ParsedScopeKind::Command,
-        }
-    }
-
-    /// Return the lookup key used by graph selector indexes.
-    pub fn lookup_key(&self) -> SelectorLookupKey {
-        match self {
-            Self::Dir { path } => SelectorLookupKey::Dir(path.clone()),
-            Self::File { path } => SelectorLookupKey::File(path.clone()),
-            Self::Symbol { path, symbol, kind } => {
-                SelectorLookupKey::Symbol(format!("{path}#{symbol}"), kind.clone())
-            }
-            Self::Module { qualified } => SelectorLookupKey::Module(qualified.clone()),
-            Self::Command { name } => SelectorLookupKey::Command(name.clone()),
         }
     }
 }
@@ -228,34 +207,6 @@ impl FromStr for Selector {
                 "selectors must start with `dir:`, `file:`, `symbol:`, `module:`, or `command:`"
                     .to_string(),
         })
-    }
-}
-
-/// Normalized selector index key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SelectorLookupKey {
-    /// Directory key.
-    Dir(String),
-    /// File key.
-    File(String),
-    /// Symbol(location, kind) where location = "path#symbol".
-    Symbol(String, String),
-    /// Module qualified-name key.
-    Module(String),
-    /// Command name key.
-    Command(String),
-}
-
-impl SelectorLookupKey {
-    /// Render this lookup key as a canonical selector string.
-    pub fn to_selector_string(&self) -> String {
-        match self {
-            Self::Dir(path) => format!("dir:{path}"),
-            Self::File(path) => format!("file:{path}"),
-            Self::Symbol(location, kind) => format!("symbol:{location}:{kind}"),
-            Self::Module(qualified) => format!("module:{qualified}"),
-            Self::Command(name) => format!("command:{name}"),
-        }
     }
 }
 

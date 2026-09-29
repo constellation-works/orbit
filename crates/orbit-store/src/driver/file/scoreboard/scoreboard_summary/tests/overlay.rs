@@ -198,11 +198,11 @@ fn summary_exposes_friction_reported_counts_from_records() {
     let temp = tempfile::tempdir().expect("create tempdir");
 
     let friction_reported = vec![
-        crate::friction_store::FrictionReportedCount {
+        crate::contracts::FrictionReportedCount {
             model: "codex".to_string(),
             count: 1,
         },
-        crate::friction_store::FrictionReportedCount {
+        crate::contracts::FrictionReportedCount {
             model: "claude-3-opus".to_string(),
             count: 1,
         },

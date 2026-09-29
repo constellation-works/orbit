@@ -1,4 +1,5 @@
 //! Persistence and query behavior at the SQLite boundary.
+use super::super::store::LexicalStore;
 use super::super::*;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 

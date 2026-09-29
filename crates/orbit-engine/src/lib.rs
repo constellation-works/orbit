@@ -39,29 +39,22 @@ mod template;
 mod tests;
 
 pub use activity_job::{
-    ActivityAsset, AssetLoadError, CatalogDirectory, CatalogDirectoryList, CatalogError,
-    DispatchError, DispatchOutcome, EnforcedAuditSink, JobAsset, JobOutcome,
-    LinuxRuntimeWriteAuthority, ResolveError, ResolvedAgentSettings, ResolvedCliExecutor,
-    ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2ActivityCatalog, V2AuditWriter,
-    V2DispatchInput, V2JobCatalog, V2SqliteSink, catalog_error_to_orbit, dispatch_error_to_orbit,
-    dispatch_v2_activity, execute_job_with_resume, inject_system_crew_input, load_activity_asset,
-    load_activity_catalog_asset, load_job_asset, resolve_crew_settings,
-    resolve_job_catalog_refs_for_execution, resolve_job_target_refs,
-    validate_catalog_activity_tools, validate_job, validate_job_deterministic_actions,
+    DispatchError, DispatchOutcome, JobOutcome, LinuxRuntimeWriteAuthority, ResolvedCliExecutor,
+    ResolvedSandbox, ResolvedShellExecutor, SandboxMask, V2AuditWriter, V2DispatchInput,
+    V2SqliteSink, dispatch_error_to_orbit, dispatch_v2_activity, execute_job_with_resume,
+    inject_system_crew_input, load_activity_asset, resolve_crew_settings,
+    resolve_job_catalog_refs_for_execution, validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
-    AGENT_INVOCATION_FAILED, AGENT_TIMEOUT, ActivityInvocationResult, ClaimExecutionContext,
-    CrewConfig, HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,
-    PluginBrokerHandle, PluginBrokerRun, PrConfig, ResolvedActivityTools, ReviewLandingRequest,
-    RuntimeHost, StepRecoveryAdmission, TaskActivityUpdate, TaskAutomationUpdate,
-    WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup,
-    blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    ClaimExecutionContext, CrewConfig, HandoffLandingContext, HandoffLandingStep,
+    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, PrConfig,
+    ResolvedActivityTools, ReviewLandingRequest, RuntimeHost, TaskActivityUpdate,
+    TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT,
+    WorktreeGcTaskLookup, blocked_workflow_failure_update, blocked_workflow_interruption_update,
 };
+pub use executor::automation::execute_action as execute_deterministic_action;
 pub use executor::automation::vcs::claim::{observe_candidate, observe_published_candidate};
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
     WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,
-};
-pub use executor::automation::{
-    StateExecutionContext, execute_action as execute_deterministic_action,
 };
