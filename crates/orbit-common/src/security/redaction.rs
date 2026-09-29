@@ -56,10 +56,13 @@ static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 /// compatibility set of ordinary words held by a sensitive-named variable is
 /// left untouched.
 pub fn redact_sensitive_env_text(raw: &str) -> String {
-    let secrets = sensitive_env_values();
     let mut redacted = raw.to_string();
-    for secret in secrets.iter() {
-        redacted = redacted.replace(secret.as_str(), REDACTED_ENV_VALUE);
+    // `redact_all` runs this for every string field of every tracing event, so
+    // only a value that actually occurs pays for a `replace` allocation.
+    for secret in sensitive_env_values().iter() {
+        if redacted.contains(secret.as_str()) {
+            redacted = redacted.replace(secret.as_str(), REDACTED_ENV_VALUE);
+        }
     }
     redacted
 }
