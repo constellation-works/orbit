@@ -982,6 +982,10 @@ fn assign_checkout_role_is_idempotent_and_rejects_owner_of_another_machine_byte_
     .expect_err("replica owner rebind must fail before mutation")
     .to_string();
     assert!(error.contains("already owned"), "unexpected: {error}");
+    assert!(
+        error.contains("workspace remove") && error.contains("ORBIT_OPERATOR=1"),
+        "a refused rebind must name the operator-gated demotion path: {error}"
+    );
     assert_eq!(rebind, in_memory_before);
     assert_eq!(fs::read(&path).expect("read after rebind"), before_rebind);
 

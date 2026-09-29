@@ -47,6 +47,11 @@ pub struct PullSettlementEntry {
 
 impl PullSettlementEntry {
     /// One line for a terminal report.
+    ///
+    /// An outcome token alone does not tell an operator whether anything is
+    /// left to do, so a line with no recorded error carries what the outcome
+    /// means and the next step. `launch_uncertain` always carries it: it is
+    /// the one outcome that must not be answered with a second attempt.
     #[must_use]
     pub fn describe(&self) -> String {
         let subject = match (&self.task_id, &self.leaf_run_id) {
@@ -55,9 +60,128 @@ impl PullSettlementEntry {
             (None, Some(leaf)) => format!("leaf {leaf}"),
             (None, None) => format!("request {}", self.request_id),
         };
-        match &self.detail {
-            Some(detail) => format!("{subject}: {} — {detail}", self.outcome),
-            None => format!("{subject}: {}", self.outcome),
+        let guidance = outcome_guidance(&self.outcome);
+        match (&self.detail, guidance) {
+            (Some(detail), Some(guidance)) if self.outcome == "launch_uncertain" => {
+                format!("{subject}: {} — {detail} ({guidance})", self.outcome)
+            }
+            (Some(detail), _) => format!("{subject}: {} — {detail}", self.outcome),
+            (None, Some(guidance)) => format!("{subject}: {} — {guidance}", self.outcome),
+            (None, None) => format!("{subject}: {}", self.outcome),
         }
+    }
+}
+
+/// What an outcome means for the operator, when it is not self-evident.
+fn outcome_guidance(outcome: &str) -> Option<&'static str> {
+    match outcome {
+        "closed_obsolete" => {
+            Some("the owner had already ended this claim; decide the task's status on the owner")
+        }
+        "leaf_running" => Some("still running; it settles itself when it ends"),
+        "pending_delivery" | "owner_unreachable" => Some(
+            "recorded but not delivered to the owner; rerun `orbit run auto --stop` once it is \
+             reachable",
+        ),
+        "pending" => Some("stopped by an error; any later pass retries it"),
+        "awaiting_drain" => Some("a live drain for this owner will carry it"),
+        "unanswered_request" => Some("the owner holds no receipt for it, so nothing is held there"),
+        "launch_uncertain" => Some(
+            "the launch was never acknowledged, so the leaf may still be running; recover the \
+             claim on the owner's dashboard and do not start another attempt",
+        ),
+        "no_owner_route" => Some("add the owner to ~/.orbit/mcp-destinations.toml"),
+        _ => None,
+    }
+}
+
+/// The owner claim a local pull leaf run executes, as this follower recorded
+/// it. `orbit run show <leaf-run>` reads this so a leaf's run page names the
+/// task it works for, which owner holds the claim, and whether the outcome has
+/// reached that owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PullLeafClaim {
+    /// The owner's task the leaf executes.
+    pub task_id: Option<String>,
+    /// The owner's claim on that task.
+    pub claim_id: Option<String>,
+    /// The owner's host-qualified selector.
+    pub owner: String,
+    /// The drain run that admitted the claim.
+    pub drain_run_id: String,
+    /// Where the follower's record of this admission stands (`launched`,
+    /// `settling`, `settled`, ...).
+    pub settlement_phase: String,
+    /// Why the owner refused the settlement, once it had already ended the
+    /// claim.
+    pub refusal: Option<String>,
+    /// What the phase means for the operator.
+    pub guidance: String,
+}
+
+impl PullLeafClaim {
+    /// One line for a run page.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!(
+            "task {} claim {} owner {} drain {} settlement={} — {}",
+            self.task_id.as_deref().unwrap_or("-"),
+            self.claim_id.as_deref().unwrap_or("-"),
+            self.owner,
+            self.drain_run_id,
+            self.settlement_phase,
+            self.guidance
+        )
+    }
+}
+
+fn phase_guidance(phase: orbit_store::contracts::LocalPullPhase, refusal: Option<&str>) -> String {
+    use orbit_store::contracts::LocalPullPhase as Phase;
+    match (phase, refusal) {
+        (Phase::Settled, Some(refusal)) => format!(
+            "the owner had already ended this claim ({refusal}); decide the task's status on \
+             the owner"
+        ),
+        (Phase::Settled, None) => "the outcome was delivered to the owner".to_string(),
+        (Phase::Settling, _) => "the outcome is recorded but not delivered to the owner; \
+             `orbit run auto --stop` retries delivery"
+            .to_string(),
+        (Phase::Launched, _) => {
+            "the leaf settles itself when it ends; nothing to do while it runs".to_string()
+        }
+        (Phase::Launching, _) => "the launch was never acknowledged; recover the claim on the \
+             owner's dashboard rather than starting another attempt"
+            .to_string(),
+        _ => "admitted, not launched yet".to_string(),
+    }
+}
+
+impl crate::OrbitRuntime {
+    /// The pull admission a local run executes, when it is a claimed leaf.
+    /// `None` for every other run, including runs on an owner checkout.
+    pub fn pull_leaf_claim(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<PullLeafClaim>, orbit_common::OrbitError> {
+        let Some(admission) = self.claimed_leaf_admission(run_id)? else {
+            return Ok(None);
+        };
+        let claim = admission
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.claim.as_ref());
+        let settlement_phase = serde_json::to_value(admission.phase)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        Ok(Some(PullLeafClaim {
+            task_id: claim.map(|claim| claim.task_id.clone()),
+            claim_id: claim.map(|claim| claim.claim_id.clone()),
+            owner: admission.destination.selector.clone(),
+            drain_run_id: admission.request.run_context.run_id.clone(),
+            settlement_phase,
+            refusal: admission.refusal.clone(),
+            guidance: phase_guidance(admission.phase, admission.refusal.as_deref()),
+        }))
     }
 }

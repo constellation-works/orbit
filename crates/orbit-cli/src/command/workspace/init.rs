@@ -157,10 +157,17 @@ impl WorkspaceInitArgs {
                 ));
             }
             (Some(WorkspaceCheckoutRole::Replica), Some(owner)) => {
-                validate_machine_id(owner)?;
+                validate_machine_id(owner).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "--owner '{owner}' is not a usable machine_id ({error}); pass the owner \
+                         host's `machine.id` (`orbit config get machine.id` on that host)"
+                    ))
+                })?;
                 if local_machine_id.as_deref() == Some(owner) {
                     return Err(OrbitError::InvalidInput(format!(
-                        "--role replica owner '{owner}' is this local machine; declare owner role instead"
+                        "--role replica owner '{owner}' is this local machine; `--owner` must name \
+                         the other host that owns the workspace (omit --role, or pass `--role \
+                         owner`, to register the owner's own checkout)"
                     )));
                 }
             }
@@ -173,7 +180,7 @@ impl WorkspaceInitArgs {
         let default_base_branch = checked_out_branch(cwd);
         // Every read of the registry below feeds the write at the end; the lock
         // keeps a concurrent sweep or init from saving over this registration.
-        let (reconciling_existing, registered_shared_root) =
+        let (reconciling_existing, registered_shared_root, checkout_role, owner_machine_id) =
             workspace_registry::with_registry_lock(registry_path, || {
                 let mut registry = workspace_registry::load_registry_from(registry_path)?;
                 let existing_workspace = registry
@@ -360,12 +367,27 @@ impl WorkspaceInitArgs {
                         self.force,
                     )?;
                 }
+                let checkout_role = registry
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.workspace_id == id)
+                    .and_then(|checkout| checkout.role);
+                let owner_machine_id = registry
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == id)
+                    .and_then(|workspace| workspace.owner_machine_id.clone());
                 workspace_registry::save_registry_to(&registry, registry_path)?;
                 if let Some(recovery) = identity_recovery {
                     preserve_corrupt_workspace_identity(orbit_dir, &recovery)?;
                     write_workspace_identity(orbit_dir, &id)?;
                 }
-                Ok((reconciling_existing, registered_shared_root))
+                Ok((
+                    reconciling_existing,
+                    registered_shared_root,
+                    checkout_role,
+                    owner_machine_id,
+                ))
             })?;
         if !reconciling_existing && !registered_shared_root {
             write_workspace_identity(orbit_dir, &id)?;
@@ -377,6 +399,8 @@ impl WorkspaceInitArgs {
             root: cwd.to_path_buf(),
             orbit_dir: orbit_dir.to_path_buf(),
             task_prefix,
+            role: checkout_role,
+            owner_machine_id,
         })
     }
 }
@@ -654,6 +678,8 @@ struct WorkspaceInitResult {
     root: PathBuf,
     orbit_dir: PathBuf,
     task_prefix: Option<String>,
+    role: Option<WorkspaceCheckoutRole>,
+    owner_machine_id: Option<String>,
 }
 
 struct WorkspaceInitReport {
@@ -661,6 +687,8 @@ struct WorkspaceInitReport {
     name: String,
     root: PathBuf,
     orbit_dir: PathBuf,
+    role: Option<WorkspaceCheckoutRole>,
+    owner_machine_id: Option<String>,
     onboarding: &'static str,
     checkout_files: Vec<String>,
     allocator: AllocatorOutcome,
@@ -761,6 +789,8 @@ fn collect_init_report(
         name: init_result.name,
         root: init_result.root,
         orbit_dir: init_result.orbit_dir,
+        role: init_result.role,
+        owner_machine_id: init_result.owner_machine_id,
         onboarding,
         checkout_files: checkout_files.into_iter().collect(),
         allocator,
@@ -793,6 +823,8 @@ fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "name": report.name,
         "root": report.root.to_string_lossy(),
         "orbit_dir": report.orbit_dir.to_string_lossy(),
+        "role": report.role.map(|role| role.to_string()),
+        "owner_machine_id": report.owner_machine_id,
         "onboarding": report.onboarding,
         "checkout_files": report.checkout_files,
         "before_ship": if report.checkout_files.is_empty() { None } else { Some("Review and commit the listed checkout files before shipping; the base checkout must be clean for local delivery.") },
@@ -867,8 +899,21 @@ fn format_workspace_init(report: &WorkspaceInitReport) -> String {
         format!("  id:        {}", report.id),
         format!("  root:      {}", report.root.display()),
         format!("  orbit_dir: {}", report.orbit_dir.display()),
-        format!("  onboarding: {}", report.onboarding),
     ];
+    if let Some(role) = report.role {
+        lines.push(format!("  role:      {role}"));
+    }
+    if let Some(owner) = report.owner_machine_id.as_deref() {
+        lines.push(format!("  owner:     {owner}"));
+    }
+    lines.push(format!("  onboarding: {}", report.onboarding));
+    if report.role == Some(WorkspaceCheckoutRole::Replica) {
+        lines.push(
+            "  next:      a replica executes through pull: add the owner to \
+             ~/.orbit/mcp-destinations.toml, then run `orbit run auto --pull <selector>`"
+                .to_string(),
+        );
+    }
     if !report.checkout_files.is_empty() {
         lines.push("  checkout files written:".to_string());
         for file in &report.checkout_files {

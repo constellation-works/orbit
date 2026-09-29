@@ -916,3 +916,59 @@ fn an_unreadable_admission_store_is_reported_and_retried_not_fatal() {
         "nothing is requested while the breaker cannot be read"
     );
 }
+
+/// A follower's run page for a claimed leaf must name the owner task and
+/// claim it works for and whether its outcome reached the owner. A run that
+/// is not a claimed leaf has no such claim.
+#[test]
+fn a_claimed_leaf_reports_its_owner_claim_and_settlement_progress() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::a_claimed_leaf_reports_its_owner_claim_and_settlement_progress",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let (drain_run, template) = pull_drain(&runtime);
+    let peer = RoutedPullPeer {
+        transport: owner.clone(),
+    };
+    let drain = PullDrain {
+        jobs: runtime.stores().jobs(),
+        peer: &peer,
+        launcher: &AcknowledgingLauncher,
+    };
+    assert_eq!(
+        drain.refill(&destination(), &template, 1).expect("admit"),
+        1
+    );
+    let admitted = records(&runtime);
+    let leaf = leaf_of(&admitted[0]);
+
+    let claim = runtime
+        .pull_leaf_claim(&leaf)
+        .expect("read the admission")
+        .expect("a claimed leaf reports its claim");
+    assert_eq!(claim.task_id.as_deref(), Some("task-1"));
+    assert_eq!(claim.claim_id, Some(claim_of(&admitted[0])));
+    assert_eq!(claim.owner, format!("{OWNER}/ws"));
+    assert_eq!(claim.drain_run_id, drain_run);
+    assert_eq!(claim.settlement_phase, "launched");
+
+    assert!(
+        runtime
+            .pull_leaf_claim(&drain_run)
+            .expect("read the admission")
+            .is_none(),
+        "the drain run itself executes no claim"
+    );
+
+    let worker = bound_worker(&runtime, &admitted[0]);
+    RuntimeHost::record_claim_handoff(&worker, &handoff(&admitted[0])).expect("handoff recorded");
+    worker_ends_leaf(&worker, &leaf, JobRunState::Success);
+    let settled = runtime
+        .pull_leaf_claim(&leaf)
+        .expect("read the admission")
+        .expect("still reports its claim after settling");
+    assert_eq!(settled.settlement_phase, "settled");
+}

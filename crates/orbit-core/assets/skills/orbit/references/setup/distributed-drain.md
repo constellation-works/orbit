@@ -63,9 +63,11 @@ runtime invocation context, not from a payload label.
 
 If both hosts initialized the same repo as owners, stop competing drains on the
 host that will become a replica, reconcile in-flight runs and reservations,
-export tasks that must move, then re-register:
+export tasks that must move, then re-register. An owner checkout is never
+rebound in place, so drop its registration first (registry only; `.orbit` stays):
 
 ```bash
+ORBIT_OPERATOR=1 orbit workspace remove <workspace-id>
 orbit workspace init --role replica --owner <owner-machine-id>
 orbit workspace show
 orbit workspace role <workspace-id> replica --owner <owner-machine-id>

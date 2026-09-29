@@ -7,6 +7,7 @@ mod job_pipeline;
 mod job_submission;
 mod managed_asset_manifest;
 mod managed_assets;
+mod settlement;
 mod skill;
 mod workflow;
 mod workspace_sync;

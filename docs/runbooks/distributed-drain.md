@@ -9,7 +9,7 @@ paths:
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
 related_artifacts: [ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-09-28
+last_validated: 2026-09-29
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -122,7 +122,19 @@ orbit workspace show
 orbit workspace role <workspace-id> replica --owner <owner-machine-id>
 ```
 
-`workspace role` validates or reasserts; it is not a takeover. A replica must
+A checkout that is registered as an owner cannot be rebound in place: both
+commands refuse with "refusing to rebind". Once its drains are quiet, drop the
+registration (registry only; `.orbit` and its tasks stay) and register it again:
+
+```bash
+ORBIT_OPERATOR=1 orbit workspace remove <workspace-id>
+orbit workspace init --role replica --owner <owner-machine-id>
+```
+
+`workspace init` and `workspace role` print the recorded role and owner
+(`--format json` carries `role` and `owner_machine_id`). A replica role always
+needs `--owner`; the refusals name the flag and say the id is the owner's
+`machine.id`. `workspace role` validates or reasserts; it is not a takeover. A replica must
 not originate owner-only task mutations or publish/restore the owner's live
 task set. Route those operations to the owner. See
 [multi-host setup](../../crates/orbit-core/assets/skills/orbit-setup/references/multi-host.md).
@@ -218,7 +230,8 @@ owner-resolved ship configuration, and review policy. Declaring version,
 schema, or review policy also reports the **first refusal admission would
 raise**, in admission order. It creates no receipt, reservation, claim, or
 task. A replica destination refuses the tool instead of answering about
-itself. Do not call pull as a health check: a pull is an admission, and an
+itself, naming its owner and saying to run the tool there or through the owner's
+federated selector. Do not call pull as a health check: a pull is an admission, and an
 admitted claim is real work the owner holds until it settles.
 
 Expected refusals you may see (and must not work around):
@@ -272,7 +285,9 @@ orbit run auto --pull <selector> --for 8h --concurrency 3
 ```
 
 `<selector>` is the owner's host-qualified selector from federated discovery
-(`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`). Before anything is
+(`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no entry in
+`~/.orbit/mcp-destinations.toml` is refused as an unknown selector, and the
+message says so. Before anything is
 submitted, the command refuses unless:
 
 - this checkout is a **replica**, and the selector names **its** owner machine
@@ -315,7 +330,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   the owner with a summary naming the leaf run, its failed step and that
   step's error. The full diagnostic stays in the follower's run
   (`orbit run show <leaf-run>`, and `.orbit/state/logs/<leaf-run>.worker.log`
-  on the follower).
+  on the follower). That run page carries a `Claim:` line (`pull_claim` in
+  `--json`): the owner task, claim, owner selector and admitting drain, and
+  whether the leaf's outcome has reached the owner.
 - After three consecutive claims settle as failures, the drain stops
   requesting work (`circuit_open` in the iteration output) and only keeps
   settling. Inspect the blocked tasks and their leaf logs, fix the cause,
@@ -465,9 +482,8 @@ The settlement stays recorded on the follower as `settling`. Flush it with
 `orbit run auto --stop` in the replica checkout once the owner is reachable
 (safe to repeat, and it needs no active drain), or by starting the next
 drain. `orbit run cancel <drain-run> --confirm` on a drain that already ended
-does the same flush. Outcomes other than `settled`, `closed_obsolete` and
-`leaf_running` are explained in the printed line; `launch_uncertain` still
-needs the deliberate recovery below.
+does the same flush. Every line that leaves work for the operator says what to do
+next, and `launch_uncertain` still needs the deliberate recovery below.
 
 **Settlements an older binary stranded.** A binary before [ORB-13663] left a
 cancelled drain's finished leaves `settling` and its failed leaves
@@ -633,7 +649,7 @@ that follower's `orbit --version`. Confirm:
 
 After starting a drain (step 8), confirm the first claim end to end: the
 owner's `orbit.drain.claims` shows it `running` on the follower's machine,
-the follower's `orbit run show <leaf-run-id>` shows the claimed PR leaf, and
+the follower's `orbit run show <leaf-run-id>` shows the claimed PR leaf and its `Claim:` line, and
 after handoff the owner task is in `review` with the PR attached and nothing
 merged.
 

@@ -373,3 +373,39 @@ fn payload_detail_uses_the_existing_renderer_contract() {
         "human form must stay on the renderer Blocks path"
     );
 }
+
+#[test]
+fn replica_init_reports_its_role_and_owner_in_both_views() {
+    let _isolated = IsolatedWorkspace::with_prefix("DANI");
+    let mut args = report_args();
+    args.role = Some(super::super::role::CliCheckoutRole::Replica);
+    args.owner = Some("hm_owner".to_string());
+    let (doc, text) = rendered_init_payload(
+        args.execute_without_runtime(None)
+            .expect("replica workspace init"),
+    );
+
+    assert_eq!(doc["role"], "replica");
+    assert_eq!(doc["owner_machine_id"], "hm_owner");
+    assert!(text.contains("role:      replica"), "{text}");
+    assert!(text.contains("owner:     hm_owner"), "{text}");
+    assert!(
+        text.contains("--pull"),
+        "a replica's init output must name the next step, `orbit run auto --pull`: {text}"
+    );
+}
+
+#[test]
+fn owner_init_reports_its_role_without_a_pull_hint() {
+    let _isolated = IsolatedWorkspace::with_prefix("DANI");
+    let (doc, text) = rendered_init_payload(
+        report_args()
+            .execute_without_runtime(None)
+            .expect("owner workspace init"),
+    );
+
+    assert_eq!(doc["role"], "owner");
+    assert_eq!(doc["owner_machine_id"], "hm_report");
+    assert!(text.contains("role:      owner"), "{text}");
+    assert!(!text.contains("--pull"), "{text}");
+}

@@ -57,7 +57,7 @@ mod settlement;
 
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub use serve::TaskPullResponse;
-pub use settlement::PullSettlementEntry;
+pub use settlement::{PullLeafClaim, PullSettlementEntry};
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -252,7 +252,9 @@ impl crate::OrbitRuntime {
                 {
                     return Err(OrbitError::CapabilityRefused(
                         "cross-attempt receipt inspection requires operator capability; a worker \
-                         session reads its own receipt namespace"
+                         session reads its own receipt namespace. Omit `machine_id` to read it, \
+                         or re-run as an operator (`ORBIT_OPERATOR=1` from a shell, or a session \
+                         served by `orbit mcp serve --operator`)"
                             .into(),
                     ));
                 }
@@ -311,8 +313,24 @@ impl crate::OrbitRuntime {
     }
 
     /// Only the owner checkout serves the distributed control plane.
+    ///
+    /// A replica is refused with what to do instead: these tools answer for
+    /// the owner, so the caller has to reach the owner rather than this
+    /// checkout. Every owner-side drain tool, read-only ones included, comes
+    /// through here, which is why the message does not talk about writes.
     fn ensure_distributed_owner_workspace(&self) -> Result<(), OrbitError> {
         self.ensure_coordination_task_write_permitted()
+            .map_err(|error| match (&error, self.coordination_write_owner()) {
+                (OrbitError::CapabilityRefused(_), Some(owner)) => {
+                    OrbitError::CapabilityRefused(format!(
+                        "this checkout is a replica of machine '{owner}'; the distributed \
+                         drain's owner tools (probe, receipt lookup, claims, pull) are served by \
+                         the owner, not a replica checkout. Run them on the owner's checkout, or \
+                         call them through the owner's federated selector"
+                    ))
+                }
+                _ => error,
+            })
     }
 
     fn distributed_owner_machine_id(&self) -> Option<String> {
@@ -583,7 +601,9 @@ impl DrainEntryRefusal {
         match self {
             DrainEntryRefusal::Replica { owner_machine_id } => format!(
                 "this checkout is a replica of machine '{owner_machine_id}'; owner-only \
-                 coordination work is refused here and a replica executes through pull"
+                 coordination work is refused here and a replica executes through pull. Start \
+                 its drain with `orbit run auto --pull <selector>` (the owner's selector from \
+                 federated orbit.workspace.list), or run this on the owner's checkout"
             ),
             DrainEntryRefusal::Saturated { occupied } => format!(
                 "{occupied} drain slot(s) are already occupied by live leaves or pending \
