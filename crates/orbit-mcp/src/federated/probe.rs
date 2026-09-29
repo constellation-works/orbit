@@ -6,10 +6,10 @@
 //! the destination, and delivers that single `tools/call`. The client speaks
 //! MCP over the same non-PTY SSH argv the v1 proxy uses.
 
-use std::io::Read;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
@@ -24,9 +24,18 @@ use crate::remote::McpSessionAuthority;
 /// Lines the probe reader may queue ahead of the consumer before it blocks.
 const PROBE_LINE_QUEUE: usize = 64;
 
-/// Longest single line the probe reader accepts from a destination. Every
-/// MCP message is one JSON line; anything past this is not a message.
-const MAX_PROBE_LINE_BYTES: u64 = 64 * 1024 * 1024;
+/// Longest line the reader accepts while the session is only probing: the
+/// `initialize` answer, workspace discovery, and `tools/list`. Those replies are
+/// small by construction (the whole advertised tool surface is a few hundred
+/// KiB), so a destination that streams megabytes without a newline is not
+/// answering, and buffering up to the tool-result ceiling first would let a
+/// hostile host pin that much memory per probe.
+const MAX_PROBE_LINE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Longest line the reader accepts once a routed `tools/call` is in flight.
+/// Tool results can legitimately be large, so delivery keeps the ceiling the
+/// reader had before probes were tightened.
+const MAX_TOOL_RESULT_LINE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// How long a write that outlived its budget gets to settle once the session
 /// is killed. Killing the child closes the pipe, so the blocked write fails at
@@ -466,7 +475,11 @@ pub(super) struct DestinationSession {
     /// `None` once a write failed or outlived its budget: the destination may
     /// hold a partial line, so nothing more can be framed after it.
     writer: Option<RequestWriter>,
-    lines: Receiver<String>,
+    lines: Receiver<Result<String, LineTooLong>>,
+    /// Ceiling the reader thread applies to the line it is assembling. Raised
+    /// before a routed `tools/call` is written, so it is never lower than the
+    /// phase in flight even while the reader is already blocked mid-line.
+    line_cap: Arc<AtomicU64>,
     deadline: Instant,
     next_id: i64,
     worker_invocation: Option<orbit_types::tool::WorkerInvocation>,
@@ -495,22 +508,18 @@ impl DestinationSession {
         // waits, and a line longer than any MCP message ends the session
         // instead of growing a string until this process is killed.
         let (sender, lines) = sync_channel(PROBE_LINE_QUEUE);
+        let line_cap = Arc::new(AtomicU64::new(MAX_PROBE_LINE_BYTES));
+        let reader_cap = Arc::clone(&line_cap);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
-                let mut line = String::new();
-                match reader
-                    .by_ref()
-                    .take(MAX_PROBE_LINE_BYTES)
-                    .read_line(&mut line)
-                {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                if !line.ends_with('\n') && line.len() as u64 >= MAX_PROBE_LINE_BYTES {
-                    break;
-                }
-                if sender.send(line).is_err() {
+                let event = match read_bounded_line(&mut reader, &reader_cap) {
+                    Ok(BoundedLine::Line(line)) => Ok(line),
+                    Ok(BoundedLine::TooLong { limit }) => Err(LineTooLong { limit }),
+                    Ok(BoundedLine::Eof) | Err(_) => break,
+                };
+                let refused = event.is_err();
+                if sender.send(event).is_err() || refused {
                     break;
                 }
             }
@@ -520,6 +529,7 @@ impl DestinationSession {
             child,
             writer: Some(writer),
             lines,
+            line_cap,
             deadline: Instant::now() + timeout,
             next_id: 0,
             worker_invocation: None,
@@ -607,6 +617,10 @@ impl DestinationSession {
     /// destination, so a lost answer after the request is written is
     /// [`LostAnswer::OutcomeUnknown`] rather than an unreachable host.
     pub(super) fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value, OrbitError> {
+        // Before the request is written, so the reader cannot be holding the
+        // probe ceiling when the (possibly large) result starts arriving.
+        self.line_cap
+            .store(MAX_TOOL_RESULT_LINE_BYTES, Ordering::Release);
         let response = self.request(
             "tools/call",
             json!({
@@ -757,7 +771,16 @@ impl DestinationSession {
                 self.lines.recv_timeout(remaining)
             };
             let line = match received {
-                Ok(line) => line,
+                Ok(Ok(line)) => line,
+                Ok(Err(LineTooLong { limit })) => {
+                    return Err(lost.classify(
+                        &self.destination,
+                        id,
+                        format!(
+                            "answer to '{method}' exceeded the {limit}-byte line limit and was refused"
+                        ),
+                    ));
+                }
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(lost.classify(
                         &self.destination,
@@ -796,6 +819,60 @@ impl DestinationSession {
             }
         }
     }
+}
+
+/// The reader refused a line that outgrew the cap of the phase in flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LineTooLong {
+    limit: u64,
+}
+
+/// What one bounded read produced.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BoundedLine {
+    /// One line, including its trailing newline when the stream had one.
+    Line(String),
+    /// The line exceeded the cap before its newline arrived.
+    TooLong { limit: u64 },
+    /// The stream ended with nothing pending.
+    Eof,
+}
+
+/// Read one line without ever holding more than the current cap.
+///
+/// The cap is re-read on every buffer refill rather than fixed per line, so a
+/// phase change that raises it takes effect for a line the reader is already
+/// blocked on. Invalid UTF-8 is an error, as it was for `read_line`.
+pub(super) fn read_bounded_line(
+    reader: &mut impl BufRead,
+    cap: &AtomicU64,
+) -> std::io::Result<BoundedLine> {
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let limit = cap.load(Ordering::Acquire);
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            if line.is_empty() {
+                return Ok(BoundedLine::Eof);
+            }
+            break;
+        }
+        let (take, complete) = match chunk.iter().position(|byte| *byte == b'\n') {
+            Some(newline) => (newline + 1, true),
+            None => (chunk.len(), false),
+        };
+        if (line.len() + take) as u64 > limit {
+            return Ok(BoundedLine::TooLong { limit });
+        }
+        line.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if complete {
+            break;
+        }
+    }
+    String::from_utf8(line)
+        .map(BoundedLine::Line)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// The session's stdin, owned by a thread so a write the destination never
