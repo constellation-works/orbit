@@ -305,3 +305,43 @@ fn the_hosts_own_handle_never_lands_on_the_callback_number() {
         );
     }
 }
+
+#[cfg(unix)]
+mod private_session_dir {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn mode_of(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[test]
+    fn a_fresh_session_directory_is_owner_only() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let _session = mint(root.path(), "demo");
+
+        let dir = root.path().join("state/plugin-callbacks");
+        assert_eq!(
+            mode_of(&dir),
+            0o700,
+            "other local users must not list live callback records"
+        );
+    }
+
+    #[test]
+    fn a_permissive_existing_session_directory_is_tightened() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("state/plugin-callbacks");
+        std::fs::create_dir_all(&dir).expect("create");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("loosen");
+
+        let _session = mint(root.path(), "demo");
+
+        assert_eq!(mode_of(&dir), 0o700);
+    }
+}

@@ -119,7 +119,7 @@ impl PluginCallbackSession {
     ) -> Result<Self, OrbitError> {
         let effective_tools = normalize_tools(effective_tools);
         let dir = callback_dir(global_root);
-        fs::create_dir_all(&dir).map_err(|error| {
+        ensure_private_session_dir(&dir).map_err(|error| {
             OrbitError::Io(format!(
                 "create plugin callback session directory `{}`: {error}",
                 dir.display()
@@ -219,6 +219,27 @@ impl PluginCallbackSession {
         self.record.starttime = key.starttime;
         rewrite_session_in_place(&self.path, &self.record)
     }
+}
+
+/// Create the session directory owner-only and make an existing one so.
+///
+/// The records under it are the credential a backend's descriptor must name
+/// (see the module docs), so who can list or open them matters: a directory
+/// left `0755` by an older release or a permissive umask lets other local
+/// users read live session records. This is the host's own directory, so a
+/// looser one is tightened rather than refused.
+fn ensure_private_session_dir(dir: &Path) -> std::io::Result<()> {
+    orbit_common::fs::io::create_private_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs::metadata(dir)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
 }
 
 impl Drop for PluginCallbackSession {
