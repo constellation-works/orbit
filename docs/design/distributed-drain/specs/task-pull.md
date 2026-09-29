@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-09-27
+last_validated: 2026-09-29
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -249,7 +249,7 @@ claude authored the initial contract under [ORB-12488]; codex revised it after d
 2026-09-18; claude reconciled it with the authorization decision and the shipped read-only surface
 under [ORB-12495], 2026-09-19; claude recorded the executable owner-local claimed leaf under
 [ORB-12616], 2026-09-20; claude recorded the owner's published-delivery acceptance and the retained
-entry points' shared admission decision under [ORB-12500], 2026-09-20. The feature remains Draft.
+entry points' shared admission decision under [ORB-12500], 2026-09-20. claude reconciled the stale status wording under the live follower drain, 2026-09-29. The feature remains Draft while it is live (the same status as [2_design.md](../2_design.md)).
 
 ## Internal storage accounting
 
@@ -288,8 +288,9 @@ distributed tools. Trusted observations must come from provider/Git state and ow
 policy. No-diff observations additionally require the existing already-landed Git checks; their
 report shape, scope projection, criteria and log requirements are shared with the local verifier.
 The durable pending outbox survives restart without an active drain or sweep.
-Generic tool/friction omitted-context fencing and transport propagation remain integration work;
-public distributed entry points must stay disabled until that proof passes.
+Generic tool/friction omitted-context fencing and transport propagation are enforced on the owner
+(a claim-scoped write that omits its claim context is refused), and the one source switch,
+`DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`, is now `true`.
 
 Journal intent schema 2 carries replayable evidence. The reader still accepts schema 1 intents;
 older executors refuse schema 2 rather than silently applying a transition without its evidence.
@@ -348,9 +349,12 @@ change.
 
 ### Caller checkpoint status
 
-The internal job-store caller checkpoint preserves request identity, unique leaf
-binding, launch uncertainty and disconnected settlement. Its refill loop is an
-internal adapter seam, not a public pull endpoint.
+The job-store caller checkpoint preserves request identity, unique leaf
+binding, launch uncertainty and disconnected settlement. Its refill loop is the
+follower's pull drain: `orbit run auto --pull <selector>` runs it as the
+`workspace_pull_pipeline` job against the registered `orbit.task.pull`,
+`orbit.drain.claim.bind` and `orbit.drain.claim.settle` tools (see
+[ORB-13625] below). The owner exposes no other pull endpoint.
 
 [ORB-12616] made the owner-local half executable. A claim's leaf is one of two
 internal handoff-only definitions chosen by the owner-resolved ship mode —
