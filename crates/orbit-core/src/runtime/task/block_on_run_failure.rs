@@ -6,9 +6,9 @@
 //!
 //! This is the symmetric counterpart to the coupling-in that
 //! `worktree_setup` performs (stamping `job_run_id` and moving tasks to
-//! `in_progress`). It reuses the same `blocked_workflow_failure_update` helper
-//! the legacy parallel-batch path already uses, so the status event
-//! (`workflow_run_failed`) and note format stay consistent across paths.
+//! `in_progress`). The update comes from the engine's
+//! `blocked_workflow_failure_update`, which owns the status event
+//! (`workflow_run_failed`) and the note format.
 //!
 //! [ORB-12969] An `interrupted` run blocks its tasks too, through
 //! `blocked_workflow_interruption_update` (`workflow_run_interrupted`, same
@@ -18,13 +18,11 @@
 //! and resume re-admits the task (`application::job::resume`), so the block
 //! costs the recovery path nothing.
 //!
-//! `blocked` is a deliberate dead end for automation: `Blocked` is not in the
-//! workflow-admission allowlist, so the ship
-//! sweep skips these tasks. The only way out is a human/orchestrator decision
-//! (`orbit.task.update` with `status: in_progress`, which accepts `Blocked` and leaves the task
-//! `in-progress` — a status workflow admission does accept — or moving it back
-//! to backlog with `orbit task update <id> --status backlog`), or resuming the
-//! run that blocked it.
+//! `blocked` is a deliberate dead end for automation: workflow admission
+//! accepts only `backlog` and `in-progress`, so the ship sweep skips these
+//! tasks. The only ways out are a human/orchestrator decision (moving the task
+//! to `backlog` or `in-progress` with `orbit.task.update`) or resuming the run
+//! that blocked it.
 //!
 //! Some failures are the host's, not the task's: dispatch could not find the
 //! provider launcher. That error is permanent for its run, but installing the
