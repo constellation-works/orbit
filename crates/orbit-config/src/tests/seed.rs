@@ -134,9 +134,9 @@ fn claude_only_seeds_every_crew_and_enables_the_claude_family() {
         "exactly the Claude crews load enabled"
     );
     assert!(resolved.disabled_lane_crews().is_empty());
-    assert_crew(&parsed, "opus", "claude", "opus");
-    assert_crew(&parsed, "sonnet", "claude", "sonnet");
-    assert_crew(&parsed, "fable", "claude", "fable");
+    assert_crew(&parsed, "opus", "claude");
+    assert_crew(&parsed, "sonnet", "claude");
+    assert_crew(&parsed, "fable", "claude");
     assert_workflow_str(&parsed, "default_crew", Some("opus"));
     assert_workflow_str(&parsed, "system_crew", Some("sonnet"));
     assert!(!contents.contains("[duel"));
@@ -151,10 +151,10 @@ fn codex_only_seeds_the_codex_family() {
         enabled_crew_names(&parsed),
         vec!["astra", "luna", "sol", "terra"]
     );
-    assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
-    assert_crew(&parsed, "sol", "codex", "gpt-6-sol");
-    assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
-    assert_crew(&parsed, "luna", "codex", "gpt-6-luna");
+    assert_crew(&parsed, "astra", "codex");
+    assert_crew(&parsed, "sol", "codex");
+    assert_crew(&parsed, "terra", "codex");
+    assert_crew(&parsed, "luna", "codex");
     assert_workflow_str(&parsed, "default_crew", Some("astra"));
     assert_workflow_str(&parsed, "system_crew", Some("luna"));
 }
@@ -162,19 +162,12 @@ fn codex_only_seeds_the_codex_family() {
 /// Single-crew families name that one crew for both lanes.
 #[test]
 fn single_crew_families_name_their_crew_for_both_lanes() {
-    for (family, model) in [
-        ("gemini", "gemini-3.8-flash"),
-        ("antigravity", "gemini-3.8-flash-high"),
-        ("grok", "grok-4.7"),
-        ("cursor", "gpt-5"),
-        ("pi", "sonnet"),
-        ("opencode", "anthropic/claude-sonnet-4-5"),
-    ] {
+    for family in ["gemini", "antigravity", "grok", "cursor", "pi", "opencode"] {
         let contents = seed_contents(&seed_for(&[family]));
         let parsed = parsed_config(&contents);
 
         assert_eq!(enabled_crew_names(&parsed), vec![family], "{family}");
-        assert_crew(&parsed, family, family, model);
+        assert_crew(&parsed, family, family);
         assert_workflow_str(&parsed, "default_crew", Some(family));
         assert_workflow_str(&parsed, "system_crew", Some(family));
         let resolved = load_seeded_config(&contents);
@@ -183,7 +176,7 @@ fn single_crew_families_name_their_crew_for_both_lanes() {
                 .crews
                 .get("system")
                 .map(|crew| crew.assignment.model.as_str()),
-            Some(model),
+            builtin_model(family).as_deref(),
             "{family}: `system` must alias the named system crew"
         );
     }
@@ -206,13 +199,8 @@ fn appended_families_never_displace_an_earlier_family() {
 
     assert_workflow_str(&parsed, "default_crew", Some("opus"));
     assert_workflow_str(&parsed, "system_crew", Some("sonnet"));
-    assert_crew(&parsed, "pi", "pi", "sonnet");
-    assert_crew(
-        &parsed,
-        "opencode",
-        "opencode",
-        "anthropic/claude-sonnet-4-5",
-    );
+    assert_crew(&parsed, "pi", "pi");
+    assert_crew(&parsed, "opencode", "opencode");
 }
 
 /// Orbit ships no `ollama` crew, so a host whose only agent CLI is ollama
@@ -438,13 +426,28 @@ fn enabled_crew_names(parsed: &toml::Value) -> Vec<&str> {
         .collect()
 }
 
-fn assert_crew(parsed: &toml::Value, name: &str, provider: &str, model: &str) {
+/// The model a built-in crew ships with. Model choice is policy owned by the
+/// built-in crew registry, so seed tests compare against it instead of
+/// re-stating model names.
+fn builtin_model(name: &str) -> Option<String> {
+    crate::resolved::default_crews()
+        .get(name)
+        .map(|crew| crew.assignment.model.clone())
+}
+
+/// A seeded crew table names the expected provider family and carries exactly
+/// the built-in crew's model, whatever that model currently is.
+fn assert_crew(parsed: &toml::Value, name: &str, provider: &str) {
     let crew = crews(parsed).get(name).expect("expected crew");
     assert_eq!(
         crew.get("provider").and_then(toml::Value::as_str),
         Some(provider)
     );
-    assert_eq!(crew.get("model").and_then(toml::Value::as_str), Some(model));
+    assert_eq!(
+        crew.get("model").and_then(toml::Value::as_str),
+        builtin_model(name).as_deref(),
+        "seeded [crews.{name}] must mirror the built-in crew's model"
+    );
     assert!(crew.get("backend").is_none());
 }
 

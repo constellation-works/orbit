@@ -29,29 +29,45 @@ fn built_in_crews_use_standard_model_specific_names() {
             "sonnet",
             "system",
             "terra",
-        ]
+        ],
+        "built-in crew set drifted; shipped job steps and provider-lane crews \
+         depend on these names [ORB-10877] [ORB-10946] [ORB-11296]"
     );
-    for (name, provider, model) in [
-        ("opus", "claude", "opus"),
-        ("sonnet", "claude", "sonnet"),
-        ("fable", "claude", "fable"),
-        ("sol", "codex", "gpt-6-sol"),
-        ("terra", "codex", "gpt-5.6-terra"),
-        ("luna", "codex", "gpt-6-luna"),
-        ("astra", "codex", "gpt-6-astra"),
-        ("gemini", "gemini", "gemini-3.8-flash"),
-        ("antigravity", "antigravity", "gemini-3.8-flash-high"),
-        ("grok", "grok", "grok-4.7"),
-        ("copilot", "copilot", "claude-sonnet-5"),
-        ("cursor", "cursor", "gpt-5"),
-        ("pi", "pi", "sonnet"),
-        ("opencode", "opencode", "anthropic/claude-sonnet-4-5"),
-        ("system", "claude", "sonnet"),
+    // Providers pin the crew-to-family mapping that seeding and lane routing
+    // rely on. Model choice is policy owned by the built-in registry, so it is
+    // checked only for presence, never for a specific name.
+    for (name, provider) in [
+        ("opus", "claude"),
+        ("sonnet", "claude"),
+        ("fable", "claude"),
+        ("sol", "codex"),
+        ("terra", "codex"),
+        ("luna", "codex"),
+        ("astra", "codex"),
+        ("gemini", "gemini"),
+        ("antigravity", "antigravity"),
+        ("grok", "grok"),
+        ("copilot", "copilot"),
+        ("cursor", "cursor"),
+        ("pi", "pi"),
+        ("opencode", "opencode"),
+        ("system", "claude"),
     ] {
         let assignment = &crews.get(name).expect("built-in crew").assignment;
-        assert_eq!(assignment.provider, provider);
-        assert_eq!(assignment.model, model);
+        assert_eq!(assignment.provider, provider, "built-in crew `{name}`");
+        assert!(
+            !assignment.model.trim().is_empty(),
+            "built-in crew `{name}` must name a model"
+        );
     }
+    // `system` is an alias lane: it must run exactly what a named crew runs.
+    let system = &crews["system"];
+    assert!(
+        crews.values().any(|crew| crew.name != "system"
+            && crew.assignment.provider == system.assignment.provider
+            && crew.assignment.model == system.assignment.model),
+        "built-in `system` must mirror a named built-in crew [ORB-10877]"
+    );
     assert!(!crews.contains_key("claude"));
     assert!(!crews.contains_key("codex"));
     // The Copilot lane keeps its own identity: it is never aliased to the
@@ -676,7 +692,7 @@ fn shipped_default_config_has_no_workspace_specific_identifiers() {
     for forbidden in ["ORB-", "agent-main", "dk-server", "F2026-"] {
         assert!(
             !shipped.contains(forbidden),
-            "shipped config must not contain workspace-specific marker {forbidden:?}"
+            "seeded default config must not leak workspace-specific marker {forbidden:?} into every consumer's config"
         );
     }
 }

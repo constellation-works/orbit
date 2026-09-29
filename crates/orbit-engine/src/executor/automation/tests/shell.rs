@@ -15,7 +15,7 @@ use crate::activity_job::{DispatchError, ResolvedShellExecutor};
 use crate::context::RuntimeHost;
 use crate::executor::automation::StateExecutionContext;
 
-use super::local_shell;
+use super::super::shell::local_shell;
 
 /// Minimal host: a workspace root, a credential-free baseline environment, and
 /// one registered shell executor. Sandbox resolution keeps the trait default
