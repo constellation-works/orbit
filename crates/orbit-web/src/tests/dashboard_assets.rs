@@ -2326,6 +2326,105 @@ if (rows.length !== 1 || !rows[0].textContent.includes("Beta")) throw new Error(
     );
 }
 
+/// Cancelling a drain coordinator ends its unlaunched claims, so the prompt
+/// says so and points at Stop; the cancel's settlement report is shown rather
+/// than discarded, and a cancelled run's button is not re-armed.
+#[test]
+fn dashboard_cancelling_a_drain_run_explains_the_consequence_and_reports_settlements() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(id = "") { this.id = id; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { if (child == null) return child; if (child.parentNode) child.parentNode.removeChild(child); this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { if (child.parentNode) child.parentNode.removeChild(child); const index = this.children.indexOf(before); if (index < 0) return this.appendChild(child); this.children.splice(index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  addEventListener(name, fn) { this.listeners[name] = fn; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get classList() { const self = this; return { add: (...classes) => { for (const c of classes) if (!self.className.split(/\s+/).includes(c)) self.className = `${self.className} ${c}`.trim(); }, toggle: (c, on) => { if (on) this.addClass(c); } }; }
+  addClass(c) { if (!this.className.split(/\s+/).includes(c)) this.className = `${this.className} ${c}`.trim(); }
+  querySelectorAll(selector) { const found = []; const visit = (node) => { for (const child of node.children) { if (selector === ".action-error" && child.className.split(/\s+/).includes("action-error")) found.push(child); visit(child); } }; visit(this); return found; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/");
+const prompts = [];
+globalThis.window = { location, innerWidth: 1200, confirm: () => true, prompt: (message) => { prompts.push(message); return "operator cancelled"; } };
+globalThis.history = { replaceState: () => {} };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+let cancelResponse = {};
+globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => cancelResponse, text: async () => JSON.stringify(cancelResponse) });
+
+const runs = [
+  { run_id: "jrun-drain", job_id: "workspace_pull_pipeline", state: "running", created_at: "2026-09-05T03:00:00Z" },
+  { run_id: "jrun-auto", job_id: "workspace_auto_pipeline", state: "running", created_at: "2026-09-05T03:01:00Z" },
+  { run_id: "jrun-ship", job_id: "ship", state: "running", created_at: "2026-09-05T03:02:00Z" },
+];
+const { initRuns, renderRuns } = await import("./js/runs.js");
+initRuns({
+  getLastRuns: () => runs,
+  getRunsMeta: () => ({ truncated: false }),
+  getRunSourcesUnavailable: () => [],
+  navigateToRun: () => {},
+  fetchAndRenderRuns: async () => { renderRuns(runs); },
+  getActiveRunId: () => null,
+});
+renderRuns(runs);
+const body = get("runs-body");
+const rowFor = (id) => body.children.find((node) => node.textContent.includes(id) && node.className.includes("runs-row") && !node.className.includes("runs-header"));
+const cancelButton = (id) => rowFor(id).children.at(-1).children.find((node) => node.className.includes("run-cancel"));
+const click = async (button) => { button.listeners.click({ stopPropagation() {} }); for (let i = 0; i < 6; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+const notice = () => body.children.find((node) => node.className.includes("run-cancel-notice"));
+
+// A plain run keeps the plain prompt.
+await click(cancelButton("jrun-ship"));
+if (prompts.at(-1) !== "Cancel jrun-ship? Add a reason (optional):") throw new Error(`plain run prompt changed: ${prompts.at(-1)}`);
+if (notice()) throw new Error("a plain cancel with no settlements must not render a report");
+
+// A follower drain names what cancelling does and offers Stop instead.
+cancelResponse = { run_id: "jrun-drain", outcome: "cancelled", pull_settlements: [
+  { owner: "host:/owner", drain_run_id: "jrun-drain", task_id: "T-1", leaf_run_id: "jrun-leaf", outcome: "settled" },
+  { owner: "host:/owner", drain_run_id: "jrun-drain", task_id: "T-2", leaf_run_id: null, outcome: "owner_unreachable" },
+  { owner: "host:/owner", drain_run_id: "jrun-drain", task_id: "T-3", leaf_run_id: null, outcome: "launch_uncertain" },
+] };
+const drainButton = cancelButton("jrun-drain");
+await click(drainButton);
+const prompt = prompts.at(-1);
+if (!prompt.includes("not launched yet fail") || !prompt.includes("tasks are blocked")) throw new Error(`the drain prompt hides its consequence: ${prompt}`);
+if (!prompt.includes("Stop")) throw new Error(`the drain prompt does not offer Stop: ${prompt}`);
+const report = notice();
+if (!report) throw new Error(`the settlement report was discarded: ${body.textContent}`);
+for (const expected of ["jrun-drain cancelled", "1 settlement delivered", "1 waiting for the owner (unreachable)", "[T-2]", "1 launch uncertain", "manual recovery", "runbook"]) {
+  if (!report.textContent.includes(expected)) throw new Error(`report is missing ${JSON.stringify(expected)}: ${report.textContent}`);
+}
+if (!report.className.includes("error")) throw new Error("undelivered settlements must not read as plain success");
+if (!drainButton.disabled || drainButton.textContent !== "cancelled") throw new Error(`a cancelled run's button was re-armed: ${drainButton.disabled} ${drainButton.textContent}`);
+
+// The report survives the re-render that follows, until dismissed.
+renderRuns(runs);
+if (!notice()) throw new Error("a re-render wiped the settlement report");
+notice().children.find((node) => node.className === "action").listeners.click({ stopPropagation() {} });
+if (notice()) throw new Error("dismiss did not remove the report");
+
+// A local auto drain also gets the drain prompt, without follower-claim wording.
+cancelResponse = { run_id: "jrun-auto", outcome: "cancelled", pull_settlements: [] };
+await click(cancelButton("jrun-auto"));
+if (!prompts.at(-1).includes("Cancel drain jrun-auto?") || prompts.at(-1).includes("not launched yet")) throw new Error(`auto drain prompt: ${prompts.at(-1)}`);
+"#,
+    );
+}
+
 /// ORB-11561: Recent Runs used to limit first, then filter to failed in the
 /// browser, so an older Failed run outside the newest success/active slice
 /// rendered as 0/0. Loading and mismatched-filter paints must not look like

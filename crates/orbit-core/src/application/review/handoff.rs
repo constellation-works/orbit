@@ -486,7 +486,11 @@ fn claim_json(
     let expires_at = chrono::DateTime::parse_from_rfc3339(&claim.claim.reservation_expires_at)
         .ok()
         .map(|value| value.with_timezone(&chrono::Utc));
-    let expired = expires_at.is_some_and(|expires_at| expires_at <= now);
+    // The reservation only guards an unsettled claim. Once the claim settles
+    // (landed, failed, revoked) the reservation is released, so an elapsed
+    // window on a settled claim is not an expiry worth reporting.
+    let unsettled = claim.claim.phase.is_unsettled();
+    let expired = unsettled && expires_at.is_some_and(|expires_at| expires_at <= now);
     serde_json::json!({
         "claim_id": claim.claim.claim_id,
         "task_id": claim.claim.task_id,
@@ -527,7 +531,9 @@ fn claim_json(
             "id": claim.claim.reservation_id,
             "expires_at": claim.claim.reservation_expires_at,
             "expired": expired,
-            "note": if expired {
+            "note": if !unsettled {
+                "reservation released — the claim has settled and no longer holds its footprint"
+            } else if expired {
                 "reservation window elapsed — the claim is still live and its frozen footprint \
                  still protects these files; expiry is not revocation and not proof the attempt died"
             } else {

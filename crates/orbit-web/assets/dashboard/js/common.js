@@ -541,3 +541,51 @@ export function syncNodes(container, newNodesArr) {
 
   if (state) panelMessage(container.id, state);
 }
+
+// One entry per admission a follower's settle-only pass carried (`orbit run
+// cancel` / `orbit run auto --stop`). Each outcome maps to a plain-language
+// clause; `attention` outcomes are the ones an operator has to act on or wait
+// out, so the summary never reports them as plain success.
+const SETTLEMENT_CLAUSES = [
+  { outcomes: ["settled"], text: (n) => `${n} ${n === 1 ? "settlement" : "settlements"} delivered` },
+  { outcomes: ["closed_obsolete"], text: (n) => `${n} closed locally (the owner had already ended ${n === 1 ? "its claim" : "their claims"} — check the ${n === 1 ? "task's" : "tasks'"} status on the owner)` },
+  { outcomes: ["leaf_running"], text: (n) => `${n} still running (${n === 1 ? "settles" : "settle"} on ${n === 1 ? "its" : "their"} own when finished)` },
+  { outcomes: ["awaiting_drain"], text: (n) => `${n} waiting for a live drain to carry ${n === 1 ? "it" : "them"}` },
+  { outcomes: ["idle", "refused", "unanswered_request"], text: (n) => `${n} with nothing held on the owner` },
+  { outcomes: ["owner_unreachable"], attention: true, text: (n) => `${n} waiting for the owner (unreachable) — run Stop again once it is reachable` },
+  { outcomes: ["pending_delivery", "pending"], attention: true, text: (n) => `${n} recorded but not delivered — run Stop again once the owner is reachable` },
+  { outcomes: ["no_owner_route"], attention: true, text: (n) => `${n} without a route to the owner — check the workspace's owner connection` },
+  { outcomes: ["launch_uncertain"], attention: true, text: (n) => `${n} launch uncertain — needs manual recovery, see the distributed drain runbook` },
+];
+const SETTLEMENT_TASKS_SHOWN = 3;
+
+/// Summarize a `pull_settlements` list as `{ text, attention }`. `text` is ""
+/// when nothing was carried. `attention` is true when any outcome still needs
+/// the operator (or the owner) before the work is delivered.
+export function describePullSettlements(entries) {
+  const list = Array.isArray(entries) ? entries.filter((entry) => entry && typeof entry === "object") : [];
+  if (list.length === 0) return { text: "", attention: false };
+  const known = new Set(SETTLEMENT_CLAUSES.flatMap((clause) => clause.outcomes));
+  const clauses = SETTLEMENT_CLAUSES.map((clause) => ({ clause, entries: list.filter((entry) => clause.outcomes.includes(entry.outcome)) }));
+  const unrecognized = list.filter((entry) => !known.has(entry.outcome));
+  const parts = [];
+  let attention = false;
+  for (const { clause, entries: matched } of clauses) {
+    if (matched.length === 0) continue;
+    let part = clause.text(matched.length);
+    if (clause.attention) {
+      attention = true;
+      const tasks = [...new Set(matched.map((entry) => entry.task_id).filter(Boolean))];
+      if (tasks.length > 0) {
+        const shown = tasks.slice(0, SETTLEMENT_TASKS_SHOWN).join(", ");
+        part += ` [${shown}${tasks.length > SETTLEMENT_TASKS_SHOWN ? `, +${tasks.length - SETTLEMENT_TASKS_SHOWN} more` : ""}]`;
+      }
+    }
+    parts.push(part);
+  }
+  if (unrecognized.length > 0) {
+    attention = true;
+    parts.push(`${unrecognized.length} in an unrecognized state — run "orbit run auto --stop" in the workspace for details`);
+  }
+  return { text: parts.join(" · "), attention };
+}
