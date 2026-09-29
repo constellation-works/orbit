@@ -60,6 +60,22 @@ fn admissions_table_exists(conn: &Connection) -> Result<bool, OrbitError> {
     .map_err(db_error)
 }
 
+/// Serialized names (`LocalPullPhase` is `snake_case`) of the phases that no
+/// longer hold a drain slot: an idle poll, a settled claim, a refused request.
+/// SQL narrows reads to the rest so the occupancy check inside the writer
+/// transaction, and every settle-only pass, never decodes finished history.
+/// [`LocalPullAdmission::holds_capacity`] stays the authority: rows are
+/// re-filtered by it, so a phase missing here is read too much, never lost.
+const RELEASED_PHASES_SQL: &str = "('idle','settled','refused')";
+
+/// Terminal `Idle` and `Refused` rows one workspace keeps. A drain that polls
+/// an owner with nothing ready leaves one such row per poll (about 1,440 a day
+/// at the shipped 60 second idle sleep), and no reader needs an old one: they
+/// hold no claim, and their request IDs are random, never reused. This keeps
+/// roughly a week of one drain's polls for diagnosis. `Settled` rows are never
+/// pruned — the failure breaker and status reporting read them.
+pub(crate) const TERMINAL_ROWS_RETAINED: usize = 10_000;
+
 fn records(conn: &Connection, workspace: &str) -> Result<Vec<LocalPullAdmission>, OrbitError> {
     let mut stmt = conn
         .prepare(
@@ -73,6 +89,59 @@ fn records(conn: &Connection, workspace: &str) -> Result<Vec<LocalPullAdmission>
         .map_err(db_error)?;
     raw.into_iter().map(decode).collect()
 }
+/// Admissions that still hold a slot, in admission order.
+fn holding_records(
+    conn: &Connection,
+    workspace: &str,
+) -> Result<Vec<LocalPullAdmission>, OrbitError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 \
+             AND json_extract(record_json,'$.phase') NOT IN {RELEASED_PHASES_SQL} ORDER BY rowid"
+        ))
+        .map_err(db_error)?;
+    let raw = stmt
+        .query_map([workspace], |r| r.get::<_, String>(0))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    let mut holding = Vec::with_capacity(raw.len());
+    for record in raw.into_iter().map(decode) {
+        let record = record?;
+        if record.holds_capacity() {
+            holding.push(record);
+        }
+    }
+    Ok(holding)
+}
+
+/// Drop all but the newest [`TERMINAL_ROWS_RETAINED`] `Idle` and `Refused`
+/// rows of `workspace`, oldest first by insertion order.
+fn prune_terminal_rows(conn: &Connection, workspace: &str) -> Result<(), OrbitError> {
+    // A cheap count keeps the common pass from scanning JSON at all.
+    let rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM local_pull_admissions WHERE workspace_id=?1",
+            [workspace],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let retained = i64::try_from(TERMINAL_ROWS_RETAINED).unwrap_or(i64::MAX);
+    if rows <= retained {
+        return Ok(());
+    }
+    conn.execute(
+        "DELETE FROM local_pull_admissions WHERE workspace_id=?1 \
+         AND json_extract(record_json,'$.phase') IN ('idle','refused') \
+         AND rowid NOT IN (SELECT rowid FROM local_pull_admissions WHERE workspace_id=?1 \
+             AND json_extract(record_json,'$.phase') IN ('idle','refused') \
+             ORDER BY rowid DESC LIMIT ?2)",
+        params![workspace, retained],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 fn read(
     conn: &Connection,
     workspace: &str,
@@ -133,10 +202,7 @@ pub(super) fn unsettled(
         if !admissions_table_exists(conn)? {
             return Ok(Vec::new());
         }
-        Ok(records(conn, workspace)?
-            .into_iter()
-            .filter(LocalPullAdmission::holds_capacity)
-            .collect())
+        holding_records(conn, workspace)
     })
 }
 
@@ -204,14 +270,10 @@ fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, O
     // because a wrapper whose lineage reaches one of their leaves is
     // represented by that admission, terminal leaf or not.
     let pending = if admissions_table_exists(conn)? {
-        records(conn, workspace)?
+        holding_records(conn, workspace)?
     } else {
         Vec::new()
     };
-    let pending: Vec<LocalPullAdmission> = pending
-        .into_iter()
-        .filter(LocalPullAdmission::holds_capacity)
-        .collect();
     let admitted_runs: BTreeSet<String> = pending
         .iter()
         .filter_map(|record| record.leaf_run_id.clone())
@@ -379,6 +441,7 @@ pub(super) fn allocate(
             refusal: None,
         };
         write(conn, workspace, &record)?;
+        prune_terminal_rows(conn, workspace)?;
         Ok(Some(record))
     })
 }

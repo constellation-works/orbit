@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-28
-last_validated: 2026-09-20
+last_updated: 2026-09-29
+last_validated: 2026-09-29
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -281,9 +281,11 @@ owns delivery:
   sandboxed. Everything else is a settle-only pass (`OrbitRuntime::settle_pending_pulls`,
   `PullDrain::carry_settlement`) run by `orbit run cancel` / the dashboard's cancel (for a pull
   drain or a claimed leaf, including one already terminal) and by `orbit run auto --stop` / the
-  dashboard's stop. A pass covers every owner, never requests work or launches a leaf, and costs
-  one failed delivery per unreachable owner. A live drain's refill still carries every admission
-  for its owner, whichever drain made it.
+  dashboard's stop. A pass covers every owner and never requests work or launches a leaf.
+  Whether it is the settle-only pass or the live drain's reconciliation, a pass costs at most one
+  failed delivery per unreachable owner: after the first transport error to an owner it stops
+  delivering to that owner for the pass, and the remaining admissions stay pending for the next
+  one. A live drain's refill still carries every admission for its owner, whichever drain made it.
 - *Abandonment.* For an admission no live drain will carry — its own drain ended and no live drain
   pulls from its owner — a pass also ends what was never launched: an unanswered request is reconciled against the owner's receipt, a claim
   with no leaf is settled as a failure, and a queued leaf is cancelled through ordinary run

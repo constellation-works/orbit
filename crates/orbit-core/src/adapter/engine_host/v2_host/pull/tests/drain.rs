@@ -6,7 +6,9 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::*;
 use orbit_types::workflow::PipelineState;
 
-use super::super::drain::{CONSECUTIVE_FAILURE_BREAKER, PullDrain, PullLauncher, PullPeer};
+use super::super::drain::{
+    CONSECUTIVE_FAILURE_BREAKER, PullDrain, PullLauncher, PullPeer, SettleScope,
+};
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
 
 #[derive(Default)]
@@ -26,6 +28,25 @@ struct Peer {
     /// Claims whose settlement the owner refuses as `stale_claim`, with the
     /// phase its receipt lookup then reports for each.
     ended: RefCell<BTreeMap<String, ExecutionClaimPhase>>,
+    /// Every call the owner was sent, whatever it answered.
+    owner_calls: Cell<usize>,
+    /// Answer every call as an unreachable destination.
+    unreachable: Cell<bool>,
+    /// Let this many requests through, then answer the rest as unreachable.
+    fail_requests_after: Cell<Option<usize>>,
+}
+impl Peer {
+    /// Count a call and answer it as the transport would when the owner is
+    /// down.
+    fn reach(&self) -> Result<(), OrbitError> {
+        self.owner_calls.set(self.owner_calls.get() + 1);
+        if self.unreachable.get() {
+            return Err(OrbitError::UnreachableDestination(
+                "owner: ssh: connect timed out".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 impl PullPeer for Peer {
     fn request(
@@ -34,6 +55,16 @@ impl PullPeer for Peer {
         request: &AdmissionRequest,
     ) -> Result<AdmissionReceipt, OrbitError> {
         self.requests.set(self.requests.get() + 1);
+        self.reach()?;
+        if self
+            .fail_requests_after
+            .get()
+            .is_some_and(|allowed| self.requests.get() > allowed)
+        {
+            return Err(OrbitError::UnreachableDestination(
+                "owner: ssh: connect timed out".into(),
+            ));
+        }
         if let Some(message) = self.refuse.borrow().clone() {
             return Err(OrbitError::RemoteTool {
                 code: "invalid_input".into(),
@@ -81,6 +112,7 @@ impl PullPeer for Peer {
         Ok(receipt)
     }
     fn bind(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        self.reach()?;
         let claim = &admission
             .receipt
             .as_ref()
@@ -89,6 +121,15 @@ impl PullPeer for Peer {
             .as_ref()
             .expect("claim")
             .claim_id;
+        // A claim the owner has already ended refuses a bind the way it
+        // refuses a settlement, and records nothing.
+        if self.ended.borrow().contains_key(claim) {
+            return Err(OrbitError::RemoteTool {
+                code: "invalid_input".into(),
+                message: "owner: invalid input: stale_claim".into(),
+                payload: serde_json::Value::Null,
+            });
+        }
         let run = admission.leaf_run_id.as_ref().expect("leaf");
         let mut binds = self.binds.borrow_mut();
         assert_eq!(
@@ -102,6 +143,7 @@ impl PullPeer for Peer {
     }
     fn settle(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         assert!(admission.settlement.is_some());
+        self.reach()?;
         if self.disconnected.get() {
             return Err(OrbitError::Execution("disconnected".into()));
         }
@@ -126,6 +168,7 @@ impl PullPeer for Peer {
         request_id: &str,
     ) -> Result<AdmissionLookup, OrbitError> {
         self.lookups.set(self.lookups.get() + 1);
+        self.reach()?;
         Ok(match self.receipts.borrow().get(request_id) {
             Some(receipt) => AdmissionLookup::Found {
                 receipt: Box::new(receipt.clone()),
@@ -934,5 +977,407 @@ fn failed_step(target: &str, message: &str) -> orbit_types::workflow::JobRunStep
         state: orbit_types::workflow::JobRunState::Failed,
         error_code: Some("STEP_FAILED".into()),
         error_message: Some(message.into()),
+    }
+}
+
+/// End the leaf of the newest admission, so the next pass settles it.
+fn end_newest_leaf(jobs: &dyn JobRunStoreBackend) -> LocalPullAdmission {
+    let record = jobs
+        .local_pull_admissions()
+        .expect("records")
+        .pop()
+        .expect("newest admission");
+    jobs.finalize_job_run(
+        record.leaf_run_id.as_deref().expect("leaf"),
+        orbit_types::workflow::JobRunState::Cancelled,
+        Utc::now(),
+        None,
+    )
+    .expect("leaf ended");
+    record
+}
+
+/// An operator revoked or recovered the claim on the owner while the response
+/// to its bind was lost. The owner then refuses that bind on every replay, so
+/// the admission must close rather than sit `Created` holding its slot: the
+/// leaf never launches, the slot frees, and the next pass admits again.
+#[test]
+fn pull_owner_refused_bind_closes_the_admission_and_frees_its_slot() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_owner_refused_bind_closes_the_admission_and_frees_its_slot",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    peer.lose_bind.set(true);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    let created = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(created.phase, LocalPullPhase::Created);
+    let leaf = created.leaf_run_id.clone().expect("leaf");
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&created), ExecutionClaimPhase::Revoked);
+
+    let error = drain
+        .refill(&destination, &template, 1)
+        .expect_err("the refusal is reported, and nothing new is admitted against it");
+    assert!(error.to_string().contains("stale_claim"), "{error}");
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].phase, LocalPullPhase::Settled);
+    let Some(ClaimMutation::Fail(evidence)) = &records[0].settlement else {
+        panic!("a refused bind settles as a failure: {:?}", records[0]);
+    };
+    assert!(
+        evidence
+            .summary
+            .as_deref()
+            .unwrap_or_default()
+            .contains("owner refused bind"),
+        "{evidence:?}"
+    );
+    let refusal = records[0].refusal.as_deref().unwrap_or_default();
+    assert!(
+        refusal.contains("stale_claim") && refusal.contains("Revoked"),
+        "{refusal}"
+    );
+    assert_eq!(launcher.launches.get(), 0, "the leaf never launches");
+    assert_eq!(
+        jobs.get_job_run(&leaf).expect("read").expect("leaf").state,
+        orbit_types::workflow::JobRunState::Failed,
+        "the queued leaf can never start"
+    );
+    assert_eq!(drain.unsettled(&destination).expect("unsettled"), 0);
+    assert_eq!(jobs.drain_leaf_occupancy().expect("occupancy").occupied, 0);
+
+    assert_eq!(drain.refill(&destination, &template, 1).expect("admits"), 1);
+    assert_eq!(launcher.launches.get(), 1);
+}
+
+/// A bind the owner refuses for a claim it still holds cannot be closed
+/// locally: the settlement stays pending and holds the slot until the operator
+/// revokes or recovers the claim on the owner, after which the next pass
+/// closes it.
+#[test]
+fn pull_refused_bind_for_a_claim_the_owner_holds_waits_for_the_operator() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_refused_bind_for_a_claim_the_owner_holds_waits_for_the_operator",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    peer.lose_bind.set(true);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    let created = jobs.local_pull_admissions().expect("records").remove(0);
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&created), ExecutionClaimPhase::Running);
+
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    assert_eq!(
+        jobs.local_pull_admissions().expect("records")[0].phase,
+        LocalPullPhase::Settling
+    );
+    assert_eq!(drain.unsettled(&destination).expect("unsettled"), 1);
+    // Still pending on the next pass, and the claim holds the only slot.
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    assert_eq!(jobs.local_pull_admissions().expect("records").len(), 1);
+
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&created), ExecutionClaimPhase::Revoked);
+    assert_eq!(drain.refill(&destination, &template, 1).expect("admits"), 1);
+    let records = jobs.local_pull_admissions().expect("records");
+    assert_eq!(records[0].phase, LocalPullPhase::Settled);
+    assert!(records[0].refusal.is_some());
+    assert_eq!(launcher.launches.get(), 1, "only the fresh claim launched");
+}
+
+/// A claim the owner had already ended says nothing about this executor, so
+/// closing one obsolete neither trips the breaker nor resets its streak.
+#[test]
+fn pull_breaker_skips_claims_closed_obsolete() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_breaker_skips_claims_closed_obsolete",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let run_id = template.run_context.run_id.clone();
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    launcher.fail.set(true);
+    for _ in 1..CONSECUTIVE_FAILURE_BREAKER {
+        assert!(drain.refill(&destination, &template, 1).is_err());
+    }
+    launcher.fail.set(false);
+    assert_eq!(drain.refill(&destination, &template, 1).expect("admit"), 1);
+    let revoked = end_newest_leaf(jobs);
+    peer.ended
+        .borrow_mut()
+        .insert(claim_id(&revoked), ExecutionClaimPhase::Revoked);
+
+    drain.reconcile_pending(&destination).expect("closes it");
+    let closed = jobs
+        .local_pull_admissions()
+        .expect("records")
+        .pop()
+        .expect("newest");
+    assert_eq!(closed.phase, LocalPullPhase::Settled);
+    assert!(closed.refusal.is_some(), "closed obsolete, not delivered");
+    assert_eq!(
+        drain
+            .consecutive_failed_settlements(&destination, &run_id)
+            .expect("count"),
+        CONSECUTIVE_FAILURE_BREAKER - 1,
+        "the obsolete claim is neither counted nor a reset"
+    );
+    assert_eq!(
+        drain
+            .refill(&destination, &template, 1)
+            .expect("still admits"),
+        1,
+        "two real failures do not open the breaker"
+    );
+}
+
+/// A `Launching` record whose leaf has since ended is settled, not left for
+/// deliberate recovery: nothing can still be launching. One whose leaf may
+/// still be live is not restarted.
+fn launching_admission(
+    jobs: &dyn JobRunStoreBackend,
+    peer: &Peer,
+    destination: &PullDestination,
+    template: &AdmissionRequest,
+) -> LocalPullAdmission {
+    let mut request = template.clone();
+    request.request_id = "launching".into();
+    let record = jobs
+        .allocate_pull_request(destination, &request, 1)
+        .expect("allocate")
+        .expect("slot");
+    let receipt = peer.request(destination, &record.request).expect("receipt");
+    for mutation in [
+        LocalPullMutation::Receive(Box::new(receipt)),
+        LocalPullMutation::CreateLeaf,
+        LocalPullMutation::Bound,
+        LocalPullMutation::LaunchIntent,
+    ] {
+        jobs.mutate_local_pull(destination, "launching", &mutation)
+            .expect("checkpoint");
+    }
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Launching);
+    record
+}
+
+#[test]
+fn pull_reconcile_settles_a_launching_admission_whose_leaf_ended() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_reconcile_settles_a_launching_admission_whose_leaf_ended",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    launching_admission(jobs, &peer, &destination, &template);
+
+    let error = drain
+        .reconcile_pending(&destination)
+        .expect_err("a possibly live leaf is not restarted");
+    assert!(error.to_string().contains("deliberate recovery"), "{error}");
+    assert_eq!(
+        jobs.local_pull_admissions().expect("records")[0].phase,
+        LocalPullPhase::Launching
+    );
+
+    end_newest_leaf(jobs);
+    drain.reconcile_pending(&destination).expect("settles");
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Settled);
+    assert!(matches!(record.settlement, Some(ClaimMutation::Fail(_))));
+    assert_eq!(peer.settlements.get(), 1);
+    assert_eq!(launcher.launches.get(), 0);
+}
+
+#[test]
+fn pull_settle_only_pass_settles_a_launching_admission_whose_leaf_ended() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_settle_only_pass_settles_a_launching_admission_whose_leaf_ended",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let mut record = launching_admission(jobs, &peer, &destination, &template);
+
+    drain
+        .carry_settlement(&mut record, SettleScope::Deliver, &|_| true)
+        .expect("a live leaf settles itself");
+    assert_eq!(record.phase, LocalPullPhase::Launching);
+    assert_eq!(peer.settlements.get(), 0);
+
+    end_newest_leaf(jobs);
+    drain
+        .carry_settlement(&mut record, SettleScope::Deliver, &|_| true)
+        .expect("settles");
+    assert_eq!(record.phase, LocalPullPhase::Settled);
+    assert_eq!(peer.settlements.get(), 1);
+}
+
+/// A hung owner costs one blocking call per pass, not one per admission — and
+/// what can be done locally still is: each ended leaf's failure is recorded,
+/// so a later pass only has to deliver it.
+#[test]
+fn pull_pass_stops_calling_an_unreachable_owner_after_the_first_failure() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_pass_stops_calling_an_unreachable_owner_after_the_first_failure",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let records = admitted_ended_leaves(jobs, &drain, &destination, &template, 3);
+    assert_eq!(records.len(), 3);
+    peer.unreachable.set(true);
+    let calls = peer.owner_calls.get();
+
+    let error = drain
+        .reconcile_pending(&destination)
+        .expect_err("the owner is unreachable");
+    assert!(
+        matches!(error, OrbitError::UnreachableDestination(_)),
+        "the first real failure is the one reported: {error}"
+    );
+    assert_eq!(
+        peer.owner_calls.get(),
+        calls + 1,
+        "one call for the pass, not one per admission"
+    );
+    let records = jobs.local_pull_admissions().expect("records");
+    assert!(
+        records.iter().all(|record| {
+            record.phase == LocalPullPhase::Settling
+                && matches!(record.settlement, Some(ClaimMutation::Fail(_)))
+        }),
+        "every failure was recorded locally: {records:?}"
+    );
+
+    peer.unreachable.set(false);
+    drain.reconcile_pending(&destination).expect("delivers");
+    assert_eq!(peer.settlements.get(), 3);
+    assert_eq!(drain.unsettled(&destination).expect("unsettled"), 0);
+}
+
+/// Claims admitted before an error ended the pass are running: the count
+/// survives it.
+#[test]
+fn pull_refill_pass_keeps_the_admissions_made_before_an_error() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::drain::pull_refill_pass_keeps_the_admissions_made_before_an_error",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (destination, template) = request(jobs);
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    peer.fail_requests_after.set(Some(1));
+
+    let pass = drain.refill_pass(&destination, &template, 3);
+    assert_eq!(pass.admitted, 1);
+    assert!(
+        matches!(pass.error, Some(OrbitError::UnreachableDestination(_))),
+        "{:?}",
+        pass.error
+    );
+    assert_eq!(launcher.launches.get(), 1);
+    assert_eq!(peer.requests.get(), 2, "the failed request ended the pass");
+}
+
+#[test]
+fn only_transport_class_errors_mark_an_owner_unreachable() {
+    use super::super::drain::is_owner_transport_failure;
+    for error in [
+        OrbitError::UnreachableDestination("owner".into()),
+        OrbitError::OutcomeUnknown {
+            mcp_call_id: "1".into(),
+            message: String::new(),
+        },
+        OrbitError::OwnerUnavailable("down".into()),
+        OrbitError::RemoteTool {
+            code: "store_error".into(),
+            message: String::new(),
+            payload: serde_json::Value::Null,
+        },
+    ] {
+        assert!(is_owner_transport_failure(&error), "{error}");
+    }
+    for error in [
+        OrbitError::RemoteTool {
+            code: "invalid_input".into(),
+            message: "stale_claim".into(),
+            payload: serde_json::Value::Null,
+        },
+        OrbitError::Store("bound leaf disappeared".into()),
+        OrbitError::JobValidation("uncertain".into()),
+        OrbitError::Execution("abandon failed".into()),
+    ] {
+        assert!(!is_owner_transport_failure(&error), "{error}");
     }
 }

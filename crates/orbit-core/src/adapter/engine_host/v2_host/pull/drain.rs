@@ -1,5 +1,7 @@
 //! Pull refill loop. The owner transport and the leaf launcher are injected;
 //! the loop owns only the durable checkpoint discipline between them.
+use std::cell::RefCell;
+
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimEvidence, ClaimMutation,
@@ -81,6 +83,76 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
     }
 }
 
+/// Whether an error says the owner could not be reached or did not answer
+/// cleanly: an unreachable or stale route, a lost or unknown outcome, an owner
+/// that is unavailable, or an owner-side failure that is not a refusal.
+///
+/// Only these mean the next call to the same owner is likely to fail or hang
+/// the same way, so a pass stops calling that owner after the first one. A
+/// refusal is an answer, and a local error (a store read, a missing binding)
+/// says nothing about the owner at all.
+pub(crate) fn is_owner_transport_failure(error: &OrbitError) -> bool {
+    match error {
+        OrbitError::RemoteTool { .. } => !is_owner_refusal(error),
+        OrbitError::UnreachableDestination(_)
+        | OrbitError::OutcomeUnknown { .. }
+        | OrbitError::OwnerUnavailable(_)
+        | OrbitError::OwnerNegotiation(_)
+        | OrbitError::StaleRoute(_)
+        | OrbitError::UnhealthyCheckout(_) => true,
+        _ => false,
+    }
+}
+
+/// A [`PullPeer`] that stops calling the owner after its first transport
+/// failure. A hung owner costs one blocking call (up to the routed delivery
+/// timeout) per pass, not one per admission; later calls fail fast with
+/// [`OrbitError::OwnerUnavailable`] and the local-only phases still run.
+struct FencedPeer<'a> {
+    inner: &'a dyn PullPeer,
+    failed: RefCell<Option<String>>,
+}
+
+impl FencedPeer<'_> {
+    fn call<T>(&self, call: impl FnOnce() -> Result<T, OrbitError>) -> Result<T, OrbitError> {
+        if let Some(first) = self.failed.borrow().as_deref() {
+            return Err(OrbitError::OwnerUnavailable(format!(
+                "not contacted again this pass; the owner already failed: {first}"
+            )));
+        }
+        let result = call();
+        if let Err(error) = &result
+            && is_owner_transport_failure(error)
+        {
+            *self.failed.borrow_mut() = Some(error.to_string());
+        }
+        result
+    }
+}
+
+impl PullPeer for FencedPeer<'_> {
+    fn request(
+        &self,
+        destination: &PullDestination,
+        request: &AdmissionRequest,
+    ) -> Result<AdmissionReceipt, OrbitError> {
+        self.call(|| self.inner.request(destination, request))
+    }
+    fn bind(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        self.call(|| self.inner.bind(admission))
+    }
+    fn settle(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        self.call(|| self.inner.settle(admission))
+    }
+    fn lookup(
+        &self,
+        destination: &PullDestination,
+        request_id: &str,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.call(|| self.inner.lookup(destination, request_id))
+    }
+}
+
 /// Consecutive claims a drain settled as failures, with no handoff between
 /// them, after which it stops requesting new work.
 ///
@@ -90,6 +162,20 @@ pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
 /// poll. Settlement of work already running is unaffected, and an operator
 /// resets the breaker by starting a new drain.
 pub(crate) const CONSECUTIVE_FAILURE_BREAKER: usize = 3;
+
+/// What one [`PullDrain::refill_pass`] did: the claims it admitted, and the
+/// error that ended it, if one did. The two are independent — a pass can admit
+/// claims and then fail on a later one.
+pub(crate) struct RefillPass {
+    pub(crate) admitted: usize,
+    pub(crate) error: Option<OrbitError>,
+}
+
+/// How the owner answered a bind.
+enum Bind {
+    Bound(Box<LocalPullAdmission>),
+    Refused(OrbitError),
+}
 
 pub(crate) struct PullDrain<'a> {
     pub(crate) jobs: &'a dyn JobRunStoreBackend,
@@ -105,21 +191,54 @@ impl PullDrain<'_> {
     /// The failure breaker is checked after reconciliation, because settling
     /// a leaf that has just failed can be what opens it: that pass must not
     /// request replacements.
+    ///
+    /// The count of claims admitted survives an error that ends the pass
+    /// later: those leaves are already running, and the caller's next wait
+    /// depends on it.
+    pub(crate) fn refill_pass(
+        &self,
+        destination: &PullDestination,
+        template: &AdmissionRequest,
+        ceiling: usize,
+    ) -> RefillPass {
+        let mut admitted = 0;
+        let error = self
+            .refill_into(destination, template, ceiling, &mut admitted)
+            .err();
+        RefillPass { admitted, error }
+    }
+
+    /// [`Self::refill_pass`] as a `Result`, for fixtures that only care
+    /// whether the pass completed.
+    #[cfg(test)]
     pub(crate) fn refill(
         &self,
         destination: &PullDestination,
         template: &AdmissionRequest,
         ceiling: usize,
     ) -> Result<usize, OrbitError> {
+        let pass = self.refill_pass(destination, template, ceiling);
+        match pass.error {
+            Some(error) => Err(error),
+            None => Ok(pass.admitted),
+        }
+    }
+
+    fn refill_into(
+        &self,
+        destination: &PullDestination,
+        template: &AdmissionRequest,
+        ceiling: usize,
+        admitted: &mut usize,
+    ) -> Result<(), OrbitError> {
         if !self.reconcile_pending(destination)? {
-            return Ok(0);
+            return Ok(());
         }
         if self.consecutive_failed_settlements(destination, &template.run_context.run_id)?
             >= CONSECUTIVE_FAILURE_BREAKER
         {
-            return Ok(0);
+            return Ok(());
         }
-        let mut admitted = 0;
         for _ in 0..ceiling {
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes).map_err(|error| {
@@ -136,9 +255,9 @@ impl PullDrain<'_> {
             if !self.reconcile(record)? {
                 break;
             }
-            admitted += 1;
+            *admitted += 1;
         }
-        Ok(admitted)
+        Ok(())
     }
 
     /// Carry every earlier admission for `destination` forward — retry an
@@ -153,17 +272,33 @@ impl PullDrain<'_> {
     /// One admission that cannot move forward does not hold the others back:
     /// every record is carried as far as it goes, and the first error is
     /// returned afterwards, so it still prevents fresh admission this pass.
+    ///
+    /// The owner is the exception: after its first transport failure the pass
+    /// stops calling it, so a hung owner costs one blocking call rather than
+    /// one per admission. Records still advance through their local-only
+    /// phases, such as recording a terminal leaf's failure settlement.
     pub(crate) fn reconcile_pending(
         &self,
         destination: &PullDestination,
     ) -> Result<bool, OrbitError> {
+        let fenced = FencedPeer {
+            inner: self.peer,
+            failed: RefCell::new(None),
+        };
+        let pass = PullDrain {
+            jobs: self.jobs,
+            peer: &fenced,
+            launcher: self.launcher,
+        };
         let mut may_allocate = true;
         let mut first_error = None;
-        for record in self.jobs.local_pull_admissions()? {
+        // Only admissions holding a slot move: finished history has nothing
+        // left to reconcile, and is never read here.
+        for record in self.jobs.unsettled_local_pull_admissions()? {
             if record.destination != *destination {
                 continue;
             }
-            match self.reconcile(record) {
+            match pass.reconcile(record) {
                 Ok(allocate) => may_allocate &= allocate,
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -181,16 +316,18 @@ impl PullDrain<'_> {
     pub(crate) fn unsettled(&self, destination: &PullDestination) -> Result<usize, OrbitError> {
         Ok(self
             .jobs
-            .local_pull_admissions()?
+            .unsettled_local_pull_admissions()?
             .iter()
-            .filter(|record| record.destination == *destination && record.holds_capacity())
+            .filter(|record| record.destination == *destination)
             .count())
     }
 
     /// How many of this drain's most recent settled claims failed in a row.
     ///
     /// Reads only admissions `run_id` made, in admission order, so an earlier
-    /// drain's history never trips a new one.
+    /// drain's history never trips a new one. A claim closed obsolete — the
+    /// owner had already ended it — says nothing about this executor, so it
+    /// neither extends nor resets the streak.
     pub(crate) fn consecutive_failed_settlements(
         &self,
         destination: &PullDestination,
@@ -204,6 +341,7 @@ impl PullDrain<'_> {
                 record.destination == *destination
                     && record.request.run_context.run_id == run_id
                     && record.phase == LocalPullPhase::Settled
+                    && record.refusal.is_none()
             })
             .rev()
             .take_while(|record| matches!(record.settlement, Some(ClaimMutation::Fail(_))))
@@ -273,10 +411,10 @@ impl PullDrain<'_> {
             record = match record.phase {
                 LocalPullPhase::Requested => self.request(&record)?,
                 LocalPullPhase::Claimed => self.update(&record, LocalPullMutation::CreateLeaf)?,
-                LocalPullPhase::Created => {
-                    self.peer.bind(&record)?;
-                    self.update(&record, LocalPullMutation::Bound)?
-                }
+                LocalPullPhase::Created => match self.try_bind(&record)? {
+                    Bind::Bound(bound) => *bound,
+                    Bind::Refused(refusal) => return self.close_refused_bind(&record, refusal),
+                },
                 LocalPullPhase::Bound => {
                     record = self.update(&record, LocalPullMutation::LaunchIntent)?;
                     if let Err(error) = self.launcher.launch(&record) {
@@ -291,9 +429,14 @@ impl PullDrain<'_> {
                     }
                     self.update(&record, LocalPullMutation::Launched)?
                 }
-                LocalPullPhase::Launching => {
-                    return Err(OrbitError::JobValidation("claimed leaf launch is uncertain; deliberate recovery is required, never generic resume".into()));
-                }
+                // A terminal leaf ended whatever the launch did, so its failure
+                // is recorded; a leaf that may still be live is not restarted.
+                LocalPullPhase::Launching => match self.settle_terminal_leaf(&record)? {
+                    Some(settling) => settling,
+                    None => {
+                        return Err(OrbitError::JobValidation("claimed leaf launch is uncertain; deliberate recovery is required, never generic resume".into()));
+                    }
+                },
                 LocalPullPhase::Launched => match self.settle_terminal_leaf(&record)? {
                     Some(settling) => settling,
                     None => return Ok(true),
@@ -310,34 +453,48 @@ impl PullDrain<'_> {
     ///
     /// `record` is advanced in place, so after an error it still shows how far
     /// the admission got. Never requests new work or launches a leaf: a
-    /// `Launching` record stays for deliberate recovery, a live leaf is left
-    /// to settle itself, and under [`SettleScope::Deliver`] an admission that
-    /// has not launched yet is left to the drain that owns it.
+    /// `Launching` record whose leaf is still live stays for deliberate
+    /// recovery, a live leaf is left to settle itself, and under
+    /// [`SettleScope::Deliver`] an admission that has not launched yet is left
+    /// to the drain that owns it.
+    ///
+    /// Under [`SettleScope::Abandon`], `no_live_drain` is asked again before
+    /// each step that would end unlaunched work. Delivery can block for the
+    /// routed timeout, so a drain that started since the pass read the live
+    /// drains must not have a queued leaf cancelled under it.
     pub(crate) fn carry_settlement(
         &self,
         record: &mut LocalPullAdmission,
         scope: SettleScope,
+        no_live_drain: &dyn Fn(&LocalPullAdmission) -> bool,
     ) -> Result<(), OrbitError> {
-        let abandon = scope == SettleScope::Abandon;
+        let abandon =
+            |record: &LocalPullAdmission| scope == SettleScope::Abandon && no_live_drain(record);
         loop {
             let next = match record.phase {
-                LocalPullPhase::Idle
-                | LocalPullPhase::Settled
-                | LocalPullPhase::Refused
-                | LocalPullPhase::Launching => return Ok(()),
+                LocalPullPhase::Idle | LocalPullPhase::Settled | LocalPullPhase::Refused => {
+                    return Ok(());
+                }
                 LocalPullPhase::Settling => self.deliver(record)?,
-                LocalPullPhase::Launched => match self.settle_terminal_leaf(record)? {
-                    Some(settling) => settling,
-                    None => return Ok(()),
-                },
-                LocalPullPhase::Created | LocalPullPhase::Bound => {
+                LocalPullPhase::Launched | LocalPullPhase::Launching => {
                     match self.settle_terminal_leaf(record)? {
                         Some(settling) => settling,
-                        None if abandon => self.abandon_queued_leaf(record)?,
                         None => return Ok(()),
                     }
                 }
-                LocalPullPhase::Claimed if abandon => self.record_settlement(
+                LocalPullPhase::Created | LocalPullPhase::Bound => {
+                    match self.settle_terminal_leaf(record)? {
+                        Some(settling) => settling,
+                        None if abandon(record) => {
+                            match self.abandon_queued_leaf(record, &abandon)? {
+                                Some(settling) => settling,
+                                None => return Ok(()),
+                            }
+                        }
+                        None => return Ok(()),
+                    }
+                }
+                LocalPullPhase::Claimed if abandon(record) => self.record_settlement(
                     record,
                     ClaimMutation::Fail(ClaimEvidence {
                         summary: Some(format!(
@@ -353,7 +510,7 @@ impl PullDrain<'_> {
                 // receipt if one was committed, so its claim is ended too. With
                 // none, nothing is held on the owner; a later drain for this
                 // owner re-sends the same ID and carries whatever it finds.
-                LocalPullPhase::Requested if abandon => match self
+                LocalPullPhase::Requested if abandon(record) => match self
                     .peer
                     .lookup(&record.destination, &record.request.request_id)?
                 {
@@ -395,33 +552,91 @@ impl PullDrain<'_> {
         self.record_settlement(&record, settlement).map(Some)
     }
 
-    /// End a cancelled drain's queued leaf and settle its claim.
+    /// End a cancelled drain's queued leaf and settle its claim. `record` is
+    /// advanced to its bound form in place. `None` when `may_abandon` says,
+    /// after the bind that may have blocked, that a live drain now carries the
+    /// admission: its queued leaf is left alone.
     fn abandon_queued_leaf(
         &self,
-        record: &LocalPullAdmission,
-    ) -> Result<LocalPullAdmission, OrbitError> {
-        let record = self.ensure_bound(record)?;
-        self.launcher.cancel_queued(&record)?;
-        self.settle_terminal_leaf(&record)?.ok_or_else(|| {
-            OrbitError::JobValidation(
-                "the queued leaf of a cancelled drain did not terminalize when cancelled".into(),
-            )
-        })
+        record: &mut LocalPullAdmission,
+        may_abandon: &dyn Fn(&LocalPullAdmission) -> bool,
+    ) -> Result<Option<LocalPullAdmission>, OrbitError> {
+        *record = self.ensure_bound(record)?;
+        if !may_abandon(record) {
+            return Ok(None);
+        }
+        self.launcher.cancel_queued(record)?;
+        self.settle_terminal_leaf(record)?
+            .ok_or_else(|| {
+                OrbitError::JobValidation(
+                    "the queued leaf of a cancelled drain did not terminalize when cancelled"
+                        .into(),
+                )
+            })
+            .map(Some)
     }
 
     /// Bind a `Created` admission's leaf on the owner. Binding is idempotent:
     /// a replay returns the recorded outcome and never substitutes a run. An
-    /// owner refusal is left to settlement, which reconciles it against the
-    /// owner's receipt; a lost or uncertain delivery is returned.
+    /// owner refusal is reported as [`Bind::Refused`]; a lost or uncertain
+    /// delivery is returned.
+    fn try_bind(&self, record: &LocalPullAdmission) -> Result<Bind, OrbitError> {
+        match self.peer.bind(record) {
+            Ok(()) => self
+                .update(record, LocalPullMutation::Bound)
+                .map(|bound| Bind::Bound(Box::new(bound))),
+            Err(error) if is_owner_refusal(&error) => Ok(Bind::Refused(error)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// [`Self::try_bind`] for a settle-only pass: a `Created` admission the
+    /// owner refuses to bind is returned as it was and left to settlement,
+    /// which reconciles the refusal against the owner's receipt.
     fn ensure_bound(&self, record: &LocalPullAdmission) -> Result<LocalPullAdmission, OrbitError> {
         if record.phase != LocalPullPhase::Created {
             return Ok(record.clone());
         }
-        match self.peer.bind(record) {
-            Ok(()) => self.update(record, LocalPullMutation::Bound),
-            Err(error) if is_owner_refusal(&error) => Ok(record.clone()),
-            Err(error) => Err(error),
+        match self.try_bind(record)? {
+            Bind::Bound(bound) => Ok(*bound),
+            Bind::Refused(_) => Ok(record.clone()),
         }
+    }
+
+    /// End a `Created` admission whose bind the owner refused — an operator
+    /// revoked or recovered the claim while the bind response was lost, say.
+    ///
+    /// Retrying the bind would be refused on every pass, leaving the record
+    /// `Created` and holding its slot forever, so its failure is recorded and
+    /// delivered like any other. Delivery reconciles against the owner's
+    /// receipt: a claim the owner has already ended closes the record
+    /// obsolete, and settling it fails the never-launched leaf so nothing can
+    /// start it. A claim the owner still holds keeps the settlement pending
+    /// (an operator revokes or recovers it on the owner to release the slot).
+    /// The refusal is returned either way, so this pass admits nothing
+    /// further against an owner that is refusing.
+    fn close_refused_bind(
+        &self,
+        record: &LocalPullAdmission,
+        refusal: OrbitError,
+    ) -> Result<bool, OrbitError> {
+        tracing::warn!(
+            target: "orbit.core.pull",
+            request_id = %record.request.request_id,
+            leaf = record.leaf_run_id.as_deref().unwrap_or("-"),
+            %refusal,
+            "the owner refused to bind a claimed leaf; ending the claim without launching it",
+        );
+        let settlement = ClaimMutation::Fail(ClaimEvidence {
+            summary: Some(format!(
+                "Outcome: failed\nowner refused bind: {refusal}; the leaf was never launched, \
+                 so nothing ran."
+            )),
+            ..Default::default()
+        });
+        let settling = self.record_settlement(record, settlement)?;
+        self.deliver(&settling)?;
+        Err(refusal)
     }
 
     /// Record `settlement` as this admission's pending settlement.

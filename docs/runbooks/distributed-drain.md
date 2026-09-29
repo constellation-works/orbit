@@ -254,10 +254,12 @@ ORBIT_OPERATOR=1 orbit tool run orbit.drain.receipt.lookup --input '{
 ```
 
 Idle receipts compact to permanent tombstones in v1. Unsettled claims keep
-full receipts. Do not delete request rows by age. At a 30-second idle poll,
-one drain leaves 2,880 request identities per day even after compaction. Stop
-a refill pass after the first idle response; the next poll uses a **new**
-request ID.
+full receipts. Do not delete request rows by age. At the shipped 60-second
+idle poll (`idle_sleep_seconds`), one drain leaves 1,440 request identities per
+day even after compaction. Stop a refill pass after the first idle response; the
+next poll uses a **new** request ID. The follower's own copy is bounded: when it
+allocates a new request it prunes its idle and refused rows to the newest
+10,000 (about a week of one drain's polls). Settled claims are never pruned.
 
 ### 8. Start the follower's pull drain
 
@@ -489,6 +491,17 @@ follower or `orbit job resume`:
 
 - Approval records one immutable candidate-scoped authorization and one
   landing-start request, and it does not merge. It carries the exact candidate
+The same applies to a handoff the owner will deterministically never accept:
+for example, the owner refuses the leaf's bind or its settlement while it still
+holds the claim as `claimed` or `running`. Every pass reports the refusal, the
+record stays `settling` and keeps its slot, and `orbit run auto --stop` does not
+clear it. The escape is on the owner: revoke or recover the claim from the
+owner's dashboard (**Recover claim → blocked** or **→ backlog**). The next pass
+on the follower, whether a drain iteration or `orbit run auto --stop`, looks the
+claim up, sees it has ended, and closes the record `closed_obsolete`, which
+frees the slot. A claim whose bind the owner refuses before the leaf ever
+launched closes the same way: the leaf is failed and never starts.
+
   and base commits you were shown, so a stale page is refused with
   `stale_claim` rather than approving whatever the owner now holds. Retries of
   the same request ID replay that decision instead of creating a second grant.

@@ -3,10 +3,10 @@
 //! Each call carries every earlier admission forward — retry, bind, launch,
 //! settle — and, while the window is open and the owner would admit this
 //! executor, tops the free slots up with new pull requests. It never fails the
-//! drain for an owner that is unreachable or refusing: that is reported in the
-//! output and the next iteration tries again, because the settlements of work
-//! already running must keep flowing whatever the owner currently says about
-//! new work.
+//! drain for an owner that is unreachable or refusing, nor for a local store
+//! read that fails: that is reported in the output and the next iteration tries
+//! again, because the settlements of work already running must keep flowing
+//! whatever the owner currently says about new work.
 //!
 //! The drain outlives its window. `unsettled` counts admissions that still hold
 //! a slot, and the job loop runs until the window has closed *and* that count
@@ -90,14 +90,27 @@ pub(crate) fn pull_refill(
     let host_shutdown = runtime.scheduled_host_shutdown();
     let mut admitted = 0;
     let mut refusal = None;
-    let mut error = None;
+    let mut error: Option<String> = None;
     // An already open breaker skips the probe; `refill` rechecks it after
     // reconciling, since settling a newly failed leaf can open it mid-pass.
-    let breaker_open = drain
-        .consecutive_failed_settlements(&destination, &run_id)
-        .map_err(|failure| failed(failure.to_string()))?
-        >= CONSECUTIVE_FAILURE_BREAKER;
-    let mut admitting = !window_expired && host_shutdown.is_none() && !breaker_open;
+    // A streak that cannot be read admits nothing: the drain reports it and
+    // tries again next iteration.
+    let mut consecutive_failures = match drain.consecutive_failed_settlements(&destination, &run_id)
+    {
+        Ok(count) => Some(count),
+        Err(failure) => {
+            error = Some(failure.to_string());
+            None
+        }
+    };
+    let breaker_open =
+        consecutive_failures.is_some_and(|count| count >= CONSECUTIVE_FAILURE_BREAKER);
+    let mut admitting = !window_expired
+        && host_shutdown.is_none()
+        && !breaker_open
+        && consecutive_failures.is_some();
+    // Whether `refill` ran, and so already reconciled this pass.
+    let mut refilled = false;
     if admitting {
         match probe(runtime, &transport, &destination) {
             Ok(ProbeVerdict {
@@ -117,9 +130,11 @@ pub(crate) fn pull_refill(
                     ship,
                 };
                 let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
-                match drain.refill(&destination, &template, ceiling) {
-                    Ok(count) => admitted = count,
-                    Err(failure) => error = Some(failure.to_string()),
+                let pass = drain.refill_pass(&destination, &template, ceiling);
+                refilled = true;
+                admitted = pass.admitted;
+                if let Some(failure) = pass.error {
+                    error = Some(failure.to_string());
                 }
             }
             Ok(verdict) => {
@@ -132,27 +147,37 @@ pub(crate) fn pull_refill(
             Err(failure) => error = Some(failure.to_string()),
         }
     }
-    // Refill already reconciled when it ran; otherwise reconcile here so
+    // Refill reconciles first, so when it ran it has already tried every
+    // pending admission, failed or not. Otherwise reconcile here so
     // settlements reach the owner even while it refuses new work.
-    if (!admitting || refusal.is_some() || (error.is_some() && admitted == 0))
-        && let Err(failure) = drain.reconcile_pending(&destination)
-    {
+    if !refilled && let Err(failure) = drain.reconcile_pending(&destination) {
         error.get_or_insert(failure.to_string());
     }
     // Count after this pass's settlements, so a breaker that opened during it
     // is reported now rather than on the next poll.
-    let consecutive_failures = drain
-        .consecutive_failed_settlements(&destination, &run_id)
-        .map_err(|failure| failed(failure.to_string()))?;
+    match drain.consecutive_failed_settlements(&destination, &run_id) {
+        Ok(count) => consecutive_failures = Some(count),
+        Err(failure) => {
+            error.get_or_insert(failure.to_string());
+        }
+    }
+    let consecutive_failures = consecutive_failures.unwrap_or(0);
     let breaker_open = consecutive_failures >= CONSECUTIVE_FAILURE_BREAKER;
     admitting &= !breaker_open;
-    let unsettled = drain
-        .unsettled(&destination)
-        .map_err(|failure| failed(failure.to_string()))?;
-    let done = window_expired && unsettled == 0;
+    // An unreadable count is not zero: the drain must not finish while it
+    // cannot tell whether a settlement is still owed.
+    let unsettled = match drain.unsettled(&destination) {
+        Ok(count) => Some(count),
+        Err(failure) => {
+            error.get_or_insert(failure.to_string());
+            None
+        }
+    };
+    let unsettled_holding = unsettled.is_none_or(|count| count > 0);
+    let done = window_expired && !unsettled_holding;
     let sleep_seconds = if admitted > 0 {
         0
-    } else if unsettled > 0 || error.is_some() {
+    } else if unsettled_holding || error.is_some() {
         poll
     } else {
         idle
