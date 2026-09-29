@@ -415,6 +415,23 @@ Custom and workspace override activities retain their existing
 forwarded to nested Codex MCP sessions; a missing marker continues to select
 the legacy allowlist. The OS sandbox remains the containment boundary.
 
+## Mask well-known credential locations under Linux Bubblewrap
+
+**Recorded:** 2026-09-29
+**Paths:** `crates/orbit-exec/src/credential_paths.rs`, `crates/orbit-exec/src/linux_sandbox/credentials.rs`, `crates/orbit-exec/src/macos_sandbox/compile.rs`
+
+### Context
+The macOS profile denies reads of `~/.ssh`, `~/.aws`, `~/.config/gh`, keychains, browser profiles and cargo publish tokens. The Linux backend mounts `/` read-only and, being a write-confinement backend, hid none of them, so a confined worker could read every credential its account could. Nothing recorded that as intent: `read_delegated` named the broad host read surface, not these files. No sandboxed flow needs them either. Commit, push and PR creation run in the unsandboxed coordinator, and a claimed leaf returns its result through step output because the sandbox already denies `~/.ssh` on macOS.
+
+### Decision
+One platform-neutral list in `orbit-exec` is the single source of truth. The SBPL compiler emits each entry as a read deny, the brokered plugin backend reads it as exclusions, and the Linux plan masks each existing entry after every other mount: `--tmpfs` for a directory, `--ro-bind /dev/null` for a file. Absent paths are skipped. A masked path that is reachable through a second mount, or that contains a path the plan grants, refuses the plan instead of starting with the mask incomplete.
+
+### Consequences
+- A Linux worker can no longer read the operator's SSH keys, cloud credentials, `gh` token or cargo publish token; SSH-authenticated `git` and authenticated `gh` do not work inside a confined worker, as on macOS.
+- Adding a credential location is a one-line change that both platforms pick up.
+- Cost: a host that aliases a credential directory (for example a second bind mount of `$HOME`) fails dispatch with a named path until the alias is removed or the executor sandbox is explicitly turned off.
+- Reads outside this list stay delegated; general read-allowlist parity on Linux is still undecided.
+
 ## Task References
 
 - [T20260328-221810] — subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.

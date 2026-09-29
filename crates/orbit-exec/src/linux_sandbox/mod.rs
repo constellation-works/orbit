@@ -2,11 +2,16 @@
 //!
 //! The backend deliberately keeps the host filesystem readable and materializes
 //! `ResolvedFsProfile::modify` as ordered bind mounts. It is therefore honest
-//! write confinement, not a general read-policy implementation. The one read
-//! boundary is an explicit mask: named directories hidden behind a read-only
-//! stand-in (see [`LinuxBwrapMask`]).
+//! write confinement, not a general read-policy implementation. It has two
+//! read boundaries, both masks emitted after every other mount: the fixed
+//! well-known credential locations (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo
+//! publish tokens, ...) that the macOS profile also denies, shared through
+//! [`crate::credential_paths`], and an explicit caller-named mask of
+//! directories hidden behind a read-only stand-in (see [`LinuxBwrapMask`]).
+//! Every other host read stays delegated.
 
 mod argv;
+mod credentials;
 mod mask;
 mod mounts;
 mod probe;
@@ -51,10 +56,12 @@ pub fn existing_glob_matches(rules: &[String]) -> Result<BTreeSet<PathBuf>, Orbi
     expand_rules(rules)
 }
 
+use crate::credential_paths::CredentialReadDeny;
 use argv::base_namespace_args;
-use mask::append_mask_mounts;
+use credentials::{append_credential_masks, host_credential_denies, host_mounts};
+use mask::{MountEntry, append_mask_mounts};
 #[cfg(test)]
-use mask::{MountEntry, host_alias, parse_mountinfo, plan_alias};
+use mask::{host_alias, parse_mountinfo, plan_alias};
 use mounts::{
     append_cargo_download_cache_mounts, append_stable_toolchain_mounts, cargo_home_dir,
     cwd_is_writable_root, profile_grants_write, push_mount,

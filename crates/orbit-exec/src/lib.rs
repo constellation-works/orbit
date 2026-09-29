@@ -45,6 +45,7 @@
 //! # Dependency direction
 //! `orbit-types` → `orbit-exec` → orbit-tools
 
+pub mod credential_paths;
 pub mod linux_landlock;
 pub mod linux_sandbox;
 pub mod macos_sandbox;
@@ -55,6 +56,7 @@ pub mod runner;
 pub mod sandbox;
 mod supervision;
 
+pub use credential_paths::default_credential_read_denies;
 pub use linux_landlock::{
     HOST_READ_ENV_VARS, LandlockBoundary, LandlockGrant, LandlockPathGrant, LandlockProbeOutcome,
     LandlockReadBoundary, MINIMUM_LANDLOCK_ABI, NETWORK_LANDLOCK_ABI, WRITE_LANDLOCK_ABI,
@@ -74,10 +76,9 @@ pub use linux_sandbox::{
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
     append_macos_network_access, append_macos_read_boundary, append_macos_subpath_mask,
-    claude_state_dir_from_env, compile_macos_sandbox_profile, default_credential_read_denies,
-    grok_state_dir_from_env, macos_login_keychain_access, sandbox_exec_available,
-    sandbox_exec_path, sandbox_exec_program_for_audit, sandbox_exec_unavailable_message,
-    spawn_under_macos_sandbox,
+    claude_state_dir_from_env, compile_macos_sandbox_profile, grok_state_dir_from_env,
+    macos_login_keychain_access, sandbox_exec_available, sandbox_exec_path,
+    sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 pub use path_identity::{create_write_root, lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};

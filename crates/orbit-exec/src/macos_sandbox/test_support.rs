@@ -182,7 +182,7 @@ fn is_default_write_allow_root(path: &Path) -> bool {
         let codex_home = std::env::var_os("CODEX_HOME");
         let claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
         let grok_home = std::env::var_os("GROK_HOME");
-        if let Some(home) = super::provider_dirs::non_empty_env_path(home.as_deref()) {
+        if let Some(home) = crate::credential_paths::non_empty_env_path(home.as_deref()) {
             roots.push(home.join("Library/Caches"));
             roots.push(home.join(".orbit/state/logs"));
         }

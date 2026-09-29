@@ -5,6 +5,10 @@ use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::Provider;
 
+use crate::credential_paths::{
+    USER_KEYCHAINS_SUBPATH, cargo_home_dir, credential_read_denies, non_empty_env_path,
+};
+
 /// Compile a [`ResolvedFsProfile`] into SBPL text suitable for
 /// `sandbox-exec -f`.
 ///
@@ -160,7 +164,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     out.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
     out.push_str("(allow file-write* (subpath \"/private/var/folders\"))\n");
     out.push_str("(allow file-write* (subpath \"/dev\"))\n");
-    if let Some(home) = super::provider_dirs::non_empty_env_path(home) {
+    if let Some(home) = non_empty_env_path(home) {
         let home = home.display().to_string();
         out.push_str(&format!(
             "(allow file-write* (subpath \"{}/Library/Caches\"))\n",
@@ -359,7 +363,7 @@ pub fn macos_login_keychain_access(
     if !provider_reads_macos_login_keychain(provider) {
         return MacosLoginKeychainAccess::DeniedByDefaultPolicy;
     }
-    let Some(home) = super::provider_dirs::non_empty_env_path(home) else {
+    let Some(home) = non_empty_env_path(home) else {
         return MacosLoginKeychainAccess::HomeUnresolved;
     };
     let keychains = home.join(USER_KEYCHAINS_SUBPATH);
@@ -405,7 +409,7 @@ fn emit_provider_credential_read_reallow(provider: &str, home: Option<&OsStr>, o
     if !provider_reads_macos_login_keychain(provider) {
         return;
     }
-    let Some(home) = super::provider_dirs::non_empty_env_path(home) else {
+    let Some(home) = non_empty_env_path(home) else {
         return;
     };
     let keychains = crate::physical_with_missing_tail(&home.join(USER_KEYCHAINS_SUBPATH));
@@ -415,10 +419,9 @@ fn emit_provider_credential_read_reallow(provider: &str, home: Option<&OsStr>, o
     ));
 }
 
-/// HOME-relative path of the per-user keychain directory. Shared by the default
-/// deny and the provider re-allow so the two clauses cannot drift.
-const USER_KEYCHAINS_SUBPATH: &str = "Library/Keychains";
-
+/// Emit the shared credential read denies as SBPL clauses. The list itself
+/// lives in [`crate::credential_paths`] so Linux Bubblewrap masks the same
+/// locations.
 fn emit_default_credential_read_denies(
     home: Option<&OsStr>,
     cargo_home: Option<&OsStr>,
@@ -436,79 +439,6 @@ fn emit_default_credential_read_denies(
     }
 }
 
-/// One well-known credential location every confined child is denied.
-struct CredentialReadDeny {
-    path: PathBuf,
-    /// A single file beside granted siblings rather than a whole tree.
-    file: bool,
-}
-
-/// The default credential read denies, in the order the SBPL compiler emits
-/// them. One list serves both the agent profile and a brokered plugin
-/// backend ([`default_credential_read_denies`]), so the two cannot drift.
-fn credential_read_denies(
-    home: Option<&OsStr>,
-    cargo_home: Option<&OsStr>,
-) -> Vec<CredentialReadDeny> {
-    let mut denies = Vec::new();
-    if let Some(home) = super::provider_dirs::non_empty_env_path(home) {
-        let home = home.display().to_string();
-        for suffix in [
-            ".ssh",
-            ".aws",
-            ".config/gh",
-            USER_KEYCHAINS_SUBPATH,
-            "Library/Application Support/Google/Chrome",
-            "Library/Application Support/Chromium",
-            "Library/Application Support/BraveSoftware/Brave-Browser",
-            "Library/Application Support/Firefox",
-        ] {
-            denies.push(CredentialReadDeny {
-                path: PathBuf::from(format!("{home}/{suffix}")),
-                file: false,
-            });
-        }
-    }
-
-    // Cargo's crates.io publish token. It is a file at the `$CARGO_HOME` root
-    // rather than inside a granted subdirectory, so it needs its own clause:
-    // `registry`/`git` are writable (see
-    // [`emit_cargo_download_cache_write_allows`]) while the token beside them
-    // is unreadable. Both spellings are denied — cargo reads the legacy
-    // extensionless `credentials` as well as `credentials.toml`. [ORB-12469]
-    if let Some(cargo_home) = cargo_home_dir(home, cargo_home) {
-        for name in CARGO_CREDENTIAL_FILE_NAMES {
-            denies.push(CredentialReadDeny {
-                path: PathBuf::from(format!("{}/{name}", cargo_home.display())),
-                file: true,
-            });
-        }
-    }
-
-    for path in ["/Library/Keychains", "/System/Library/Keychains"] {
-        denies.push(CredentialReadDeny {
-            path: PathBuf::from(path),
-            file: false,
-        });
-    }
-    denies
-}
-
-/// The well-known credential locations the SBPL compiler denies every
-/// confined child, resolved from this process's `HOME` and `CARGO_HOME`.
-///
-/// Exposed for a confinement that is not compiled from an agent profile — a
-/// plugin backend the host spawns on an agent's behalf — so it carries the
-/// same credential denies on either platform.
-pub fn default_credential_read_denies() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME");
-    let cargo_home = std::env::var_os("CARGO_HOME");
-    credential_read_denies(home.as_deref(), cargo_home.as_deref())
-        .into_iter()
-        .map(|deny| deny.path)
-        .collect()
-}
-
 /// Whether the resolved profile grants any write at all. A profile whose
 /// `modify` rules are all negated confines the CLI to a read-only filesystem,
 /// and no convenience grant may quietly turn it into a writer.
@@ -516,23 +446,11 @@ fn profile_grants_write(rules: &ResolvedFsProfile) -> bool {
     rules.modify.iter().any(|rule| !rule.starts_with('!'))
 }
 
-/// Resolve Cargo's home directory the way cargo itself does: `$CARGO_HOME`
-/// when the operator admitted it into the child environment, otherwise the
-/// documented `$HOME/.cargo` default. `None` when neither resolves, in which
-/// case no cargo clause is emitted at all.
-fn cargo_home_dir(home: Option<&OsStr>, cargo_home: Option<&OsStr>) -> Option<PathBuf> {
-    super::provider_dirs::non_empty_env_path(cargo_home)
-        .or_else(|| super::provider_dirs::non_empty_env_path(home).map(|path| path.join(".cargo")))
-}
-
 /// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
 const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
 
 /// `$CARGO_HOME` lock files a sandboxed build must be able to create and take.
 const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
-
-/// Cargo credential file names, both spellings, denied for read.
-const CARGO_CREDENTIAL_FILE_NAMES: &[&str] = &["credentials", "credentials.toml"];
 
 /// Allow writes inside Cargo's shared download caches.
 ///

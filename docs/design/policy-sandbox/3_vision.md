@@ -41,7 +41,9 @@ the seam where macOS turns an activity's resolved `FsProfile` into an outer proc
 
 The shipped first version is deliberately a **write-confinement backend**, not a claim of byte-for-byte
 SBPL parity. It materially improves today's bare Linux execution while keeping unsupported policy
-semantics visible instead of silently calling them enforced.
+semantics visible instead of silently calling them enforced. The one read boundary it does carry is the
+shared list of well-known credential locations (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish
+tokens), masked after every other mount so the two platforms hide the same secrets.
 
 #### Backend and availability contract
 
