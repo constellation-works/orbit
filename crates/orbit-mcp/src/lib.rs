@@ -93,7 +93,7 @@ pub trait McpHost: Send + Sync + 'static {
 ///
 /// Resumes a session handed over by a previous image of this process, and
 /// returns [`StdioExit::HandOver`] when this one should hand over in turn;
-/// see [`stdio_session`](crate::stdio_session).
+/// see [`stdio_session`].
 pub async fn serve_stdio_with_context(
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
