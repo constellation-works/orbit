@@ -67,6 +67,9 @@ pub struct DrainAdmissionsStopResult {
     /// and the unlaunched admissions of drains that are no longer running
     /// ended. Empty on a workspace that never pulled.
     pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
+    /// The owner machine when this checkout is a replica, so a report can say
+    /// "no pull drain" rather than "no auto coordinator" there.
+    pub replica_owner_machine_id: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -111,6 +114,7 @@ impl OrbitRuntime {
                 outcome: "idle",
                 coordinators: Vec::new(),
                 pull_settlements: self.settle_pending_pulls(),
+                replica_owner_machine_id: self.coordination_write_owner().map(str::to_owned),
             });
         }
 
@@ -166,6 +170,7 @@ impl OrbitRuntime {
             outcome,
             coordinators: changes,
             pull_settlements: self.settle_pending_pulls(),
+            replica_owner_machine_id: self.coordination_write_owner().map(str::to_owned),
         })
     }
 

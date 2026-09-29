@@ -18,7 +18,7 @@ use super::steps::{
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -90,8 +90,15 @@ pub(crate) fn run_show_payload(
     let catalog_layers = runtime
         .catalog_reference_layers(&run.job_id)
         .unwrap_or_default();
+    // A claimed follower leaf names the owner task and claim it works for and
+    // whether its outcome reached the owner; every other run has none.
+    let pull_claim = runtime.pull_leaf_claim(&run.run_id).unwrap_or_else(|error| {
+        tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull admission unreadable; run shown without its claim");
+        None
+    });
     let doc = json!({
         "run": run_projection,
+        "pull_claim": pull_claim,
         "catalog_layers": catalog_layers
             .iter()
             .map(CatalogReferenceLayer::to_json)
@@ -127,12 +134,17 @@ pub(crate) fn run_show_payload(
             state.updated_at.to_rfc3339(),
         ));
     }
-    header.push_str(&activity_provenance_lines(&doc["run"]["activity_provenance"]).join("\n"));
-    if doc["run"]["activity_provenance"]
-        .as_array()
-        .is_some_and(|values| !values.is_empty())
-    {
+    if let Some(claim) = &pull_claim {
+        header.push_str(&format!(
+            "\n{} {}",
+            crate::output::color::bold("Claim:"),
+            claim.describe()
+        ));
+    }
+    let provenance_lines = activity_provenance_lines(&doc["run"]["activity_provenance"]);
+    if !provenance_lines.is_empty() {
         header.push('\n');
+        header.push_str(&provenance_lines.join("\n"));
     }
     header.push_str(&catalog_layer_lines(&catalog_layers));
     header.push_str(&live_provider_process_lines(&provider_processes));

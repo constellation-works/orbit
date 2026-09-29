@@ -235,7 +235,8 @@ pub fn assign_checkout_role(
         WorkspaceCheckoutRole::Owner => {
             if owner_machine_id.is_some() {
                 return Err(OrbitError::WorkspaceError(format!(
-                    "workspace '{workspace_id}' owner role does not take an owner machine_id"
+                    "workspace '{workspace_id}' owner role does not take an owner machine_id; drop \
+                     `--owner` (only `replica` names an owner)"
                 )));
             }
             if let Some(local_machine_id) = local_machine_id {
@@ -262,14 +263,22 @@ pub fn assign_checkout_role(
         WorkspaceCheckoutRole::Replica => {
             let owner = owner_machine_id.ok_or_else(|| {
                 OrbitError::WorkspaceError(format!(
-                    "workspace '{workspace_id}' replica role requires an owner machine_id"
+                    "workspace '{workspace_id}' replica role requires an owner machine_id; pass \
+                     `--owner <machine_id>` with the owner's `machine.id` (run `orbit config get \
+                     machine.id` on the owner host)"
                 ))
             })?;
-            validate_machine_id(owner)?;
+            validate_machine_id(owner).map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "owner machine_id '{owner}' is not usable ({error}); pass the owner host's \
+                     `machine.id` as `--owner <machine_id>` (`orbit config get machine.id` there)"
+                ))
+            })?;
             if local_machine_id == Some(owner) {
                 return Err(OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' cannot declare the local machine '{owner}' as \
-                     its replica owner"
+                     its replica owner; `--owner` must name the other host that owns the \
+                     workspace (use the owner role on the owner's own checkout)"
                 )));
             }
             if let Some(existing_owner) = declared_owner.as_deref()
@@ -277,7 +286,10 @@ pub fn assign_checkout_role(
             {
                 return Err(OrbitError::WorkspaceError(format!(
                     "workspace '{workspace_id}' is already owned by machine '{existing_owner}'; \
-                     refusing to rebind it to '{owner}' while assigning a replica role"
+                     refusing to rebind it to '{owner}' while assigning a replica role. To demote \
+                     an owner checkout, run `ORBIT_OPERATOR=1 orbit workspace remove \
+                     {workspace_id}` (registry only; `.orbit` is kept), then `orbit workspace init \
+                     --role replica --owner {owner}`"
                 )));
             }
             if let Some(existing_owner) = registry.checkouts[checkout_index]

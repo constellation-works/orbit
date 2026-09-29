@@ -46,12 +46,21 @@ impl crate::OrbitRuntime {
         trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         ensure_distributed_mutation_available("orbit.workflow.auto --pull")?;
+        // Operator input that needs no owner is checked before the probe, so a
+        // typo costs no network round trip.
+        if request.max_active_leaf_runs == Some(0) {
+            return Err(OrbitError::InvalidInput(
+                "--concurrency must be at least 1".into(),
+            ));
+        }
         let destination = self.resolve_pull_destination(request.selector)?;
         if self.workflow_required_validation_commands().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "this host declares no `workflow.required_validation_commands`; a claimed leaf \
                  must run the owner's required validation, and an empty list fails every \
-                 handoff closed. Configure the same list the owner uses."
+                 handoff closed. Set the same list the owner uses (`orbit config get \
+                 workflow.required_validation_commands` there, then `orbit config set \
+                 workflow.required_validation_commands '<list>'` here)."
                     .into(),
             ));
         }
@@ -61,11 +70,6 @@ impl crate::OrbitRuntime {
                 .map_err(|error| OrbitError::Store(error.to_string()))?,
         });
         if let Some(ceiling) = request.max_active_leaf_runs {
-            if ceiling == 0 {
-                return Err(OrbitError::InvalidInput(
-                    "--concurrency must be at least 1".into(),
-                ));
-            }
             input["max_active_leaf_runs"] = json!(ceiling);
         }
         self.submit_pipeline_run_with_trigger(PULL_DRAIN_JOB, input, None, request.actor, trigger)
@@ -121,15 +125,26 @@ impl crate::OrbitRuntime {
                     .into(),
             )
         })?;
-        let report = transport.call(
-            selector,
-            "orbit.drain.probe",
-            json!({
-                "caller_version": owner_binary_version(),
-                "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-                "caller_review_policy": self.local_review_policy_label(),
-            }),
-        )?;
+        let report = transport
+            .call(
+                selector,
+                "orbit.drain.probe",
+                json!({
+                    "caller_version": owner_binary_version(),
+                    "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                    "caller_review_policy": self.local_review_policy_label(),
+                }),
+            )
+            .map_err(|error| match error {
+                // The selector parsed and names this replica's own owner, so
+                // the only thing missing is a route to that machine.
+                OrbitError::UnknownSelector(token) => OrbitError::UnknownSelector(format!(
+                    "{token}: this host has no destination for owner machine '{owner_machine}'; \
+                     add it to ~/.orbit/mcp-destinations.toml and check the selector against \
+                     federated orbit.workspace.list"
+                )),
+                other => other,
+            })?;
         let answered_as = report.get("owner_machine_id").and_then(Value::as_str);
         if answered_as != Some(owner_machine) {
             return Err(OrbitError::InvalidInput(format!(

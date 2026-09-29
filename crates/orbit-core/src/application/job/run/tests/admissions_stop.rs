@@ -209,3 +209,23 @@ fn a_finished_child_is_not_listed_as_remaining() {
         .expect("stop drain");
     assert!(result.coordinators[0].remaining_children.is_empty());
 }
+
+/// A replica's stop with nothing running must be recognisable as a replica's,
+/// so the CLI can say no pull drain is running instead of naming an owner-side
+/// coordinator this checkout never has.
+#[test]
+fn an_idle_stop_on_a_replica_names_the_owner_it_would_pull_from() {
+    let (_root, runtime) = test_runtime();
+    let owner_result = runtime
+        .stop_workspace_auto_admissions(request())
+        .expect("owner stop");
+    assert_eq!(owner_result.outcome, "idle");
+    assert_eq!(owner_result.replica_owner_machine_id, None);
+
+    let replica = runtime.with_coordination_write_owner(Some("hm_owner".to_string()));
+    let result = replica
+        .stop_workspace_auto_admissions(request())
+        .expect("replica stop");
+    assert_eq!(result.outcome, "idle");
+    assert_eq!(result.replica_owner_machine_id.as_deref(), Some("hm_owner"));
+}

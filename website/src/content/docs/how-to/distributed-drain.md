@@ -49,10 +49,17 @@ orbit workspace show
 orbit workspace role <workspace-id> replica --owner <owner-machine-id>
 ```
 
-`workspace role` reasserts the role; it is not a takeover, and a replica role
-always needs `--owner`. If both hosts were
+`workspace init` and `workspace role` both print the recorded role and owner (or
+the same fields with `--format json`), so you can confirm the replica before
+draining. `workspace role` reasserts the role; it is not a takeover, and a
+replica role always needs `--owner` (the owner's `machine.id`). A replica
+refuses `orbit run auto` and `orbit run ship` and points at `--pull`. If both hosts were
 already independent owners of the same repo, stop their drains, finish or
-export leftover work, then re-register. Move tasks with `orbit task export` /
+export leftover work, then demote the extra checkout: `workspace init` and
+`workspace role` refuse to rebind a registered owner, so run
+`ORBIT_OPERATOR=1 orbit workspace remove <workspace-id>` (registry only;
+`.orbit` stays) and repeat `workspace init --role replica --owner <owner-machine-id>`.
+Move tasks with `orbit task export` /
 `orbit task import` — do not copy the database.
 
 ## 2. Match binaries, crews, and review policy
@@ -96,7 +103,9 @@ forwarded over SSH are audit attribution, not credentials.
 From a session that reaches the **owner**. Both drain tools require an
 identified caller, `agent` or `operator`; a plain shell has neither, so set
 `ORBIT_OPERATOR=1` for a deliberate operator run (it is recorded in the audit
-trail):
+trail; an MCP session needs a server started with `--operator` instead). A
+replica checkout refuses these tools and names its owner: run them on the owner
+or through its federated selector.
 
 ```bash
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
@@ -130,7 +139,9 @@ same `workflow.required_validation_commands` the owner declares:
 orbit run auto --pull <owner-machine>/<ws_id> --for 8h --concurrency 3
 ```
 
-The selector is the owner's `selector` from federated discovery. The command
+The selector is the owner's `selector` from federated discovery; if this host
+has no destination for the owner the command says to add it to
+`~/.orbit/mcp-destinations.toml`. The command
 refuses before submitting anything unless this checkout is a replica of that
 owner and workspace and the owner's probe admits this executor. Each claim
 runs as a local leaf that implements, validates, pushes and opens a pull
@@ -139,7 +150,9 @@ task to `review`. Approve it on the owner's dashboard to land it.
 
 A leaf that fails before its handoff moves its task to `blocked` on the owner,
 with a summary naming the leaf run, the failed step and its error. The full
-diagnostic stays on the replica: `orbit run show <leaf-run>`. After three
+diagnostic stays on the replica: `orbit run show <leaf-run>`, whose `Claim:`
+line names the owner task and claim the leaf works for and whether its outcome
+has reached the owner (`pull_claim` in `--json`). After three
 consecutive claims settle as failures the drain stops requesting work
 (`circuit_open` in the iteration output) and only keeps settling. Fix the
 cause, move the blocked tasks back to `backlog` deliberately, and start a new
@@ -154,8 +167,10 @@ still hand off, and it delivers any settlement still waiting for the owner.
 `orbit run cancel <drain-run> --confirm` kills the coordinator instead. Claims
 it had not launched yet end as failures, and their tasks go to `blocked`;
 leaves already running deliver their own handoff or failure when they end. The
-command prints one line per admission under `Pull settlements`. Prefer `--stop`
-when you only want no new work.
+command prints one line per admission under `Pull settlements`; each line that
+leaves something to do says what (for example, rerun `orbit run auto --stop`
+once the owner answers, or recover a `launch_uncertain` claim on the owner's
+dashboard). Prefer `--stop` when you only want no new work.
 
 If the owner was unreachable when a leaf ended, its settlement stays recorded
 on the replica as `settling`. Run `orbit run auto --stop` in the replica

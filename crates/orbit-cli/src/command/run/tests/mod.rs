@@ -285,6 +285,47 @@ fn auto_stop_with_no_coordinator_is_idle() {
     .expect("idle stop succeeds");
 }
 
+/// On a replica the idle stop still runs its settle-only pass; the report says
+/// there is no pull drain and nothing pending rather than naming a
+/// coordinator that only an owner has.
+#[test]
+fn auto_stop_on_an_idle_replica_reports_no_pull_drain_and_json_stays_parseable() {
+    let runtime = OrbitRuntime::in_memory()
+        .expect("runtime")
+        .with_coordination_write_owner(Some("hm_owner".to_string()));
+    let output = super::auto::AutoCommand {
+        low_complexity_crews: None,
+        medium_complexity_crews: None,
+        hard_complexity_crews: None,
+        xhard_complexity_crews: None,
+        for_duration: None,
+        concurrency: None,
+        complete: false,
+        allow_crew: Vec::new(),
+        strict_worker_containment: false,
+        pull: None,
+        json: true,
+        claim_token: None,
+        stop: true,
+    }
+    .execute(&runtime)
+    .expect("idle replica stop succeeds");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("stop must return a payload");
+    };
+    let (doc, view) = payload.into_view();
+    assert_eq!(doc["outcome"], "idle");
+    assert_eq!(doc["pull_settlements"], serde_json::json!([]));
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("stop keeps a human view");
+    };
+    let crate::output::payload::Block::Text(text) = &blocks[0] else {
+        panic!("stop human view is prose");
+    };
+    assert!(text.contains("pull drain"), "{text}");
+    assert!(text.contains("No pull settlements pending"), "{text}");
+}
+
 #[test]
 fn parses_pull_drain_selector_and_rejects_owner_only_flags() {
     let command = parse_run(&[

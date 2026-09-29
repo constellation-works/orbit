@@ -244,7 +244,20 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
     });
     let settlement_lines = super::support::pull_settlement_lines(&result.pull_settlements);
     if result.coordinators.is_empty() {
-        let mut lines = vec!["No active auto coordinator in this workspace.".to_string()];
+        let replica = result.replica_owner_machine_id.is_some();
+        let mut lines = vec![
+            if replica {
+                "No active pull drain in this replica checkout."
+            } else {
+                "No active auto coordinator in this workspace."
+            }
+            .to_string(),
+        ];
+        if replica && settlement_lines.is_empty() {
+            // The settle-only pass still ran; saying it found nothing tells an
+            // operator flushing leftovers that there is nothing left.
+            lines.push("No pull settlements pending.".to_string());
+        }
         lines.extend(settlement_lines);
         return Ok(Payload::detail(doc, lines.join("\n")).into());
     }

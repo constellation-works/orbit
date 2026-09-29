@@ -926,6 +926,49 @@ fn invalid_replica_init_fails_before_workspace_artifacts_or_registry_mutation() 
     }
 }
 
+/// A refused replica declaration must name the flag that fixes it, and a
+/// malformed owner id must say where a valid one comes from.
+#[test]
+fn replica_init_refusals_name_the_owner_flag_and_where_to_find_the_id() {
+    for (role, owner, remedy) in [
+        (CliCheckoutRole::Replica, None, "--owner"),
+        (CliCheckoutRole::Owner, Some("hm_other"), "--owner"),
+        (CliCheckoutRole::Replica, Some("ssh:hub"), "machine.id"),
+        (CliCheckoutRole::Replica, Some("hm_local"), "--owner"),
+    ] {
+        let workspace = tempdir().expect("workspace tempdir");
+        let home = tempdir().expect("home tempdir");
+        let global = home.path().join(".orbit");
+        std::fs::create_dir_all(&global).expect("create global orbit");
+        std::fs::write(
+            global.join("config.toml"),
+            "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
+        )
+        .expect("write host identity");
+
+        let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+        let error = WorkspaceInitArgs {
+            name: Some("refused".to_string()),
+            base_branch: Some("agent-main".to_string()),
+            ship_mode: None,
+            role: Some(role),
+            owner: owner.map(str::to_string),
+            task_id_start: None,
+            mcp: false,
+            inject_agent_rules: false,
+            refresh_defaults: false,
+            force: false,
+        }
+        .execute_without_runtime(None)
+        .expect_err("refused declaration")
+        .to_string();
+        assert!(
+            error.contains(remedy),
+            "refusal for owner {owner:?} must name `{remedy}`: {error}"
+        );
+    }
+}
+
 #[test]
 fn workspace_list_and_show_report_effective_ship_mode() {
     let now = Utc::now();
