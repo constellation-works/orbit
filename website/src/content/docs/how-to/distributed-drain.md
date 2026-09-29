@@ -175,7 +175,9 @@ dashboard). Prefer `--stop` when you only want no new work.
 If the owner was unreachable when a leaf ended, its settlement stays recorded
 on the replica as `settling`. Run `orbit run auto --stop` in the replica
 checkout once the owner answers; it is safe to repeat and needs no active
-drain.
+drain. Nothing retries on a timer, so run `orbit doctor` on the replica to see
+whether any are waiting: its `pull-settlements` warning gives the count, the age
+of the oldest, and this same command.
 
 ## 7. Inspect claims; recover by hand
 

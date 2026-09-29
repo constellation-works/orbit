@@ -482,15 +482,22 @@ The settlement stays recorded on the follower as `settling`. Flush it with
 `orbit run auto --stop` in the replica checkout once the owner is reachable
 (safe to repeat, and it needs no active drain), or by starting the next
 drain. `orbit run cancel <drain-run> --confirm` on a drain that already ended
-does the same flush. Every line that leaves work for the operator says what to do
-next, and `launch_uncertain` still needs the deliberate recovery below.
+does the same flush. Nothing retries on a timer, so `orbit doctor` reports a
+`pull-settlements` warning while any recorded settlement is undelivered: how many
+wait, how long the oldest has, and `orbit run auto --stop` as the fix. The row
+is `ok` once they are delivered, and on a workspace that never pulled. Every line
+that leaves work for the operator says what to do next, and `launch_uncertain`
+still needs the deliberate recovery below.
 
 **Settlements an older binary stranded.** A binary before [ORB-13663] left a
 cancelled drain's finished leaves `settling` and its failed leaves
 `launched` with no settlement, and their owner claims `running`. After
 upgrading the follower, run `orbit run auto --stop` in its replica checkout.
 Delivered handoffs move their tasks to `review` on the owner, and the
-failures move theirs to `blocked`. Inspect first, read-only:
+failures move theirs to `blocked`. Inspect first: `orbit doctor` counts the
+recorded-but-undelivered (`settling`) settlements. It does not see a failed leaf
+that recorded no settlement (`launched`), so for a complete read-only list of
+everything still holding a slot, query the database:
 
 ```bash
 sqlite3 -readonly ~/.orbit/orbit.db "SELECT leaf_run_id,

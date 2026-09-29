@@ -39,7 +39,9 @@ use orbit_store::contracts::{
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::drain::{PullDrain, SettleScope, is_owner_transport_failure, leaf_failure_settlement};
 use crate::OrbitRuntime;
-use crate::application::distributed::{PULL_DRAIN_JOB, PullSettlementEntry};
+use crate::application::distributed::{
+    PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry,
+};
 
 impl OrbitRuntime {
     /// Record a terminal claimed leaf's settlement in its admission. Local
@@ -160,6 +162,35 @@ impl OrbitRuntime {
                 Vec::new()
             }
         }
+    }
+
+    /// Admissions whose outcome is recorded locally but not delivered to the
+    /// owner (`Settling`), with when the oldest was recorded.
+    ///
+    /// Read-only: it reads through the same schema-free path as
+    /// [`Self::settle_pending_pulls`], so a workspace that never pulled
+    /// reports nothing and keeps no pull tables. It contacts no owner.
+    pub fn pending_pull_settlements(&self) -> Result<PendingPullSettlements, OrbitError> {
+        let jobs = self.stores().jobs();
+        let mut summary = PendingPullSettlements::default();
+        for record in jobs.unsettled_local_pull_admissions()? {
+            if record.phase != LocalPullPhase::Settling {
+                continue;
+            }
+            summary.count += 1;
+            let recorded_at = record
+                .leaf_run_id
+                .as_deref()
+                .map(|leaf| jobs.get_job_run(leaf))
+                .transpose()?
+                .flatten()
+                .and_then(|run| run.finished_at);
+            summary.oldest_recorded_at = match (summary.oldest_recorded_at, recorded_at) {
+                (Some(oldest), Some(recorded)) => Some(oldest.min(recorded)),
+                (oldest, recorded) => oldest.or(recorded),
+            };
+        }
+        Ok(summary)
     }
 
     fn carry_settlements(&self, records: Vec<LocalPullAdmission>) -> Vec<PullSettlementEntry> {

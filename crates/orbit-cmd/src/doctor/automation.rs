@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use orbit_core::application::distributed::PendingPullSettlements;
 use orbit_core::application::health::artifact::ArtifactCondition;
 
 use super::*;
@@ -62,6 +63,73 @@ pub(super) fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorRe
         segments.join("; "),
         "For each named running run use `orbit job resume <run_id>`; for each named pending run use `orbit run cancel <run_id>`.".to_string(),
     )
+}
+
+/// Follower pull settlements recorded locally but never delivered to the
+/// owner. Nothing retries delivery on a timer, so the owner keeps the claim
+/// `running` until an operator runs a settle-only pass; this row is what makes
+/// that wait visible. A workspace that never pulled reports none.
+pub(super) fn doctor_check_pull_settlements(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    pull_settlements_finding(runtime.pending_pull_settlements(), chrono::Utc::now())
+}
+
+pub(super) fn pull_settlements_finding(
+    pending: Result<PendingPullSettlements, OrbitError>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> WorkspaceDoctorResult {
+    const CHECK: &str = "pull-settlements";
+    let pending = match pending {
+        Ok(pending) => pending,
+        Err(error) => {
+            return check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot inspect pull settlements: {error}"),
+            );
+        }
+    };
+    if pending.count == 0 {
+        return check(
+            CHECK,
+            WorkspaceDoctorStatus::Ok,
+            "no pull settlements are waiting to be delivered to an owner".to_string(),
+        );
+    }
+    let oldest = pending
+        .oldest_age(now)
+        .map(|age| format!(", the oldest waiting {}", format_age(age)))
+        .unwrap_or_default();
+    actionable_check(
+        CHECK,
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "{} pull settlement(s) recorded here but not delivered to the owner{oldest}; the \
+             owner still shows those claims as running and nothing retries on a timer",
+            pending.count
+        ),
+        "Run `orbit run auto --stop` once the owner is reachable to deliver them, then rerun \
+         `orbit doctor`."
+            .to_string(),
+    )
+}
+
+/// Coarse age for a diagnostic line: the two most significant units.
+fn format_age(age: chrono::Duration) -> String {
+    let seconds = age.num_seconds().max(0);
+    let (days, hours, minutes) = (
+        seconds / 86_400,
+        seconds % 86_400 / 3_600,
+        seconds % 3_600 / 60,
+    );
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 /// A pending host shutdown or reboot holds every unattended admission —

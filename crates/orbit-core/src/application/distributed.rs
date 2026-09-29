@@ -57,7 +57,7 @@ mod settlement;
 
 pub use follower::{PULL_DRAIN_JOB, WorkspacePullRequest};
 pub use serve::TaskPullResponse;
-pub use settlement::{PullLeafClaim, PullSettlementEntry};
+pub use settlement::{PendingPullSettlements, PullLeafClaim, PullSettlementEntry};
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
