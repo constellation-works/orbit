@@ -231,6 +231,13 @@ failed. A 409 from ship or another governed start means a conflicting run or
 workspace claim is already held; refresh and inspect the named run instead of
 retrying blindly.
 
+On a distributed-drain follower, a run that executes a task claimed from another
+machine warns before you cancel it: the confirmation says cancelling fails the
+claim on the owner machine, blocks the owner's task, and names that task. The
+run detail carries the claim (`pull_claim`, the same field `orbit run show
+--json` prints); a row in the runs list has none, so cancelling one of these
+rows reads the run detail once to find it.
+
 A failed, timed-out, or interrupted run's detail opens with the step it
 stopped at and the error it recorded.
 

@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { panelCanRender, describePullSettlements, el, stateCell, syncNodes, postJson, makeToggleRow } from './common.js';
+import { panelCanRender, describePullSettlements, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -174,9 +174,43 @@ function runIsDrain(run) {
   return !!run && DRAIN_JOB_IDS.has(run.job_id);
 }
 
+// Leaf definitions only a follower's claim may run. Their run rows come from
+// list endpoints that carry no claim (a per-row admission read would make every
+// list an N+1), so the cancel action asks the run detail for the claim instead.
+const CLAIMED_LEAF_JOB_IDS = new Set(["task_claimed_local_pipeline", "task_claimed_pr_pipeline"]);
+
+// A claimed leaf executes another machine's task, and cancelling it fails that
+// claim on the owner and blocks the owner's task. `claim` is the run detail's
+// `pull_claim`; null or absent means the run executes no owner claim.
+function claimedLeafSentence(claim) {
+  if (!claim) return "";
+  const task = claim.task_id ? ` (task ${claim.task_id})` : "";
+  const owner = claim.owner ? ` on ${claim.owner}` : " on the owner machine";
+  return `This run executes a claimed task${task} for its owner. Cancelling it fails that claim${owner} and the owner's task is blocked.`;
+}
+
+// The claim to warn about: the row's own when the payload carried one (run
+// detail), else one detail read for a claimed-leaf row of a list. A failed read
+// shows no warning rather than blocking the cancel, like `orbit run show`.
+async function resolvePullClaim(run) {
+  if (run.pull_claim !== undefined) return run.pull_claim;
+  if (!CLAIMED_LEAF_JOB_IDS.has(run.job_id)) return null;
+  try {
+    const detail = await fetchJson(runScopedPath(`/api/runs/${encodeURIComponent(run.run_id)}`, run));
+    return (detail && detail.pull_claim) || null;
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
 function cancelPromptText(run) {
   const runId = run.run_id;
-  if (!runIsDrain(run)) return `Cancel ${runId}? Add a reason (optional):`;
+  if (!runIsDrain(run)) {
+    const claimed = claimedLeafSentence(run.pull_claim);
+    if (!claimed) return `Cancel ${runId}? Add a reason (optional):`;
+    return [`Cancel ${runId}?`, claimed, "Add a reason (optional):"].join("\n\n");
+  }
   const consequence = runIsPullDrain(run)
     ? "Cancelling ends the drain now: claims it has not launched yet fail and their tasks are blocked. Workers already running keep going and deliver their own result."
     : "Cancelling ends the drain coordinator now instead of letting admitted work wind down.";
@@ -268,9 +302,12 @@ function buildCancelNotice(notice, onDismiss) {
 async function cancelRun(run, btn, host) {
   const runId = run && run.run_id;
   if (!runId) return;
-  const reason = window.prompt(cancelPromptText(run), "");
-  if (reason === null) return;
   const old = btn.textContent;
+  btn.disabled = true;
+  const pullClaim = await resolvePullClaim(run);
+  btn.disabled = !runIsCancellable(run);
+  const reason = window.prompt(cancelPromptText({ ...run, pull_claim: pullClaim }), "");
+  if (reason === null) return;
   let cancelled = false;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>cancel`;

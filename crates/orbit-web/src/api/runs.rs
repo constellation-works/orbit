@@ -478,8 +478,18 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "provider processes",
     );
 
+    // A claimed follower leaf names the owner task and claim it works for;
+    // every other run has none. The dashboard's cancel confirmation reads this,
+    // because cancelling a claimed leaf fails the claim on the owner. An
+    // unreadable admission is logged and shown as no claim, like `orbit run show`.
+    let pull_claim = runtime.pull_leaf_claim(run_id).unwrap_or_else(|error| {
+        tracing::warn!(run_id, %error, "pull admission unreadable; run detail shown without its claim");
+        None
+    });
+
     json!({
         "run": full,
+        "pull_claim": pull_claim,
         "steps": steps,
         "provider_processes": provider_processes
             .iter()
