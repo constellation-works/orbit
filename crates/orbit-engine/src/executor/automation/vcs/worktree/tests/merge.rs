@@ -264,18 +264,6 @@ impl RuntimeHost for MergeTestHost {
         ))
     }
 
-    fn maybe_create_failure_task(
-        &self,
-        _job_id: &str,
-        _run_id: &str,
-        _error_code: &str,
-        _error_message: &str,
-        _agent: Option<&str>,
-        _model: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
     fn scoring_enabled(&self) -> bool {
         false
     }

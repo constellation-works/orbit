@@ -7,7 +7,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::{
     CrewConfig, DispatchError, PluginBrokerHandle, PluginBrokerRun, ResolvedActivityTools,
     ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, RuntimeHost, TaskActivityUpdate,
-    TaskAutomationUpdate, V2AuditWriter,
+    TaskAutomationUpdate,
 };
 use orbit_store::contracts::{
     InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
@@ -20,7 +20,7 @@ use orbit_types::task::{
     ExternalRef, Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::InvocationTrace;
-use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -460,11 +460,6 @@ impl RuntimeHost for OrbitRuntime {
             .refresh_file_connections(&self.context.persistence().audit_db)
     }
 
-    fn missing_required_environment_vars(&self, required_env_vars: &[&str]) -> Vec<String> {
-        self.execution_env_policy()
-            .missing_required(required_env_vars)
-    }
-
     fn record_event(&self, event: OrbitEvent) -> Result<(), OrbitError> {
         OrbitRuntime::record_event(self, event)
     }
@@ -491,14 +486,6 @@ impl RuntimeHost for OrbitRuntime {
 
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         self.configured_agent_model_pair(agent_cli)
-    }
-
-    fn canonical_model_name(&self, agent_cli: &str, model: Option<&str>) -> Option<String> {
-        let _ = agent_cli;
-        model
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
     }
 
     fn invocation_records(
@@ -533,44 +520,6 @@ impl RuntimeHost for OrbitRuntime {
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
         OrbitRuntime::run_tool_with_context_and_role(self, name, input, role, tool_context)
-    }
-
-    fn v2_runtime_host(&self) -> Result<&dyn RuntimeHost, OrbitError> {
-        Ok(self)
-    }
-
-    fn v2_activity(&self, name: &str) -> Result<ActivityV2, OrbitError> {
-        self.v2_activity_catalog()
-            .map_err(|error| {
-                OrbitError::InvalidInput(format!("build v2 activity catalog: {error}"))
-            })?
-            .get(name)
-            .cloned()
-            .ok_or_else(|| OrbitError::InvalidInput(format!("v2 activity '{name}' not found")))
-    }
-
-    fn v2_audit_writer(&self, run_id: &str) -> Result<Arc<V2AuditWriter>, OrbitError> {
-        V2AuditWriter::with_disk_sinks(
-            &self.paths().audit_dir,
-            self.v2_audit_store()?,
-            self.workspace_id()?,
-            run_id,
-            "system",
-            Some(self.paths().repo_root.as_path()),
-        )
-        .map_err(|error| OrbitError::Execution(format!("v2 audit sinks: {error}")))
-    }
-
-    fn maybe_create_failure_task(
-        &self,
-        _job_id: &str,
-        _run_id: &str,
-        _error_code: &str,
-        _error_message: &str,
-        _agent: Option<&str>,
-        _model: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        Ok(())
     }
 
     fn scoring_enabled(&self) -> bool {

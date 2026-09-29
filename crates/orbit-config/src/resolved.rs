@@ -1011,23 +1011,6 @@ impl ExecutionEnvPolicy {
         }
         allowlisted_child_env(&self.pass, extras)
     }
-
-    /// Required variables that this policy would not deliver to a subprocess.
-    pub fn missing_required(&self, required_env_vars: &[&str]) -> Vec<String> {
-        required_env_vars
-            .iter()
-            .copied()
-            .filter(|name| !self.is_required_var_available(name))
-            .map(ToString::to_string)
-            .collect()
-    }
-
-    fn is_required_var_available(&self, name: &str) -> bool {
-        if self.inherit {
-            return std::env::var(name).is_ok();
-        }
-        self.pass.iter().any(|candidate| candidate == name) && std::env::var(name).is_ok()
-    }
 }
 
 fn default_pass_list() -> Vec<String> {
