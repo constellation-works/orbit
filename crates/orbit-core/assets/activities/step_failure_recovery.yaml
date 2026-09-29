@@ -170,7 +170,8 @@ spec:
     Claimed leaves: a run of `task_claimed_pr_pipeline` or
     `task_claimed_local_pipeline` (its implement input carries
     `claimed: true`) executes a task another machine owns, and ends at the
-    typed handoff its `claim_handoff` step records. There:
+    typed handoff its `claim_handoff` step records. There the runner withholds
+    `orbit.task.show` and `orbit.task.update` from you, and:
     - the execution summary of record is the implement step's output
       (`execution_summary` in the run's implement checkpoint); the handoff
       carries it to the owner. Never read or write the owner's task record

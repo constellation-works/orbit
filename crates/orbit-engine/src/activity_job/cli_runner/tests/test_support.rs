@@ -289,6 +289,36 @@ impl TestHost {
 }
 
 impl RuntimeHost for TestHost {
+    /// A host whose `task_context` sets `worker_bound` stands in for the
+    /// process a claim is bound to: it carries a trusted worker binding, the
+    /// same way a claimed leaf's worker does, and needs no worker authority
+    /// store to register children against.
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        self.task_context
+            .as_ref()
+            .is_some_and(|context| context["worker_bound"] == true)
+            .then(|| orbit_types::tool::WorkerInvocation {
+                owner_machine_id: "owner-machine".to_string(),
+                owner_workspace_id: "owner-workspace".to_string(),
+                owner_destination: "owner-host".to_string(),
+                task_id: "ORB-13315".to_string(),
+                claim_id: "claim-1".to_string(),
+                execution: orbit_types::task::ExecutionLocation {
+                    machine_id: "follower-machine".to_string(),
+                    machine_name: None,
+                },
+                bound_run_id: "leaf-run".to_string(),
+            })
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
+    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     fn checkpoint_rebase_recovery(
         &self,
         _run_id: &str,
