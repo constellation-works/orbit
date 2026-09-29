@@ -100,8 +100,42 @@ fn shared_git_dir(checkout: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
+    // Every short command resolves its roots here; two `git rev-parse`
+    // processes to learn that an ordinary checkout is not a linked worktree
+    // cost more than the rest of root resolution.
+    if !may_be_linked_worktree(start) {
+        return None;
+    }
     find_git_main_worktree_root_with_git(start)
         .or_else(|| find_git_main_worktree_root_from_gitfile(start))
+}
+
+/// Whether `start` could sit in a linked worktree, judged from the nearest
+/// `.git` entry alone. A linked worktree's `.git` is a file, and only a
+/// directory carrying a `commondir` pointer can name a separate shared
+/// directory, so a plain `.git` directory or no `.git` at all rules it out.
+/// Git's own overrides (`GIT_DIR` and friends) can relocate the answer, so
+/// with one set only git can say.
+pub(crate) fn may_be_linked_worktree(start: &Path) -> bool {
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    if GIT_LOCATION_OVERRIDES
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return true;
+    }
+    start
+        .ancestors()
+        .map(|ancestor| ancestor.join(".git"))
+        .find_map(|git_path| {
+            git_path
+                .symlink_metadata()
+                .ok()
+                .map(|meta| (git_path, meta))
+        })
+        .is_some_and(|(git_path, meta)| {
+            !meta.is_dir() || git_path.join("commondir").symlink_metadata().is_ok()
+        })
 }
 
 fn find_git_main_worktree_root_with_git(start: &Path) -> Option<PathBuf> {

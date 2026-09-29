@@ -1,3 +1,4 @@
+use crate::policy::glob::validate_glob_rule;
 use crate::policy::{GlobReach, PolicyError, compile_glob_regex, match_glob, normalize_glob_path};
 
 #[test]
@@ -215,4 +216,42 @@ fn a_trailing_subtree_wildcard_reaches_every_depth_beneath_its_prefix() {
     for dir in ["secrets", "secrets/a", "secrets/a/b/c"] {
         assert!(reach.names_beneath(dir), "beneath `{dir}`");
     }
+}
+
+/// Rules of `len` bytes built from `unit`, truncated on a character boundary.
+fn rule_of(unit: &str, len: usize) -> String {
+    let mut rule = unit.repeat(len / unit.len() + 1);
+    while rule.len() > len {
+        rule.pop();
+    }
+    rule
+}
+
+#[test]
+fn rules_within_the_uncompiled_bound_always_compile() {
+    // The costliest operators and multi-byte literals, at exactly the bound
+    // `validate_glob_rule` waves through without compiling.
+    for unit in [
+        "?", "*", "*?", "**/", "a?/", "é", "日本", "[", "(?:", "\\", "**/*?",
+    ] {
+        let rule = rule_of(unit, crate::policy::glob::UNCOMPILED_VALIDATION_MAX_BYTES);
+        assert!(
+            compile_glob_regex(&rule).is_ok(),
+            "a rule of {} bytes built from `{unit}` must compile",
+            rule.len()
+        );
+        assert!(validate_glob_rule(&rule).is_ok());
+    }
+}
+
+#[test]
+fn oversized_rules_are_still_checked_by_compiling() {
+    let huge = "?".repeat(200_000);
+    assert!(
+        compile_glob_regex(&huge).is_err(),
+        "fixture must be rejected"
+    );
+
+    assert!(validate_glob_rule(&huge).is_err());
+    assert!(validate_glob_rule(&"a/".repeat(400)).is_ok());
 }

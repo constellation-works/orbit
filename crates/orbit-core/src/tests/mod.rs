@@ -2,3 +2,4 @@
 
 mod composition;
 mod context;
+mod paths;

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::policy::PolicyError;
 use crate::policy::fs_rules::CompiledFsRules;
-use crate::policy::glob::compile_glob_regex;
+use crate::policy::glob::validate_glob_rule;
 use crate::resource::validate_resource_name;
 
 pub const DEFAULT_POLICY_NAME: &str = "default";
@@ -444,7 +444,7 @@ fn normalize_rule(rule: &str, label: &str) -> Result<String, PolicyError> {
         normalized = ".".to_string();
     }
 
-    compile_glob_regex(&normalized).map_err(|error| {
+    validate_glob_rule(&normalized).map_err(|error| {
         PolicyError::Invalid(format!(
             "{label} rule `{trimmed}` is not a valid filesystem glob: {error}"
         ))
