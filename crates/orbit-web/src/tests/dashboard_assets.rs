@@ -2498,6 +2498,15 @@ if (!prompts.at(-1).includes("Cancel drain jrun-auto?") || prompts.at(-1).includ
     );
 }
 
+/// A run action's outcome has to reach the operator: a refused action's error
+/// must survive the table's next re-render, a cancel or resume that succeeded
+/// must not be reported as failed because the refresh after it did, and each
+/// row's buttons must name their run.
+#[test]
+fn dashboard_run_actions_report_failures_and_stale_refreshes_truthfully() {
+    run_dashboard_javascript_test(include_str!("dashboard_runs_actions.mjs"));
+}
+
 /// ORB-11561: Recent Runs used to limit first, then filter to failed in the
 /// browser, so an older Failed run outside the newest success/active slice
 /// rendered as 0/0. Loading and mismatched-filter paints must not look like

@@ -31,6 +31,8 @@ let controlsAuthorized = true;
 let stopOutcome = 'stopped';
 let stopSettlements;
 let drainAdmissionsStopped = false;
+let failReadiness = false;
+let nullCapacity = false;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const requests = [];
@@ -52,7 +54,7 @@ globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   const workspace = url.searchParams.get('workspace');
   const body = options.body ? JSON.parse(options.body) : null;
-  requests.push({ path: url.pathname, workspace, body });
+  requests.push({ path: url.pathname, workspace, body, concurrency: url.searchParams.get('concurrency') });
   if (options.method === 'POST') {
     if (delayPost) await new Promise(resolve => { releasePost = resolve; });
     if (responseError) return response({ error: responseError }, 500);
@@ -100,6 +102,7 @@ globalThis.fetch = async (path, options = {}) => {
     ],
     total: submittedJob ? 4 : 3, limit: 100, truncated: false,
   });
+  if (url.pathname === '/api/workflows/auto/readiness' && failReadiness) return response({ error: 'readiness unavailable' }, 500);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: controlsAuthorized,
     snapshot: { read_only: true, limitations: 'Fixture snapshot only; eligibility can change immediately and does not guarantee a task will start.' },
@@ -113,6 +116,7 @@ globalThis.fetch = async (path, options = {}) => {
       drain_status_run_id: drainPhase === 'idle' ? null : 'jrun-20260923-0400-a1',
       ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
       admitted_workers: drainPhase === 'idle' ? 0 : 2,
+      ...(nullCapacity ? { active_leaf_runs: null, max_active_leaf_runs: null, free_slots: null, occupancy: null } : {}),
     },
     tasks: readinessTasks,
   });
@@ -176,6 +180,71 @@ assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260
 const backToReview = completionOption('review');
 backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
 assert(completionOption('review').checked, 'completion returns to review');
+
+// Concurrency the server would refuse (zero, negative, fractional) never reaches
+// it: the readiness read a poll makes would answer 400 and blank the card, and
+// Start would answer 422. Start stays off and the reason is visible until the
+// field is fixed.
+const concurrencyInput = () => descendants(get('auto-drain-body')).find(node => node.id === 'auto-drain-concurrency');
+const concurrencyProblem = () => descendants(get('auto-drain-body')).find(node => node.id === 'auto-drain-concurrency-problem');
+const typeConcurrency = value => { concurrencyInput().value = value; concurrencyInput().dispatchEvent(new Event('input')); };
+const lastReadiness = () => requests.filter(r => r.path === '/api/workflows/auto/readiness').at(-1);
+assert(concurrencyProblem().hidden === true, 'a valid concurrency shows no problem');
+for (const bad of ['0', '-1', '2.5']) {
+  typeConcurrency(bad);
+  assert(drainButton('Start 2h window').disabled, `Start is off for concurrency ${bad}`);
+  assert(concurrencyInput().getAttribute('aria-invalid') === 'true', `the field is marked invalid for ${bad}`);
+  assert(concurrencyProblem().hidden === false && concurrencyProblem().textContent.includes('whole number'), `the reason is visible for ${bad}: ${concurrencyProblem().textContent}`);
+  assert(concurrencyProblem().getAttribute('role') === 'alert', 'the reason is announced');
+  const before = requests.filter(r => r.path === '/api/workflows/auto').length;
+  drainButton('Start 2h window').click(); await tick();
+  assert(requests.filter(r => r.path === '/api/workflows/auto').length === before, `Start posts nothing for ${bad}`);
+  await fetchAndRenderOperations();
+  assert(lastReadiness().concurrency === null, `the readiness poll does not send concurrency ${bad}`);
+  assert(concurrencyInput().value === bad, 'a poll does not discard what the operator typed');
+  assert(drainButton('Start 2h window').disabled, `Start stays off across a poll for ${bad}`);
+}
+typeConcurrency('3');
+assert(!drainButton('Start 2h window').disabled && concurrencyProblem().hidden === true, 'a valid value turns Start back on and clears the reason');
+await fetchAndRenderOperations();
+assert(lastReadiness().concurrency === '3', 'a valid concurrency is sent with the readiness read');
+typeConcurrency('');
+assert(!drainButton('Start 2h window').disabled, 'blank means the runtime default and is valid');
+typeConcurrency('2');
+
+// A payload without capacity figures reads as unknown, not as zero: `Number(null)`
+// is 0, which printed "0 free slots" and a placeholder of "null".
+nullCapacity = true;
+await fetchAndRenderOperations();
+assert(drainText().includes('Capacity unknown') && !drainText().includes('0 free slots') && !drainText().includes('NaN'), `missing figures read as unknown: ${drainText()}`);
+assert(concurrencyInput().placeholder === 'auto', `no limit means no numeric placeholder: ${concurrencyInput().placeholder}`);
+nullCapacity = false;
+await fetchAndRenderOperations();
+
+// The window Start opens changes the card's state, and that change must not be
+// announced over Start's own result (the run and its completion mode).
+drainRunId = 'jrun-20260923-0400-a1';
+drainPhase = 'draining';
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+assert(get('auto-drain-live').textContent.includes('Draining'), 'the card moved to the live window');
+assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted') && get('auto-drain-operation-feedback').className.includes('success'), `the start result survives the state change: ${get('auto-drain-operation-feedback').textContent}`);
+// Later changes are still announced.
+drainPhase = 'winding_down';
+await fetchAndRenderOperations();
+assert(get('auto-drain-operation-feedback').textContent.includes('Auto-drain Winding down'), `a later state change is announced: ${get('auto-drain-operation-feedback').textContent}`);
+drainRunId = null;
+drainPhase = 'idle';
+await fetchAndRenderOperations();
+assert(get('auto-drain-operation-feedback').textContent === 'Auto-drain idle.', `settling to idle is announced: ${get('auto-drain-operation-feedback').textContent}`);
+
+// Start went through but the read-back failed: the window exists, so the result
+// stays; it is not rewritten into a start failure.
+failReadiness = true;
+drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
+assert(get('auto-drain-operation-feedback').textContent.includes('submitted') && !get('auto-drain-operation-feedback').textContent.includes('failed to start'), `a failed read-back is not a failed start: ${get('auto-drain-operation-feedback').textContent}`);
+assert(!drainButton('Start 2h window').disabled, 'the guard is released after a failed read-back');
+failReadiness = false;
+await fetchAndRenderOperations();
 
 // Settle pending delivers recorded settlements and reports each outcome; a
 // settlement that did not reach its owner is never reported as plain success.

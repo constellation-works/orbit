@@ -135,13 +135,13 @@
         <div class="col-log" id="side-dock" data-mode="drain">
           <div class="dock-head">
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Right dock mode">
-              <button type="button" role="tab" class="dock-seg on" data-mode="drain" aria-selected="true" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
-              <button type="button" role="tab" class="dock-seg" data-mode="log" aria-selected="false" tabindex="-1">Log</button>
+              <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0">Drain <span id="dock-drain-state" class="dock-drain-state"></span></button>
+              <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log</button>
             </div>
             <span class="dock-meta"><span class="live-dot"></span><span id="log-count">0</span> lines</span>
           </div>
 
-          <div class="dock-pane" data-pane="drain">
+          <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
             <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
               <header>
                 <span class="drain-title"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-title">Auto-drain</span></span>
@@ -158,7 +158,7 @@
             </section>
           </div>
 
-          <div class="dock-pane" data-pane="log">
+          <div class="dock-pane" id="dock-pane-log" role="tabpanel" aria-labelledby="dock-tab-log" data-pane="log">
             <section class="panel" id="log-panel">
               <div class="log-foot log-filters">
                 <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">all</button>

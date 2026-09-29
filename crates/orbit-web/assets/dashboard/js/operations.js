@@ -17,6 +17,9 @@ let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
 let autoDrainComplete = false;
+// Set while Start or Stop is refreshing the card after reporting its result, so
+// the state change that result caused is not announced over the result.
+let holdDrainAnnouncement = false;
 let context = null;
 let unsubscribeWorkspace = null;
 // The operator's unapplied cadence choice, held outside the rebuilt <select>
@@ -1311,6 +1314,20 @@ function autoDrainReasons(payload) {
   };
 }
 
+// The server takes concurrency as a whole number from 1 (a `u32`). Anything
+// else typed into the field would be refused by the readiness read the next
+// poll makes (a 400 that blanks the card) and by Start (a 422), so it is held
+// back here with the reason shown beside the field.
+const AUTO_DRAIN_CONCURRENCY_MAX = 4_294_967_295;
+const AUTO_DRAIN_CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";
+
+function autoDrainConcurrencyValid() {
+  if (autoDrainConcurrency === "") return true;
+  if (!/^\d+$/.test(autoDrainConcurrency)) return false;
+  const value = Number(autoDrainConcurrency);
+  return value >= 1 && value <= AUTO_DRAIN_CONCURRENCY_MAX;
+}
+
 function autoDrainCounts(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
   const eligible = tasks.filter((task) => task.eligible === true).length;
@@ -1434,7 +1451,7 @@ function renderAutoDrainHead(payload) {
     head.appendChild(detail);
   }
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
-  if (announcedDrainState !== null && announcedDrainState !== stateKey) {
+  if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement) {
     feedback("auto-drain-operation-feedback", "", `Auto-drain ${label}.`);
   }
   announcedDrainState = stateKey;
@@ -1461,9 +1478,10 @@ function autoDrainDurationControl(payload) {
 
 // Concurrency is the same blank-means-runtime-default number input as before,
 // with − / + around it; the stepper clamps at the input's own minimum of 1.
-function autoDrainConcurrencyControl(payload) {
+function autoDrainConcurrencyControl(payload, form) {
   const capacity = payload.capacity || {};
-  const fallback = Number.isFinite(Number(capacity.max_active_leaf_runs)) ? String(capacity.max_active_leaf_runs) : "";
+  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
+  const fallback = Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
   const label = el("label", { class: "drain-field-label", text: "Parallel tasks" });
   label.htmlFor = "auto-drain-concurrency";
   const input = el("input", { class: "drain-stepper-value mono", title: "Leaf-run concurrency (blank = runtime default)" });
@@ -1473,8 +1491,25 @@ function autoDrainConcurrencyControl(payload) {
   input.placeholder = fallback || "auto";
   input.value = autoDrainConcurrency;
   input.dataset.drainFocus = "concurrency";
+  // The message sits under the whole settings row, not in this narrow column.
+  const problem = el("div", { class: "operation-control-note drain-stop-note disabled-reason" });
+  problem.id = "auto-drain-concurrency-problem";
+  problem.setAttribute("role", "alert");
+  problem.hidden = true;
+  form.problem = problem;
+  input.setAttribute("aria-describedby", problem.id);
+  // Typing does not rebuild the card (that would drop the caret), so the field,
+  // its message and the Start button are brought in line by hand.
+  form.syncConcurrency = () => {
+    const valid = autoDrainConcurrencyValid();
+    input.setAttribute("aria-invalid", valid ? "false" : "true");
+    problem.textContent = valid ? "" : AUTO_DRAIN_CONCURRENCY_PROBLEM;
+    problem.hidden = valid;
+    if (form.start) form.start.disabled = autoDrainStartBlocked(payload);
+  };
   input.addEventListener("input", () => {
     autoDrainConcurrency = input.value.trim();
+    form.syncConcurrency();
   });
   const step = (delta, name) => {
     const button = el("button", { class: "drain-step", text: delta < 0 ? "−" : "+" });
@@ -1485,9 +1520,11 @@ function autoDrainConcurrencyControl(payload) {
       const current = Math.trunc(Number(autoDrainConcurrency || fallback || 1));
       autoDrainConcurrency = String(Math.max(1, (Number.isFinite(current) ? current : 1) + delta));
       input.value = autoDrainConcurrency;
+      form.syncConcurrency();
     });
     return button;
   };
+  form.syncConcurrency();
   return el("div", { class: "drain-field" }, [
     label,
     el("div", { class: "drain-stepper" }, [step(-1, "Decrease"), input, step(1, "Increase")]),
@@ -1528,7 +1565,17 @@ function autoDrainCompletionControl(payload, reasons) {
   return el("div", { class: "drain-field drain-field-complete" }, [label, group]);
 }
 
-function autoDrainStartButton(payload) {
+// Why Start is off, in one place so typing in the concurrency field can
+// re-evaluate it without a rebuild.
+function autoDrainStartBlocked(payload) {
+  const reasons = autoDrainReasons(payload);
+  return Boolean(reasons.submit)
+    || pendingOperations.has("auto-drain:start")
+    || !autoDrainConcurrencyValid()
+    || (autoDrainComplete && Boolean(reasons.complete));
+}
+
+function autoDrainStartButton(payload, form) {
   const key = "auto-drain:start";
   const reasons = autoDrainReasons(payload);
   const pending = pendingOperations.has(key);
@@ -1539,9 +1586,11 @@ function autoDrainStartButton(payload) {
   });
   button.type = "button";
   button.dataset.drainFocus = "start";
-  button.disabled = Boolean(reasons.submit) || pending || autoDrainComplete && Boolean(reasons.complete);
+  button.disabled = autoDrainStartBlocked(payload);
+  form.start = button;
+  form.syncConcurrency?.();
   button.addEventListener("click", async () => {
-    if (pendingOperations.has(key)) return;
+    if (pendingOperations.has(key) || !autoDrainConcurrencyValid()) return;
     const workspace = selectedWorkspace();
     const counts = autoDrainCounts(payload);
     const duration = autoDrainDuration;
@@ -1567,7 +1616,7 @@ function autoDrainStartButton(payload) {
       const state = result?.state ?? "submitted";
       const completion = result?.completion ?? "review";
       feedback("auto-drain-operation-feedback", "success", `Run ${runId ?? "(no run id)"} ${state} (completion: ${completion}).`);
-      await fetchAndRenderAutoDrain();
+      await refreshDrainAfterAction();
     } catch (error) {
       feedback("auto-drain-operation-feedback", "error", `Auto-delivery window failed to start: ${error.message}`);
     } finally {
@@ -1576,6 +1625,21 @@ function autoDrainStartButton(payload) {
     }
   });
   return button;
+}
+
+// Re-read the card once Start or Stop has reported. The action has already
+// happened by then, so a failed read must not replace its result with a
+// failure message (the panel's own note says the refresh failed), and the
+// state change the action caused must not be announced over that result.
+async function refreshDrainAfterAction() {
+  holdDrainAnnouncement = true;
+  try {
+    await fetchAndRenderAutoDrain();
+  } catch (_) {
+    /* reported by the panel's own status note */
+  } finally {
+    holdDrainAnnouncement = false;
+  }
 }
 
 const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-delivery window? Already admitted workers keep running under their captured completion authority. This is not cancellation. Any settlement already recorded is also delivered to its owner.";
@@ -1654,7 +1718,7 @@ function autoDrainStopButton(payload) {
         settlements.attention ? "error" : "success",
         settlements.text ? `${headline} Settlements: ${settlements.text}.` : headline,
       );
-      await fetchAndRenderAutoDrain();
+      await refreshDrainAfterAction();
     } catch (error) {
       feedback("auto-drain-operation-feedback", "error", `${copy.label === "Stop" ? "Stopping admissions" : "Settling"} failed: ${error.message}`);
     } finally {
@@ -1675,13 +1739,19 @@ function autoDrainStopNote(payload) {
   });
 }
 
+// A missing figure is unknown, not zero: `Number(null)` is 0, which would
+// read a payload that simply lacks the field as "0 free slots".
+function autoDrainNumber(value) {
+  return value == null || value === "" ? NaN : Number(value);
+}
+
 // Capacity in words: how many leaf runs hold a slot against the limit, a bar
 // that shows any overflow past the limit, and one sentence on what a window
 // started now would do with that.
 function autoDrainCapacity(capacity, counts) {
-  const busy = Number(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
-  const limit = Number(capacity.max_active_leaf_runs);
-  const free = Number(capacity.free_slots);
+  const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
+  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
+  const free = autoDrainNumber(capacity.free_slots);
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
   const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -1796,12 +1866,16 @@ function renderAutoDrain(payload) {
   );
   if (blocked.length > 0) body.appendChild(autoDrainBlockedList(blocked, payload.capacity?.occupancy, selectedWorkspace()));
   const durationLabel = el("span", { class: "drain-field-label", text: "Window length" });
+  // The concurrency field and the Start button are built apart but depend on
+  // each other; they meet here.
+  const form = {};
   body.append(
     el("div", { class: "drain-form" }, [
       durationLabel,
       autoDrainDurationControl(payload),
-      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload), autoDrainCompletionControl(payload, reasons)]),
-      el("div", { class: "drain-actions" }, [autoDrainStartButton(payload), autoDrainStopButton(payload)]),
+      el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload, form), autoDrainCompletionControl(payload, reasons)]),
+      form.problem,
+      el("div", { class: "drain-actions" }, [autoDrainStartButton(payload, form), autoDrainStopButton(payload)]),
       autoDrainStopNote(payload),
     ]),
   );
@@ -1813,7 +1887,7 @@ function fetchAndRenderAutoDrain() {
   if (!workspace) {
     return requestPanel("auto-drain-body", "unselected", () => Promise.resolve({}), renderAutoDrain, "auto-drain-live");
   }
-  const query = autoDrainConcurrency ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
+  const query = autoDrainConcurrency && autoDrainConcurrencyValid() ? `?concurrency=${encodeURIComponent(autoDrainConcurrency)}` : "";
   const path = `/api/workflows/auto/readiness${query}`;
   return requestPanel("auto-drain-body", path, () => fetchJson(path), renderAutoDrain, "auto-drain-live");
 }

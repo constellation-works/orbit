@@ -49,6 +49,20 @@ class Node {
     for (const child of children) this.appendChild(child);
   }
   remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  prepend(child) {
+    if (child.parentNode) child.parentNode.removeChild(child);
+    this.children.unshift(child);
+    child.parentNode = this;
+  }
+  replaceWith(node) {
+    const parent = this.parentNode;
+    if (!parent) return;
+    if (node.parentNode) node.parentNode.removeChild(node);
+    const index = parent.children.indexOf(this);
+    parent.children.splice(index, 1, node);
+    node.parentNode = parent;
+    this.parentNode = null;
+  }
 
   addEventListener(name, fn) {
     const bound = this.listeners.get(name) || [];
@@ -133,6 +147,16 @@ for (const filter of ["all", "err", "deny", "warn"]) {
   sideDock.appendChild(pill);
 }
 
+// The dock's Drain / Log tabs, as index.html ships them.
+const dockToggle = get("dock-mode-toggle");
+for (const mode of ["drain", "log"]) {
+  const tab = new Node("button");
+  tab.className = "dock-seg";
+  tab.dataset.mode = mode;
+  tab.setAttribute("role", "tab");
+  dockToggle.appendChild(tab);
+}
+
 globalThis.document = {
   body: new Node("body"),
   hidden: false,
@@ -144,6 +168,7 @@ globalThis.document = {
   createDocumentFragment: () => new Node("#fragment"),
   querySelectorAll: (selector) => {
     if (selector === "#side-dock .filter-pill") return sideDock.querySelectorAll(".filter-pill");
+    if (selector === "#dock-mode-toggle .dock-seg") return dockToggle.querySelectorAll(".dock-seg");
     return [];
   },
   querySelector: () => null,

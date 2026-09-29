@@ -335,4 +335,34 @@ for (const id of ["ORB-L", "ORB-H"]) {
   assert.equal(link.href, `#runs?run_id=${encodeURIComponent(`jrun-${id}`)}`);
 }
 
+// --- Action forms return focus; a failed action is announced ------------------
+
+// Closing the comment or reject form swaps the actions row back in, which drops
+// focus to the page. It goes back to the control that opened the form so the
+// keyboard user is where they were.
+context.getActiveStatuses = () => new Set(["proposed", "backlog", "review", "done"]);
+tasks = [summaryRow()];
+renderTasks(tasks, context);
+if (!detail()) row().dispatch("click");
+await settle();
+assert.ok(detail(), "the detail is open for the action checks");
+const actionButton = (name) => detail().querySelector(`button.action.${name}`);
+actionButton("comment").dispatch("click");
+assert.ok(detail().querySelector("textarea"), "the comment form opens");
+assert.equal(document.activeElement.tagName, "TEXTAREA", "opening the form focuses its field");
+actionButton("cancel").dispatch("click");
+assert.equal(detail().querySelector("textarea"), null, "cancel closes the comment form");
+assert.ok(document.activeElement === actionButton("comment"), "cancelling the comment form returns focus to Comment");
+actionButton("reject").dispatch("click");
+actionButton("cancel").dispatch("click");
+assert.ok(document.activeElement === actionButton("reject"), "cancelling the reject form returns focus to Reject");
+
+// The stub refuses every action endpoint, so the row reports a failure. It
+// must be a live alert: a plain div appearing above the buttons is never read.
+actionButton("approve").dispatch("click");
+await settle();
+const actionError = detail().querySelector(".action-error");
+assert.ok(actionError, "a refused action is reported in the detail");
+assert.equal(actionError.getAttribute("role"), "alert", "a refused action is announced");
+
 console.log("dashboard summary rows expand through the detail endpoint");

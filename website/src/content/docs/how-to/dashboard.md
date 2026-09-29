@@ -145,12 +145,17 @@ status:
 | **archive** | Any status except `archived`. |
 | **comment** | Always. |
 
+Cancelling the comment or reject form returns keyboard focus to the button that
+opened it, and a refused action is announced as an alert above the buttons.
+
 On the owner of a [distributed drain](../distributed-drain/), the detail of a
 task this workspace holds an execution claim for also carries a **distributed
 execution** panel: the claim's state and the accepted handoff. **approve** on a
 `review` task with a handed-off claim sends **Approve handoff** for the exact
 candidate you were shown. **Revoke authority** and **Recover claim → blocked** /
-**Recover claim → backlog** ask for a reason. A replica shows claim state as held
+**Recover claim → backlog** ask for a reason first; with the field empty they
+ask for it instead of confirming, and send nothing. After any of these actions
+keyboard focus lands on the reported outcome. A replica shows claim state as held
 by its owner, and refuses all three actions.
 
 Status and crew dropdowns on the row are editable with a concrete workspace
@@ -170,7 +175,8 @@ the MCP surface cannot force.
 The right dock has two modes that share the same column width: **Drain**
 (the [auto-drain](#auto-drain) window card, then the files currently locked
 by tasks) and **Log** (a live `orbit.log` tail with all / err / deny / warn
-filters).
+filters). The two modes are a tab strip: arrow keys, **Home**, and **End** move
+between them.
 
 #### Edit task metadata inline
 
@@ -216,9 +222,14 @@ Supported run actions, when the run's state allows them:
 - **Replay run** — submits a new run of the same job.
 
 Those buttons are absent or disabled when the state does not allow the
-action. A 409 from ship or another governed start means a conflicting run
-or workspace claim is already held; refresh and inspect the named run
-instead of retrying blindly.
+action. Each is named for its run (and workspace) for assistive technology. A
+refused action shows its error above the list, announced as an alert, and the
+error stays until you dismiss it or start another action, so a background
+refresh does not remove it. If a cancel or resume succeeds but the refresh
+after it fails, the message says the view is stale, not that the action
+failed. A 409 from ship or another governed start means a conflicting run or
+workspace claim is already held; refresh and inspect the named run instead of
+retrying blindly.
 
 A failed, timed-out, or interrupted run's detail opens with the step it
 stopped at and the error it recorded.
@@ -375,7 +386,9 @@ above Locked files. Top to bottom:
   then `+N more`.
 - **Window length** — `15m` to `8h`; the selected segment is filled.
 - **Parallel tasks** — `−` / `+` around the leaf-run limit. Blank means the
-  runtime default, shown as the placeholder.
+  runtime default, shown as the placeholder. Anything but a whole number of 1
+  or more (`0`, `-1`, `2.5`) is flagged under the field, turns **Start** off,
+  and is not sent to the server until it is fixed.
 - **When a task finishes** — **Stop at review** (the default) or **Mark
   done**, which turns amber.
 - **Start … window** submits `orbit run auto` with those settings after a
@@ -388,8 +401,12 @@ above Locked files. Top to bottom:
   Stop and Settle pending need an operator session, like Start with **Mark
   done**.
 
-Start and Stop results appear in the card's status line. The snapshot is
-read-only: nothing is reserved or started until you start a window.
+Start and Stop results appear in the card's status line and stay there when
+the card then changes state (for example from `idle` to **Draining**); later
+changes to the window are announced in the same line. If the card cannot
+re-read its state after a Start or Stop, the result stands and the panel's own
+note says the refresh failed. The snapshot is read-only: nothing is reserved or
+started until you start a window.
 
 **Mark done** is a governed operator action: it marks every task
 the window ships as `done` (`review` → `done`), not only the ones visible at

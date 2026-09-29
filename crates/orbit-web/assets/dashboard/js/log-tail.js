@@ -347,12 +347,15 @@ function wireDockModeToggle() {
   for (const btn of toggle.querySelectorAll(".dock-seg")) {
     btn.addEventListener("click", () => setDockMode(btn.dataset.mode));
   }
-  // Arrow keys move between the two segments, matching the window selectors.
+  // Arrow keys move between the two segments, matching the window selectors;
+  // Home and End jump to the first and last, as a tablist promises.
   toggle.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const idx = DOCK_MODES.indexOf(logPanelPrefs.dockMode);
-    const next = event.key === "ArrowLeft" ? idx - 1 : idx + 1;
+    const next = event.key === "Home" ? 0
+      : event.key === "End" ? DOCK_MODES.length - 1
+        : event.key === "ArrowLeft" ? idx - 1 : idx + 1;
     const mode = DOCK_MODES[(next + DOCK_MODES.length) % DOCK_MODES.length];
     setDockMode(mode);
     const btn = toggle.querySelector(`.dock-seg[data-mode="${mode}"]`);
