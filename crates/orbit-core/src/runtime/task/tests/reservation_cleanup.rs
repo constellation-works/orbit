@@ -492,3 +492,78 @@ fn task_reservation_reserve_pressure_reconciles_stale_running_owner() {
             && payload["release_reason"] == "stale_run_reconciled"
     }));
 }
+
+#[test]
+fn stale_classification_reads_a_shared_owner_run_once_per_pass() {
+    use crate::application::job::job_run_get_counter;
+
+    let (_root, runtime, _repo_root) = test_runtime();
+    let owner = insert_running_run(&runtime, "shared_owner", std::process::id());
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&owner.run_id, JobRunState::Failed, Utc::now(), Some(1))
+        .expect("terminalize owner without cleanup");
+    for file in ["file:src/a.rs", "file:src/b.rs", "file:src/c.rs"] {
+        reserve_direct(&runtime, Vec::new(), file, Some(&owner.run_id));
+    }
+
+    let reads = job_run_get_counter::track(&runtime, &owner.run_id);
+    let stale = runtime
+        .list_stale_task_reservations()
+        .expect("diagnose reservations");
+    assert_eq!(
+        stale.len(),
+        3,
+        "every reservation of a terminal owner is stale"
+    );
+    assert!(
+        reads.reads() <= 1,
+        "one owner run must be read at most once per classification pass, got {}",
+        reads.reads()
+    );
+
+    assert_eq!(
+        runtime.release_stale_task_reservations().expect("repair"),
+        3
+    );
+    assert_eq!(active_reservation_count(&runtime), 0);
+}
+
+#[test]
+fn stale_release_skips_a_candidate_released_between_scan_and_release() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let absent = reserve_direct(&runtime, Vec::new(), "file:src/a.rs", Some("jrun-gone"));
+    let kept = reserve_direct(&runtime, Vec::new(), "file:src/b.rs", None);
+
+    // Release the stale candidate out of band; the pass must treat it as a
+    // replay rather than emit a second release or fail.
+    runtime
+        .stores()
+        .task_reservations()
+        .release_task_reservation(orbit_store::contracts::TaskReservationReleaseParams {
+            workspace_orbit_dir: workspace_orbit_dir(&runtime),
+            workspace_id: workspace_task_reservation_id(&runtime).expect("workspace id"),
+            reservation_id: absent,
+            release_reason: TaskReservationReleaseReason::Explicit,
+            release_metadata_json: None,
+        })
+        .expect("release out of band");
+
+    assert_eq!(
+        runtime.release_stale_task_reservations().expect("repair"),
+        0
+    );
+    let survivors = runtime
+        .stores()
+        .task_reservations()
+        .inspect_active_task_reservations(
+            &workspace_orbit_dir(&runtime),
+            workspace_task_reservation_id(&runtime)
+                .expect("workspace id")
+                .as_deref(),
+        )
+        .expect("inspect");
+    assert_eq!(survivors.len(), 1);
+    assert_eq!(survivors[0].reservation_id, kept);
+}

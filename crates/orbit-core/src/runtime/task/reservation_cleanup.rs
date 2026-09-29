@@ -1,6 +1,7 @@
 //! Detection and cleanup of stale task reservations.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -10,7 +11,7 @@ use orbit_store::contracts::{
     TaskReservationReleaseParams, TaskReservationReleaseReason,
 };
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::json;
 
 use crate::OrbitRuntime;
@@ -25,6 +26,11 @@ struct StaleReservationContext {
     /// Run ids the orphan classifiers already consider conclusively orphaned.
     orphaned_run_ids: BTreeSet<String>,
     task_statuses: BTreeMap<String, TaskStatus>,
+    /// Owner-run lookups made during this pass, keyed by run id, so several
+    /// reservations sharing an owner cost one store read. Stale answers only
+    /// err toward keeping a reservation: a terminal state is final, and a run
+    /// cached as live is at worst released by the next repair pass.
+    run_cache: RefCell<HashMap<String, Option<JobRun>>>,
 }
 
 /// A task reservation that Orbit can prove is no longer protecting live work.
@@ -80,9 +86,13 @@ impl OrbitRuntime {
         let mut released = 0;
         for reservation_id in candidate_ids {
             let current = self
-                .inspect_active_reservations()?
-                .into_iter()
-                .find(|reservation| reservation.reservation_id == reservation_id);
+                .stores()
+                .task_reservations()
+                .inspect_active_task_reservation(
+                    &workspace_orbit_dir(self),
+                    workspace_task_reservation_id(self)?.as_deref(),
+                    &reservation_id,
+                )?;
             let Some(current) = current else {
                 continue;
             };
@@ -147,7 +157,24 @@ impl OrbitRuntime {
         Ok(StaleReservationContext {
             orphaned_run_ids,
             task_statuses,
+            run_cache: RefCell::new(HashMap::new()),
         })
+    }
+
+    fn cached_owner_run(
+        &self,
+        run_id: &str,
+        context: &StaleReservationContext,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        if let Some(cached) = context.run_cache.borrow().get(run_id) {
+            return Ok(cached.clone());
+        }
+        let run = self.get_job_run_backend(run_id)?;
+        context
+            .run_cache
+            .borrow_mut()
+            .insert(run_id.to_string(), run.clone());
+        Ok(run)
     }
 
     fn classify_stale_task_reservation(
@@ -156,7 +183,7 @@ impl OrbitRuntime {
         context: &StaleReservationContext,
     ) -> Result<Option<String>, OrbitError> {
         if let Some(owner_run_id) = reservation.owner_run_id.as_deref() {
-            let Some(run) = self.get_job_run_backend(owner_run_id)? else {
+            let Some(run) = self.cached_owner_run(owner_run_id, context)? else {
                 return Ok(Some(format!("owner run {owner_run_id} is absent")));
             };
             if run.state.is_terminal() {

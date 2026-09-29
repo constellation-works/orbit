@@ -9,6 +9,7 @@
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -30,11 +31,13 @@ const COVERING_OWNER_MARKERS: &[&str] = &[
 pub(in crate::adapter::engine_host::v2_host) trait DuplicateTaskLookup {
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError>;
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError>;
+    /// Shared so a snapshot hands the same allocation to every candidate
+    /// instead of cloning the workspace's task list per assessment.
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError>;
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError>;
 
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError>;
+    fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError>;
 }
 
 impl DuplicateTaskLookup for crate::OrbitRuntime {
@@ -42,16 +45,16 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
         crate::OrbitRuntime::list_tasks_by_tags(self, tags)
     }
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
-        crate::OrbitRuntime::list_tasks(self)
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
+        crate::OrbitRuntime::list_tasks(self).map(Rc::from)
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         crate::OrbitRuntime::get_task(self, task_id)
     }
 
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        crate::OrbitRuntime::get_task_comments(self, task_id)
+    fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
+        crate::OrbitRuntime::get_task_comments(self, task_id).map(Rc::from)
     }
 }
 
@@ -67,8 +70,8 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
 /// indexed or single-bundle reads and happen only on a hit.
 pub(in crate::adapter::engine_host::v2_host) struct SnapshotDuplicateLookup<'a, L: ?Sized> {
     inner: &'a L,
-    tasks: OnceCell<Vec<Task>>,
-    comments: RefCell<BTreeMap<String, Vec<TaskComment>>>,
+    tasks: OnceCell<Rc<[Task]>>,
+    comments: RefCell<BTreeMap<String, Rc<[TaskComment]>>>,
 }
 
 impl<'a, L: DuplicateTaskLookup + ?Sized> SnapshotDuplicateLookup<'a, L> {
@@ -86,28 +89,28 @@ impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for SnapshotDuplicateL
         self.inner.list_tasks_by_tags(tags)
     }
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
         if let Some(tasks) = self.tasks.get() {
-            return Ok(tasks.clone());
+            return Ok(Rc::clone(tasks));
         }
         // A failed hydration is not cached: the caller fails the whole action
         // on the first error, so there is no retry to serve stale emptiness to.
         let tasks = self.inner.list_tasks()?;
-        Ok(self.tasks.get_or_init(|| tasks).clone())
+        Ok(Rc::clone(self.tasks.get_or_init(|| tasks)))
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.inner.get_task(task_id)
     }
 
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+    fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
         if let Some(comments) = self.comments.borrow().get(task_id) {
-            return Ok(comments.clone());
+            return Ok(Rc::clone(comments));
         }
         let comments = self.inner.get_task_comments(task_id)?;
         self.comments
             .borrow_mut()
-            .insert(task_id.to_string(), comments.clone());
+            .insert(task_id.to_string(), Rc::clone(&comments));
         Ok(comments)
     }
 }
@@ -211,16 +214,16 @@ where
     }
 
     validate_candidate(candidate)?;
-    let mut open_tasks = lookup
-        .list_tasks()?
-        .into_iter()
+    let all_tasks = lookup.list_tasks()?;
+    let mut open_tasks = all_tasks
+        .iter()
         .filter(|task| is_open_status(task.status) || recently_completed(task))
         .collect::<Vec<_>>();
     open_tasks.sort_by(|left, right| left.id.cmp(&right.id));
 
     for task in open_tasks {
         let comments = lookup.get_task_comments(&task.id)?;
-        let searchable = searchable_task_text(&task, &comments);
+        let searchable = searchable_task_text(task, &comments);
         let fingerprints = if is_open_status(task.status) {
             &candidate.fingerprints
         } else {
@@ -231,7 +234,7 @@ where
             .find(|fingerprint| fingerprint_matches(&searchable, fingerprint))
         {
             return Ok(Some(DuplicateTaskMatch {
-                task_id: task.id,
+                task_id: task.id.clone(),
                 match_kind: "material_coverage",
                 evidence: bounded_evidence(fingerprint.name, &fingerprint.anchors),
             }));

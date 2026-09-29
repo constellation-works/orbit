@@ -1,6 +1,7 @@
 //! Cross-pipeline tests for the shared duplicate-task assessment contract.
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use orbit_common::OrbitError;
 use orbit_engine::RuntimeHost;
@@ -89,7 +90,7 @@ impl DuplicateTaskLookup for FailingBroadLookup<'_> {
         self.runtime.list_tasks_by_tags(tags)
     }
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
         Err(injected_lookup_error())
     }
 
@@ -97,8 +98,8 @@ impl DuplicateTaskLookup for FailingBroadLookup<'_> {
         self.runtime.get_task(task_id)
     }
 
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        self.runtime.get_task_comments(task_id)
+    fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
+        self.runtime.get_task_comments(task_id).map(Rc::from)
     }
 }
 
@@ -112,11 +113,11 @@ impl DuplicateTaskLookup for FailingSecondBroadLookup<'_> {
         self.runtime.list_tasks_by_tags(tags)
     }
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
         let call = self.broad_calls.get();
         self.broad_calls.set(call + 1);
         if call == 0 {
-            self.runtime.list_tasks()
+            self.runtime.list_tasks().map(Rc::from)
         } else {
             Err(injected_lookup_error())
         }
@@ -126,8 +127,8 @@ impl DuplicateTaskLookup for FailingSecondBroadLookup<'_> {
         self.runtime.get_task(task_id)
     }
 
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        self.runtime.get_task_comments(task_id)
+    fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
+        self.runtime.get_task_comments(task_id).map(Rc::from)
     }
 }
 
@@ -140,15 +141,15 @@ impl DuplicateTaskLookup for FailingCommentsLookup<'_> {
         self.runtime.list_tasks_by_tags(tags)
     }
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
-        self.runtime.list_tasks()
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
+        self.runtime.list_tasks().map(Rc::from)
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.runtime.get_task(task_id)
     }
 
-    fn get_task_comments(&self, _task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+    fn get_task_comments(&self, _task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
         Err(injected_lookup_error())
     }
 }

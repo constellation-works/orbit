@@ -6,6 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use orbit_common::OrbitError;
 use orbit_engine::RuntimeHost;
@@ -956,22 +957,22 @@ impl DuplicateTaskLookup for CountingLookup<'_> {
         self.runtime.list_tasks_by_tags(tags)
     }
 
-    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+    fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
         self.list_calls.set(self.list_calls.get() + 1);
-        self.runtime.list_tasks()
+        self.runtime.list_tasks().map(Rc::from)
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         self.runtime.get_task(task_id)
     }
 
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+    fn get_task_comments(&self, task_id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
         *self
             .comment_reads
             .borrow_mut()
             .entry(task_id.to_string())
             .or_default() += 1;
-        self.runtime.get_task_comments(task_id)
+        self.runtime.get_task_comments(task_id).map(Rc::from)
     }
 }
 

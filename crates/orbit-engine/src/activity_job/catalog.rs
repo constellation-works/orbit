@@ -342,6 +342,13 @@ impl V2JobCatalog {
         ))
     }
 
+    /// Consume one entry, returning its source path and spec without cloning.
+    pub fn take(&mut self, name: &str) -> Option<(PathBuf, JobV2)> {
+        let spec = self.inner.entries.remove(name)?;
+        let path = self.inner.sources.remove(name)?;
+        Some((path, spec))
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Path, &JobV2)> {
         self.inner.entries.iter().filter_map(|(name, spec)| {
             self.inner
