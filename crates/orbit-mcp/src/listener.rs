@@ -11,12 +11,15 @@
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::ToolSessionContext;
 use rmcp::ServiceExt;
+use tokio::io::{AsyncRead, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -44,6 +47,14 @@ const ACCEPT_EXHAUSTION_BACKOFF: Duration = Duration::from_millis(250);
 /// enough of them starve every legitimate client.
 const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Longest single JSON-RPC message, in bytes, a listener session accepts.
+///
+/// The peer is unauthenticated and rmcp reads a message into memory until its
+/// newline with no ceiling of its own, so one connection that never sends a
+/// newline would otherwise grow the process without bound. A session that
+/// exceeds this is closed. Far larger than any tool call an agent sends.
+pub(crate) const DEFAULT_MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+
 /// How far a listener is allowed to be reachable.
 ///
 /// The listener authenticates no one: a local process that reaches the socket
@@ -68,6 +79,7 @@ pub struct McpListener {
     trusted_context: ToolSessionContext,
     sessions: Arc<Semaphore>,
     first_byte_timeout: Duration,
+    max_message_bytes: usize,
 }
 
 impl McpListener {
@@ -92,6 +104,7 @@ impl McpListener {
             trusted_context,
             sessions: Arc::new(Semaphore::new(DEFAULT_MAX_MCP_SESSIONS)),
             first_byte_timeout: FIRST_BYTE_TIMEOUT,
+            max_message_bytes: DEFAULT_MAX_MCP_MESSAGE_BYTES,
         })
     }
 
@@ -99,6 +112,12 @@ impl McpListener {
     /// closed and its session slot released.
     pub fn with_first_byte_timeout(mut self, timeout: Duration) -> Self {
         self.first_byte_timeout = timeout;
+        self
+    }
+
+    /// Replace the longest message a session may send before it is closed.
+    pub fn with_max_message_bytes(mut self, limit: usize) -> Self {
+        self.max_message_bytes = limit;
         self
     }
 
@@ -158,6 +177,7 @@ impl McpListener {
                 peer,
                 permit,
                 self.first_byte_timeout,
+                self.max_message_bytes,
             ));
         }
     }
@@ -196,6 +216,7 @@ async fn serve_connection(
     peer: SocketAddr,
     _permit: OwnedSemaphorePermit,
     first_byte_timeout: Duration,
+    max_message_bytes: usize,
 ) {
     // rmcp ignores unparsable lines. An HTTP request line and its headers are
     // unparsable, but JSON-RPC lines in a POST body are not. Check the first
@@ -222,7 +243,9 @@ async fn serve_connection(
             return;
         }
     }
-    let running = match server.serve(stream).await {
+    let (reader, writer) = tokio::io::split(stream);
+    let transport = (MessageLimited::new(reader, max_message_bytes), writer);
+    let running = match server.serve(transport).await {
         Ok(running) => running,
         Err(error) => {
             tracing::warn!(peer = %peer, error = %error, "mcp listener session did not start");
@@ -231,6 +254,53 @@ async fn serve_connection(
     };
     if let Err(error) = running.waiting().await {
         tracing::warn!(peer = %peer, error = %error, "mcp listener session ended with an error");
+    }
+}
+
+/// Fails a read once a message (the bytes since the last newline) outgrows
+/// `limit`, which ends the rmcp session before the message is buffered whole.
+struct MessageLimited<R> {
+    inner: R,
+    limit: usize,
+    line_bytes: usize,
+}
+
+impl<R> MessageLimited<R> {
+    fn new(inner: R, limit: usize) -> Self {
+        Self {
+            inner,
+            limit,
+            line_bytes: 0,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for MessageLimited<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = &mut *self;
+        let before = buf.filled().len();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {}
+            other => return other,
+        }
+        for byte in &buf.filled()[before..] {
+            if *byte == b'\n' {
+                this.line_bytes = 0;
+            } else {
+                this.line_bytes += 1;
+                if this.line_bytes > this.limit {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("mcp message exceeds {} bytes", this.limit),
+                    )));
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }
 

@@ -3,8 +3,8 @@ use std::process::Command;
 
 use chrono::Utc;
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
-    TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus,
+    ArtifactManifestV2, TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACT_SCHEMA_VERSION,
+    TASK_ARTIFACTS_DIR_NAME, TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus,
 };
 use tempfile::TempDir;
 
@@ -434,4 +434,60 @@ fn export_racing_a_deletion_is_valid_or_reports_the_disappeared_bundle() {
             }
         }
     });
+}
+
+/// A bundle that holds a link must never carry the link's target into an
+/// archive: the archive leaves the machine, the target may be a credential.
+#[cfg(unix)]
+#[test]
+fn export_refuses_a_symlink_inside_a_bundle_without_packing_its_target() {
+    let src = TempDir::new().unwrap();
+    let archive = src.path().join("tasks.tar.zst");
+    let ws = "export-symlink-abcdef";
+    let registry = open_registry(src.path());
+    let binding = bind(&registry, src.path(), ws);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        ws,
+        &make_bundle("ORB-00000", "linked", Vec::new()),
+    );
+
+    let secret = src.path().join("host-secret.txt");
+    let secret_bytes = b"host-credential-must-not-leave";
+    fs::write(&secret, secret_bytes).unwrap();
+    let files_dir = store
+        .bundle_path("ORB-00000")
+        .unwrap()
+        .join(TASK_ARTIFACTS_DIR_NAME)
+        .join(TASK_ARTIFACT_FILES_DIR_NAME);
+    fs::create_dir_all(&files_dir).unwrap();
+    std::os::unix::fs::symlink(&secret, files_dir.join("leak")).unwrap();
+
+    let result = export_tasks(&registry, ws, ExportSelection::All, &archive, exported_at());
+
+    let packed_secret = archive.is_file() && {
+        let decoder = zstd::stream::read::Decoder::new(fs::File::open(&archive).unwrap()).unwrap();
+        let mut packed = Vec::new();
+        for entry in tar::Archive::new(decoder).entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut body).unwrap();
+            packed.extend(body);
+        }
+        packed
+            .windows(secret_bytes.len())
+            .any(|window| window == secret_bytes)
+    };
+    assert!(
+        !packed_secret,
+        "export dereferenced a bundle symlink and packed the target's bytes"
+    );
+    let error = result.expect_err("a bundle holding a symlink must not be exported");
+    assert!(error.to_string().contains("ORB-00000"), "{error}");
+    assert!(
+        !archive.exists(),
+        "refused export must not create an archive"
+    );
 }

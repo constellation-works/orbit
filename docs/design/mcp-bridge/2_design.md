@@ -134,6 +134,10 @@ authenticates no client: local processes can reach its agent tool surface even
 when it binds loopback. A browser page can send HTTP requests to loopback, so
 the listener closes a connection unless its first byte is `{`. This check runs
 before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body.
+rmcp buffers a message until its newline with no ceiling of its own, so the
+listener also closes a session whose single message exceeds 8 MiB
+(`DEFAULT_MAX_MCP_MESSAGE_BYTES`) rather than let an unauthenticated peer grow
+the process without bound.
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state

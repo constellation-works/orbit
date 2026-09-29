@@ -206,7 +206,7 @@ impl PluginTool {
                 "plugin tool '{}' exited with {}: {}",
                 self.name,
                 output.exit_code.unwrap_or(1),
-                output.stderr.trim()
+                secrets.mask_delivered(output.stderr.trim())
             )));
         }
         response_output(&self.name, &response?)

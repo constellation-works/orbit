@@ -237,6 +237,40 @@ fn an_exec_backend_receives_its_secret_on_stdin_and_not_in_env_or_argv() {
     assert_eq!(output["argv_hits"], 0, "the value is not in argv");
 }
 
+/// A backend that fails and echoes the secret it was handed on stderr (a
+/// verbose HTTP client, a traceback printing request headers) must not carry
+/// that value to the agent in the tool's error.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_failing_exec_backend_cannot_return_its_secret_through_stderr() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let command = stub_backend(
+        temp.path(),
+        &format!(
+            "#!/bin/sh\ncat >/dev/null\necho 'auth failed for token {EXEC_SECRET}' >&2\nexit 4\n"
+        ),
+    );
+    let mut backend = (*spec(command, temp.path(), PluginPermissions::default(), &[])).clone();
+    backend.secrets =
+        PluginSecretDelivery::new(vec!["api_token".to_string()], Arc::new(FixedSource));
+
+    let error = tool(Arc::new(backend), None)
+        .execute(&context(temp.path()), json!({}))
+        .expect_err("the backend exits non-zero")
+        .to_string();
+
+    assert!(
+        error.contains("exited with 4") && error.contains("auth failed"),
+        "the failure still explains itself: {error}"
+    );
+    assert!(
+        !error.contains(EXEC_SECRET),
+        "a delivered secret value reached the tool error: {error}"
+    );
+}
+
 struct FixedSource;
 
 impl PluginSecretSource for FixedSource {

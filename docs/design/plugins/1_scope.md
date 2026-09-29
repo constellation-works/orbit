@@ -344,6 +344,10 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   call's audit row records each name as `applied` or `refused` (§4.4). An entry whose name is
   not a valid secret name is refused without being logged or audited by name.
 
+  When an `exec` backend exits non-zero, the host includes its stderr in the tool error. Any
+  secret value that call delivered is replaced by `[secret]` there, so a backend that prints
+  a credential while failing does not hand it to the caller.
+
   OAuth refresh with X, which invalidates the old refresh token on every refresh: the backend
   reads `refresh_token` from `context.secrets`, exchanges it for an access token and a new
   refresh token, and answers `{"ok": true, "output": {…}, "secret_updates": {"refresh_token":

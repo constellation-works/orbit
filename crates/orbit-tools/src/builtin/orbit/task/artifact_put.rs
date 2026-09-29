@@ -1,8 +1,8 @@
-use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::open_read_only_no_follow;
 use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_common::tracing;
 use orbit_policy::resolve_symlinks;
@@ -134,12 +134,22 @@ fn read_bounded_artifact(
     source_path: &Path,
     artifact_path: Option<&str>,
 ) -> Result<TaskArtifact, OrbitError> {
-    let mut file = File::open(source_path).map_err(|error| {
+    // `confine_source_path` resolved and checked this path a moment ago, but
+    // the workspace belongs to the caller. Refuse a link swapped in since, and
+    // a FIFO or device that would block or never end: only a regular file is
+    // read.
+    let mut file = open_read_only_no_follow(source_path).map_err(|error| {
         OrbitError::Io(format!(
             "read artifact source '{}': {error}",
             source_path.display()
         ))
     })?;
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "artifact source '{}' is not a regular file",
+            source_path.display()
+        )));
+    }
     let mut content = Vec::new();
     file.by_ref()
         .take(MAX_TASK_ARTIFACT_CONTENT_BYTES + 1)

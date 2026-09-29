@@ -133,3 +133,52 @@ async fn a_peer_that_starts_a_json_object_promptly_is_not_dropped_by_the_first_b
     );
     server.abort();
 }
+
+#[tokio::test]
+async fn a_peer_that_streams_an_endless_message_is_disconnected() {
+    let listener = McpListener::bind(
+        addr("127.0.0.1:0"),
+        ListenerExposure::LoopbackOnly,
+        Arc::new(NoTools),
+        ToolSessionContext::trusted_local(None, None, None),
+    )
+    .await
+    .expect("bind listener")
+    .with_max_message_bytes(4 * 1024);
+    let bound = listener.local_addr().expect("bound address");
+    let server = tokio::spawn(listener.serve());
+
+    let mut client = TcpStream::connect(bound).await.expect("connect");
+    client
+        .write_all(
+            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}
+"#,
+        )
+        .await
+        .expect("send initialize");
+    let mut reply = [0u8; 1];
+    client
+        .read_exact(&mut reply)
+        .await
+        .expect("initialize is answered");
+
+    // A message with no newline, longer than the ceiling. The server must
+    // hang up rather than buffer it for as long as the peer keeps sending.
+    let mut chunk = vec![b'a'; 1024];
+    chunk[0] = b'{';
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        for _ in 0..64 {
+            if client.write_all(&chunk).await.is_err() {
+                return;
+            }
+        }
+        let mut sink = Vec::new();
+        let _ = client.read_to_end(&mut sink).await;
+    })
+    .await;
+    assert!(
+        closed.is_ok(),
+        "the listener must close a session whose message exceeds the size ceiling"
+    );
+    server.abort();
+}
