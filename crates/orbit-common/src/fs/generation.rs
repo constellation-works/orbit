@@ -61,7 +61,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
@@ -517,14 +517,15 @@ fn hash_executable(mut file: File) -> Result<String, OrbitError> {
 
 /// Digest the running inode, even after its installed path has been replaced.
 pub fn process_generation() -> Result<&'static str, OrbitError> {
-    process_digest(None)
+    process_digest(None, false)
 }
 
-/// [`process_generation`], remembering the digest under `root` between
-/// processes for as long as the running image's file identity is unchanged
-/// (see [`image_digest`]). Whichever call runs first fixes the process's
-/// digest; later calls return it.
-fn process_digest(cache_root: Option<&Path>) -> Result<&'static str, OrbitError> {
+/// [`process_generation`], answered from the digest cache under `cache_root`
+/// for as long as the running image's file identity is unchanged (see
+/// [`image_digest`]). A fresh digest is written back only when `record` is
+/// set; a read-only participant must leave the root byte-identical. Whichever
+/// call runs first fixes the process's digest; later calls return it.
+fn process_digest(cache_root: Option<&Path>, record: bool) -> Result<&'static str, OrbitError> {
     static DIGEST: OnceLock<Result<String, String>> = OnceLock::new();
     DIGEST
         .get_or_init(|| {
@@ -538,7 +539,13 @@ fn process_digest(cache_root: Option<&Path>) -> Result<&'static str, OrbitError>
                 let cache = cache_root.and_then(|root| {
                     validated_generation_record_path(root, IMAGE_DIGEST_CACHE).ok()
                 });
-                image_digest::digest_with_cache(cache.as_deref(), file, hash_executable)
+                image_digest::digest_with_cache(
+                    cache.as_deref(),
+                    record,
+                    SystemTime::now(),
+                    file,
+                    hash_executable,
+                )
             })();
             result.map_err(|e: OrbitError| e.to_string())
         })
@@ -671,7 +678,7 @@ impl GenerationGuard {
         F: FnOnce() -> Result<u32, OrbitError>,
     {
         let participant = Participant {
-            digest: process_digest(Some(root))?,
+            digest: process_digest(Some(root), access != Access::ReadOnly)?,
             identity,
             role,
             access,

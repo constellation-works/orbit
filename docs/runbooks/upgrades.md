@@ -254,7 +254,9 @@ Hashing a whole binary dominates a short command, so the digest is remembered in
 `.generation-image-digest.json` (a disposable cache, safe to delete) keyed by the
 image's device, inode, size, mtime and ctime. Any rewrite or replacement changes the
 key and is re-hashed; an image modified within the last two seconds is never
-recorded, so a same-tick rewrite cannot alias an earlier entry.
+recorded, so a same-tick rewrite cannot alias an earlier entry. A read-only
+participant reads the cache but never writes it, so a read-only join leaves the
+root byte-identical.
 OS locks release on exit or crash (and on exec, which is how a handover leaves);
 never unlink `.generation.lock`, `.generation-admission.lock`,
 `.generation-compat.json`, `.generation-pending.json` or `.generation-participants/`
