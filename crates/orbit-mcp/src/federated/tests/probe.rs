@@ -5,14 +5,18 @@
 //! path without an SSH host: everything the mux sends is accepted and nothing
 //! is ever answered.
 
+use std::io::Cursor;
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::json;
 
-use super::super::probe::{DestinationSession, RoutedSession, SshRoutedSession};
+use super::super::probe::{
+    BoundedLine, DestinationSession, RoutedSession, SshRoutedSession, read_bounded_line,
+};
 use super::fixtures::{OWNER_MACHINE, destination};
 
 /// A destination that takes the request and stops there.
@@ -414,4 +418,115 @@ for line in sys.stdin:
             )
             .is_err()
     );
+}
+
+/// A destination that answers `initialize` with a JSON line of `oversize`
+/// bytes, then answers `tools/call` with the same. The bulk sits in a string
+/// field so every line is valid JSON: only its length can be wrong.
+fn bulky_destination(oversize: usize) -> std::process::Child {
+    Command::new("python3")
+        .args([
+            "-u",
+            "-c",
+            r#"
+import sys, json
+size = int(sys.argv[1])
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    if request["method"] == "initialize":
+        result = {"protocolVersion": "2025-06-18", "pad": "a" * size}
+    else:
+        result = {"structuredContent": {"blob": "a" * size}}
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}) + "\n")
+    sys.stdout.flush()
+"#,
+            &oversize.to_string(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn a bulky destination")
+}
+
+const FIVE_MIB: usize = 5 * 1024 * 1024;
+
+#[test]
+fn an_oversized_handshake_answer_is_refused_with_a_line_limit_error() {
+    let mut session = DestinationSession::start(
+        destination("orbit-owner", OWNER_MACHINE),
+        bulky_destination(FIVE_MIB),
+        Duration::from_secs(20),
+    )
+    .expect("start a session against the bulky destination");
+
+    let started = Instant::now();
+    let error = session
+        .handshake()
+        .expect_err("a handshake answer past the probe ceiling is not a handshake");
+    assert!(
+        matches!(error, OrbitError::UnreachableDestination(_)),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("line limit"),
+        "the refusal must say why, not read as a silent disconnect: {error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the oversized line is refused when it crosses the cap, not at the deadline"
+    );
+}
+
+#[test]
+fn a_routed_tool_result_may_exceed_the_probe_ceiling() {
+    // Sessions start at the probe ceiling; only delivery raises it, so a
+    // 5 MiB result proves tool results keep their own, larger, cap.
+    let mut session = DestinationSession::start(
+        destination("orbit-owner", OWNER_MACHINE),
+        bulky_destination(FIVE_MIB),
+        Duration::from_secs(20),
+    )
+    .expect("start a session against the bulky destination");
+    let reply = session
+        .call_tool("orbit.task.list", json!({}))
+        .expect("a large tool result is legitimate and must be delivered");
+    assert_eq!(reply["blob"].as_str().map(str::len), Some(FIVE_MIB));
+}
+
+#[test]
+fn bounded_line_reader_splits_lines_and_refuses_an_overlong_one() {
+    let cap = AtomicU64::new(8);
+    let mut reader = Cursor::new(b"one\ntwo\n12345678\n123456789\nlast".to_vec());
+
+    let mut next = || read_bounded_line(&mut reader, &cap).expect("read");
+    assert_eq!(next(), BoundedLine::Line("one\n".into()));
+    assert_eq!(next(), BoundedLine::Line("two\n".into()));
+    // Newline included, this line is exactly nine bytes: over an 8-byte cap.
+    assert_eq!(next(), BoundedLine::TooLong { limit: 8 });
+}
+
+#[test]
+fn bounded_line_reader_yields_a_final_unterminated_line_then_eof() {
+    let cap = AtomicU64::new(64);
+    let mut reader = Cursor::new(b"tail".to_vec());
+
+    assert_eq!(
+        read_bounded_line(&mut reader, &cap).expect("read"),
+        BoundedLine::Line("tail".into())
+    );
+    assert_eq!(
+        read_bounded_line(&mut reader, &cap).expect("read"),
+        BoundedLine::Eof
+    );
+}
+
+#[test]
+fn bounded_line_reader_rejects_invalid_utf8() {
+    let cap = AtomicU64::new(64);
+    let mut reader = Cursor::new(vec![0xff, 0xfe, b'\n']);
+
+    assert!(read_bounded_line(&mut reader, &cap).is_err());
 }
