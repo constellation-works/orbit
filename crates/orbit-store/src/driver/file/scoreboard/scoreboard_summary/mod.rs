@@ -12,19 +12,17 @@ mod highlights;
 mod overlay;
 mod types;
 
-pub use files::{summary_path, write_summary};
-pub use generate::{
-    generate_summary, generate_summary_with_audit_tool_calls, generate_summary_with_inputs,
-};
+pub use files::write_summary;
+pub use generate::generate_summary_with_inputs;
+#[cfg(test)]
+pub use generate::{generate_summary, generate_summary_with_audit_tool_calls};
 pub use highlights::{
-    CoverageAvailability, CoverageNote, NotableCompletion, NotableCompletions, ScoreboardCoverage,
-    select_notable_completions, snapshot_coverage,
+    NotableCompletions, ScoreboardCoverage, select_notable_completions, snapshot_coverage,
 };
 pub use types::{
-    AgentSummary, FrictionSummary, NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION,
-    OrchestrationBucketKind, OrchestrationBucketSummary, OrchestrationModelSummary,
-    OrchestrationSummary, PrSummary, RecentSummary, ScoreboardInputs, ScoreboardSummary,
-    ScoreboardWindow, TokenSummary, TopToolCall, WorkflowRunCount,
+    AgentSummary, NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION, OrchestrationBucketKind,
+    OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary, RecentSummary,
+    ScoreboardInputs, ScoreboardSummary, ScoreboardWindow, TopToolCall, WorkflowRunCount,
 };
 
 #[cfg(test)]

@@ -205,8 +205,9 @@ const CREDENTIAL_FILE_NAMES: &[&str] = &["credentials", "credentials.json", "cre
 
 /// Every environment variable that widens the host read set.
 ///
-/// Exposed so an operator can see, and a test can pin, exactly which names in a
-/// child environment turn into filesystem grants.
+/// Lets a test pin exactly which names in a child environment turn into
+/// filesystem grants.
+#[cfg(test)]
 pub const HOST_READ_ENV_VARS: &[&str] = &[
     "CARGO_HOME",
     "GH_CONFIG_DIR",

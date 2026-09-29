@@ -23,8 +23,8 @@ pub use inspect::{
 };
 pub use install::{ClockInstallReport, install_clock, sweep_log_path};
 pub use settings::{
-    ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, clock_settings_path,
-    load_clock_settings, save_clock_settings, set_clock_cadence,
+    ClockSettings, DEFAULT_CLOCK_CADENCE_SECONDS, LAUNCHD_LABEL, SYSTEMD_UNIT, load_clock_settings,
+    save_clock_settings, set_clock_cadence,
 };
 pub use status::{ClockStatus, clock_status};
 

@@ -33,7 +33,7 @@ use orbit_types::policy::{ResolvedFsProfile, compile_glob_regex};
 use regex::Regex;
 
 pub use argv::{compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority};
-pub use probe::{bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message, probe_bwrap};
+pub use probe::{bwrap_path, bwrap_program_for_audit, probe_bwrap};
 pub use spawn::spawn_under_linux_bwrap;
 pub use types::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
@@ -41,8 +41,8 @@ pub use types::{
     LinuxBwrapSpawnRequest,
 };
 pub use write_grants::{
-    PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind, WriteGrant,
-    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
+    UnsatisfiedWriteGrant, WriteAnchorKind, linux_bwrap_write_grant_diagnostic,
+    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
 };
 
 /// Every existing path matched by any of `rules`: absolute globs in the

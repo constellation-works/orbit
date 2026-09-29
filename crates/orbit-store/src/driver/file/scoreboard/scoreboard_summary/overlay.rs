@@ -3,7 +3,7 @@
 
 use super::AgentSummary;
 use super::types::FamilyScoreboard;
-use crate::friction_store::FrictionReportedCount;
+use crate::contracts::FrictionReportedCount;
 use crate::{AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole};
 use orbit_common::OrbitError;
 use orbit_types::identity::{

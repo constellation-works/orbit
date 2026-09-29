@@ -72,10 +72,6 @@ impl Session {
         &self.history
     }
 
-    pub fn history_mut(&mut self) -> &mut Vec<Message> {
-        &mut self.history
-    }
-
     pub fn append_message(&mut self, msg: Message) {
         self.history.push(msg);
     }

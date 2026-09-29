@@ -29,10 +29,6 @@ pub fn write_summary(
     Ok(path)
 }
 
-pub fn summary_path(scoreboard_dir: &Path) -> std::path::PathBuf {
-    scoreboard_dir.join(SUMMARY_FILENAME)
-}
-
 pub(super) fn read_model_scoreboard(scoreboard_dir: &Path) -> Result<FamilyScoreboard, OrbitError> {
     read_model_scoreboard_after_check(scoreboard_dir, |_| Ok(()))
 }

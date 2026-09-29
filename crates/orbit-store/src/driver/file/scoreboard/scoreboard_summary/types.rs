@@ -1,7 +1,7 @@
 //! Scoreboard summary document types, windows and generation inputs.
 
 use super::{NotableCompletions, ScoreboardCoverage};
-use crate::friction_store::FrictionReportedCount;
+use crate::contracts::FrictionReportedCount;
 use crate::{AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;

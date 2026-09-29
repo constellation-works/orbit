@@ -67,7 +67,7 @@ The glob translator supports `*`, `**`, `?`, and `<prefix>/**`. It is intentiona
 
 ## 4. PolicyEngine Facade
 
-`crates/orbit-policy/src/lib.rs` re-exports `PolicyEngine`, `FsPolicyEvaluation`, and `PolicyDecision`. `PolicyEngine` wraps a validated `PolicyDef` and exposes:
+`crates/orbit-policy/src/lib.rs` re-exports `PolicyEngine` and `FsPolicyEvaluation`. `PolicyEngine` wraps a validated `PolicyDef` and exposes:
 
 ```
 PolicyEngine::check(profile, operation, path) -> FsPolicyEvaluation

@@ -31,9 +31,3 @@ pub const TEST_GEMINI_MODEL: &str = "gemini-3.1-pro";
 
 /// Frozen grok model literal for attribution/input test fixtures.
 pub const TEST_GROK_MODEL: &str = "grok-4";
-
-/// Convenience default test model (codex family) for tests that just need
-/// *some* model string and do not care which.
-pub fn test_model() -> &'static str {
-    TEST_CODEX_MODEL
-}

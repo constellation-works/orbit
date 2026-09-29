@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+use orbit_common::text::ceil_char_boundary;
+#[cfg(test)]
+use orbit_common::text::floor_char_boundary;
 use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;

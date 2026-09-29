@@ -21,16 +21,18 @@
 //! and `orbit-cmd`.
 //!
 //! # Key exports
-//! - Backend trait types: [`TaskStoreBackend`], [`TaskDocumentStoreBackend`],
-//!   [`TaskHistoryStoreBackend`],
-//!   [`TaskArtifactStoreBackend`], [`TaskReservationStoreBackend`],
-//!   [`JobRunStoreBackend`], [`AuditEventStoreBackend`], [`ToolStoreBackend`]
+//! - Backend trait types in [`contracts`]: [`contracts::TaskStoreBackend`],
+//!   [`contracts::TaskDocumentStoreBackend`],
+//!   [`contracts::TaskHistoryStoreBackend`],
+//!   [`contracts::TaskArtifactStoreBackend`],
+//!   [`contracts::TaskReservationStoreBackend`],
+//!   [`contracts::JobRunStoreBackend`], [`contracts::AuditEventStoreBackend`],
+//!   [`contracts::ToolStoreBackend`]
 //! - Composition functions: `compose::workspace_task_backends`, `compose::workspace_job_run_store`,
 //!   `global_executor_def_store`, `global_policy_def_store`,
 //!   `audit_event_store_sqlite`, `workspace_coordinated_backends`, `tool_store_sqlite`
 //! - [`SessionLogStore`] — lock-safe workspace session-log persistence
-//! - [`Store`] / [`StoreTx`] — SQLite connection handle and transaction wrapper
-//! - [`validate_instance_against_schema`] — JSON Schema validation for activity I/O
+//! - [`Store`] — SQLite connection handle and transaction wrapper
 //!
 //! # Dependency direction
 //! `orbit-common` / `orbit-types` ← `orbit-store` ← consumers such as orbit-core and orbit-engine
@@ -52,7 +54,7 @@ pub mod maintenance {
         pub use crate::contracts::WorkspaceConfig;
         pub use crate::driver::file::workspace_binding::{
             read_workspace_config, read_workspace_config_optional, workspace_config_path,
-            workspace_id_for_orbit_dir, write_workspace_config,
+            write_workspace_config,
         };
         pub use crate::driver::sqlite::task_registry::*;
     }
@@ -66,22 +68,10 @@ pub mod skill_store {
 }
 
 /// Friction records. Live reads and writes go through [`FrictionStore`]
-/// (SQLite, ORB-10680); the file-layout helpers re-exported here own the hub
-/// publication decision and the legacy tree kept as read-only evidence.
+/// (SQLite, ORB-10680); the tag taxonomy file did not move.
 pub mod friction_store {
-    pub use orbit_types::identity::validate_friction_id;
-
-    pub use crate::driver::file::friction_store::{
-        canonical_hub_friction_root, ensure_default_tag_taxonomy, prepare_hub_friction_root,
-        readable_hub_friction_root,
-    };
-    pub use crate::repository::friction::{
-        FrictionAddParams, FrictionListFilter, FrictionReportedCount, FrictionStore,
-        FrictionUpdateParams, StoredFrictionRecord,
-    };
-    pub use crate::workflow::friction::{
-        FrictionImportReport, export_workspace_frictions, import_workspace_frictions,
-    };
+    pub use crate::driver::file::friction_store::ensure_default_tag_taxonomy;
+    pub use crate::repository::friction::{FrictionAddParams, FrictionListFilter, FrictionStore};
 }
 
 pub mod pr_scoreboard {
@@ -92,13 +82,10 @@ pub mod pr_scoreboard {
 
 pub mod scoreboard_summary {
     pub use crate::driver::file::scoreboard::scoreboard_summary::{
-        AgentSummary, CoverageAvailability, CoverageNote, FrictionSummary, NormalizedTokenSummary,
-        NotableCompletion, NotableCompletions, ORCHESTRATION_SCHEMA_VERSION,
-        OrchestrationBucketKind, OrchestrationBucketSummary, OrchestrationModelSummary,
-        OrchestrationSummary, PrSummary, RecentSummary, ScoreboardCoverage, ScoreboardInputs,
-        ScoreboardSummary, ScoreboardWindow, TokenSummary, TopToolCall, WorkflowRunCount,
-        generate_summary, generate_summary_with_audit_tool_calls, generate_summary_with_inputs,
-        summary_path, write_summary,
+        NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION, OrchestrationBucketKind,
+        OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary,
+        ScoreboardInputs, ScoreboardSummary, ScoreboardWindow, generate_summary_with_inputs,
+        write_summary,
     };
 }
 
@@ -109,52 +96,39 @@ pub mod token_scoreboard {
 use chrono::{DateTime, Utc};
 
 pub use contracts::incident::{
-    CASCADE_WINDOW_SECS, DEFAULT_SCAN_LIMIT as FAILURE_INCIDENT_SCAN_LIMIT, FailureClass,
-    FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
+    FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
     JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
-    build_report as build_failure_incident_report, classify as classify_failure,
-    group_failure_incidents, is_failure_only_diagnostic_surface, is_lifecycle_diagnostic,
-    normalize_message as normalize_failure_message, signature_for as failure_signature_for,
+    is_failure_only_diagnostic_surface,
 };
-pub use contracts::{
-    ActiveTaskReservation, ActivityInvocationCount, ActivityInvocationMetrics,
-    AgentInvocationMetrics, AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter,
-    AuditEventInsertParams, AuditEventStoreBackend, AuditInvocationFields, AuditRoleAggregate,
-    AuditToolAggregate, AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole,
-    AuditTopToolCall, BoundedFacts, ExecutorDefStoreBackend, ExpiredTaskReservation,
-    FrictionStoreBackend, InvocationAccountingFact, InvocationAccountingQuery,
-    InvocationInsertParams, InvocationQuery, InvocationRecord, InvocationRunCoverage,
-    InvocationStoreBackend, InvocationToolCallRecord, JobRunOutcomeFact, JobRunQuery,
-    JobRunStepParams, JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend,
-    RegisteredTaskResolution, ReleasedTaskReservation, RoutineCursor, RoutineFireIntentParams,
-    RoutineFireRecord, RoutineFireState, RoutinePauseRecord, RoutineStoreBackend,
-    SessionLogAppendParams, SessionLogEntry, SessionLogFilter, SessionLogKind,
-    SessionLogStoreBackend, TaskArtifactStoreBackend, TaskArtifactUpdateParams,
-    TaskCompletionByComplexity, TaskCoordinationCommit, TaskCoordinationCommitOutcome,
-    TaskCoordinationCommitParams, TaskCoordinationRow, TaskCreateParams, TaskDocumentStoreBackend,
-    TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams,
-    TaskInvocationMetrics, TaskLockConflict, TaskLockHolder, TaskReservationCheckParams,
+pub(crate) use contracts::{
+    ActiveTaskReservation, AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate,
+    AuditToolCallCountsByRole, AuditToolCallCountsBySurfaceAndRole, AuditTopToolCall,
+    ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationCheckParams,
     TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
     TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
     TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
-    TaskReservationReleaseReason, TaskReservationReleaseResult, TaskReservationReserveParams,
-    TaskReservationReserveResult, TaskReservationScope, TaskReservationStoreBackend,
-    TaskStoreBackend, ToolInvocationMetrics, ToolStoreBackend, V2AuditEventFilter,
-    V2AuditEventInsertParams, V2AuditEventRow, V2AuditStoreBackend, WorkspaceClaimAcquireParams,
-    WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams, WorkspaceClaimCheckResult,
-    WorkspaceClaimHolder, WorkspaceClaimReleaseParams, WorkspaceClaimReleaseResult,
-    WorkspaceClaimStatusResult,
+    TaskReservationReleaseResult, TaskReservationReserveResult, TaskReservationScope,
+    WorkspaceClaimAcquireParams, WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams,
+    WorkspaceClaimCheckResult, WorkspaceClaimHolder, WorkspaceClaimReleaseParams,
+    WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
+};
+pub use contracts::{
+    ActivityInvocationCount, ActivityInvocationMetrics, AuditEventFilter, AuditEventInsertParams,
+    AuditToolAggregate, InvocationInsertParams, InvocationQuery, InvocationRecord,
+    InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams, RegisteredTaskResolution,
+    RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, SessionLogAppendParams,
+    SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams, TaskCompletionByComplexity,
+    TaskCreateParams, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
+    TaskReservationReleaseReason, TaskReservationReserveParams, TaskStoreBackend,
+    ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow,
 };
 pub use driver::file::session_log_store::SessionLogStore;
 pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;
-pub use driver::file::workspace_binding::{
-    read_workspace_config, read_workspace_config_optional, workspace_config_path,
-    workspace_id_for_orbit_dir, write_workspace_config,
-};
-pub use driver::sqlite::connection::{Store, StoreTx};
-pub use driver::sqlite::routine_store::{RoutineSweepLock, try_acquire_routine_sweep_lock};
-pub use fs::lock::{LockHolderInfo, read_lock_holder};
-pub use json_schema::{validate_instance_against_schema, validate_schema_document};
+pub use driver::file::workspace_binding::workspace_id_for_orbit_dir;
+pub use driver::sqlite::connection::Store;
+pub(crate) use driver::sqlite::connection::StoreTx;
+pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
+pub use fs::lock::read_lock_holder;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {

@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use super::super::RegisterWorkspaceParams;
 use super::store;
 use crate::contracts::WorkspaceConfig;
-use crate::{
+use crate::driver::file::workspace_binding::{
     read_workspace_config, read_workspace_config_optional, workspace_config_path,
     workspace_id_for_orbit_dir, write_workspace_config,
 };

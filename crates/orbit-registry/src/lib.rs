@@ -15,7 +15,6 @@ pub mod workspace_registry;
 mod tests;
 
 pub use machine_identity::{
-    CONFIG_TOML_FILE, LEGACY_HOST_TOML_FILE, MachineIdentity, MachineIdentityOutcome,
-    MachineIdentityState, NewMachineIdentity, ensure_machine_identity, inspect_machine_identity,
-    load_machine_identity, migrate_host_toml, os_hostname,
+    MachineIdentityOutcome, MachineIdentityState, NewMachineIdentity, ensure_machine_identity,
+    inspect_machine_identity, load_machine_identity, os_hostname,
 };

@@ -14,7 +14,6 @@ mod setup;
 pub use command::{McpCommand, McpSubcommand};
 pub(crate) use orbit_mcp::safe_mcp_tool_names;
 pub(crate) use server::ID_RESOLVED_WORKSPACE_TOOLS;
-#[allow(unused_imports)]
 pub(crate) use setup::init_auto_for_workspace;
 pub(crate) use setup::registered_clients_for_workspace;
 

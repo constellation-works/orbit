@@ -4,10 +4,8 @@ use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use tempfile::tempdir;
 
 use crate::application::task::TaskAddParams;
-use crate::{
-    InvocationInsertParams, OrbitRuntime, OrchestratorInvocationMetricsBucket,
-    OrchestratorMetricsBucketKind,
-};
+use crate::runtime::engine::OrchestratorInvocationMetricsBucket;
+use crate::{InvocationInsertParams, OrbitRuntime, OrchestratorMetricsBucketKind};
 
 const PRICED_MODEL: &str = "claude-opus-4-7";
 const UNPRICED_MODEL: &str = "unpriced-model";

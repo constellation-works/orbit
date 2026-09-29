@@ -66,8 +66,6 @@ use orbit_types::policy::ResolvedFsProfile;
 
 use crate::runner::{EnvironmentMode, ExecRequest};
 
-pub use host::HOST_READ_ENV_VARS;
-
 /// Lowest Landlock ABI this enforcement accepts.
 ///
 /// ABI 2 (Linux 5.19) is the first to expose `LANDLOCK_ACCESS_FS_REFER`.
@@ -477,8 +475,8 @@ pub struct LandlockReadBoundary {
 /// runtime requires, and the workspace paths the resolved profile allows.
 ///
 /// `environment` is the child's own environment, which is what names the tool
-/// state directories in [`HOST_READ_ENV_VARS`]. Nothing outside those grants
-/// is readable.
+/// state directories named by the host read set (see `host::host_read_grants`).
+/// Nothing outside those grants is readable.
 pub fn linux_landlock_read_boundary(
     workspace_root: &Path,
     profile: &ResolvedFsProfile,

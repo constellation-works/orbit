@@ -667,20 +667,6 @@ impl PullDrain<'_> {
             }))
     }
 
-    /// Persist a leaf's settlement, then deliver it. A disconnect leaves
-    /// exactly this immutable settlement for a later pass to retry
-    /// idempotently.
-    #[allow(dead_code)]
-    pub(crate) fn settle(
-        &self,
-        record: &LocalPullAdmission,
-        settlement: ClaimMutation,
-    ) -> Result<(), OrbitError> {
-        let pending = self.update(record, LocalPullMutation::Settle(Box::new(settlement)))?;
-        self.deliver(&pending)?;
-        Ok(())
-    }
-
     /// Deliver a persisted settlement to the owner.
     ///
     /// An owner refusal is reconciled against the owner's receipt, the way a

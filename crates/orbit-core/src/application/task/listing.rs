@@ -37,10 +37,9 @@ fn query_task_store(
 ) -> Result<TaskPage, OrbitError> {
     let residual = |task: &Task, statuses: &BTreeMap<String, TaskStatus>| {
         (!query.ready || task_dependencies_ready(task, statuses))
-            && query
-                .path
-                .as_deref()
-                .is_none_or(|path| crate::task_selectors_contain_path(&task.context_files, path))
+            && query.path.as_deref().is_none_or(|path| {
+                crate::application::search::task_selectors_contain_path(&task.context_files, path)
+            })
     };
     store.query_task_rows(
         &query.filter,

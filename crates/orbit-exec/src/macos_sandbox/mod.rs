@@ -40,7 +40,7 @@ pub use compile::{
     append_macos_read_boundary, append_macos_subpath_mask, compile_macos_sandbox_profile,
     macos_login_keychain_access,
 };
-pub use provider_dirs::{claude_state_dir_from_env, grok_state_dir_from_env};
+pub use provider_dirs::claude_state_dir_from_env;
 pub use spawn::{
     MacosSandboxSpawnRequest, sandbox_exec_available, sandbox_exec_path,
     sandbox_exec_program_for_audit, sandbox_exec_unavailable_message, spawn_under_macos_sandbox,

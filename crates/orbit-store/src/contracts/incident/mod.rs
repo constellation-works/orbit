@@ -50,6 +50,5 @@ pub use signature::{normalize_message, signature_for};
 pub use types::{
     CASCADE_WINDOW_SECS, DEFAULT_SCAN_LIMIT, FAILURE_ONLY_DIAGNOSTIC_SURFACES, FailureClass,
     FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_CATEGORY, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
-    PropagationLink,
+    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
 };

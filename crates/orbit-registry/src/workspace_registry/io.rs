@@ -159,11 +159,6 @@ fn persist_migration(
     Ok(snapshot.load.registry)
 }
 
-/// Save the machine-global workspace registry atomically.
-pub fn save_registry(registry: &WorkspaceRegistry) -> Result<(), OrbitError> {
-    save_registry_to(registry, &registry_path()?)
-}
-
 /// Validate and atomically save a registry to an explicit path.
 pub fn save_registry_to(registry: &WorkspaceRegistry, path: &Path) -> Result<(), OrbitError> {
     let path = validated_registry_path(path)?;

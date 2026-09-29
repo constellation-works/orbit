@@ -1,26 +1,12 @@
 use orbit_types::resource::{
     POLICY_RESOURCE_SCHEMA_VERSION, PolicyResource, ResourceHeader, ResourceKind,
 };
-use orbit_types::task::TaskPlan;
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, ROUTINE_SCHEMA_VERSION, RoutineDefinition,
     SchemaHeader,
 };
 
 use crate::error::OrbitError;
-
-pub fn parse_task_plan(raw: &str, label: &str) -> Result<TaskPlan, OrbitError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || !looks_like_structured_task_plan(trimmed) {
-        return Ok(TaskPlan::default());
-    }
-    serde_yaml::from_str::<TaskPlan>(trimmed)
-        .map_err(|error| OrbitError::InvalidInput(format!("failed to parse {label}: {error}")))
-}
-
-fn looks_like_structured_task_plan(raw: &str) -> bool {
-    raw.contains("checkpoints:") || raw.contains("success_criteria:")
-}
 
 pub fn parse_auto_task_yaml(yaml: &str) -> Result<AutoTaskDefinition, OrbitError> {
     let header: SchemaHeader = serde_yaml::from_str(yaml)

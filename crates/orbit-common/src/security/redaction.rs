@@ -31,16 +31,15 @@ use std::{
 use regex::Regex;
 use serde_json::Value;
 
+use crate::error::FrictionNotLocal;
 use crate::{
-    ArtifactOrigin, DependencyNotDelivered, FrictionNotLocal, OrbitError, RecoverableVcsConflict,
-    WorkspaceClaimHeld,
+    ArtifactOrigin, DependencyNotDelivered, OrbitError, RecoverableVcsConflict, WorkspaceClaimHeld,
 };
 
 const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
 static DEFAULT_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static ARGV_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-#[cfg_attr(test, allow(dead_code))]
 static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
@@ -171,10 +170,6 @@ fn proper_prefix_table(pat: &[u8]) -> Vec<usize> {
     table
 }
 
-pub fn redact_sensitive_env_option(raw: Option<String>) -> Option<String> {
-    raw.map(|value| redact_sensitive_env_text(&value))
-}
-
 pub fn redact_sensitive_env_json(value: Value) -> Value {
     match value {
         Value::String(raw) => Value::String(redact_sensitive_env_text(&raw)),
@@ -222,210 +217,9 @@ fn redact_path_prefix(text: &str, prefix: &str) -> String {
     redacted
 }
 
-/// Apply env-value redaction to the message carried by any `OrbitError` variant.
-pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
-    match error {
-        OrbitError::PolicyDenied(m) => OrbitError::PolicyDenied(redact_sensitive_env_text(&m)),
-        OrbitError::NotFound { kind, id } => OrbitError::NotFound {
-            kind,
-            id: redact_sensitive_env_text(&id),
-        },
-        OrbitError::CapabilityDenied(m) => {
-            OrbitError::CapabilityDenied(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnknownSelector(m) => {
-            OrbitError::UnknownSelector(redact_sensitive_env_text(&m))
-        }
-        OrbitError::AmbiguousCaller(m) => {
-            OrbitError::AmbiguousCaller(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnauthorizedCaller(m) => {
-            OrbitError::UnauthorizedCaller(redact_sensitive_env_text(&m))
-        }
-        OrbitError::AmbiguousDestination(m) => {
-            OrbitError::AmbiguousDestination(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnreachableDestination(m) => {
-            OrbitError::UnreachableDestination(redact_sensitive_env_text(&m))
-        }
-        OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact_sensitive_env_text(&m)),
-        OrbitError::UnhealthyCheckout(m) => {
-            OrbitError::UnhealthyCheckout(redact_sensitive_env_text(&m))
-        }
-        OrbitError::ToolNotOnThisHost(m) => {
-            OrbitError::ToolNotOnThisHost(redact_sensitive_env_text(&m))
-        }
-        OrbitError::PluginDisabledInWorkspace { plugin, workspace } => {
-            OrbitError::PluginDisabledInWorkspace {
-                plugin: redact_sensitive_env_text(&plugin),
-                workspace: redact_sensitive_env_text(&workspace),
-            }
-        }
-        OrbitError::PluginDisabledOnHost { plugin } => OrbitError::PluginDisabledOnHost {
-            plugin: redact_sensitive_env_text(&plugin),
-        },
-        OrbitError::CapabilityRefused(m) => {
-            OrbitError::CapabilityRefused(redact_sensitive_env_text(&m))
-        }
-        OrbitError::AdrInvalidTransition(m) => {
-            OrbitError::AdrInvalidTransition(redact_sensitive_env_text(&m))
-        }
-        OrbitError::RemoteArtifactUnavailable {
-            kind,
-            id,
-            artifact_origin,
-        } => OrbitError::RemoteArtifactUnavailable {
-            kind,
-            id: redact_sensitive_env_text(&id),
-            artifact_origin: redact_artifact_origin(artifact_origin, redact_sensitive_env_text),
-        },
-        OrbitError::ArtifactNotLocal {
-            kind,
-            id,
-            artifact_origin,
-        } => OrbitError::ArtifactNotLocal {
-            kind,
-            id: redact_sensitive_env_text(&id),
-            artifact_origin: redact_artifact_origin(artifact_origin, redact_sensitive_env_text),
-        },
-        OrbitError::FrictionNotLocal(details) => OrbitError::FrictionNotLocal(
-            redact_friction_not_local(*details, redact_sensitive_env_text),
-        ),
-        OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact_sensitive_env_text(&m)),
-        OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
-            field: redact_sensitive_env_text(&field),
-            reason: redact_sensitive_env_text(&reason),
-        },
-        OrbitError::InvalidInputDiagnostic {
-            message,
-            did_you_mean,
-        } => OrbitError::InvalidInputDiagnostic {
-            message: redact_sensitive_env_text(&message),
-            did_you_mean: did_you_mean
-                .into_iter()
-                .map(|suggestion| redact_sensitive_env_text(&suggestion))
-                .collect(),
-        },
-        OrbitError::SkillValidation(m) => {
-            OrbitError::SkillValidation(redact_sensitive_env_text(&m))
-        }
-        OrbitError::JobValidation(m) => OrbitError::JobValidation(redact_sensitive_env_text(&m)),
-        OrbitError::AgentProtocolViolation(m) => {
-            OrbitError::AgentProtocolViolation(redact_sensitive_env_text(&m))
-        }
-        OrbitError::UnsupportedAgentProvider(m) => {
-            OrbitError::UnsupportedAgentProvider(redact_sensitive_env_text(&m))
-        }
-        OrbitError::OwnerUnavailable(m) => {
-            OrbitError::OwnerUnavailable(redact_sensitive_env_text(&m))
-        }
-        OrbitError::OwnerNegotiation(m) => {
-            OrbitError::OwnerNegotiation(redact_sensitive_env_text(&m))
-        }
-        OrbitError::OutcomeUnknown {
-            mcp_call_id,
-            message,
-        } => OrbitError::OutcomeUnknown {
-            mcp_call_id: redact_sensitive_env_text(&mcp_call_id),
-            message: redact_sensitive_env_text(&message),
-        },
-        OrbitError::RemoteTool {
-            code,
-            message,
-            payload,
-        } => OrbitError::RemoteTool {
-            code: redact_sensitive_env_text(&code),
-            message: redact_sensitive_env_text(&message),
-            payload: redact_sensitive_env_json(payload),
-        },
-        OrbitError::Execution(m) => OrbitError::Execution(redact_sensitive_env_text(&m)),
-        OrbitError::ProcessTimeout { timeout_ms, detail } => OrbitError::ProcessTimeout {
-            timeout_ms,
-            detail: redact_sensitive_env_text(&detail),
-        },
-        OrbitError::WorkerContainmentUnavailable { reason } => {
-            OrbitError::WorkerContainmentUnavailable {
-                reason: redact_sensitive_env_text(&reason),
-            }
-        }
-        OrbitError::RecoverableVcsConflict(conflict) => OrbitError::RecoverableVcsConflict(
-            redact_recoverable_vcs_conflict(*conflict, redact_sensitive_env_text),
-        ),
-        OrbitError::RunCancellationIncomplete {
-            pid,
-            pgid,
-            term_sent,
-            kill_sent,
-            leader_alive,
-            group_alive,
-        } => OrbitError::RunCancellationIncomplete {
-            pid,
-            pgid,
-            term_sent,
-            kill_sent,
-            leader_alive,
-            group_alive,
-        },
-        OrbitError::TaskBundleCorrupt {
-            task_id,
-            path,
-            reason,
-        } => OrbitError::TaskBundleCorrupt {
-            task_id: redact_sensitive_env_text(&task_id),
-            path: redact_sensitive_env_text(&path),
-            reason: redact_sensitive_env_text(&reason),
-        },
-        OrbitError::FileLockTimeout(timeout) => OrbitError::FileLockTimeout(
-            redact_file_lock_timeout(*timeout, redact_sensitive_env_text),
-        ),
-        OrbitError::Store(m) => OrbitError::Store(redact_sensitive_env_text(&m)),
-        OrbitError::SqliteContention(contention) => OrbitError::SqliteContention(
-            redact_sqlite_contention(*contention, redact_sensitive_env_text),
-        ),
-        OrbitError::TaskStatusTransition(m) => {
-            OrbitError::TaskStatusTransition(redact_sensitive_env_text(&m))
-        }
-        OrbitError::DependencyNotDelivered(diagnostic) => OrbitError::DependencyNotDelivered(
-            redact_dependency_not_delivered(*diagnostic, redact_sensitive_env_text),
-        ),
-        OrbitError::ShipRunInFlight { task_id, run_id } => OrbitError::ShipRunInFlight {
-            task_id: redact_sensitive_env_text(&task_id),
-            run_id: redact_sensitive_env_text(&run_id),
-        },
-        OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
-            OrbitError::TaskCompletionLiveRun {
-                task_id: redact_sensitive_env_text(&task_id),
-                run_id: redact_sensitive_env_text(&run_id),
-            }
-        }
-        OrbitError::ResumeRunInFlight {
-            source_run_id,
-            run_id,
-        } => OrbitError::ResumeRunInFlight {
-            source_run_id: redact_sensitive_env_text(&source_run_id),
-            run_id: redact_sensitive_env_text(&run_id),
-        },
-        OrbitError::WorkspaceClaimHeld(claim) => OrbitError::WorkspaceClaimHeld(
-            redact_workspace_claim_held(*claim, redact_sensitive_env_text),
-        ),
-        OrbitError::JobRunStateTransition(m) => {
-            OrbitError::JobRunStateTransition(redact_sensitive_env_text(&m))
-        }
-        OrbitError::JobRunStartConflict(m) => {
-            OrbitError::JobRunStartConflict(redact_sensitive_env_text(&m))
-        }
-        OrbitError::JobRunControlConflict(m) => {
-            OrbitError::JobRunControlConflict(redact_sensitive_env_text(&m))
-        }
-        OrbitError::Io(m) => OrbitError::Io(redact_sensitive_env_text(&m)),
-        OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact_sensitive_env_text(&m)),
-        OrbitError::Migration(m) => OrbitError::Migration(redact_sensitive_env_text(&m)),
-    }
-}
-
 /// Scrub an [`OrbitError`]'s string payloads with the full [`redact_all`]
 /// pipeline (live env values **plus** the HTTP header / bearer / provider-key
-/// patterns), not just env values like [`redact_sensitive_env_error`].
+/// patterns), not just live env values.
 /// [ORB-00417] Apply at the error persistence/log boundary so an error message
 /// embedding a `Bearer <token>` or `sk-*` key in a URL is never written out
 /// un-redacted. Idempotent: `redact_all` placeholders never re-match the secret
@@ -746,7 +540,6 @@ fn collect_sensitive_env_values() -> Vec<String> {
     values
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn cached_sensitive_env_values() -> &'static [String] {
     SENSITIVE_ENV_VALUES
         .get_or_init(collect_sensitive_env_values)
@@ -1044,15 +837,6 @@ impl PatternRedactor {
             }
         }
         out.into_owned()
-    }
-
-    /// Byte-level convenience for callers holding raw HTTP bodies. Non-UTF-8
-    /// input is returned unchanged.
-    pub fn apply_bytes(&self, bytes: &[u8]) -> Vec<u8> {
-        match std::str::from_utf8(bytes) {
-            Ok(text) => self.apply_str(text).into_bytes(),
-            Err(_) => bytes.to_vec(),
-        }
     }
 }
 

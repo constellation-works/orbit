@@ -261,6 +261,7 @@ pub fn parse_gh_json(stdout: &str, label: &str) -> Result<Value, OrbitError> {
 }
 
 /// One log excerpt, already redacted and bounded.
+#[cfg(test)]
 pub struct BoundedLog {
     pub text: String,
     pub truncated: bool,
@@ -275,6 +276,7 @@ pub struct BoundedLog {
 /// so a plain prefix truncation loses the part the reader came for. The gap is
 /// marked inline, and `truncated` lets a caller ask for more rather than
 /// silently reasoning over a partial log.
+#[cfg(test)]
 pub fn bound_log_text(raw: &str, max_bytes: usize) -> BoundedLog {
     let redacted = redact_all(raw);
     let total_bytes = redacted.len();

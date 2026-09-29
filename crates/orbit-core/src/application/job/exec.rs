@@ -1,7 +1,7 @@
 //! `orbit job run <yaml-path>` — schemaVersion 2 job entrypoint.
 //!
-//! Mirrors `activity_v2::run_activity_v2_from_yaml`: reads the YAML, routes
-//! through the two-pass loader, and dispatches via the Phase 3 DAG executor.
+//! Reads the YAML, routes through the two-pass loader, and dispatches via the
+//! Phase 3 DAG executor.
 //! orbit-core never names orbit-agent types — transport/session construction
 //! lives below the boundary in `orbit_engine::job_executor`.
 
@@ -202,15 +202,6 @@ impl OrbitRuntime {
             V2RunFinalizationOptions::DIRECT,
         )?;
         outcome
-    }
-
-    pub fn run_job_v2_from_yaml_with_run_id(
-        &self,
-        yaml_path: &Path,
-        input: Value,
-        run_id_override: Option<String>,
-    ) -> Result<V2JobRunResult, OrbitError> {
-        self.run_job_v2_from_yaml_with_run_context(yaml_path, input, run_id_override, None, None)
     }
 
     /// [ORB-10470] Execute a persisted run against its own checkpoints.

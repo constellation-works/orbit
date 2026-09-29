@@ -473,16 +473,4 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         workspace_by_orbit_dir(&conn, &orbit_dir)
     }
-
-    /// Resolve a checkout before a task operation touches checkout-local files.
-    pub fn require_workspace_checkout(
-        &self,
-        partition_id: &str,
-    ) -> Result<WorkspaceCheckoutBinding, OrbitError> {
-        self.find_workspace_checkout(partition_id)?.ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "workspace '{partition_id}' has no local checkout binding; link or initialize a checkout before running this file operation"
-            ))
-        })
-    }
 }

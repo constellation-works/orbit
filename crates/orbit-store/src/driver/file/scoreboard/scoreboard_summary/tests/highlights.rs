@@ -2,8 +2,8 @@ use chrono::{Duration, TimeZone, Utc};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
 use super::super::highlights::{
-    NOTABLE_COMPLETIONS_LIMIT, NOTABLE_SELECTION_LABEL, NOTABLE_SELECTION_METHOD,
-    SUMMARY_EXCERPT_MAX_CHARS, excerpt_execution_summary,
+    CoverageAvailability, NOTABLE_COMPLETIONS_LIMIT, NOTABLE_SELECTION_LABEL,
+    NOTABLE_SELECTION_METHOD, SUMMARY_EXCERPT_MAX_CHARS, excerpt_execution_summary,
 };
 use super::super::*;
 

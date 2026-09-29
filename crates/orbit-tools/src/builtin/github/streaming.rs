@@ -559,6 +559,7 @@ fn commit_sha_tokens(payload: &str) -> Vec<&str> {
 /// so both outputs must be capped here: a matrix run whose log carries tens
 /// of thousands of fetch lines must not hand the caller an unbounded commit
 /// list, and membership is a set lookup rather than a scan per token.
+#[cfg(test)]
 pub fn scan_checkout_evidence(log: &str, max_lines: usize) -> CheckoutEvidence {
     let mut collector = CheckoutEvidenceCollector::new(max_lines, log.len());
     collector.push(log.as_bytes());

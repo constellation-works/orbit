@@ -56,9 +56,6 @@ pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
 /// Default codex model (Astra is the provider default).
 pub const CODEX_DEFAULT_MODEL: &str = CODEX_ASTRA_MODEL;
 
-/// Legacy codex "weak" model retained for compatibility with executor pairs.
-pub const CODEX_DEFAULT_WEAK: &str = "gpt-5.4-mini";
-
 /// Default gemini model for the provider-default map.
 pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
 
@@ -69,16 +66,6 @@ pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
 /// against Antigravity CLI 1.1.27). Bare Gemini CLI ids such as
 /// `gemini-3.8-flash` are not remapped. [ORB-11299]
 pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
-
-/// Cheap-tier Antigravity model used for the bounded system crew. Flash-low
-/// is the documented low-effort sibling of the default high slug.
-pub const ANTIGRAVITY_CREW_MODEL: &str = "gemini-3.8-flash-low";
-
-/// Legacy gemini "strong" model retained for compatibility with executor pairs.
-pub const GEMINI_PAIR_STRONG: &str = "gemini-3.1-pro";
-
-/// Legacy gemini "weak" model retained for compatibility with executor pairs.
-pub const GEMINI_PAIR_WEAK: &str = "gemini-3.8-flash";
 
 /// Default Grok Build model (the canonical model listed by `grok models`).
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
@@ -93,9 +80,6 @@ pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
 /// regardless of which vendor supplies the model. [ORB-10946]
 pub const COPILOT_DEFAULT_MODEL: &str = "claude-sonnet-5";
 
-/// Cheap-tier Claude model used for the bounded Copilot system crew.
-pub const COPILOT_CREW_MODEL: &str = "claude-haiku-4.5";
-
 /// Default model for the Cursor execution lane.
 ///
 /// Cursor routes to multiple model vendors, but the persisted provider remains
@@ -103,10 +87,6 @@ pub const COPILOT_CREW_MODEL: &str = "claude-haiku-4.5";
 /// run never depends on an interactive session's ambient model selection.
 /// [ORB-10945]
 pub const CURSOR_DEFAULT_MODEL: &str = "gpt-5";
-
-/// Model used for Cursor's bounded system crew. Cursor does not publish a
-/// stable cheap-tier alias, so the known-good default is reused.
-pub const CURSOR_CREW_MODEL: &str = CURSOR_DEFAULT_MODEL;
 
 /// Default model for the Pi execution lane.
 ///
@@ -117,11 +97,6 @@ pub const CURSOR_CREW_MODEL: &str = CURSOR_DEFAULT_MODEL;
 /// `pi` whichever vendor the pattern resolves to. [ORB-11296]
 pub const PI_DEFAULT_MODEL: &str = "sonnet";
 
-/// Model used for Pi's bounded system crew. Pi publishes no stable cheap-tier
-/// alias of its own, so the known-good default is reused; an operator who
-/// wants a cheaper tier names one explicitly in `[crews.system]`.
-pub const PI_CREW_MODEL: &str = PI_DEFAULT_MODEL;
-
 /// Default model for the OpenCode execution lane.
 ///
 /// OpenCode addresses models as a `provider/model` coordinate, where the
@@ -131,12 +106,6 @@ pub const PI_CREW_MODEL: &str = PI_DEFAULT_MODEL;
 /// and looks the vendor up in its provider catalog, so a bare model id does
 /// not resolve. [ORB-11295]
 pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
-
-/// Model used for OpenCode's bounded system crew. OpenCode publishes no
-/// vendor-independent cheap tier, so this names the cheap tier of the same
-/// vendor as [`OPENCODE_DEFAULT_MODEL`]; an operator who prefers another
-/// vendor names one explicitly in `[crews.system]`.
-pub const OPENCODE_CREW_MODEL: &str = "anthropic/claude-haiku-4-5";
 
 /// Cheap Claude model used by the orbit-agent HTTP examples.
 ///

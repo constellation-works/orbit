@@ -23,12 +23,10 @@
 //! # Dependency direction
 //! `orbit-types` → `orbit-policy` → orbit-core
 
-pub mod decision;
-pub mod engine;
+mod engine;
 mod evaluator;
 
 #[cfg(test)]
 mod tests;
 
-pub use decision::PolicyDecision;
 pub use engine::{FsPolicyEvaluation, PolicyEngine, resolve_symlinks};

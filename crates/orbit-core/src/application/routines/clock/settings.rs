@@ -51,10 +51,6 @@ impl ClockSettings {
     }
 }
 
-pub fn clock_settings_path(global_root: &Path) -> PathBuf {
-    global_root.join(CLOCK_SETTINGS_FILE)
-}
-
 pub fn load_clock_settings(global_root: &Path) -> Result<ClockSettings, OrbitError> {
     let path = validated_clock_settings_path(global_root)?;
     let raw = match fs::read_to_string(&path) {

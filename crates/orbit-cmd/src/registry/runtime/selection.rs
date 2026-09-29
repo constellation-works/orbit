@@ -58,12 +58,6 @@ pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
     }
 }
 
-/// Project the server host's task namespace before Core opens a selected
-/// workspace runtime.
-pub fn sync_runtime_task_prefix(global_root: &Path) -> Result<(), OrbitError> {
-    sync_task_prefix(global_root)
-}
-
 pub(super) enum CliWorkspaceTarget<'a> {
     CurrentRuntime,
     Checkout {
@@ -482,6 +476,7 @@ impl RuntimeOpenInputs {
 /// Custom/legacy roots without a `[machine]` table retain the historical ORB
 /// default; once an identity exists, a `machine.task_prefix` that contradicts
 /// the ids already minted locally fails closed at the allocator.
+#[cfg(test)]
 pub(crate) fn sync_task_prefix(global_root: &Path) -> Result<(), OrbitError> {
     sync_task_prefix_for_identity(global_root, &inspect_machine_identity(global_root)?)
 }

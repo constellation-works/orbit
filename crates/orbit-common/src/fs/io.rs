@@ -154,11 +154,6 @@ impl StagedTextFile {
         Self::new_internal(target_path, content.as_bytes(), true)
     }
 
-    /// Stage a volatile write. `commit()` renames without fsyncing.
-    pub fn new_volatile(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content.as_bytes(), false)
-    }
-
     fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
         Self::new_internal_with_permissions(target_path, content, durable, true)
     }

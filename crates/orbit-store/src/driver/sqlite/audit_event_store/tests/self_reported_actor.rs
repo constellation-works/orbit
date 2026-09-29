@@ -3,8 +3,8 @@
 use crate::AuditAttributionAggregate;
 use crate::AuditEventFilter;
 use crate::AuditEventInsertParams;
-use crate::AuditInvocationFields;
 use crate::Store;
+use crate::contracts::AuditInvocationFields;
 use chrono::{Duration, Utc};
 use orbit_types::telemetry::AuditAttribution;
 use orbit_types::telemetry::AuditEventStatus;

@@ -148,11 +148,8 @@ pub struct FailureIncidentQuery {
 /// Default cap on raw failure rows scanned for one aggregation.
 pub const DEFAULT_SCAN_LIMIT: usize = 20_000;
 
-/// Category key for failed audit rows with no tool identity. These are
-/// job-run / activity lifecycle events, not a synthetic tool named `unknown`.
-pub const JOB_RUN_LIFECYCLE_CATEGORY: &str = "job_run_lifecycle";
-
-/// Operator-facing label for [`JOB_RUN_LIFECYCLE_CATEGORY`].
+/// Operator-facing label for failed audit rows with no tool identity: job-run /
+/// activity lifecycle events, not a synthetic tool named `unknown`.
 pub const JOB_RUN_LIFECYCLE_LABEL: &str = "job-run lifecycle";
 
 /// Lifecycle audit surfaces that are emitted only when an abnormal path

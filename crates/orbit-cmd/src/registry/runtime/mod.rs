@@ -38,8 +38,9 @@ pub(crate) use selection::retry_pipeline_worker_bootstrap;
 #[cfg(test)]
 pub(crate) use selection::select_workspace_for_cwd_and_roots;
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use selection::sync_task_prefix;
-pub use selection::{global_root_for, selector_looks_like_path, sync_runtime_task_prefix};
+pub use selection::{global_root_for, selector_looks_like_path};
 
 #[cfg(test)]
 mod tests;

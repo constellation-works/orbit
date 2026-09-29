@@ -2,12 +2,10 @@
 
 mod audit_actor;
 mod audit_event;
-mod error;
 mod invocation;
 mod metrics;
 mod pricing;
 mod self_reported_actor;
-pub use error::TelemetryError;
 
 #[cfg(test)]
 mod tests;

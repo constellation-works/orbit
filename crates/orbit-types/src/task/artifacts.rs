@@ -8,9 +8,6 @@ use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
 use crate::task::{ExternalRef, TaskComplexity, TaskError, TaskPriority, TaskStatus, TaskType};
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
-/// Historical task prefix retained for source compatibility. Task parsing is
-/// prefix-agnostic; new ids should be formatted with [`format_task_id`].
-pub const ORB_TASK_ID_PREFIX: &str = "ORB-";
 /// Minimum numeric width used when minting task ids. Parsers accept wider ids.
 pub const ORB_TASK_ID_WIDTH: usize = 5;
 /// Maximum representable allocator value, no longer the five-digit boundary.

@@ -69,15 +69,6 @@ pub(crate) fn grok_state_dir(home: Option<&OsStr>, grok_home: Option<&OsStr>) ->
         .or_else(|| non_empty_env_path(home).map(|path| path.join(".grok")))
 }
 
-/// Process-env wrapper around [`grok_state_dir`]. Returns the writable state
-/// directory Grok Build uses at runtime — `$GROK_HOME` if set, otherwise
-/// `$HOME/.grok`. Returns `None` only when both env vars are unset or empty.
-pub fn grok_state_dir_from_env() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME");
-    let grok_home = std::env::var_os("GROK_HOME");
-    grok_state_dir(home.as_deref(), grok_home.as_deref())
-}
-
 /// Writable directories an **active** Copilot executor needs, in the order
 /// they are granted. [ORB-10946]
 ///

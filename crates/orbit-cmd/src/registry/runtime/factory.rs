@@ -526,21 +526,6 @@ impl RegisteredRuntimeFactory {
         })
     }
 
-    pub fn open_resolved_checkout(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
-        binding: WorkspaceRuntimeBinding,
-    ) -> Result<OrbitRuntime, OrbitError> {
-        Self::open_resolved_checkout_for(
-            global_root,
-            shared_root,
-            local_root,
-            binding,
-            HostLifetime::ShortLived,
-        )
-    }
-
     pub fn open_resolved_checkout_for(
         global_root: &Path,
         shared_root: &Path,

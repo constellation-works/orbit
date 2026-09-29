@@ -325,11 +325,6 @@ impl PipelineState {
         self.updated_at = Utc::now();
     }
 
-    pub fn set_iteration(&mut self, iteration: u32) {
-        self.iteration = iteration;
-        self.updated_at = Utc::now();
-    }
-
     pub fn set_waiting_reasons(
         &mut self,
         waiting_on_deps: Option<Vec<String>>,
@@ -457,24 +452,6 @@ impl PipelineState {
             .filter(|dispatch| dispatch.cancellation_policy() == ChildCancellationPolicy::Cascade)
             .map(|dispatch| dispatch.child_run_id.clone())
             .collect()
-    }
-
-    /// Rebuild the pipeline snapshot just before `step_index` executes.
-    pub fn rebuild_pipeline_before(&self, step_index: u32) -> Value {
-        let mut pipeline = self.initial_input.clone();
-        for (_, patch) in self.pipeline_patches.range(..step_index) {
-            merge_pipeline_patch(&mut pipeline, patch);
-        }
-        pipeline
-    }
-
-    /// Recover the last non-skipped step state before `step_index`.
-    pub fn previous_step_state_before(&self, step_index: u32) -> Option<JobRunState> {
-        self.step_states
-            .range(..step_index)
-            .rev()
-            .map(|(_, state)| *state)
-            .find(|state| *state != JobRunState::Skipped)
     }
 }
 

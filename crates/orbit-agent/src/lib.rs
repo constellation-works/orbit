@@ -62,19 +62,10 @@ pub mod providers;
 mod runtime;
 mod types;
 
-pub use agent::{Agent, AgentConfig, ProviderOptions};
-pub use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
+pub use agent::{Agent, AgentConfig};
 pub use providers::{
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout, normalize_cli_stdout,
     project_cli_response,
 };
-pub use runtime::AgentRuntime;
-pub use types::{AgentInvocationSpec, AgentOperation, AgentRequest, AgentResponseStatus};
-pub use types::{
-    DeclaredResponseFailure, ParsedStdout, is_timeout, parse_and_validate_response,
-    peek_declared_response_failure, peek_response_status, response_envelope_protocol_check,
-};
-pub use types::{
-    provider_invocation_diagnostic, response_envelope_json_schema,
-    response_envelope_json_schema_arg,
-};
+pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
+pub use types::{DeclaredResponseFailure, ParsedStdout, provider_invocation_diagnostic};

@@ -23,12 +23,6 @@ pub struct TokenUsage {
     pub output: u64,
 }
 
-impl TokenUsage {
-    pub fn prompt_response_total(&self) -> u64 {
-        self.input.saturating_add(self.output)
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallTrace {
     #[serde(default)]

@@ -14,8 +14,6 @@ pub(crate) struct RawRuntimeConfig {
     // forward-compatible extension tables. Runtime admission reads only its
     // owned keys, while explicit migration guards below reject retired
     // runtime keys whose continued acceptance would be unsafe or misleading.
-    #[allow(dead_code)]
-    pub(crate) identity: Option<toml::Value>,
     pub(crate) task: Option<RawTaskSection>,
     pub(crate) knowledge: Option<RawKnowledgeConfig>,
     pub(crate) watch: Option<toml::Value>,

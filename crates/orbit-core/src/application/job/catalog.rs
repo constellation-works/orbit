@@ -275,7 +275,7 @@ impl OrbitRuntime {
     /// tell "came from the workspace copy" apart from "came from the shared
     /// global directory". Skip the exclusion entirely when the two paths
     /// coincide, rather than filtering out every default job name.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn load_v2_job_execution_names(&self) -> Result<BTreeSet<String>, OrbitError> {
         Ok(self.load_v2_job_execution_membership().names)
     }
