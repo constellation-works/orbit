@@ -24,7 +24,7 @@
 .drain-state-label { color: var(--state-running); font-weight: 600; }
 .drain-card[data-drain-state="winding_down"] .drain-state-label { color: var(--priority-medium); }
 .drain-live-detail { min-width: 0; overflow-wrap: anywhere; }
-.drain-idle { color: var(--fg-mute); }
+.drain-idle { color: var(--fg-dim); }
 .dock-drain-state { color: var(--state-running); font-size: 10px; }
 .dock-seg[data-drain-state="winding_down"] .dock-drain-state { color: var(--priority-medium); }
 .global-drain-state { display: inline-flex; align-items: center; gap: 7px; min-width: 0; border: 1px solid var(--state-running); border-radius: var(--radius); background: var(--bg); color: var(--state-running); padding: 5px 8px; cursor: pointer; font: 600 12px var(--font-sans); }
@@ -64,7 +64,7 @@
   background: transparent; color: var(--fg); font-size: 13px; text-align: center; appearance: textfield; -moz-appearance: textfield;
 }
 .drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.drain-stepper-value::placeholder { color: var(--fg-mute); }
+.drain-stepper-value::placeholder { color: var(--fg-dim); }
 .drain-completion {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: 3px;
   border: 1px solid var(--hair); border-radius: var(--radius); background: var(--bg);
@@ -107,14 +107,15 @@
 .drain-stat.blocked.nonzero .drain-stat-value { color: var(--priority-medium); }
 .drain-blocked { display: flex; flex-direction: column; gap: 7px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .drain-blocked-row { min-width: 0; padding-left: 8px; border-left: 2px solid var(--priority-medium); }
-.drain-blocked-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; font-size: 11px; }
+.drain-blocked-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; font-size: 11.5px; }
 .drain-blocked-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.drain-blocked-state { flex: 0 0 auto; color: var(--fg-dim); font-size: 10px; }
+.drain-blocked-state { flex: 0 0 auto; color: var(--fg-dim); font-size: 11px; }
 .drain-blocked-state.running { color: var(--state-running); }
-.drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: 10px; }
-.drain-blocked-more { color: var(--fg-dim); font-size: 10px; }
+.drain-blocked-lock { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); font-size: 11px; }
+.drain-blocked-more { color: var(--fg-dim); font-size: 11px; }
 .drain-muted { color: var(--fg-dim); }
 .drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.drain-stop-note[hidden] { display: none; }

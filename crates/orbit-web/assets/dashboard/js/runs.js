@@ -99,6 +99,14 @@ function runIsResumable(run) {
   return RESUMABLE_RUN_STATES.has(run && run.state);
 }
 
+// A row's button reads "cancel" or "Resume", which names nothing once a screen
+// reader lists the controls on their own; the run (and its workspace, when the
+// table spans several) makes each one distinguishable.
+function runActionLabel(verb, run) {
+  const workspace = run && (run.workspace_name || run.workspace_id);
+  return `${verb} run ${run && run.run_id}${workspace ? ` in ${workspace}` : ""}`;
+}
+
 function buildCancelRunButton(run, host) {
   const btn = el("button", {
     class: "action reject run-cancel",
@@ -106,6 +114,7 @@ function buildCancelRunButton(run, host) {
     title: `Cancel ${run.run_id}`,
   });
   btn.disabled = !runIsCancellable(run);
+  btn.setAttribute("aria-label", runActionLabel("Cancel", run));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     cancelRun(run, btn, host);
@@ -119,6 +128,7 @@ function buildReplayRunButton(run, host) {
     text: "Replay run",
     title: `Replay ${run.run_id}`,
   });
+  btn.setAttribute("aria-label", runActionLabel("Replay", run));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     replayRun(run, btn, host);
@@ -133,6 +143,7 @@ function buildResumeRunButton(run, host) {
     title: `Resume ${run.run_id} from its first non-successful step`,
   });
   btn.disabled = resumeRequestsInFlight.has(runIdentity(run));
+  btn.setAttribute("aria-label", runActionLabel("Resume", run));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     resumeRun(run, btn, host);
@@ -177,6 +188,53 @@ function cancelPromptText(run) {
   ].join("\n\n");
 }
 
+// The latest failed action on the runs table. The table is re-synced from
+// keyed nodes on every poll, and a node appended to it without a key is
+// dropped by the next one, so an error written straight into the host would
+// vanish within seconds, usually before it was read. It is held here and
+// rendered with the rows until dismissed or the next action starts. Other
+// hosts (the run detail) are rebuilt on their own terms and keep the node.
+let runActionError = null;
+const RUN_ACTION_ERROR_KEY = "run-action-error";
+
+function runActionErrorNode(build, dismiss) {
+  const node = build();
+  node.setAttribute("role", "alert");
+  node.dataset.key = RUN_ACTION_ERROR_KEY;
+  if (dismiss) {
+    const button = el("button", { class: "action", text: "dismiss", title: "Dismiss this error" });
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      dismiss();
+    });
+    node.appendChild(button);
+  }
+  return node;
+}
+
+function currentRuns() {
+  return hasCtx("getLastRuns") ? _runsCtx.getLastRuns() : [];
+}
+
+function showRunActionError(host, text, build = () => el("div", { class: "action-error", text })) {
+  if (host && host.id === "runs-body") {
+    runActionError = { hash: text, build };
+    renderRuns(currentRuns());
+    return;
+  }
+  if (host) {
+    host.appendChild(runActionErrorNode(build, null));
+  }
+}
+
+function clearRunActionError(host) {
+  runActionError = null;
+  if (!host) return;
+  for (const node of Array.from(host.children || [])) {
+    if (node.dataset && node.dataset.key === RUN_ACTION_ERROR_KEY) node.remove();
+  }
+}
+
 // The latest cancel's settlement report, kept across re-renders of the runs
 // table so the poll that follows a cancel does not wipe it before it is read.
 let cancelNotice = null;
@@ -216,9 +274,7 @@ async function cancelRun(run, btn, host) {
   let cancelled = false;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>cancel`;
-  if (host) {
-    for (const node of host.querySelectorAll(".action-error")) node.remove();
-  }
+  clearRunActionError(host);
   let notice = null;
   try {
     const result = await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run),
@@ -230,20 +286,8 @@ async function cancelRun(run, btn, host) {
     // On the runs table the report renders at the top of the list (below);
     // elsewhere (run detail) it is appended to the host once the view refreshes.
     if (notice && host && host.id === "runs-body") cancelNotice = notice;
-    const refreshActiveDetail = !run.workspace_id && getActiveRunId() === runId;
-    await Promise.all([
-      doFetchAndRenderRuns(),
-      refreshActiveDetail ? doFetchAndRenderRunDetail() : Promise.resolve(),
-      refreshActiveDetail ? doFetchAndRenderRunEvents() : Promise.resolve(),
-    ]);
-    if (notice && host && host.id !== "runs-body") {
-      const node = buildCancelNotice(notice, () => node.remove());
-      host.appendChild(node);
-    }
   } catch (e) {
-    if (host) {
-      host.appendChild(el("div", { class: "action-error", text: e.message || "cancel failed" }));
-    }
+    showRunActionError(host, e.message || "cancel failed");
     console.error(e);
   } finally {
     // A cancelled run stays marked cancelled; only a failed attempt re-arms.
@@ -251,6 +295,25 @@ async function cancelRun(run, btn, host) {
       btn.disabled = false;
       btn.textContent = old;
     }
+  }
+  if (!cancelled) return;
+  // The cancel is done. A refresh that then fails is a stale list, not a
+  // failed cancel, and must not read as one: an operator who believes the
+  // run is still live would cancel it again or go looking for what it wastes.
+  try {
+    const refreshActiveDetail = !run.workspace_id && getActiveRunId() === runId;
+    await Promise.all([
+      doFetchAndRenderRuns(),
+      refreshActiveDetail ? doFetchAndRenderRunDetail() : Promise.resolve(),
+      refreshActiveDetail ? doFetchAndRenderRunEvents() : Promise.resolve(),
+    ]);
+  } catch (e) {
+    showRunActionError(host, `${runId} was cancelled, but the view could not refresh: ${e.message || e}. Use Refresh to update it.`);
+    console.error(e);
+  }
+  if (notice && host && host.id !== "runs-body") {
+    const node = buildCancelNotice(notice, () => node.remove());
+    host.appendChild(node);
   }
 }
 
@@ -261,18 +324,14 @@ async function replayRun(run, btn, host) {
   const old = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>Replay run`;
-  if (host) {
-    for (const node of host.querySelectorAll(".action-error")) node.remove();
-  }
+  clearRunActionError(host);
   try {
     const payload = await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/replay`, run));
     if (!payload.run_id) throw new Error("replay response did not include run_id");
     doNavigateToRun(payload.run_id, run.workspace_id);
     doFetchAndRenderRuns().catch(console.error);
   } catch (e) {
-    if (host) {
-      host.appendChild(el("div", { class: "action-error", text: e.message || "replay failed" }));
-    }
+    showRunActionError(host, e.message || "replay failed");
     console.error(e);
   } finally {
     btn.disabled = false;
@@ -313,9 +372,7 @@ async function resumeRun(run, btn, host) {
   const old = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>Resume`;
-  if (host) {
-    for (const node of host.querySelectorAll(".action-error")) node.remove();
-  }
+  clearRunActionError(host);
   let resumed = false;
   try {
     const payload = await postJson(runScopedPath(`/api/job-runs/${encodeURIComponent(runId)}/resume`, run));
@@ -323,14 +380,21 @@ async function resumeRun(run, btn, host) {
     resumedRunIdsBySource.set(key, payload.run_id);
     resumed = true;
   } catch (e) {
-    if (host) host.appendChild(resumeErrorNode(e, run));
+    showRunActionError(host, (e && e.message) || "resume failed", () => resumeErrorNode(e, run));
     console.error(e);
   } finally {
     resumeRequestsInFlight.delete(key);
     btn.disabled = false;
     btn.textContent = old;
   }
-  if (resumed) await doFetchAndRenderRuns();
+  if (!resumed) return;
+  try {
+    await doFetchAndRenderRuns();
+  } catch (e) {
+    // The resume was accepted; only the list is stale.
+    showRunActionError(host, `${runId} was resumed, but the list could not refresh: ${(e && e.message) || e}. Use Refresh to update it.`);
+    console.error(e);
+  }
 }
 
 function coerceNumber(value) {
@@ -696,6 +760,14 @@ export function renderRuns(runs) {
       cancelNotice = null;
       renderRuns(hasCtx("getLastRuns") ? _runsCtx.getLastRuns() : runs);
     }));
+  }
+  if (runActionError) {
+    const errorNode = runActionErrorNode(runActionError.build, () => {
+      runActionError = null;
+      renderRuns(currentRuns());
+    });
+    errorNode.dataset.hash = runActionError.hash;
+    frag.appendChild(errorNode);
   }
   const unavailableNode = unavailableSourcesNode(unavailable);
   if (unavailableNode) frag.appendChild(unavailableNode);

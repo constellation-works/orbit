@@ -419,6 +419,10 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(button(block, "Revoke authority"), "an authorized handoff offers revocation");
   assert.ok(block.querySelector(".claim-feedback.ok"), "the decision is reported");
   assert.equal(block.querySelector(".claim-feedback").getAttribute("role"), "status");
+  // The pressed button was replaced by the repaint; focus lands on the outcome
+  // instead of falling to the page, where a keyboard user would start over.
+  const focused = document.activeElement;
+  assert.ok(focused && block.contains(focused) && focused.classList.contains("claim-feedback"), "focus moves to the reported outcome after a decision");
 }
 
 // --- revocation -------------------------------------------------------------
@@ -677,6 +681,8 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.equal(confirms.length, 1, "revoking asks first");
   assert.ok(confirms[0].includes("ORB-2"), `the confirmation names the task: ${confirms[0]}`);
   assert.ok(/withdraws? (completion )?authority/i.test(confirms[0]), `the confirmation names the effect: ${confirms[0]}`);
+  // Recovery has its own reason field (the second one in the row).
+  block.querySelectorAll("input.claim-reason")[1].value = "host was rebuilt";
   press(recoveryButton(block, "backlog"));
   await settle();
   assert.equal(confirms.length, 2, "recovering asks first");
@@ -935,6 +941,51 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(text.includes("claim made up event"), text);
   assert.equal(block.querySelectorAll(".claim-panel").length, 2, "each claim gets its own panel");
   assert.ok(text.includes("claim claim-2"), "a second claim is told apart by its header");
+}
+
+// --- a decision that needs a reason is not sent without one ----------------------
+
+{
+  // The owner refuses a blank reason, but only after the operator has answered
+  // the irreversible-action confirmation. Asking first spends neither the
+  // confirmation nor a replay identity.
+  consoleBody = console_([claim({ phase: "running", handoff: null, unsettled: true })]);
+  const block = await mount();
+  sent.length = 0;
+  const input = reasonInput(block);
+  press(recoveryButton(block, "blocked"));
+  await settle();
+  assert.equal(sent.length, 0, "a blank reason sends nothing");
+  assert.equal(confirms.length, 0, "a blank reason does not ask for confirmation");
+  assert.equal(input.getAttribute("aria-invalid"), "true", "the empty field is marked invalid");
+  const problem = block.querySelector(".claim-feedback.error");
+  assert.ok(problem && problem.getAttribute("role") === "alert" && problem.textContent.includes("needs a reason"), `the missing reason is announced: ${block.textContent}`);
+  assert.ok(document.activeElement === input, "focus returns to the field that needs input");
+
+  // Whitespace is still blank.
+  input.value = "   ";
+  press(recoveryButton(block, "backlog"));
+  await settle();
+  assert.equal(sent.length, 0, "a whitespace-only reason sends nothing");
+
+  input.value = "host was rebuilt";
+  press(recoveryButton(block, "blocked"));
+  await settle();
+  assert.equal(sent.length, 1, "with a reason the decision goes through");
+  assert.equal(sent[0].body.reason, "host was rebuilt");
+}
+
+// --- a candidate with missing fields does not print placeholders ---------------------
+
+{
+  const sparse = claim();
+  sparse.handoff.candidate = { delivery: { kind: "pull_request" } };
+  sparse.bound_run = { run_id: "leaf-1" };
+  consoleBody = console_([sparse]);
+  const block = await mount();
+  const text = block.textContent;
+  assert.ok(!text.includes("undefined"), `no field prints "undefined": ${text}`);
+  assert.ok(text.includes("pull request") && !text.includes("#"), `a missing pull request number is not shown as #undefined: ${text}`);
 }
 
 globalThis.distributedTestsPassed = true;

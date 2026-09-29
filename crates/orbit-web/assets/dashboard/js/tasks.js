@@ -2291,6 +2291,22 @@ async function applyTaskCrewChange(task, nextValue, context) {
   scheduleFeedbackExpiry(crewFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
+// A failed action is announced when it appears: the row's own controls are the
+// only thing the operator is looking at, and a plain div is never read out.
+function actionErrorNode(text, remedy) {
+  const node = el("div", { class: "action-error", text });
+  node.setAttribute("role", "alert");
+  if (remedy) node.appendChild(el("div", { class: "action-error-remedy", text: remedy }));
+  return node;
+}
+
+// Closing a form swaps the actions row back in, which drops focus to the page.
+// Put it back on the control that opened the form.
+function restoreActionFocus(actions, selector) {
+  const opener = actions.querySelector?.(selector);
+  if (opener && typeof opener.focus === "function") opener.focus();
+}
+
 /* ORB-10444: one-click Ship. The dispatch carries only the task id — the
    pipeline resolves the crew from the task's own record and the mode from the
    workspace's configured default — so there is deliberately no crew picker and
@@ -2318,9 +2334,7 @@ async function shipTask(task, detail, btnNode, context) {
     shipInFlightTaskIds.delete(task.id);
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     btnNode.textContent = oldText;
-    detail.prepend(
-      el("div", { class: "action-error", text: `ship failed: ${error.message || String(error)}` }),
-    );
+    detail.prepend(actionErrorNode(`ship failed: ${error.message || String(error)}`));
   }
 }
 
@@ -2386,18 +2400,14 @@ function showCommentForm(task, detail, actions, context) {
     } catch (error) {
       submit.disabled = false;
       cancel.disabled = false;
-      detail.prepend(
-        el("div", {
-          class: "action-error",
-          text: `comment failed: ${error.message || String(error)}`,
-        }),
-      );
+      detail.prepend(actionErrorNode(`comment failed: ${error.message || String(error)}`));
     }
   });
   cancel.addEventListener("click", (e) => {
     e.stopPropagation();
     delete detail.dataset.draft;
     form.replaceWith(actions);
+    restoreActionFocus(actions, ".action.comment");
   });
   buttons.appendChild(previewToggle);
   buttons.appendChild(submit);
@@ -2433,6 +2443,7 @@ function showRejectForm(task, detail, actions, context) {
     e.stopPropagation();
     delete detail.dataset.draft;
     form.replaceWith(actions);
+    restoreActionFocus(actions, ".action.reject");
   });
   buttons.appendChild(submit);
   buttons.appendChild(cancel);
@@ -2482,9 +2493,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
     if (opts.onFailure) opts.onFailure();
-    const errEl = el("div", { class: "action-error", text: String(err.message || err) });
-    if (err && err.remedy) errEl.appendChild(el("div", { class: "action-error-remedy", text: err.remedy }));
-    detail.prepend(errEl);
+    detail.prepend(actionErrorNode(String(err.message || err), err && err.remedy));
   }
 }
 
@@ -2503,7 +2512,7 @@ async function approveReviewTask(task, detail, btnNode, context) {
   if (claimed.refusal) {
     const prior = detail.querySelector(".action-error");
     if (prior) prior.remove();
-    detail.prepend(el("div", { class: "action-error", text: `approve: ${claimed.refusal}` }));
+    detail.prepend(actionErrorNode(`approve: ${claimed.refusal}`));
     return undefined;
   }
   const request = handoffApprovalRequest(claimed.claim);

@@ -145,3 +145,21 @@ pill("err").dispatch("click");
 assert.equal(pill("err").getAttribute("aria-pressed"), "false");
 assert.equal(pill("all").getAttribute("aria-pressed"), "true", "clearing the last level falls back to `all`");
 assert.equal(visibleLogCount(), "2");
+
+// --- Dock tabs: Home and End reach the ends of the tablist ---------------------
+
+const dockTabs = document.querySelectorAll("#dock-mode-toggle .dock-seg");
+const selectedDockTab = () => dockTabs.filter((tab) => tab.getAttribute("aria-selected") === "true").map((tab) => tab.dataset.mode);
+const dockKey = (key) => document.getElementById("dock-mode-toggle").dispatch("keydown", { key });
+assert.deepEqual(selectedDockTab(), ["drain"], "the dock opens on Drain");
+dockKey("End");
+assert.deepEqual(selectedDockTab(), ["log"], "End selects the last tab");
+assert.equal(dockTabs.find((tab) => tab.dataset.mode === "log").tabIndex, 0, "only the selected tab is a tab stop");
+dockKey("Home");
+assert.deepEqual(selectedDockTab(), ["drain"], "Home selects the first tab");
+dockKey("ArrowRight");
+assert.deepEqual(selectedDockTab(), ["log"], "ArrowRight moves to the next tab");
+dockKey("ArrowRight");
+assert.deepEqual(selectedDockTab(), ["drain"], "ArrowRight wraps around");
+dockKey("x");
+assert.deepEqual(selectedDockTab(), ["drain"], "other keys leave the selection alone");

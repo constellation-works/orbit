@@ -239,7 +239,7 @@ export function buildClaimPanel(claim, capabilities, options = {}) {
       // host is the honest answer; an owner-local link would resolve against
       // this checkout's job store and open the wrong thing or nothing.
       panel.appendChild(
-        line("bound run", `${run.run_id} on machine ${run.machine_id}`, {
+        line("bound run", `${run.run_id} on machine ${run.machine_id || "unknown"}`, {
           class: "remote",
           note: claim.inspect_on || "inspect this run on its execution machine",
         }),
@@ -328,7 +328,7 @@ function buildHandoffPanel(handoff) {
   const delivery = candidate.delivery || {};
   wrap.appendChild(line("repository", candidate.repository));
   wrap.appendChild(
-    line("branches", `${candidate.source_branch} → ${candidate.base_branch} (lands on ${candidate.landing_branch})`),
+    line("branches", `${candidate.source_branch || "?"} → ${candidate.base_branch || "?"} (lands on ${candidate.landing_branch || "?"})`),
   );
   wrap.appendChild(
     line(
@@ -382,7 +382,7 @@ function buildHandoffPanel(handoff) {
 function deliveryLabel(delivery) {
   switch (delivery && delivery.kind) {
     case "pull_request":
-      return `pull request #${delivery.number}`;
+      return delivery.number == null ? "pull request" : `pull request #${delivery.number}`;
     case "local_candidate":
       return "local candidate (owner performs the merge)";
     case "already_landed":
@@ -456,12 +456,18 @@ function buildClaimActions(claim, capabilities, handlers) {
       return;
     }
     let input = null;
+    let problem = null;
+    const clearProblem = () => {
+      if (input) input.setAttribute("aria-invalid", "false");
+      if (problem) problem.textContent = "";
+    };
     if (opts.reasonRequired && !opts.blocked) {
       input = el("input", { class: "claim-reason" });
       input.type = "text";
       input.placeholder = opts.reasonPlaceholder || "reason";
       input.setAttribute("aria-label", `${text} reason`);
       input.setAttribute("data-reason-for", key);
+      input.addEventListener("input", clearProblem);
       row.appendChild(input);
       controls.push({ node: input, blocked: false });
     }
@@ -478,6 +484,21 @@ function buildClaimActions(claim, capabilities, handlers) {
       button.addEventListener("click", () => {
         if (button.disabled || busy) return;
         const reason = input ? input.value : null;
+        // The owner refuses a decision with no reason, but only after the
+        // confirmation below has been answered and a replay identity spent.
+        // Ask for the reason first, where the operator is already looking.
+        if (input && !String(reason).trim()) {
+          if (!problem) {
+            problem = el("div", { class: "claim-feedback error" });
+            problem.setAttribute("role", "alert");
+            row.appendChild(problem);
+          }
+          problem.textContent = `${text} needs a reason.`;
+          input.setAttribute("aria-invalid", "true");
+          input.focus();
+          return;
+        }
+        clearProblem();
         if (opts.confirm && !confirmed(opts.confirm(reason, choice.value))) return;
         setBusy(true, button);
         const requestId = requestIdFor(`${key}|${choice.value || ""}|${reason || ""}`);
@@ -681,7 +702,26 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     container.insertBefore(feedbackNode(text, kind, remedy), container.firstChild);
   };
 
+  // The button that was pressed is gone once the panel repaints, and focus
+  // falls to the page. Put it on the outcome (or, failing that, the first
+  // control) so a keyboard or screen-reader user lands where the result is.
+  const focusOutcome = () => {
+    const target = container.querySelector(".claim-feedback") || container.querySelector("button.claim-action");
+    if (!target) return;
+    // A note is not a tab stop, but it can take programmatic focus.
+    if (target.tagName !== "BUTTON") target.tabIndex = -1;
+    if (typeof target.focus === "function") target.focus();
+  };
+
   const act = async (run) => {
+    try {
+      await perform(run);
+    } finally {
+      focusOutcome();
+    }
+  };
+
+  const perform = async (run) => {
     let body;
     try {
       body = await run();
@@ -722,7 +762,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     retry.addEventListener("click", () => {
       if (retry.disabled) return;
       retry.disabled = true;
-      refresh(recorded);
+      refresh(recorded).then(focusOutcome);
     });
     container.appendChild(note);
     container.appendChild(retry);
