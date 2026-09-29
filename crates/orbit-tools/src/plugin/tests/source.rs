@@ -3,8 +3,8 @@ use std::io::Write;
 use orbit_types::plugin::{MANIFEST_FILE_NAME, PLUGIN_DIR_NAME};
 
 use super::super::source::{
-    ArchiveLimits, PluginSourceRequest, resolve_plugin_root, resolve_plugin_source, unpack_tar,
-    unpack_zip,
+    ArchiveLimits, MAX_ARCHIVE_BYTES, PluginSourceRequest, copy_bounded, resolve_plugin_root,
+    resolve_plugin_source, unpack_tar, unpack_zip,
 };
 
 const MANIFEST: &str = "\
@@ -143,7 +143,7 @@ fn enter_fake_git_child(test: &str) -> bool {
     let curl_args_capture = temp.path().join("curl-args");
     let body = temp.path().join("body");
     let curl_script = format!(
-        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nout=''\nprev=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '--output' ]; then out=$arg; fi\n  prev=$arg\ndone\n[ -n \"$out\" ] || exit 2\n[ -f {body} ] || exit 22\ncat {body} > \"$out\"\n",
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nout=''\nprev=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '--output' ]; then out=$arg; fi\n  prev=$arg\ndone\n[ -n \"$out\" ] || exit 2\n[ -f {body} ] || exit 22\nif [ \"$out\" = '-' ]; then cat {body}; else cat {body} > \"$out\"; fi\n",
         args = quote(&curl_args_capture),
         body = quote(&body),
     );
@@ -607,6 +607,56 @@ fn an_archive_whose_digest_does_not_match_the_pin_is_refused() {
         error.contains(&sha256_pin(&body)) && error.contains(WRONG_DIGEST),
         "the refusal must report both the observed and the pinned digest: {error}"
     );
+}
+
+/// A body past the limit is refused while it streams, whatever the server
+/// announced: the fetch shim sends the sparse file with no length at all, the
+/// way a chunked response arrives.
+#[cfg(unix)]
+#[test]
+fn an_archive_body_past_the_size_limit_is_refused_during_the_download() {
+    if !enter_fake_git_child("an_archive_body_past_the_size_limit_is_refused_during_the_download") {
+        return;
+    }
+    let path = std::env::var_os("ORBIT_TEST_PLUGIN_CURL_BODY").expect("fetch body path");
+    let file = std::fs::File::create(path).expect("create oversize body");
+    file.set_len(MAX_ARCHIVE_BYTES + 1)
+        .expect("size oversize body");
+
+    let error = resolve_plugin_source(&pinned(ARCHIVE_URL, Some(WRONG_DIGEST)))
+        .expect_err("an oversize body must be refused")
+        .to_string();
+    assert!(
+        error.contains("limit") && error.contains(ARCHIVE_URL),
+        "the refusal names the size limit and the source, not the digest mismatch: {error}"
+    );
+}
+
+#[test]
+fn a_bounded_copy_stops_reading_an_endless_source_at_the_limit() {
+    let mut sink = Vec::new();
+
+    let error = copy_bounded(&mut std::io::repeat(7), &mut sink, 1024, "endless")
+        .expect_err("an endless source exceeds any limit")
+        .to_string();
+
+    assert!(error.contains("1024-byte limit"), "{error}");
+    assert!(
+        sink.len() <= 1025,
+        "at most one byte past the limit may be written: {}",
+        sink.len()
+    );
+}
+
+#[test]
+fn a_bounded_copy_passes_a_source_at_exactly_the_limit() {
+    let source = vec![1u8; 512];
+    let mut sink = Vec::new();
+
+    let copied = copy_bounded(&mut source.as_slice(), &mut sink, 512, "exact").expect("copy");
+
+    assert_eq!(copied, 512);
+    assert_eq!(sink, source);
 }
 
 /// No trust on first use, and no download either: an unpinned archive source

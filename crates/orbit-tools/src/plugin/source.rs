@@ -17,13 +17,15 @@
 //! There is deliberately no trust-on-first-use fallback — the first fetch is
 //! exactly the one whoever controls the URL would tamper with.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_common::security::release::sha256_hex;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
+use orbit_exec::{
+    EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
+};
 use orbit_types::plugin::{
     MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, parse_archive_digest, plugin_root_in,
     remote_archive_source,
@@ -34,7 +36,7 @@ use crate::TIMEOUT_LONG_MS;
 
 /// Largest archive Orbit will read for a plugin source. A plugin tree is a
 /// manifest, its schemas and a backend; anything past this is not one.
-const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+pub(super) const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Largest tree an archive may unpack to. This, not the download bound, is
 /// what makes a compression bomb harmless: a few compressed kilobytes say
@@ -329,13 +331,21 @@ fn validate_archive_url(url: &str) -> Result<(), OrbitError> {
     Ok(())
 }
 
-/// Download `url` to `destination`.
+/// Download `url` to `destination`, writing at most [`MAX_ARCHIVE_BYTES`].
+///
+/// curl's `--max-filesize` only trips when the server announces a length up
+/// front; a chunked response is never capped by it. So curl writes to its
+/// stdout and this process copies that stream into `destination` through
+/// [`copy_bounded`], which stops at the limit. A hostile host therefore cannot
+/// fill the disk before the digest pin is ever consulted. `--max-filesize`
+/// stays as the early refusal for a server that does announce a length.
 ///
 /// The transport rules are curl's own so they hold for every hop rather than
 /// only the first: `--proto =https` admits no other scheme, `--proto-redir
 /// =https` refuses a redirect that changes scheme, and `--disable` stops a
 /// host `.curlrc` from re-enabling either.
 fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
+    // `-` sends the body to stdout, where the bounded copy below reads it.
     let args = vec![
         "--disable".to_string(),
         "--fail".to_string(),
@@ -351,14 +361,16 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
         "--max-filesize".to_string(),
         MAX_ARCHIVE_BYTES.to_string(),
         "--output".to_string(),
-        destination.to_string_lossy().into_owned(),
+        "-".to_string(),
         "--".to_string(),
         url.to_string(),
     ];
     // A custom trust store belongs to the operator, and is the only thing
     // beyond the baseline environment this fetch is allowed to read.
     let environment = allowlisted_child_env(&[], &["SSL_CERT_FILE", "SSL_CERT_DIR"]);
-    let result = run_process(
+    let target = destination.to_path_buf();
+    let source_name = url.to_string();
+    let (result, _written) = run_process_streaming_stdout(
         &ExecRequest {
             program: "curl".to_string(),
             args,
@@ -369,12 +381,20 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
             debug: false,
         },
         &NoSandbox,
+        move |mut body| {
+            let mut file = std::fs::File::create(&target)
+                .map_err(|error| OrbitError::Io(format!("create the download file: {error}")))?;
+            copy_bounded(&mut body, &mut file, MAX_ARCHIVE_BYTES, &source_name)
+        },
     )
-    .map_err(|error| {
-        OrbitError::Execution(format!(
+    .map_err(|error| match error {
+        // The consumer's own refusals (oversize, disk write) already say what
+        // happened; only a failure to run curl needs the hint.
+        refusal @ (OrbitError::InvalidInput(_) | OrbitError::Io(_)) => refusal,
+        error => OrbitError::Execution(format!(
             "cannot fetch the plugin archive '{url}': {error}; fetching an `https://` plugin \
              source needs `curl` on PATH"
-        ))
+        )),
     })?;
     if result.success {
         return Ok(());
@@ -383,6 +403,29 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
         "cannot fetch the plugin archive '{url}': {}",
         result.stderr.trim()
     )))
+}
+
+/// Copy `reader` into `writer`, refusing once more than `limit` bytes arrive.
+///
+/// Reads at most `limit + 1` bytes from `reader`, so a source that never ends
+/// costs one byte past the limit, not the disk.
+pub(super) fn copy_bounded(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    limit: u64,
+    source_name: &str,
+) -> Result<u64, OrbitError> {
+    let copied =
+        std::io::copy(&mut reader.take(limit.saturating_add(1)), writer).map_err(|error| {
+            OrbitError::Io(format!("download plugin archive '{source_name}': {error}"))
+        })?;
+    if copied > limit {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin archive '{source_name}' is larger than the {limit}-byte limit for a plugin \
+             source; download stopped"
+        )));
+    }
+    Ok(copied)
 }
 
 fn refuse_oversize_archive(path: &Path, source_name: &str) -> Result<(), OrbitError> {
