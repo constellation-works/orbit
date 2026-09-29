@@ -17,7 +17,7 @@ next: false
       <a class="orbit-button primary" href="/getting-started/">Get started →</a>
       <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
     </div>
-    <p class="orbit-hero-requirements">Needs Node 18+ and one signed-in agent CLI · macOS and Linux · MIT licensed</p>
+    <p class="orbit-hero-requirements">Needs Node 18+, one signed-in agent CLI, and the GitHub CLI for pull requests · macOS and Linux · MIT licensed</p>
     <div class="orbit-hero-providers">
       <div class="orbit-hero-providers-label">Drives the agent CLI you already sign in to</div>
       <ul class="orbit-hero-providers-list">

@@ -138,14 +138,14 @@ export default defineConfig({
           tag: 'meta',
           attrs: {
             property: 'og:image',
-            content: 'https://orbit-cli.com/og-image.svg',
+            content: 'https://orbit-cli.com/og-image.png',
           },
         },
         {
           tag: 'meta',
           attrs: {
             property: 'og:image:type',
-            content: 'image/svg+xml',
+            content: 'image/png',
           },
         },
         {
@@ -165,6 +165,13 @@ export default defineConfig({
         {
           tag: 'meta',
           attrs: {
+            property: 'og:image:alt',
+            content: 'Orbit: a local-first runtime for coding agents, shown as three concentric orbits on a dark background.',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
             name: 'twitter:card',
             content: 'summary_large_image',
           },
@@ -173,7 +180,14 @@ export default defineConfig({
           tag: 'meta',
           attrs: {
             name: 'twitter:image',
-            content: 'https://orbit-cli.com/og-image.svg',
+            content: 'https://orbit-cli.com/og-image.png',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            name: 'twitter:image:alt',
+            content: 'Orbit: a local-first runtime for coding agents, shown as three concentric orbits on a dark background.',
           },
         },
       ],

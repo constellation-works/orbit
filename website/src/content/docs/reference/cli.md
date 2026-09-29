@@ -31,8 +31,17 @@ before the subcommand.
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
 | `orbit plugin add` \| `list` \| `show` \| `upgrade` \| `enable` \| `disable` \| `remove` \| `doctor` \| `sync` | Install and manage Orbit plugins; `validate`, `test`, `scaffold`, and `migrate` support plugin authoring. Installed plugin command groups appear under `Plugins:` in `orbit --help`. |
+| `orbit plugin secret set` \| `list` \| `rm` | Manage the secrets a plugin declares in `spec.secrets`. `set <plugin> <name>` reads the value from stdin or a no-echo prompt, never from an argument; `list <plugin>` shows whether each secret is set, never its value; `rm <plugin> <name>` deletes one. |
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
+
+A plugin source keeps its plugin in a `.orbit-plugin/` directory holding
+`plugin.yaml`; that directory is the plugin root and the only tree installed.
+A top-level `plugin.yaml` is refused by `plugin add`, `validate`, `test`, `sync`,
+and `upgrade`, with no fallback. Move `plugin.yaml` and its tree into
+`.orbit-plugin/`, or run `orbit plugin scaffold` to create the current shape.
+Plugins install once per machine; a repository commits only its
+`.orbit/plugins.yaml` pin file.
 
 ## Knowledge
 
@@ -69,8 +78,9 @@ before the subcommand.
 |---|---|
 | `orbit run ship [task_id ...]` | Ship selected tasks, or the ready backlog, through the gated pipeline. Returns a run ID immediately. |
 | `orbit run ship --mode local` | Deliver in place instead of opening a pull request. |
-| `orbit run auto [--for <duration>]` | Drain the backlog for a window. `--concurrency`, `--allow-crew`, `--low-complexity-crews` / `--medium-complexity-crews` / `--hard-complexity-crews` / `--xhard-complexity-crews` (crew pools for unassigned tasks, `crew` or `crew:weight`; override the `[workflow]` pools), `--claim-token` when another operator holds the workspace claim. |
-| `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Already admitted workers keep running — this is not cancellation. |
+| `orbit run auto [--for <duration>]` | Drain the backlog for a window. `--concurrency`, `--allow-crew`, `--low-complexity-crews` / `--medium-complexity-crews` / `--hard-complexity-crews` / `--xhard-complexity-crews` (crew pools for unassigned tasks, `crew` or `crew:weight`; override the `[workflow]` pools), `--strict-worker-containment` (require a systemd user scope for the coordinator and every worker; overrides `machine.worker_containment_strict` for this drain), `--claim-token` when another operator holds the workspace claim, `--json`. |
+| `orbit run auto --pull <SELECTOR>` | On a replica checkout, pull work from the owner named by the host-qualified selector and run each claim as a leaf that ends at a pull request handed back to the owner, which keeps landing authority. Takes `--for` and `--concurrency`; conflicts with `--complete`, `--allow-crew`, `--strict-worker-containment`, the crew-pool flags, `--claim-token`, and `--stop`. See [Set Up a Distributed Drain](../../how-to/distributed-drain/). |
+| `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Already admitted workers keep running — this is not cancellation. On a replica it also delivers any recorded pull settlements to the owner, and needs no active drain to do so. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Additionally authorize that run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
 | `orbit run readiness [task_id ...]` | Read-only explanation of why backlog tasks can or cannot start. `--concurrency`, `--allow-crew`, `--limit`. |
 | `orbit run task-pilot [task_id ...]` | Preflight proposed/backlog tasks and persist validated selectors. Omit IDs for automatic discovery. `--base-branch`, `--max-tasks`, `--max-partition-size`, `--wait`, `--json`. |
