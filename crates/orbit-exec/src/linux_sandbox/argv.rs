@@ -14,6 +14,10 @@ use super::*;
 /// before any policy mount — see [`append_cargo_download_cache_mounts`] for why
 /// the read-only bind of `/` cannot stand for them.
 ///
+/// Every plan also hides the host account's well-known credential locations
+/// (`~/.ssh`, `~/.aws`, `~/.config/gh`, cargo publish tokens) behind an empty
+/// stand-in, after every other mount — see [`super::credentials`].
+///
 /// The profile's globs are compiled once and every non-subtree rule is
 /// expanded up front from one walk per search root; the mount loops and the
 /// post-run guard read that expansion rather than walking again.
@@ -34,6 +38,32 @@ fn compile_plan(
     cwd: Option<&Path>,
     managed_worktree: bool,
     mask: Option<&LinuxBwrapMask>,
+) -> Result<LinuxBwrapPlan, OrbitError> {
+    compile_plan_with_credentials(
+        profile,
+        program,
+        args,
+        cwd,
+        managed_worktree,
+        mask,
+        &host_credential_denies(),
+        host_mounts,
+    )
+}
+
+/// [`compile_plan`] with the credential locations to mask passed explicitly,
+/// so the placement can be exercised against a fixture home instead of the
+/// host account's.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compile_plan_with_credentials(
+    profile: &ResolvedFsProfile,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    managed_worktree: bool,
+    mask: Option<&LinuxBwrapMask>,
+    credentials: &[CredentialReadDeny],
+    mounts: impl FnOnce() -> Result<Vec<MountEntry>, OrbitError>,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
     let compiled = CompiledModifyRules::compile(profile)?;
     let expanded = expand_each_rule(
@@ -152,7 +182,8 @@ fn compile_plan(
         append_stable_toolchain_mounts(&mut out, cwd)?;
     }
     // After every policy mount and alias bind, so none of them can expose a
-    // masked directory again.
+    // masked location again.
+    append_credential_masks(&mut out, credentials, mounts)?;
     if let Some(mask) = mask {
         append_mask_mounts(&mut out, mask)?;
     }

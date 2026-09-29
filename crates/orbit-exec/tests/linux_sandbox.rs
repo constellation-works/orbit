@@ -81,6 +81,78 @@ fn bwrap_child_gets_only_the_supplied_environment() {
     }
 }
 
+/// The host filesystem stays readable under Bubblewrap, but the well-known
+/// credential locations are masked: a confined child sees an empty `~/.ssh`
+/// and no cargo token while its worktree stays writable. The fake home lives
+/// under the crate directory because the sandbox replaces `/tmp` with its own
+/// tmpfs, which would hide a home created there and prove nothing.
+#[test]
+fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
+    let probe = probe_bwrap();
+    if !probe.available {
+        println!("skipping real Bubblewrap test: {}", probe.detail);
+        return;
+    }
+
+    let home_dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("home tempdir");
+    let home = home_dir.path().canonicalize().expect("canonical home");
+    std::fs::create_dir_all(home.join(".ssh")).expect("ssh dir");
+    std::fs::create_dir_all(home.join(".cargo")).expect("cargo dir");
+    std::fs::write(home.join(".ssh/id_ed25519"), b"PRIVATE-KEY").expect("key");
+    std::fs::write(home.join(".cargo/credentials.toml"), b"PUBLISH-TOKEN").expect("token");
+    let workspace_dir = tempfile::tempdir().expect("workspace tempdir");
+    let workspace = workspace_dir
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let resolved = profile(vec![format!("{}/**", workspace.display())]);
+
+    let _home = orbit_common::test_env::scoped([
+        ("HOME", Some(home.to_str().expect("utf-8 home"))),
+        ("CARGO_HOME", None),
+    ]);
+    let script = format!(
+        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' 2>&1; \
+         ls -A '{home}/.ssh'; echo written > '{ws}/out.txt'",
+        home = home.display(),
+        ws = workspace.display()
+    );
+    let plan = compile_linux_bwrap_argv(
+        &resolved,
+        "/bin/sh",
+        &["-c".to_string(), script],
+        Some(&workspace),
+        false,
+    )
+    .expect("compile");
+    let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan: &plan,
+        env: &env,
+        cwd: Some(&workspace),
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn");
+    let output = child.wait_with_output().expect("wait");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains("PRIVATE-KEY") && !stdout.contains("PUBLISH-TOKEN"),
+        "credential contents must not reach a confined child: {stdout}"
+    );
+    assert!(
+        !stdout.contains("id_ed25519"),
+        "the masked ~/.ssh must list as empty: {stdout}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("out.txt")).expect("worktree write"),
+        "written\n",
+        "the writable worktree must survive the credential masks"
+    );
+}
+
 /// Explicit live regression for the validation-to-mount boundary. The host
 /// name is replaced after its descriptor is opened; the child may modify only
 /// that opened object, never the replacement now visible at the name.

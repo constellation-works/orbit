@@ -1,6 +1,8 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use crate::credential_paths::non_empty_env_path;
+
 use super::sbpl_filter::{push_regex_escaped, push_regex_escaped_str, sbpl_escape};
 
 pub(super) fn provider_state_dirs(
@@ -223,14 +225,6 @@ fn xdg_scoped_dir(
         })
     })?;
     Some(base.join("opencode"))
-}
-
-pub(super) fn non_empty_env_path(value: Option<&OsStr>) -> Option<PathBuf> {
-    let value = value?;
-    if value.to_string_lossy().is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(value))
 }
 
 /// Claude Code persists its main settings to `$HOME/.claude.json`, a sibling

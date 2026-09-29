@@ -55,6 +55,7 @@ fn synthetic_probe(available: bool, detail: &str) -> BwrapProbeOutcome {
 }
 
 mod cache;
+mod credentials;
 mod descriptor;
 mod mask;
 mod rules;

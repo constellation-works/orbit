@@ -25,7 +25,11 @@ Bubblewrap profile the probe fails with the UID-map error above.
 
 The Linux boundary enforces writes from the resolved policy. It leaves host filesystem reads
 and host network access available, so it does not provide worktree-only reads or policy-gated
-network egress. See [policy-sandbox](../design/policy-sandbox/) for the design.
+network egress. The one exception is the well-known credential locations (`~/.ssh`, `~/.aws`,
+`~/.config/gh`, cargo publish tokens): each that exists is masked inside the sandbox, so a worker
+sees an empty directory or an empty file there. Dispatch fails with a message naming the path if
+one of them is also reachable through a second mount, for example a bind mount of `$HOME`;
+remove the alias rather than disabling the sandbox. See [policy-sandbox](../design/policy-sandbox/) for the design.
 
 ## Install and verify on Ubuntu 24.04
 
