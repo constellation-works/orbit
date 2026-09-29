@@ -87,17 +87,22 @@ rm -f "$FAKE_RUSTC_LOG" "$FAKE_SCCACHE_LOG"
 [[ -f "$FAKE_RUSTC_LOG" ]] || fail "missing-sccache wrapper did not exec rustc"
 [[ ! -f "$FAKE_SCCACHE_LOG" ]] || fail "missing sccache must not exec sccache"
 
-# 3. Unwritable cache dir -> rustc, not sccache.
+# 3. Unwritable cache dir -> rustc, not sccache. Root ignores directory mode
+# bits, so the case cannot be staged there (containers and cloud sessions).
 mkdir -p "$HOME/.orbit/cache/compiler"
-chmod a-w "$HOME/.orbit/cache/compiler"
 export ORBIT_COMPILER_CACHE_BIN="$TMP/sccache"
-export FAKE_SCCACHE_LOG="$TMP/sccache-unwritable.log"
-export FAKE_RUSTC_LOG="$TMP/rustc-unwritable.log"
-rm -f "$FAKE_SCCACHE_LOG" "$FAKE_RUSTC_LOG"
-"$WRAPPER" "$TMP/bin/rustc" --emit metadata
-[[ -f "$FAKE_RUSTC_LOG" ]] || fail "unwritable cache did not exec rustc"
-[[ ! -f "$FAKE_SCCACHE_LOG" ]] || fail "unwritable cache must not exec sccache"
-chmod u+w "$HOME/.orbit/cache/compiler"
+if [[ "$(id -u)" -eq 0 ]]; then
+  printf 'test-compiler-cache: skip unwritable-cache case (running as root)\n'
+else
+  chmod a-w "$HOME/.orbit/cache/compiler"
+  export FAKE_SCCACHE_LOG="$TMP/sccache-unwritable.log"
+  export FAKE_RUSTC_LOG="$TMP/rustc-unwritable.log"
+  rm -f "$FAKE_SCCACHE_LOG" "$FAKE_RUSTC_LOG"
+  "$WRAPPER" "$TMP/bin/rustc" --emit metadata
+  [[ -f "$FAKE_RUSTC_LOG" ]] || fail "unwritable cache did not exec rustc"
+  [[ ! -f "$FAKE_SCCACHE_LOG" ]] || fail "unwritable cache must not exec sccache"
+  chmod u+w "$HOME/.orbit/cache/compiler"
+fi
 
 # 4. Writable cache + sccache -> sccache then rustc, with per-namespace daemon defaults.
 export FAKE_SCCACHE_LOG="$TMP/sccache-hit.log"
