@@ -457,3 +457,62 @@ fn host_shutdown_check_names_a_scheduled_reboot() {
         row.remediation
     );
 }
+
+/// Settlements a follower recorded but never delivered leave the owner's claims
+/// `running` until an operator acts, so doctor warns with the count, the age of
+/// the oldest and the command that delivers them — and says nothing is wrong
+/// when none wait.
+#[test]
+fn pull_settlement_check_warns_with_count_age_and_the_delivering_command() {
+    use crate::doctor::automation::pull_settlements_finding;
+    use orbit_common::OrbitError;
+    use orbit_core::application::distributed::PendingPullSettlements;
+
+    let now = Utc::now();
+    let waiting = pull_settlements_finding(
+        Ok(PendingPullSettlements {
+            count: 1,
+            oldest_recorded_at: Some(now - chrono::Duration::minutes(135)),
+        }),
+        now,
+    );
+    assert_eq!(waiting.status, WorkspaceDoctorStatus::Warning);
+    assert!(waiting.message.contains("1 pull settlement"), "{waiting:?}");
+    assert!(waiting.message.contains("2h 15m"), "{waiting:?}");
+    assert!(
+        waiting
+            .remediation
+            .as_deref()
+            .is_some_and(|fix| fix.contains("orbit run auto --stop")),
+        "the finding must name the command that delivers the settlements: {waiting:?}"
+    );
+
+    let undated = pull_settlements_finding(
+        Ok(PendingPullSettlements {
+            count: 3,
+            oldest_recorded_at: None,
+        }),
+        now,
+    );
+    assert_eq!(undated.status, WorkspaceDoctorStatus::Warning);
+    assert!(undated.message.contains("3 pull settlement"), "{undated:?}");
+
+    let none = pull_settlements_finding(Ok(PendingPullSettlements::default()), now);
+    assert_eq!(none.status, WorkspaceDoctorStatus::Ok);
+    assert!(none.remediation.is_none());
+
+    let unreadable = pull_settlements_finding(Err(OrbitError::Store("locked".into())), now);
+    assert_eq!(unreadable.status, WorkspaceDoctorStatus::Warning);
+}
+
+/// Most workspaces never pulled; doctor reports them clean.
+#[test]
+fn pull_settlement_check_is_ok_in_a_workspace_that_never_pulled() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let runtime = workspace_runtime(&temp);
+    let results = runtime.doctor_workspace().expect("doctor");
+    assert_eq!(
+        status_of(&results, "pull-settlements").status,
+        WorkspaceDoctorStatus::Ok
+    );
+}

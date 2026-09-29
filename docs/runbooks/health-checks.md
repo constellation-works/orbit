@@ -26,6 +26,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `semantic-index` | stale embedding rows; skipped if never indexed |
 | `stale-locks` | `.lock` files under `state/`, `tasks/`, `learnings/`, and `adrs/.locks/` whose recorded holder PID is dead |
 | `job-runs` | orphaned `pending` or `running` runs with no live worker process |
+| `pull-settlements` | warns when a replica has recorded a leaf's outcome but not delivered it to the owner (nothing retries on a timer), naming the count and the age of the oldest. Remedy: `orbit run auto --stop` ([distributed drain](./distributed-drain.md#claim-inspection-and-manual-recovery)); `ok` on a workspace that never pulled |
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
 | `host-shutdown` | warns while the host has a shutdown or reboot scheduled (logind's `/run/systemd/shutdown/scheduled`), naming its mode and time; unattended admissions are held until it clears ([distributed drain](./distributed-drain.md#scheduled-host-shutdown-or-reboot)) |

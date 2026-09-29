@@ -138,6 +138,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_search_index(self),
             doctor_check_stale_locks(self),
             doctor_check_job_runs(self),
+            doctor_check_pull_settlements(self),
             doctor_check_task_reservations(self),
             doctor_check_task_relations(self),
             doctor_check_infra_blocked_tasks(self),

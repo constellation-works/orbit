@@ -640,6 +640,94 @@ fn stop_and_cancel_deliver_stranded_settlements_without_a_drain() {
     assert_eq!(unique.len(), 2);
 }
 
+/// An outcome recorded but not delivered is the one state only an operator
+/// clears, so it must be countable and dated without contacting the owner. The
+/// leaf whose failure was never recorded, and the admission whose leaf still
+/// runs, are not waiting on delivery.
+#[test]
+fn a_recorded_but_undelivered_settlement_is_counted_and_clears_once_delivered() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::a_recorded_but_undelivered_settlement_is_counted_and_clears_once_delivered",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let stranded = stranded_by_a_cancelled_drain(&runtime, &owner);
+    let calls_before = owner.calls.lock().unwrap().len();
+
+    let pending = runtime.pending_pull_settlements().expect("summary");
+    assert_eq!(pending.count, 1, "{pending:?}");
+    let leaf_finished = runtime
+        .stores()
+        .jobs()
+        .get_job_run(&leaf_of(&stranded[0]))
+        .expect("leaf run")
+        .expect("leaf exists")
+        .finished_at;
+    assert_eq!(pending.oldest_recorded_at, leaf_finished);
+    assert!(
+        pending
+            .oldest_age(Utc::now())
+            .is_some_and(|age| age >= chrono::Duration::zero())
+    );
+    assert_eq!(
+        owner.calls.lock().unwrap().len(),
+        calls_before,
+        "the summary never contacts the owner"
+    );
+
+    let stop = runtime
+        .stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
+            actor: "cli",
+            source: "run_auto_stop",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop");
+    assert_eq!(stop.pull_settlements.len(), 2);
+    assert_eq!(
+        runtime.pending_pull_settlements().expect("summary"),
+        Default::default()
+    );
+}
+
+/// The summary is read by `orbit doctor` in every workspace, most of which
+/// never pulled: it must report nothing and leave no pull table behind.
+#[test]
+fn pending_pull_settlements_do_not_create_pull_tables_in_a_workspace_that_never_pulled() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::pending_pull_settlements_do_not_create_pull_tables_in_a_workspace_that_never_pulled",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let table_exists = || {
+        rusqlite::Connection::open(runtime.global_root().join("orbit.db"))
+            .expect("open orbit db")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='local_pull_admissions')",
+                [],
+                |row| row.get::<_, bool>(0),
+            )
+            .expect("query sqlite_master")
+    };
+    assert!(
+        !table_exists(),
+        "a fresh workspace starts without pull tables"
+    );
+
+    assert_eq!(
+        runtime.pending_pull_settlements().expect("summary"),
+        Default::default()
+    );
+    assert!(
+        !table_exists(),
+        "reading pending settlements created the pull tables"
+    );
+}
+
 /// [ORB-13663] A settle-only pass never takes work from a live drain: while
 /// another drain for the same owner is running, a cancelled drain's
 /// unlaunched claim is left for it to carry, and its queued leaf is not

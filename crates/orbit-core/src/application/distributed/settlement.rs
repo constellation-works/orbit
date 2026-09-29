@@ -8,6 +8,7 @@
 //! is still recorded. This is the report those surfaces print, one entry per
 //! admission that still held a slot when the pass started.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 /// One admission carried by a settle-only pass.
@@ -92,6 +93,30 @@ fn outcome_guidance(outcome: &str) -> Option<&'static str> {
         ),
         "no_owner_route" => Some("add the owner to ~/.orbit/mcp-destinations.toml"),
         _ => None,
+    }
+}
+
+/// Settlements this follower recorded but never delivered to the owner.
+///
+/// Nothing retries delivery on a timer by design, so an undelivered
+/// settlement waits for an operator to run `orbit run auto --stop`. This is
+/// the read-only summary `orbit doctor` reports so the wait is visible.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PendingPullSettlements {
+    /// Admissions whose outcome is recorded but not delivered.
+    pub count: usize,
+    /// When the oldest such admission's leaf ended, and so when its outcome
+    /// was recorded. `None` when none is pending or no ended leaf run can be
+    /// read for any of them.
+    pub oldest_recorded_at: Option<DateTime<Utc>>,
+}
+
+impl PendingPullSettlements {
+    /// How long the oldest pending settlement has waited, at `now`.
+    #[must_use]
+    pub fn oldest_age(&self, now: DateTime<Utc>) -> Option<chrono::Duration> {
+        self.oldest_recorded_at
+            .map(|recorded| (now - recorded).max(chrono::Duration::zero()))
     }
 }
 
