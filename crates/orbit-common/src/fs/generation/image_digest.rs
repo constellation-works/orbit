@@ -128,9 +128,16 @@ fn store(path: &Path, key: ImageKey, digest: &str, now: SystemTime) {
 }
 
 /// The digest of `file`, from the cache at `cache_path` when the image's file
-/// identity matches an entry, otherwise from `hash` (remembered afterwards).
+/// identity matches an entry, otherwise from `hash`.
+///
+/// A freshly hashed digest is remembered, as of `now`, only when `record` is
+/// set. A
+/// read-only participant passes `false`: it may use an entry a writer left,
+/// but it must not create or change any file under the generation root.
 pub(super) fn digest_with_cache(
     cache_path: Option<&Path>,
+    record: bool,
+    now: SystemTime,
     file: File,
     hash: impl FnOnce(File) -> Result<String, OrbitError>,
 ) -> Result<String, OrbitError> {
@@ -146,7 +153,9 @@ pub(super) fn digest_with_cache(
         return Ok(entry.sha256);
     }
     let digest = hash(file)?;
-    store(path, key, &digest, SystemTime::now());
+    if record {
+        store(path, key, &digest, now);
+    }
     Ok(digest)
 }
 
