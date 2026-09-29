@@ -9,9 +9,11 @@
 //!   incompatible generation is pending on its authority. When one is, the
 //!   run it owns is recorded `interrupted` under
 //!   [`UPGRADE_QUIESCE_ERROR_CODE`] — resumable from its checkpoints with
-//!   `orbit job resume` — and the process exits, releasing its share of the
-//!   generation. A drain coordinator also admits no new leaves while a switch
-//!   is pending, since every one of them would be refused at startup.
+//!   `orbit job resume`, except a claimed leaf, which generic resume refuses
+//!   and whose owner recovers the claim for a later drain to re-admit — and
+//!   the process exits, releasing its share of the generation. A drain
+//!   coordinator also admits no new leaves while a switch is pending, since
+//!   every one of them would be refused at startup.
 //! - **Hand over.** A drain coordinator whose installed executable was
 //!   replaced by a build that can adopt its run execs that executable in
 //!   place with the same arguments and [`ADOPT_RUN_ENV`] naming the run. The
@@ -109,15 +111,23 @@ impl OrbitRuntime {
 
     /// Record `run_id` interrupted for `switch` and exit the process.
     fn yield_to_pending_switch(&self, run_id: &str, switch: &PendingSwitch) -> ! {
-        let message = format!(
-            "interrupted at a step boundary so a newer Orbit (pid {}, {}) can switch the store \
-             generation; resume it with `orbit job resume {run_id}` once the upgrade completes",
-            switch.pid, switch.role,
-        );
+        self.record_upgrade_interruption(run_id, switch.pid, switch.role);
+        std::process::exit(0)
+    }
+
+    /// Record `run_id` interrupted so the process `pid` can switch the store
+    /// generation. A failure to record is logged and otherwise ignored:
+    /// reconciliation records a run whose owner is gone as interrupted all the
+    /// same.
+    pub(crate) fn record_upgrade_interruption(
+        &self,
+        run_id: &str,
+        pid: u32,
+        role: ParticipantRole,
+    ) {
+        let message = self.upgrade_interruption_message(run_id, pid, role);
         tracing::warn!(target: "orbit.generation", run_id, "{message}");
         if let Err(error) = self.interrupt_worker_run(run_id, &message) {
-            // The process still exits: reconciliation records a run whose
-            // owner is gone as interrupted all the same.
             tracing::warn!(
                 target: "orbit.generation",
                 run_id,
@@ -125,7 +135,44 @@ impl OrbitRuntime {
                 "could not record the upgrade interruption",
             );
         }
-        std::process::exit(0)
+    }
+
+    /// The diagnostic recorded on an upgrade-interrupted run.
+    ///
+    /// A claimed leaf is refused by generic resume, so it must not be pointed
+    /// at `orbit job resume`: its recovery is on the owner, which re-admits it
+    /// through a later drain. When the store cannot say whether the run is a
+    /// claimed leaf, the wording stays neutral instead of guessing a command
+    /// that may be refused.
+    fn upgrade_interruption_message(
+        &self,
+        run_id: &str,
+        pid: u32,
+        role: ParticipantRole,
+    ) -> String {
+        let claimed = self
+            .stores()
+            .jobs()
+            .local_pull_for_run(run_id)
+            .map(|admission| admission.is_some());
+        let next = match claimed {
+            Ok(false) => {
+                format!("resume it with `orbit job resume {run_id}` once the upgrade completes")
+            }
+            Ok(true) => {
+                "this claimed leaf cannot be resumed directly; once the upgrade completes, \
+                 recover the claim on the owner and let a drain re-admit it"
+                    .to_string()
+            }
+            Err(_) => {
+                "once the upgrade completes, inspect the run before choosing how to recover it"
+                    .to_string()
+            }
+        };
+        format!(
+            "interrupted at a step boundary by an Orbit upgrade so a newer Orbit (pid {pid}, {role}) \
+             can switch the store generation; {next}"
+        )
     }
 
     fn interrupt_worker_run(

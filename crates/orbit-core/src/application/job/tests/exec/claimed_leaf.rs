@@ -16,6 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::generation::ParticipantRole;
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::*;
 use orbit_types::task::TaskStatus;
@@ -1141,6 +1142,69 @@ fn an_uncertain_launch_refuses_generic_resume_and_waits_for_deliberate_recovery(
         claims[0].claim.phase,
         ExecutionClaimPhase::Running,
         "an uncertain attempt keeps its authority until a human takes it away"
+    );
+}
+
+/// An upgrade-interrupted claimed leaf is not pointed at generic resume.
+///
+/// The diagnostic is copied to the owner task's execution summary, and generic
+/// resume refuses a bound leaf, so the recorded guidance must not send the
+/// operator to a command that cannot work. An ordinary run keeps it.
+#[test]
+fn an_upgrade_interrupted_claimed_leaf_is_not_told_to_generic_resume() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::an_upgrade_interrupted_claimed_leaf_is_not_told_to_generic_resume",
+    ) {
+        return;
+    }
+    let (_root, runtime, _repo_root, _global) = owner_runtime();
+    seed_claimable_task(&runtime);
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "local");
+    let peer = CuttingPeer::new(&runtime);
+    let launcher = KillingLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+    };
+    let jobs = runtime.stores().jobs();
+    let pull = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pull.refill(&destination, &template, 1)
+    }));
+    std::panic::set_hook(previous);
+    assert!(killed.is_err(), "the fixture kills the launching process");
+    let leaf = jobs
+        .local_pull_admissions()
+        .expect("records")
+        .remove(0)
+        .leaf_run_id
+        .expect("leaf");
+
+    let recorded = |run_id: &str| -> String {
+        runtime.record_upgrade_interruption(run_id, 1, ParticipantRole::Drain);
+        let run = jobs.get_job_run(run_id).expect("read").expect("run");
+        assert_eq!(run.state, orbit_types::workflow::JobRunState::Interrupted);
+        run.steps
+            .iter()
+            .find_map(|step| step.error_message.clone())
+            .expect("the interruption is recorded with a diagnostic")
+    };
+
+    let claimed = recorded(&leaf);
+    assert!(
+        !claimed.contains("orbit job resume"),
+        "a claimed leaf must not be sent to generic resume: {claimed}"
+    );
+    let ordinary = recorded(&drain);
+    assert!(
+        ordinary.contains("orbit job resume"),
+        "an ordinary run stays resumable: {ordinary}"
     );
 }
 
