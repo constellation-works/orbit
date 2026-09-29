@@ -34,6 +34,12 @@ use crate::runtime_memo::AUDIT_SUMMARY_TTL;
 /// switch the tile to alert state without a second round-trip.
 const DEFAULT_DENIAL_THRESHOLD: i64 = 10;
 
+/// Largest `?offset=` accepted by `GET /audit`. SQLite walks and discards
+/// every skipped row, so an unbounded offset is an unbounded scan. Rejecting
+/// (rather than clamping) keeps a too-deep page from silently returning rows
+/// from the wrong position.
+const AUDIT_MAX_OFFSET: usize = 100_000;
+
 /// Longest `GET /audit/summary` window. Dashboard selections are `1h`, `24h`,
 /// `7d`, and `30d` (`all` falls back to 24h). A wider `since` is rejected.
 const MAX_SUMMARY_WINDOW_DAYS: usize = 30;
@@ -61,6 +67,11 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
 
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     let offset = q.offset.unwrap_or(0);
+    if offset > AUDIT_MAX_OFFSET {
+        return bad_request(format!(
+            "offset must be <= {AUDIT_MAX_OFFSET}; got {offset}"
+        ));
+    }
     let tool = q.tool.filter(|s| !s.is_empty());
     let role = q.role.filter(|s| !s.is_empty());
     let transport = match q

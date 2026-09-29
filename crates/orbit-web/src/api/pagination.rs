@@ -8,6 +8,8 @@ use orbit_core::{DEFAULT_TASK_LIST_LIMIT, TaskStatus, TaskType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::HISTORY_MAX_LIMIT;
+
 const CURSOR_VERSION: u8 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -180,7 +182,10 @@ fn parse_limit(raw: &str) -> Result<usize, String> {
     if value == 0 {
         return Err("`limit` must be at least 1".to_string());
     }
-    Ok(value)
+    // Clamp here, before `filter_key` embeds the limit in the cursor, so an
+    // oversized request cannot force an unbounded scan and cursors minted for
+    // it stay valid for the clamped page size.
+    Ok(value.min(HISTORY_MAX_LIMIT))
 }
 
 impl TaskCursor {

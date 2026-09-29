@@ -13,6 +13,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use super::super::{build_state, check_bindable_host, drain_with_grace_period};
+use crate::serve::{build_app, security_headers};
 
 #[test]
 fn allows_ipv4_loopback() {
@@ -333,4 +334,55 @@ fn without_root_override_child() {
         vec!["isolated-global"]
     );
     std::fs::write(global_root.join("child-case-ran"), b"ok").expect("record completed child case");
+}
+
+async fn app_response(uri: &str) -> axum::response::Response {
+    use tower::ServiceExt;
+
+    let runtime = orbit_core::OrbitRuntime::in_memory().expect("build runtime");
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+    build_app(state)
+        .expect("build app")
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(uri)
+                .header("host", "localhost:7878")
+                .body(axum::body::Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+/// Every response, API and static alike, carries the baseline hardening
+/// headers, and the static asset keeps its own CSP.
+#[tokio::test]
+async fn api_and_static_responses_carry_baseline_security_headers() {
+    for uri in ["/api/tasks", "/static/dashboard.css", "/no-such-route"] {
+        let response = app_response(uri).await;
+        let headers = response.headers();
+        assert_eq!(headers["x-content-type-options"], "nosniff", "{uri}");
+        assert_eq!(headers["referrer-policy"], "no-referrer", "{uri}");
+        assert_eq!(
+            headers["cross-origin-resource-policy"], "same-origin",
+            "{uri}"
+        );
+    }
+    let asset = app_response("/static/dashboard.css").await;
+    assert!(
+        asset.headers().contains_key("content-security-policy"),
+        "static assets keep their CSP"
+    );
+}
+
+#[tokio::test]
+async fn security_headers_do_not_overwrite_a_handler_value() {
+    let mut response = axum::response::Response::new(axum::body::Body::empty());
+    response.headers_mut().insert(
+        "referrer-policy",
+        axum::http::HeaderValue::from_static("same-origin"),
+    );
+    let response: axum::response::Response = security_headers(response).await;
+    assert_eq!(response.headers()["referrer-policy"], "same-origin");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
 }

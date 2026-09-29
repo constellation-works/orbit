@@ -275,6 +275,11 @@ async fn get_task_artifact_serves_subdirectory_bytes_and_media_type() {
         response.headers().get("x-content-type-options"),
         Some(&HeaderValue::from_static("nosniff"))
     );
+    assert_eq!(
+        response.headers().get(header::CONTENT_SECURITY_POLICY),
+        Some(&HeaderValue::from_static("sandbox; default-src 'none'")),
+        "artifact bytes are task-author content and must be sandboxed"
+    );
     assert!(
         response
             .headers()

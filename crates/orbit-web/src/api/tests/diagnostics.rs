@@ -15,13 +15,13 @@ use orbit_core::{
     InvocationInsertParams, OrbitRuntime, TaskComplexity, TaskStatus, V2AuditEventInsertParams,
 };
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
 use super::super::diagnostics::{
-    diagnostics_friction_row, diagnostics_metrics_values, global_error_rows_from_path,
-    parse_structured_error_line,
+    MAX_STDERR_BLOBS_PER_REQUEST, diagnostics_friction_row, diagnostics_metrics_values,
+    global_error_rows_from_path, parse_structured_error_line,
 };
 use super::super::router;
 use super::test_support::{body_json, write_lines};
@@ -271,6 +271,94 @@ async fn diagnostics_errors_prefer_the_newest_agent_stderr_rows() {
         .collect::<Vec<_>>();
     assert_eq!(agent_rows.len(), 1, "{payload}");
     assert_eq!(agent_rows[0]["job_run"], "jrun-new");
+}
+
+async fn errors_on(state: crate::state::DashboardState) -> Value {
+    let response = Router::new()
+        .nest("/api", router())
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/diagnostics/errors?limit=10")
+                .header("host", "localhost:7878")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    body_json(response).await
+}
+
+fn agent_stderr_runs(payload: &Value) -> Vec<String> {
+    payload
+        .as_array()
+        .expect("rows")
+        .iter()
+        .filter(|row| row["source"] == "agent-stderr")
+        .filter_map(|row| row["job_run"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Overlapping Errors-tab polls on one server share a single scan: a row
+/// recorded inside the TTL is not visible to the second poll, while a fresh
+/// server (no memo) sees it.
+#[tokio::test]
+async fn diagnostics_errors_are_memoized_within_the_ttl() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    seed_cli_invocation_audit_at(
+        &runtime,
+        "jrun-first",
+        b"2099-05-08T01:12:22.000000Z ERROR codex_core::session: first failure\n",
+        1,
+    );
+    let state = crate::state::DashboardState::single(Arc::clone(&runtime));
+    let first = errors_on(state.clone()).await;
+    assert_eq!(agent_stderr_runs(&first), vec!["jrun-first"]);
+
+    seed_cli_invocation_audit_at(
+        &runtime,
+        "jrun-second",
+        b"2099-05-08T02:12:22.000000Z ERROR codex_core::session: second failure\n",
+        2,
+    );
+    let cached = errors_on(state).await;
+    assert_eq!(cached, first, "second poll inside the TTL reuses the scan");
+
+    let fresh = errors_on(crate::state::DashboardState::single(runtime)).await;
+    assert_eq!(agent_stderr_runs(&fresh), vec!["jrun-second", "jrun-first"]);
+}
+
+/// One request reads at most `MAX_STDERR_BLOBS_PER_REQUEST` stderr blobs,
+/// newest invocations first, so a deep history of quiet invocations cannot
+/// turn a poll into thousands of disk reads.
+#[tokio::test]
+async fn diagnostics_errors_cap_the_stderr_blobs_read_per_request() {
+    let error_line = "2099-05-08T01:12:22.000000Z ERROR codex_core::session: old failure\n";
+    let quiet = b"nothing structured here\n";
+
+    let shallow = OrbitRuntime::in_memory().expect("build runtime");
+    seed_cli_invocation_audit_at(&shallow, "jrun-old", error_line.as_bytes(), 1);
+    for index in 0..3 {
+        seed_cli_invocation_audit_at(&shallow, &format!("jrun-quiet-{index}"), quiet, 3);
+    }
+    let payload = errors_on(crate::state::DashboardState::single(Arc::new(shallow))).await;
+    assert_eq!(
+        agent_stderr_runs(&payload),
+        vec!["jrun-old"],
+        "control: below the cap the old failure is found"
+    );
+
+    let deep = OrbitRuntime::in_memory().expect("build runtime");
+    seed_cli_invocation_audit_at(&deep, "jrun-old", error_line.as_bytes(), 1);
+    for index in 0..MAX_STDERR_BLOBS_PER_REQUEST {
+        seed_cli_invocation_audit_at(&deep, &format!("jrun-quiet-{index}"), quiet, 3);
+    }
+    let payload = errors_on(crate::state::DashboardState::single(Arc::new(deep))).await;
+    assert!(
+        agent_stderr_runs(&payload).is_empty(),
+        "the oldest invocation lies past the blob cap and is not read: {payload}"
+    );
 }
 
 #[test]

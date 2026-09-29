@@ -423,3 +423,74 @@ fn rendered_tail_cursor_stops_before_a_partial_record() {
     assert!(tail.events[0].message_html.contains("whole"));
     assert_eq!(tail.cursor, complete.len() as u64);
 }
+
+/// The unterminated trailing record is never read into memory past the
+/// stream's record cap: it is treated like a partial write, so the tail
+/// serves the complete records and leaves the cursor at the tail's start.
+#[test]
+fn rendered_tail_skips_an_oversized_unterminated_record() {
+    let complete = join_lines(
+        &[event_line("2026-04-27T01:00:01Z", "orbit.keep", "whole")],
+        true,
+    );
+    let huge = event_line(
+        "2026-04-27T01:00:02Z",
+        "orbit.keep",
+        &"x".repeat(MAX_LOG_RECORD_BYTES + 1),
+    );
+    let raw = format!("{complete}{huge}");
+    let mut reader = Cursor::new(raw.as_bytes());
+
+    let tail = read_rendered_tail_from(&mut reader, raw.len() as u64, &Filters::default(), 10, 8)
+        .expect("tail");
+
+    assert_eq!(tail.events.len(), 1, "only the complete record is served");
+    assert!(tail.events[0].message_html.contains("whole"));
+    assert_eq!(tail.cursor, complete.len() as u64);
+}
+
+#[test]
+fn rendered_tail_still_serves_a_small_unterminated_record() {
+    let record = event_line("2026-04-27T01:00:02Z", "orbit.keep", "edge");
+    let mut reader = Cursor::new(record.as_bytes());
+
+    let tail =
+        read_rendered_tail_from(&mut reader, record.len() as u64, &Filters::default(), 10, 8)
+            .expect("tail");
+
+    assert_eq!(tail.events.len(), 1);
+    assert_eq!(tail.cursor, record.len() as u64);
+}
+
+/// Secret-looking tokens in log fields are redacted before HTML escaping,
+/// for the generic field renderer and the CLI-runner line renderer alike.
+#[test]
+fn rendered_log_redacts_secret_tokens_in_lines_and_fields() {
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+    let runner = render_log_event_for_web(&json!({
+        "timestamp": "2026-04-27T01:00:03Z",
+        "level": "INFO",
+        "target": "orbit_engine::activity_job::cli_runner",
+        "fields": {"stream": "stderr", "line": format!("using key {secret} now")}
+    }));
+    let generic = render_log_event_for_web(&json!({
+        "timestamp": "2026-04-27T01:00:03Z",
+        "level": "INFO",
+        "target": "orbit.other",
+        "fields": {"message": format!("token {secret}"), "detail": {"header": "Authorization: Bearer abc123def456"}}
+    }));
+
+    for (label, rendered) in [("cli_runner line", runner), ("generic fields", generic)] {
+        assert!(
+            !rendered.message_html.contains(secret)
+                && !rendered.message_html.contains("abc123def456"),
+            "{label} leaked a secret: {}",
+            rendered.message_html
+        );
+        assert!(
+            rendered.message_html.contains("REDACTED"),
+            "{label} should show a redaction marker: {}",
+            rendered.message_html
+        );
+    }
+}

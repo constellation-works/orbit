@@ -1284,3 +1284,14 @@ async fn audit_summary_sparkline_preserves_supported_windows_and_bucket_cap() {
         );
     }
 }
+
+/// `?offset=` is bounded: an absurd value is rejected instead of turning into
+/// an unbounded SQLite skip, while a reasonable one still pages normally.
+#[tokio::test]
+async fn audit_rejects_offset_beyond_the_scan_bound() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let response = request_audit(runtime.clone(), "/audit?offset=18446744073709551615").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = request_audit(runtime, "/audit?offset=1000").await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
