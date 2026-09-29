@@ -1739,6 +1739,73 @@ fn readiness_reports_the_live_ceiling_and_who_moved_it() {
     assert_eq!(previewed["capacity"]["limit_source"], "requested");
 }
 
+/// A replica's pull drain is a coordinator `orbit run auto --stop` acts on, so
+/// readiness must show it live and then stopped; it is not the auto drain.
+#[test]
+fn readiness_reports_a_live_pull_drain_and_its_stopped_admissions() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+
+    let idle = readiness(&runtime, &[], None);
+    assert_eq!(idle["capacity"]["pull_drain_run_id"], Value::Null);
+    assert_eq!(idle["capacity"]["pull_drain_admissions_stopped"], false);
+
+    let input = json!({ "owner_machine_id": "owner-1" });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            crate::application::distributed::PULL_DRAIN_JOB,
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .expect("insert pull drain run");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start pull drain run");
+    runtime
+        .stores()
+        .jobs()
+        .write_run_state(
+            &run.run_id,
+            &orbit_types::workflow::PipelineState::new(
+                run.run_id.clone(),
+                crate::application::distributed::PULL_DRAIN_JOB.to_string(),
+                input,
+            ),
+        )
+        .expect("write pull drain state");
+
+    let live = readiness(&runtime, &[], None);
+    assert_eq!(live["capacity"]["pull_drain_run_id"], run.run_id);
+    assert_eq!(live["capacity"]["pull_drain_admissions_stopped"], false);
+    assert_eq!(
+        live["capacity"]["drain_run_id"],
+        Value::Null,
+        "the pull drain is not the auto drain: {live}"
+    );
+
+    runtime
+        .stop_workspace_auto_admissions(crate::application::job::DrainAdmissionsStopRequest {
+            actor: "tester",
+            source: "unit",
+            reason: None,
+            claim_token: None,
+        })
+        .expect("stop drains");
+
+    let stopped = readiness(&runtime, &[], None);
+    assert_eq!(stopped["capacity"]["pull_drain_run_id"], run.run_id);
+    assert_eq!(stopped["capacity"]["pull_drain_admissions_stopped"], true);
+    assert_eq!(
+        stopped["capacity"]["pull_drain_admissions_stop"]["actor"],
+        "tester"
+    );
+}
+
 #[test]
 fn readiness_separates_a_queued_drain_from_the_running_coordinator() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();

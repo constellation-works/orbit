@@ -31,6 +31,8 @@ let controlsAuthorized = true;
 let stopOutcome = 'stopped';
 let stopSettlements;
 let drainAdmissionsStopped = false;
+let pullDrainRunId = null;
+let pullDrainStopped = false;
 let failReadiness = false;
 let nullCapacity = false;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
@@ -60,7 +62,7 @@ globalThis.fetch = async (path, options = {}) => {
     if (responseError) return response({ error: responseError }, 500);
     if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
     if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', submitted_at: new Date().toISOString() });
-    if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : [], pull_settlements: stopSettlements });
+    if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : pullDrainRunId ? [{ run_id: pullDrainRunId, outcome: 'stopped', remaining_children: [] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
       return response({ job_id: 'fixture', run_id: submittedJob.run_id, state: 'submitted', submitted_at: submittedJob.created_at });
@@ -112,6 +114,7 @@ globalThis.fetch = async (path, options = {}) => {
       occupancy: { phases: { implementing: 2, lock_waiting: 1, post_implementation: 1, unknown: 0 } },
       deferred_conflicts: [{ task_id: 'ORB-3', blocking_task_ids: ['ORB-30'] }],
       drain_run_id: drainRunId, admissions_stopped: drainAdmissionsStopped,
+      pull_drain_run_id: pullDrainRunId, pull_drain_admissions_stopped: pullDrainStopped,
       drain_phase: drainPhase,
       drain_status_run_id: drainPhase === 'idle' ? null : 'jrun-20260923-0400-a1',
       ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
@@ -294,6 +297,25 @@ await fetchAndRenderOperations();
 assert(drainButton('Settle pending') && !drainButton('Settle pending').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
 drainAdmissionsStopped = false;
 drainRunId = null;
+drainPhase = 'winding_down';
+
+// A replica's live pull drain has no auto window, yet Stop acts on it: the
+// button reads Stop (not Settle pending), and the confirm names the pull drain
+// and does not claim that no window is live or that nothing is stopped.
+drainPhase = 'idle';
+pullDrainRunId = 'jrun-pull-drain-0001';
+await fetchAndRenderOperations();
+assert(drainButton('Stop') && !drainButton('Settle pending') && !drainButton('Stop').disabled, 'a live pull drain alone offers Stop, not Settle pending');
+assert(get('auto-drain-live').textContent.includes('Pull drain') && descendants(get('auto-drain-live')).some(node => String(node.title || '').includes('jrun-pull-drain-0001')), `header shows the pull drain: ${get('auto-drain-live').textContent}`);
+drainButton('Stop').click(); await tick(); await tick(); await tick();
+assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stopping a pull drain posts to the stop endpoint');
+assert(confirmations.at(-1).includes('pull drain') && confirmations.at(-1).includes('jrun-pull-drain-0001') && !confirmations.at(-1).includes('No auto-delivery window'), `confirm names the pull drain: ${confirmations.at(-1)}`);
+// Once its admissions are stopped the readiness says so and the button offers the settle-only pass.
+pullDrainStopped = true;
+await fetchAndRenderOperations();
+assert(drainButton('Settle pending') && drainText().includes('Admissions are already stopped for pull drain jrun-pull-drain-0001'), `a stopped pull drain is reported as stopped: ${drainText()}`);
+pullDrainStopped = false;
+pullDrainRunId = null;
 drainPhase = 'winding_down';
 
 // No concrete workspace: the card is read-only and fetches nothing.

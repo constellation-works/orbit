@@ -1288,12 +1288,18 @@ function fetchAndRenderAutoTasks() {
 // payload shape with the fields at the top level is read the same way so a
 // mixed-version dashboard never hides a running window.
 function autoDrainLiveWindow(payload) {
+  const capacity = payload.capacity || {};
   const source = payload.capacity && "drain_run_id" in payload.capacity ? payload.capacity : payload;
   const runId = source?.drain_run_id ? String(source.drain_run_id) : "";
   return {
     runId,
     admissionsStopped: source?.admissions_stopped === true,
     stop: source?.admissions_stop && typeof source.admissions_stop === "object" ? source.admissions_stop : null,
+    // A replica's pull drain is a second coordinator the same Stop acts on. It
+    // is reported beside `drain_run_id`, never in place of it.
+    pullRunId: capacity.pull_drain_run_id ? String(capacity.pull_drain_run_id) : "",
+    pullAdmissionsStopped: capacity.pull_drain_admissions_stopped === true,
+    pullStop: capacity.pull_drain_admissions_stop && typeof capacity.pull_drain_admissions_stop === "object" ? capacity.pull_drain_admissions_stop : null,
   };
 }
 
@@ -1436,7 +1442,12 @@ function renderAutoDrainHead(payload) {
   const head = $("auto-drain-live");
   if (!head) return;
   head.textContent = "";
-  if (phase === "idle") {
+  if (phase === "idle" && live.pullRunId && !workspaceReadOnlyReason()) {
+    head.appendChild(el("strong", { class: "drain-state-label", text: live.pullAdmissionsStopped ? "Pull drain · admissions stopped" : "Pull drain" }));
+    const detail = el("span", { class: "drain-live-detail" });
+    detail.appendChild(runLink(live.pullRunId, selectedWorkspace()?.id, autoDrainShortRunId(live.pullRunId)));
+    head.appendChild(detail);
+  } else if (phase === "idle") {
     head.appendChild(el("span", { class: "drain-idle", text: workspaceReadOnlyReason() ? "read-only" : "idle" }));
   } else {
     head.appendChild(el("strong", { class: "drain-state-label", text: label }));
@@ -1643,6 +1654,9 @@ async function refreshDrainAfterAction() {
 }
 
 const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-delivery window? Already admitted workers keep running under their captured completion authority. This is not cancellation. Any settlement already recorded is also delivered to its owner.";
+// The pull drain's stop reads differently from the auto window's: its leaves
+// were assigned by the owner and stay claimed there until they settle.
+const PULL_DRAIN_STOP_CONFIRM = "Stop new admissions for this replica's pull drain? Leaves it already admitted keep running and stay claimed by their owner. This is not cancellation, and cancelling one leaf fails its claim on the owner. Any settlement already recorded is also delivered to its owner.";
 const AUTO_DRAIN_SETTLE_CONFIRM = "Deliver the settlements this workspace has recorded but not yet delivered? No auto-delivery window needs to be live. Nothing is cancelled; running workers are left alone.";
 
 // [ORB-12728] Counterpart to `orbit run auto --stop`: stops new admissions on
@@ -1655,16 +1669,38 @@ const AUTO_DRAIN_SETTLE_CONFIRM = "Deliver the settlements this workspace has re
 // reason is visible text beside the button rather than a title alone.
 function autoDrainStopMode(payload) {
   const live = autoDrainLiveWindow(payload);
-  return live.runId && !live.admissionsStopped ? "stop" : "settle";
+  const autoOpen = live.runId && !live.admissionsStopped;
+  const pullOpen = live.pullRunId && !live.pullAdmissionsStopped;
+  return autoOpen || pullOpen ? "stop" : "settle";
+}
+
+// The windows a Stop would close now, named for confirm and status text.
+function autoDrainStopTargets(live) {
+  const targets = [];
+  if (live.runId && !live.admissionsStopped) targets.push(`auto window ${live.runId}`);
+  if (live.pullRunId && !live.pullAdmissionsStopped) targets.push(`pull drain ${live.pullRunId}`);
+  return targets;
 }
 
 function autoDrainStopCopy(payload) {
   const live = autoDrainLiveWindow(payload);
   if (autoDrainStopMode(payload) === "stop") {
-    return { label: "Stop", busy: "Stopping…", aria: "Stop admissions", confirm: AUTO_DRAIN_STOP_CONFIRM, description: "Stop new admissions for the live window and deliver recorded settlements." };
+    const autoOpen = live.runId && !live.admissionsStopped;
+    const pullOpen = live.pullRunId && !live.pullAdmissionsStopped;
+    const confirm = autoOpen && pullOpen
+      ? `${AUTO_DRAIN_STOP_CONFIRM} The pull drain ${live.pullRunId} on this replica is stopped too; its admitted leaves stay claimed by their owner.`
+      : autoOpen ? AUTO_DRAIN_STOP_CONFIRM : PULL_DRAIN_STOP_CONFIRM;
+    const description = autoOpen
+      ? "Stop new admissions for the live window and deliver recorded settlements."
+      : "Stop new admissions for this replica's pull drain and deliver recorded settlements.";
+    return { label: "Stop", busy: "Stopping…", aria: "Stop admissions", confirm, description };
   }
-  const already = live.runId
-    ? `Admissions are already stopped for ${live.runId}${live.stop?.actor ? ` (by ${live.stop.actor})` : ""}. `
+  const stoppedBy = (stop) => (stop?.actor ? ` (by ${stop.actor})` : "");
+  const stopped = [];
+  if (live.runId) stopped.push(`${live.runId}${stoppedBy(live.stop)}`);
+  if (live.pullRunId) stopped.push(`pull drain ${live.pullRunId}${stoppedBy(live.pullStop)}`);
+  const already = stopped.length
+    ? `Admissions are already stopped for ${stopped.join(" and ")}. `
     : "No auto-delivery window is live. ";
   return { label: "Settle pending", busy: "Settling…", aria: "Settle pending settlements", confirm: AUTO_DRAIN_SETTLE_CONFIRM, description: `${already}Deliver settlements recorded for finished or cancelled drains.` };
 }
@@ -1695,10 +1731,11 @@ function autoDrainStopButton(payload) {
   button.addEventListener("click", async () => {
     if (pendingOperations.has(key)) return;
     const workspace = selectedWorkspace();
-    const windowLine = live.runId ? `Window: ${live.runId} in workspace "${workspace?.name || workspace?.id}"` : `Workspace "${workspace?.name || workspace?.id}"`;
+    const targets = autoDrainStopTargets(live);
+    const windowLine = targets.length ? `Window: ${targets.join(" and ")} in workspace "${workspace?.name || workspace?.id}"` : `Workspace "${workspace?.name || workspace?.id}"`;
     if (!window.confirm(`${copy.confirm}\n\n${windowLine}`)) return;
     pendingOperations.add(key);
-    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${live.runId}…` : "Delivering recorded settlements…");
+    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${targets.join(" and ")}…` : "Delivering recorded settlements…");
     renderAutoDrain(payload);
     try {
       const result = await postJson("/api/workflows/auto/stop", {});

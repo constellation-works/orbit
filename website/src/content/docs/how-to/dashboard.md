@@ -394,9 +394,13 @@ above Locked files. Top to bottom:
 - **Start … window** submits `orbit run auto` with those settings after a
   confirmation (**Start another … window** while one is already draining).
   **Stop** stops new admissions on the live window (`orbit run auto --stop`);
-  admitted workers keep running. Once admissions have stopped, or with no
-  window live, the button reads **Settle pending** and delivers any pull
-  settlement recorded on this replica that has not reached its owner (see
+  admitted workers keep running. On a replica, a live pull drain counts as a
+  window too: the header reads **Pull drain**, the button reads **Stop**, and
+  the confirmation names the pull drain and says its admitted leaves stay
+  claimed by their owner (cancelling one fails its claim). Once admissions have
+  stopped, or with no window live, the button reads **Settle pending** and
+  delivers any pull settlement recorded on this replica that has not reached
+  its owner (see
   [Set Up a Distributed Drain](../distributed-drain/#6-stop-cancel-and-settle)).
   Stop and Settle pending need an operator session, like Start with **Mark
   done**.
