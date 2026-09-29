@@ -34,6 +34,10 @@ const fullTask = () => ({
   context_files: [],
   tags: [],
   artifacts: [],
+  external_refs: [
+    { system: "github", id: "7", url: "https://github.com/example/repo/issues/7" },
+    { system: "hostile", id: "1", url: "javascript:alert(1)" },
+  ],
   comments: [{ at: "2026-09-15T00:00:00Z", by: "human", message: "detail comment" }],
   history: [{ at: "2026-09-15T00:00:00Z", by: "human", event: "created" }],
   status_transitions: [
@@ -128,6 +132,16 @@ await settle();
 assert.ok(detail().textContent.includes("Body text only the detail carries"), "the detail renders the fetched body");
 assert.ok(detail().textContent.includes("detail comment"), "the detail renders the fetched comments");
 assert.ok(!detail().textContent.includes("Loading ORB-2"));
+// Task records are agent-writable: an external ref becomes a link only for an
+// http(s) URL, opened away from the operator's dashboard tab.
+const refLines = detail().querySelectorAll(".external-ref-line");
+assert.equal(refLines.length, 2, "both external refs render");
+const refLink = refLines[0].querySelector("a");
+assert.equal(refLink.href, "https://github.com/example/repo/issues/7");
+assert.equal(refLink.target, "_blank");
+assert.equal(refLink.rel, "noopener noreferrer");
+assert.equal(refLines[1].querySelector("a"), null, "a javascript: ref must never become a link");
+assert.equal(refLines[1].textContent, "hostile:1", "a rejected ref still shows its label as text");
 assert.equal(replaced.length, 1, "the fetched projection replaces the summary in the list");
 assert.equal(replaced[0].projection, undefined, "the replacement is the full projection");
 renderTasks(tasks, context);

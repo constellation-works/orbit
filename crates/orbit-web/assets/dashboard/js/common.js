@@ -589,3 +589,11 @@ export function describePullSettlements(entries) {
   }
   return { text: parts.join(" · "), attention };
 }
+
+// A URL from a manifest, task record, or API payload is assigned straight to
+// an anchor, so only the two schemes a hyperlink may carry are drawn; anything
+// else (`javascript:`, `data:`) is rendered as text by the caller.
+export function isHttpUrl(url) {
+  const scheme = String(url || "").trimStart().toLowerCase();
+  return scheme.startsWith("http://") || scheme.startsWith("https://");
+}
