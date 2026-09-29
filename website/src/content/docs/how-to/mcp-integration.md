@@ -36,7 +36,11 @@ orbit mcp init --all
 targets every supported client. `--scope workspace` (the default) writes
 repo-local config; `--scope home` writes user-level config.
 
-**Grok Build** uses the native `.grok/config.toml` format (similar to how Claude Code can use a config file). `orbit mcp init --grok` will create or update `.grok/config.toml` in your workspace root (or `~/.grok/config.toml` for global).
+**Grok Build** reads the shared MCP config, so `orbit mcp init --grok` writes
+`.mcp.json` in your workspace root, or `~/.claude.json` with `--scope home`. When
+Grok's shared reader is unavailable, for example because `~/.grok/config.toml`
+records that Grok already imported Claude's config or turns the Claude MCP
+reader off, Orbit writes Grok's native `.grok/config.toml` instead.
 
 ### Workspaces with an external Orbit root
 

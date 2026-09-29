@@ -51,7 +51,7 @@ guarantees, what it refuses, and why. For the commands, see the
   </a>
   <a class="orbit-card" href="./scheduling/" data-tag="03">
     <h3>Routines and Auto-Tasks</h3>
-    <p>The sweep clock, versioned triggers, recurring chores as data, and what unattended never gets.</p>
+    <p>The sweep clock, routine triggers, recurring chores as data, and what unattended never gets.</p>
   </a>
   <a class="orbit-card" href="./policies/" data-tag="04">
     <h3>Policies</h3>

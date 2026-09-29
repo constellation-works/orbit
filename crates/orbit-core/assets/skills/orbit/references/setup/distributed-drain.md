@@ -68,7 +68,7 @@ export tasks that must move, then re-register:
 ```bash
 orbit workspace init --role replica --owner <owner-machine-id>
 orbit workspace show
-orbit workspace role <workspace-id> replica
+orbit workspace role <workspace-id> replica --owner <owner-machine-id>
 ```
 
 `workspace role` reasserts; it is not a takeover. Copying Git history does not

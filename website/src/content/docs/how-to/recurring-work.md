@@ -9,8 +9,8 @@ Orbit has two layers of scheduling, and they answer different questions.
 
 | Layer | Question it answers | Where it lives |
 |---|---|---|
-| **Routines** | *Which job should fire, on what cadence?* | Versioned YAML in `.orbit/routines/` |
-| **Auto-tasks** | *Which recurring chore should become a task?* | Versioned YAML in `.orbit/auto_tasks/`, managed by `orbit auto-task` |
+| **Routines** | *Which job should fire, on what cadence?* | YAML in `.orbit/routines/` |
+| **Auto-tasks** | *Which recurring chore should become a task?* | YAML in `.orbit/auto_tasks/`, managed by `orbit auto-task` |
 
 Both are driven by the same clock: `orbit clock tick`. Nothing is scheduled until
 that clock runs. This guide is the operating procedure; the model behind it —
@@ -80,8 +80,8 @@ and every registered owner checkout's definitions are evaluated by this host's
 clock.
 
 `orbit workspace init` seeds a set of default routines into `.orbit/routines/`,
-each **disabled**, because enabling unattended agent work is a deliberate,
-versioned decision. `orbit workspace sync` refreshes that shipped set on a newer
+each **disabled**, because enabling unattended agent work is a deliberate
+decision. `orbit workspace sync` refreshes that shipped set on a newer
 binary while preserving local edits. The shipped set covers task pilot preflight, ship sweeps, worktree GC, and
 CI/dependency alert sweeps.
 
@@ -90,8 +90,9 @@ orbit routine list               # toggles, next-due, last fire
 orbit routine show "$ROUTINE_NAME"
 ```
 
-To enable one, edit its YAML in `.orbit/routines/` and set `enabled: true`. That
-is a tracked change, reviewed like any other.
+To enable one, edit its YAML in `.orbit/routines/` and set `enabled: true`.
+`.orbit/` is per-user state that git ignores, so the edit applies to this
+checkout on this machine.
 
 ### Routine shape
 
@@ -137,8 +138,7 @@ orbit routine pause "$ROUTINE_NAME"
 orbit routine resume "$ROUTINE_NAME"
 ```
 
-To retire a routine everywhere, set `enabled: false` in its versioned
-definition instead.
+To retire a routine, set `enabled: false` in its definition instead.
 
 ## 3. Define recurring chores as auto-tasks
 
