@@ -1,6 +1,3 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use super::*;
 
 /// Upper bound on rendered `fan_out.items`; see [`run_fan_out`].
@@ -86,7 +83,7 @@ pub(super) fn run_fan_out(
                     Err(err) => {
                         results_ref
                             .lock()
-                            .expect("results poisoned")
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .push((idx, Err(DispatchError::AuditFailed(format!("{err:?}")))));
                         return;
                     }
@@ -134,7 +131,7 @@ pub(super) fn run_fan_out(
                 );
                 results_ref
                     .lock()
-                    .expect("results poisoned")
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push((idx, res));
             }));
         }
@@ -153,12 +150,15 @@ pub(super) fn run_fan_out(
                         state: "failed".to_string(),
                     },
                 );
-                results.lock().expect("results poisoned").push((
-                    idx,
-                    Err(DispatchError::JobExecution(format!(
-                        "worker {idx} panicked: {message}"
-                    ))),
-                ));
+                results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((
+                        idx,
+                        Err(DispatchError::JobExecution(format!(
+                            "worker {idx} panicked: {message}"
+                        ))),
+                    ));
             }
         }
 
@@ -169,7 +169,9 @@ pub(super) fn run_fan_out(
     let mut collected_count = 0u32;
     let mut failed_count = 0u32;
     let mut first_error: Option<DispatchError> = None;
-    let mut sorted = results.into_inner().expect("results poisoned");
+    let mut sorted = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if sorted.len() != items.len() {
         return Err(DispatchError::JobExecution(format!(
             "fan-out collected {} results for {} items",
