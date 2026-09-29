@@ -56,9 +56,12 @@
 			if (btn) {
 				btn.addEventListener('click', () => {
 					const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-					localStorage.setItem('orbit-theme-choice', theme);
 					document.documentElement.dataset.theme = theme;
 					updateThemePickers(theme);
+					// Persisting is best effort: blocked site data must not undo the switch.
+					try {
+						localStorage.setItem('orbit-theme-choice', theme);
+					} catch {}
 				});
 			}
 		}

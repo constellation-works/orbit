@@ -47,15 +47,17 @@ const groups = [
       <span class="orbit-footer-brand">Orbit</span>
       <p>A local-first runtime for coding agents. MIT licensed; sends no telemetry.</p>
     </div>
-    {
-      groups.map(({ title, links }) => (
-        <nav aria-label={title}>
-          <p class="orbit-footer-title">{title}</p>
-          {links.map(({ href, label }) => (
-            <a href={href}>{label}</a>
-          ))}
-        </nav>
-      ))
-    }
+    <nav class="orbit-footer-nav" aria-label="Footer">
+      {
+        groups.map(({ title, links }) => (
+          <div class="orbit-footer-group">
+            <p class="orbit-footer-title">{title}</p>
+            {links.map(({ href, label }) => (
+              <a href={href}>{label}</a>
+            ))}
+          </div>
+        ))
+      }
+    </nav>
   </div>
 </footer>

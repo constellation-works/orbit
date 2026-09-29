@@ -8,8 +8,12 @@ import { Icon } from '@astrojs/starlight/components';
 		// The old starlight-theme value was also written on plain page loads, so it
 		// cannot identify an explicit choice. Only the new key is authoritative.
 		const storageKey = 'orbit-theme-choice';
-		const storedTheme =
-			typeof localStorage !== 'undefined' && localStorage.getItem(storageKey);
+		// Merely touching localStorage throws when a browser blocks site data, so
+		// the read is guarded or the whole provider (and every picker) would die.
+		let storedTheme = null;
+		try {
+			storedTheme = localStorage.getItem(storageKey);
+		} catch {}
 		const theme = storedTheme === 'dark' ? 'dark' : 'light';
 		document.documentElement.dataset.theme = theme;
 		return {
