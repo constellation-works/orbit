@@ -781,6 +781,7 @@ function renderArtifactText(mediaType, text) {
 // route enforces with `nosniff`: SVG and HTML are viewable formats that also
 // host script, so they are deliberately absent and fall through to download.
 const INLINE_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const ARTIFACT_FETCH_TIMEOUT_MS = 30000;
 
 function artifactFileName(path) {
   return String(path).split("/").pop() || String(path);
@@ -793,9 +794,16 @@ function buildArtifactDownloadLink(artifact, objectUrl, text) {
   return link;
 }
 
+// A blob URL pins its bytes until revoked. `syncNodes` tears down a detail it
+// replaces, so the preview releases them when the task detail goes away.
+function releaseOnTeardown(node, objectUrl) {
+  node.teardown = () => URL.revokeObjectURL(objectUrl);
+  return node;
+}
+
 function buildArtifactImage(artifact, blob) {
   const objectUrl = URL.createObjectURL(blob);
-  const figure = el("div", { class: "artifact-image-view" });
+  const figure = releaseOnTeardown(el("div", { class: "artifact-image-view" }), objectUrl);
   const image = el("img", { class: "artifact-image" });
   image.src = objectUrl;
   // The path is the only description the artifact carries, so it is a more
@@ -840,9 +848,10 @@ function buildArtifactPreview(artifact, response) {
   ) {
     return response.text().then((text) => renderArtifactText(mediaType, text));
   }
-  return response.blob().then((blob) =>
-    buildArtifactDownloadLink(artifact, URL.createObjectURL(blob)),
-  );
+  return response.blob().then((blob) => {
+    const objectUrl = URL.createObjectURL(blob);
+    return releaseOnTeardown(buildArtifactDownloadLink(artifact, objectUrl), objectUrl);
+  });
 }
 
 export function buildArtifacts(task) {
@@ -880,12 +889,21 @@ export function buildArtifacts(task) {
         preview.textContent = "loading...";
         try {
           if (isAggregateView() && !task.workspace_id) throw new Error("task workspace is unknown");
-          const response = await fetch(artifactUrl(task, path));
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          preview.replaceChildren(await buildArtifactPreview(artifact, response));
+          // Same 30s bound as fetchJson, covering the body read too, so a
+          // stalled artifact read ends in an error instead of "loading..." forever.
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
+          try {
+            const response = await fetch(artifactUrl(task, path), { signal: controller.signal });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            preview.replaceChildren(await buildArtifactPreview(artifact, response));
+          } finally {
+            clearTimeout(timeout);
+          }
           preview.dataset.loaded = "true";
         } catch (error) {
-          preview.textContent = `Unable to load ${path}: ${error.message}`;
+          const reason = error && error.name === "AbortError" ? "request timed out after 30 seconds" : error.message;
+          preview.textContent = `Unable to load ${path}: ${reason}`;
         }
       },
     });

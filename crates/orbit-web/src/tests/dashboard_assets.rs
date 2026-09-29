@@ -2725,6 +2725,12 @@ const fallback = collectLinks(preview).filter((a) => a.download === "flow.png");
 if (fallback.length !== 1)
   throw new Error(`a failed image must still offer its bytes exactly once, got ${fallback.length}`);
 
+// --- Tearing the detail down releases the preview's blob URL ---------------
+const { teardownNode } = await import("./js/common.js");
+teardownNode(preview);
+if (!revoked.includes("blob:png"))
+  throw new Error(`a torn-down image preview must revoke its blob URL, revoked: ${revoked}`);
+
 // --- Narrow viewport renders the same image element ------------------------
 window.innerWidth = 420;
 ({ preview } = await renderPreview(png, respondWith("png", "image/png")));
@@ -2740,6 +2746,9 @@ if (byTag(preview, "img"))
   throw new Error("SVG hosts script and must never be rendered inline");
 const svgLink = collectLinks(preview).find((a) => a.download === "active.svg");
 if (!svgLink) throw new Error(`SVG must fall back to a download link: ${preview.textContent}`);
+teardownNode(preview);
+if (!revoked.includes("blob:svg"))
+  throw new Error(`a torn-down download link must revoke its blob URL, revoked: ${revoked}`);
 
 // --- Text artifacts keep working ------------------------------------------
 const md = { path: "notes/summary.md", media_type: "text/markdown", size_bytes: 11 };
