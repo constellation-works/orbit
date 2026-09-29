@@ -293,6 +293,52 @@ fn an_expired_reservation_is_reported_without_implying_revocation() {
     assert!(!rendered.contains("\"phase\":\"revoked\""), "{rendered}");
 }
 
+/// A settled claim released its reservation, so a window that elapsed after
+/// settlement is not an expiry and must not claim the footprint is protected.
+#[test]
+fn a_settled_claim_reports_its_reservation_as_released_not_expired() {
+    let console = console(false);
+    console
+        .runtime
+        .recover_claim_as_operator(
+            &console.claim_id,
+            "running",
+            TaskStatus::Backlog,
+            "human",
+            "host was rebuilt",
+            "req-release",
+        )
+        .expect("recover");
+    let current = console.claim();
+    assert_eq!(current["phase"], "revoked");
+    let expires_at = chrono::DateTime::parse_from_rfc3339(
+        current["reservation"]["expires_at"]
+            .as_str()
+            .expect("expires_at"),
+    )
+    .expect("rfc3339 expiry")
+    .with_timezone(&chrono::Utc);
+
+    let observed = console
+        .runtime
+        .distributed_claim_console_at(expires_at + chrono::Duration::seconds(1))
+        .expect("console read");
+    let claim = &observed["claims"][0];
+    let reservation = &claim["reservation"];
+
+    assert_eq!(claim["unsettled"], false, "{claim}");
+    assert_eq!(claim["footprint_protected"], false, "{claim}");
+    assert_eq!(
+        reservation["expired"], false,
+        "a released reservation is not expired: {claim}"
+    );
+    let note = reservation["note"].as_str().expect("note");
+    assert!(
+        !note.contains("still live") && !note.contains("still protects"),
+        "the live-claim note must not describe a settled claim: {note}"
+    );
+}
+
 #[test]
 fn a_handed_off_claim_reports_its_candidate_typed_review_and_pending_authority() {
     let console = console(true);

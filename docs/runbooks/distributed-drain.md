@@ -448,7 +448,16 @@ neither strands a claim.
   deliver their own handoff or failure when they end. The command prints a
   `Pull settlements` section, one line per admission, and `--json` carries
   the same list as `pull_settlements`.
-- Prefer `--stop` when you only want no new work: it wastes nothing.
+- Prefer `--stop` when you only want no new work: it wastes nothing. The
+  dashboard's cancel prompt for a drain run says this too.
+
+The dashboard reports the same `pull_settlements` list after **Stop** and
+after **cancel**: a one-line summary counting each outcome, with any
+settlement that has not reached its owner called out (`owner_unreachable` and
+`pending_delivery` say to run Stop again once the owner is reachable;
+`launch_uncertain` says it needs manual recovery, below). With no live window
+the auto card's button reads **Settle pending** and runs the same settle-only
+pass; it stays available because the pass needs no active drain.
 
 Leaf delivery can still fail — the owner was unreachable when the leaf ended.
 The settlement stays recorded on the follower as `settling`. Flush it with
@@ -482,15 +491,6 @@ status decision: set a task to `done` if its pull request merged, otherwise
 move it back to `backlog`. A refused settlement for a claim the owner still
 holds stays pending and blocks new admissions until it is delivered.
 
-Handoff **approval** and **revocation** are owner-operator mutations (agent
-capability cannot approve). They are owner-domain seams reached from the
-owner's dashboard — `POST /api/distributed/handoffs/<handoff-id>/approve` and
-`.../revoke`, governed as `handoff.approve` and `handoff.revoke` — and they are
-still not `orbit tool run` entry points. Never substitute `--complete` on a
-follower or `orbit job resume`:
-
-- Approval records one immutable candidate-scoped authorization and one
-  landing-start request, and it does not merge. It carries the exact candidate
 The same applies to a handoff the owner will deterministically never accept:
 for example, the owner refuses the leaf's bind or its settlement while it still
 holds the claim as `claimed` or `running`. Every pass reports the refusal, the
@@ -502,6 +502,15 @@ claim up, sees it has ended, and closes the record `closed_obsolete`, which
 frees the slot. A claim whose bind the owner refuses before the leaf ever
 launched closes the same way: the leaf is failed and never starts.
 
+Handoff **approval** and **revocation** are owner-operator mutations (agent
+capability cannot approve). They are owner-domain seams reached from the
+owner's dashboard — `POST /api/distributed/handoffs/<handoff-id>/approve` and
+`.../revoke`, governed as `handoff.approve` and `handoff.revoke` — and they are
+still not `orbit tool run` entry points. Never substitute `--complete` on a
+follower or `orbit job resume`:
+
+- Approval records one immutable candidate-scoped authorization and one
+  landing-start request, and it does not merge. It carries the exact candidate
   and base commits you were shown, so a stale page is refused with
   `stale_claim` rather than approving whatever the owner now holds. Retries of
   the same request ID replay that decision instead of creating a second grant.

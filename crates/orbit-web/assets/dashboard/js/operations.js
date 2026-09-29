@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { requestPanel, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { requestPanel, describePullSettlements, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -1302,13 +1302,12 @@ function autoDrainReasons(payload) {
     complete: workspaceReason || (payload.controls_authorized === false
       ? "Automatic completion requires an authorized operator session; the window can still start with default review completion."
       : ""),
-    stop: workspaceReason || (!live.runId
-      ? "No auto-delivery window is live in this workspace."
-      : live.admissionsStopped
-        ? `Admissions are already stopped for ${live.runId}${live.stop?.actor ? ` (by ${live.stop.actor})` : ""}; admitted workers keep running.`
-        : payload.controls_authorized === false
-          ? "Stopping admissions requires an authorized operator session."
-          : ""),
+    // Stop is also the settle-only pass (`orbit run auto --stop`): it delivers
+    // recorded settlements and needs no live window, so only a read-only view
+    // or a missing operator session blocks it.
+    stop: workspaceReason || (payload.controls_authorized === false
+      ? "Stopping admissions and settling requires an authorized operator session."
+      : ""),
   };
 }
 
@@ -1579,53 +1578,101 @@ function autoDrainStartButton(payload) {
   return button;
 }
 
-const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-delivery window? Already admitted workers keep running under their captured completion authority. This is not cancellation.";
+const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-delivery window? Already admitted workers keep running under their captured completion authority. This is not cancellation. Any settlement already recorded is also delivered to its owner.";
+const AUTO_DRAIN_SETTLE_CONFIRM = "Deliver the settlements this workspace has recorded but not yet delivered? No auto-delivery window needs to be live. Nothing is cancelled; running workers are left alone.";
 
 // [ORB-12728] Counterpart to `orbit run auto --stop`: stops new admissions on
 // the live coordinator without cancelling it or the workers it already
-// admitted. Enabled only while readiness reports a live, not-yet-stopped
-// window and the session may govern it; the title says which of those is
-// missing otherwise.
+// admitted, then runs the settle-only pass that delivers recorded settlements
+// [ORB-13663]. That pass needs no live window, so with none (or with
+// admissions already stopped) the button stays usable as "Settle pending" —
+// the remedy for leaves stuck `settling` and claims stranded `running`.
+// Only a read-only view or a missing operator session disables it, and the
+// reason is visible text beside the button rather than a title alone.
+function autoDrainStopMode(payload) {
+  const live = autoDrainLiveWindow(payload);
+  return live.runId && !live.admissionsStopped ? "stop" : "settle";
+}
+
+function autoDrainStopCopy(payload) {
+  const live = autoDrainLiveWindow(payload);
+  if (autoDrainStopMode(payload) === "stop") {
+    return { label: "Stop", busy: "Stopping…", aria: "Stop admissions", confirm: AUTO_DRAIN_STOP_CONFIRM, description: "Stop new admissions for the live window and deliver recorded settlements." };
+  }
+  const already = live.runId
+    ? `Admissions are already stopped for ${live.runId}${live.stop?.actor ? ` (by ${live.stop.actor})` : ""}. `
+    : "No auto-delivery window is live. ";
+  return { label: "Settle pending", busy: "Settling…", aria: "Settle pending settlements", confirm: AUTO_DRAIN_SETTLE_CONFIRM, description: `${already}Deliver settlements recorded for finished or cancelled drains.` };
+}
+
+// The outcome word for the admissions half of a stop result.
+function autoDrainStopHeadline(outcome) {
+  if (outcome === "idle") return "No auto-delivery window was live";
+  if (outcome === "unchanged") return "Admissions were already stopped";
+  if (outcome === "cancelled_queued") return "Queued window cancelled";
+  return `Admissions ${outcome ?? "stop requested"}`;
+}
+
 function autoDrainStopButton(payload) {
   const key = "auto-drain:stop";
   const reasons = autoDrainReasons(payload);
   const live = autoDrainLiveWindow(payload);
+  const copy = autoDrainStopCopy(payload);
   const pending = pendingOperations.has(key);
   const button = el("button", {
     class: "operation-button drain-stop",
-    text: pending ? "Stopping…" : "Stop",
-    title: reasons.stop || AUTO_DRAIN_STOP_CONFIRM,
+    text: pending ? copy.busy : copy.label,
+    title: reasons.stop || copy.description,
   });
   button.type = "button";
   button.dataset.drainFocus = "stop";
-  button.setAttribute("aria-label", pending ? "Stopping admissions" : "Stop admissions");
+  button.setAttribute("aria-label", pending ? copy.busy : copy.aria);
   button.disabled = Boolean(reasons.stop) || pending;
   button.addEventListener("click", async () => {
     if (pendingOperations.has(key)) return;
     const workspace = selectedWorkspace();
-    if (!window.confirm(`${AUTO_DRAIN_STOP_CONFIRM}\n\nWindow: ${live.runId} in workspace "${workspace?.name || workspace?.id}"`)) return;
+    const windowLine = live.runId ? `Window: ${live.runId} in workspace "${workspace?.name || workspace?.id}"` : `Workspace "${workspace?.name || workspace?.id}"`;
+    if (!window.confirm(`${copy.confirm}\n\n${windowLine}`)) return;
     pendingOperations.add(key);
-    feedback("auto-drain-operation-feedback", "pending", `Stopping admissions for ${live.runId}…`);
+    feedback("auto-drain-operation-feedback", "pending", autoDrainStopMode(payload) === "stop" ? `Stopping admissions for ${live.runId}…` : "Delivering recorded settlements…");
     renderAutoDrain(payload);
     try {
       const result = await postJson("/api/workflows/auto/stop", {});
       const coordinators = Array.isArray(result?.coordinators) ? result.coordinators : [];
       const remaining = coordinators.reduce((sum, change) => sum + (Array.isArray(change?.remaining_children) ? change.remaining_children.length : 0), 0);
       const changes = coordinators.map((change) => `${change?.run_id ?? "(no run id)"}: ${change?.outcome ?? "?"}`).join(", ");
-      feedback("auto-drain-operation-feedback", "success", [
-        `Admissions ${result?.outcome ?? "stop requested"}`,
+      const settlements = describePullSettlements(result?.pull_settlements);
+      const headline = [
+        autoDrainStopHeadline(result?.outcome),
         changes ? `(${changes})` : "",
         remaining > 0 ? `· ${remaining} admitted worker${remaining === 1 ? "" : "s"} still running.` : ".",
-      ].filter(Boolean).join(" "));
+      ].filter(Boolean).join(" ");
+      // A settlement that did not reach its owner is not a plain success: the
+      // stop happened, but the operator still has something to wait out or do.
+      feedback(
+        "auto-drain-operation-feedback",
+        settlements.attention ? "error" : "success",
+        settlements.text ? `${headline} Settlements: ${settlements.text}.` : headline,
+      );
       await fetchAndRenderAutoDrain();
     } catch (error) {
-      feedback("auto-drain-operation-feedback", "error", `Stopping admissions failed: ${error.message}`);
+      feedback("auto-drain-operation-feedback", "error", `${copy.label === "Stop" ? "Stopping admissions" : "Settling"} failed: ${error.message}`);
     } finally {
       pendingOperations.delete(key);
       if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
     }
   });
   return button;
+}
+
+// Visible text (not only a tooltip, which keyboard and touch users never see)
+// says why the control is off, or what it does right now.
+function autoDrainStopNote(payload) {
+  const reasons = autoDrainReasons(payload);
+  return el("div", {
+    class: reasons.stop ? "operation-control-note drain-stop-note disabled-reason" : "operation-control-note drain-stop-note",
+    text: reasons.stop || autoDrainStopCopy(payload).description,
+  });
 }
 
 // Capacity in words: how many leaf runs hold a slot against the limit, a bar
@@ -1755,6 +1802,7 @@ function renderAutoDrain(payload) {
       autoDrainDurationControl(payload),
       el("div", { class: "drain-settings" }, [autoDrainConcurrencyControl(payload), autoDrainCompletionControl(payload, reasons)]),
       el("div", { class: "drain-actions" }, [autoDrainStartButton(payload), autoDrainStopButton(payload)]),
+      autoDrainStopNote(payload),
     ]),
   );
   if (focusKey) body.querySelector?.(`[data-drain-focus="${focusKey}"]`)?.focus();

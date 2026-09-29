@@ -80,6 +80,8 @@
 .drain-completion-option.done.selected { background: #2a1f0e; color: #f7cf94; }
 .drain-completion-option:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .drain-actions { display: flex; gap: 8px; min-width: 0; }
+.drain-stop-note { margin: 0; font-size: 12px; }
+.drain-stop-note.disabled-reason { color: #f2c38b; }
 .drain-capacity { display: flex; flex-direction: column; gap: 8px; }
 .drain-capacity-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; color: #c4c4cc; }
 .drain-capacity-free { font-size: 12.5px; color: var(--fg-dim); white-space: nowrap; }
@@ -113,3 +115,6 @@
 .drain-blocked-more { color: var(--fg-dim); font-size: 10px; }
 .drain-muted { color: var(--fg-dim); }
 .drain-card > .operation-feedback { min-height: 0; padding: 7px 12px; border-top: 1px solid var(--hair); border-bottom: 0; }
+
+/* Settlement report shown on the runs table after cancelling a drain run. */
+.run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

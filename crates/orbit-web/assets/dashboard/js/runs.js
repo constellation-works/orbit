@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { panelCanRender, el, stateCell, syncNodes, postJson, makeToggleRow } from './common.js';
+import { panelCanRender, describePullSettlements, el, stateCell, syncNodes, postJson, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -150,34 +150,107 @@ function runIdentity(run) {
   return `${run && run.workspace_id ? run.workspace_id : ""}:${run && run.run_id ? run.run_id : ""}`;
 }
 
+// Jobs whose runs are drain coordinators: the local `auto` window and a
+// follower's pull drain. Cancelling one ends the coordinator, not just the
+// admissions, so it gets its own prompt and settlement report.
+const DRAIN_JOB_IDS = new Set(["workspace_auto_pipeline", "workspace_pull_pipeline"]);
+
+function runIsPullDrain(run) {
+  return run && run.job_id === "workspace_pull_pipeline";
+}
+
+function runIsDrain(run) {
+  return !!run && DRAIN_JOB_IDS.has(run.job_id);
+}
+
+function cancelPromptText(run) {
+  const runId = run.run_id;
+  if (!runIsDrain(run)) return `Cancel ${runId}? Add a reason (optional):`;
+  const consequence = runIsPullDrain(run)
+    ? "Cancelling ends the drain now: claims it has not launched yet fail and their tasks are blocked. Workers already running keep going and deliver their own result."
+    : "Cancelling ends the drain coordinator now instead of letting admitted work wind down.";
+  return [
+    `Cancel drain ${runId}?`,
+    consequence,
+    "To only stop taking new work, press Stop on the Auto-drain card (Tasks tab) instead — nothing is wasted.",
+    "Enter a reason (optional) and press OK to cancel the drain, or press Cancel to leave it running:",
+  ].join("\n\n");
+}
+
+// The latest cancel's settlement report, kept across re-renders of the runs
+// table so the poll that follows a cancel does not wipe it before it is read.
+let cancelNotice = null;
+
+function cancelNoticeFor(run, result) {
+  const settlements = describePullSettlements(result && result.pull_settlements);
+  if (!settlements.text) return null;
+  return {
+    key: runIdentity(run),
+    text: `${run.run_id} cancelled. Settlements: ${settlements.text}.`,
+    attention: settlements.attention,
+  };
+}
+
+function buildCancelNotice(notice, onDismiss) {
+  const dismiss = el("button", { class: "action", text: "dismiss", title: "Dismiss this settlement report" });
+  dismiss.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onDismiss();
+  });
+  const node = el("div", { class: `operation-feedback run-cancel-notice ${notice.attention ? "error" : "success"}` }, [
+    el("span", { text: notice.text }),
+    dismiss,
+  ]);
+  node.setAttribute("role", "status");
+  node.dataset.key = "run-cancel-notice";
+  node.dataset.hash = `${notice.key}-${notice.text}`;
+  return node;
+}
+
 async function cancelRun(run, btn, host) {
   const runId = run && run.run_id;
   if (!runId) return;
-  const reason = window.prompt(`Cancel ${runId}? Add a reason (optional):`, "");
+  const reason = window.prompt(cancelPromptText(run), "");
   if (reason === null) return;
   const old = btn.textContent;
+  let cancelled = false;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>cancel`;
   if (host) {
     for (const node of host.querySelectorAll(".action-error")) node.remove();
   }
+  let notice = null;
   try {
-    await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run),
+    const result = await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run),
       { reason: reason.trim() || null });
+    cancelled = true;
+    // The button must not offer a second cancel while the refresh is in flight.
+    btn.textContent = "cancelled";
+    notice = cancelNoticeFor(run, result);
+    // On the runs table the report renders at the top of the list (below);
+    // elsewhere (run detail) it is appended to the host once the view refreshes.
+    if (notice && host && host.id === "runs-body") cancelNotice = notice;
     const refreshActiveDetail = !run.workspace_id && getActiveRunId() === runId;
     await Promise.all([
       doFetchAndRenderRuns(),
       refreshActiveDetail ? doFetchAndRenderRunDetail() : Promise.resolve(),
       refreshActiveDetail ? doFetchAndRenderRunEvents() : Promise.resolve(),
     ]);
+    if (notice && host && host.id !== "runs-body") {
+      const node = buildCancelNotice(notice, () => node.remove());
+      host.appendChild(node);
+    }
   } catch (e) {
     if (host) {
       host.appendChild(el("div", { class: "action-error", text: e.message || "cancel failed" }));
     }
     console.error(e);
   } finally {
-    btn.disabled = false;
-    btn.textContent = old;
+    // A cancelled run stays marked cancelled; only a failed attempt re-arms.
+    if (!cancelled) {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
   }
 }
 
@@ -618,6 +691,12 @@ export function renderRuns(runs) {
   }
   frag.appendChild(runFilterControls());
   frag.appendChild(runsScopeNote());
+  if (cancelNotice) {
+    frag.appendChild(buildCancelNotice(cancelNotice, () => {
+      cancelNotice = null;
+      renderRuns(hasCtx("getLastRuns") ? _runsCtx.getLastRuns() : runs);
+    }));
+  }
   const unavailableNode = unavailableSourcesNode(unavailable);
   if (unavailableNode) frag.appendChild(unavailableNode);
   const limitNote = loading ? null : runsLimitNote(meta);

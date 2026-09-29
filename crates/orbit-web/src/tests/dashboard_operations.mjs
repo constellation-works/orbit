@@ -27,6 +27,10 @@ let releaseGet = null;
 let nextTask = 1;
 let drainRunId = null;
 let drainPhase = 'idle';
+let controlsAuthorized = true;
+let stopOutcome = 'stopped';
+let stopSettlements;
+let drainAdmissionsStopped = false;
 const drainDeadline = window.__drainDeadline || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 let submittedJob = null;
 const requests = [];
@@ -54,7 +58,7 @@ globalThis.fetch = async (path, options = {}) => {
     if (responseError) return response({ error: responseError }, 500);
     if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
     if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', submitted_at: new Date().toISOString() });
-    if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: 'stopped', coordinators: [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] });
+    if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: stopOutcome, coordinators: drainRunId ? [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] : [], pull_settlements: stopSettlements });
     if (url.pathname === '/api/jobs/fixture/run') {
       submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
       return response({ job_id: 'fixture', run_id: submittedJob.run_id, state: 'submitted', submitted_at: submittedJob.created_at });
@@ -97,14 +101,14 @@ globalThis.fetch = async (path, options = {}) => {
     total: submittedJob ? 4 : 3, limit: 100, truncated: false,
   });
   if (url.pathname === '/api/workflows/auto/readiness') return response({
-    controls_authorized: true,
+    controls_authorized: controlsAuthorized,
     snapshot: { read_only: true, limitations: 'Fixture snapshot only; eligibility can change immediately and does not guarantee a task will start.' },
     capacity: {
       active_leaf_runs: 4, max_active_leaf_runs: 4, free_slots: 0,
       candidate_pool_size: 8, candidate_pool_truncated: true,
       occupancy: { phases: { implementing: 2, lock_waiting: 1, post_implementation: 1, unknown: 0 } },
       deferred_conflicts: [{ task_id: 'ORB-3', blocking_task_ids: ['ORB-30'] }],
-      drain_run_id: drainRunId, admissions_stopped: false,
+      drain_run_id: drainRunId, admissions_stopped: drainAdmissionsStopped,
       drain_phase: drainPhase,
       drain_status_run_id: drainPhase === 'idle' ? null : 'jrun-20260923-0400-a1',
       ends_at: drainDeadline, running_admitted_workers: drainPhase === 'idle' ? 0 : 1,
@@ -139,7 +143,10 @@ assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String
 const blockedLinks = descendants(drainBody).filter(node => String(node.href || '').includes('#tasks?'));
 assert(blockedLinks.some(link => String(link.href).includes('workspace=one') && String(link.href).includes('q=ORB-30')), 'blocked-by links stay workspace-qualified');
 assert(get('auto-drain-live').textContent === 'idle', 'no live window reads idle');
-assert(drainButton('Stop').disabled && String(drainButton('Stop').title).includes('No auto-delivery window is live'), 'Stop is disabled without a live window and says why');
+// With no live window Stop becomes "Settle pending": the settle-only pass
+// needs no drain, so it stays usable and says what it does in visible text.
+assert(!drainButton('Stop') && drainButton('Settle pending') && !drainButton('Settle pending').disabled, 'Stop relabels to Settle pending and stays enabled without a live window');
+assert(drainText().includes('No auto-delivery window is live. Deliver settlements recorded for finished or cancelled drains.'), 'the idle control explains itself in visible text');
 
 // More than three blocked tasks collapse to "+N more".
 readinessTasks.push(...[10, 11, 12].map(n => ({ task_id: `ORB-${n}`, status: 'backlog', eligible: false, reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] })));
@@ -170,6 +177,36 @@ const backToReview = completionOption('review');
 backToReview.checked = true; backToReview.dispatchEvent(new Event('change'));
 assert(completionOption('review').checked, 'completion returns to review');
 
+// Settle pending delivers recorded settlements and reports each outcome; a
+// settlement that did not reach its owner is never reported as plain success.
+stopOutcome = 'idle';
+stopSettlements = [
+  { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' },
+  { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-2', leaf_run_id: 'jrun-leaf-2', outcome: 'settled' },
+  { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-3', leaf_run_id: null, outcome: 'owner_unreachable' },
+  { owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-4', leaf_run_id: null, outcome: 'launch_uncertain' },
+];
+drainButton('Settle pending').click(); await tick(); await tick(); await tick();
+assert(confirmations.at(-1).includes('No auto-delivery window needs to be live'), 'settle confirms without demanding a window');
+const settleFeedback = get('auto-drain-operation-feedback');
+assert(settleFeedback.textContent.includes('No auto-delivery window was live'), `idle stop names what did not change: ${settleFeedback.textContent}`);
+assert(settleFeedback.textContent.includes('2 settlements delivered'), `delivered settlements are counted: ${settleFeedback.textContent}`);
+assert(settleFeedback.textContent.includes('1 waiting for the owner (unreachable)') && settleFeedback.textContent.includes('[ORB-3]'), `an unreachable owner is called out with its task: ${settleFeedback.textContent}`);
+assert(settleFeedback.textContent.includes('1 launch uncertain — needs manual recovery, see the distributed drain runbook') && settleFeedback.textContent.includes('[ORB-4]'), `an uncertain launch points at the runbook: ${settleFeedback.textContent}`);
+assert(settleFeedback.className.includes('error') && !settleFeedback.className.includes('success'), 'unfinished settlements are not styled as success');
+stopSettlements = [{ owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' }];
+drainButton('Settle pending').click(); await tick(); await tick(); await tick();
+assert(settleFeedback.textContent.includes('1 settlement delivered') && settleFeedback.className.includes('success'), `a fully delivered pass is plain success: ${settleFeedback.textContent}`);
+stopOutcome = 'stopped';
+stopSettlements = undefined;
+
+// Read-only reasons are visible text beside the button, not only a tooltip.
+controlsAuthorized = false;
+await fetchAndRenderOperations();
+assert(drainButton('Settle pending').disabled && drainText().includes('requires an authorized operator session'), 'an unauthorized session sees why the control is off as visible text');
+controlsAuthorized = true;
+await fetchAndRenderOperations();
+
 // A live window: header link in short form, time left for a window this
 // browser started, and Stop enabled.
 drainRunId = 'jrun-20260923-0400-a1';
@@ -182,6 +219,11 @@ drainButton('Stop').click(); await tick(); await tick(); await tick();
 assert(requests.some(r => r.path === '/api/workflows/auto/stop' && r.workspace === 'one'), 'stop posts to the stop endpoint');
 assert(confirmations.at(-1).includes('This is not cancellation.') && confirmations.at(-1).includes('jrun-20260923-0400-a1'), 'stop confirms and names the window');
 assert(get('auto-drain-operation-feedback').textContent.includes('Admissions stopped') && get('auto-drain-operation-feedback').textContent.includes('1 admitted worker still running.'), 'stop result lands in the card status line');
+// Once admissions are stopped the button offers the settle-only pass instead.
+drainAdmissionsStopped = true;
+await fetchAndRenderOperations();
+assert(drainButton('Settle pending') && !drainButton('Settle pending').disabled && drainText().includes('Admissions are already stopped for jrun-20260923-0400-a1'), 'a stopped window still offers to settle recorded work');
+drainAdmissionsStopped = false;
 drainRunId = null;
 drainPhase = 'winding_down';
 
