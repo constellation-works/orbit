@@ -38,7 +38,38 @@ pub(super) struct LogSnapshot {
 }
 
 const LOG_STREAM_CHANNEL_DEPTH: usize = 64;
+/// Poll interval while log data is flowing; also the floor after a reset.
 const LOG_STREAM_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
+/// Ceiling of the idle backoff. An idle stream polls this often, so a new
+/// line reaches the client at most this late and a disconnect or shutdown is
+/// noticed within it.
+const LOG_STREAM_IDLE_POLL_INTERVAL: StdDuration = StdDuration::from_secs(1);
+
+/// Idle backoff for the stream's polling thread: fast while the log advances,
+/// doubling toward [`LOG_STREAM_IDLE_POLL_INTERVAL`] while nothing new is
+/// read, and back to the floor as soon as data arrives.
+#[derive(Debug)]
+pub(super) struct PollBackoff {
+    delay: StdDuration,
+}
+
+impl PollBackoff {
+    pub(super) fn new() -> Self {
+        Self {
+            delay: LOG_STREAM_POLL_INTERVAL,
+        }
+    }
+
+    /// Delay before the next poll, given whether the last poll made progress.
+    pub(super) fn next_delay(&mut self, progressed: bool) -> StdDuration {
+        if progressed {
+            self.delay = LOG_STREAM_POLL_INTERVAL;
+        } else {
+            self.delay = (self.delay * 2).min(LOG_STREAM_IDLE_POLL_INTERVAL);
+        }
+        self.delay
+    }
+}
 /// Maximum number of concurrent `/api/log/stream` clients. Each accepted
 /// stream pins one native polling thread, so this cap bounds thread/FD/CPU
 /// usage even if the dashboard is bound beyond loopback.
@@ -48,8 +79,8 @@ pub(super) const LOG_STREAM_MAX_CONCURRENT: usize = 8;
 ///
 /// Wraps a `tokio::sync::Semaphore` so the handler can `try_acquire` a permit
 /// per accepted stream. The permit is held by the polling thread and released
-/// when the thread exits (which happens within one poll interval after the
-/// client disconnects). Excess clients receive `503 Service Unavailable`.
+/// when the thread exits (which happens within one idle poll interval after
+/// the client disconnects). Excess clients receive `503 Service Unavailable`.
 pub(super) struct LogStreamGate {
     sem: Arc<Semaphore>,
 }
@@ -224,14 +255,22 @@ pub(super) fn spawn_log_sse_frames(
     resume_offset: Option<u64>,
 ) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel(LOG_STREAM_CHANNEL_DEPTH);
+    // A fresh stream starts at the file's end as of this request, read here
+    // before the polling thread starts rather than whenever it first runs. A
+    // resume offset past the end means the log rotated while the client was
+    // away (the tab closes its stream while hidden), so it is kept: the shrink
+    // check in `read_appended_log_events` then replays the new file from 0
+    // instead of skipping what was written to it.
+    let start_offset =
+        resume_offset.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
     thread::spawn(move || {
         // Permit is dropped when this thread exits, which happens within one
-        // poll interval — or one batch of a replay — of the client
+        // idle poll interval — or one batch of a replay — of the client
         // disconnecting (tx.is_closed()).
         let _permit = permit;
-        let mut offset =
-            resume_offset.unwrap_or_else(|| std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
+        let mut offset = start_offset;
         let mut lines = LogLineBuffer::default();
+        let mut backoff = PollBackoff::new();
         loop {
             if tx.is_closed() || SHUTTING_DOWN.load(Ordering::Relaxed) {
                 return;
@@ -239,6 +278,7 @@ pub(super) fn spawn_log_sse_frames(
             // A replay (`from=0` over a large log) drains batch by batch with
             // no sleep between them, re-checking disconnect and shutdown each
             // time; only a caught-up stream waits for the next poll.
+            let scanned_from = offset;
             let caught_up = match read_appended_log_events(&path, &filters, &mut offset, &mut lines)
             {
                 Ok(batch) => {
@@ -255,8 +295,11 @@ pub(super) fn spawn_log_sse_frames(
                 }
                 Err(_) => true,
             };
+            // Progress means bytes were consumed (even if the filter matched
+            // none of them), so a busy log with a narrow filter stays fast.
+            let delay = backoff.next_delay(offset != scanned_from);
             if caught_up {
-                thread::sleep(LOG_STREAM_POLL_INTERVAL);
+                thread::sleep(delay);
             }
         }
     });
@@ -271,7 +314,7 @@ pub(super) const LOG_STREAM_BATCH_BYTES: u64 = 1 << 20;
 /// Longest record the stream reassembles. A longer one — or an unterminated
 /// run of bytes that never gets its newline — is dropped through its next
 /// newline, so partial-line storage never exceeds this.
-pub(super) const LOG_STREAM_MAX_RECORD_BYTES: usize = 1 << 20;
+pub(super) const LOG_STREAM_MAX_RECORD_BYTES: usize = crate::log_format::MAX_LOG_RECORD_BYTES;
 
 /// Bytes of the record being read, carried across polls until its newline.
 #[derive(Debug, Default)]

@@ -10,11 +10,17 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use orbit_common::fs::reverse_lines::{REVERSE_READ_BLOCK, ReverseLines};
+use orbit_common::security::redaction::redact_all;
 use orbit_core::OrbitError;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::parse::parse_since;
+
+/// Longest single log record the web surfaces buffer. The SSE stream drops a
+/// longer record, and the snapshot tail skips an unterminated trailing one
+/// this large instead of reading it into memory.
+pub(crate) const MAX_LOG_RECORD_BYTES: usize = 1 << 20;
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq, PartialOrd, Ord)]
 #[clap(rename_all = "lower")]
@@ -244,12 +250,20 @@ pub(crate) fn read_rendered_tail_from<R: Read + Seek>(
         block_size
     };
     let records_end = complete_records_end(reader, len, block_size)?;
-    let mut unterminated = vec![0; (len - records_end) as usize];
-    reader.seek(SeekFrom::Start(records_end))?;
-    reader.read_exact(&mut unterminated)?;
-    let final_record = std::str::from_utf8(&unterminated)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+    // An unterminated tail longer than the stream's record cap is treated like
+    // a partial write (not served, cursor left at its start) without being
+    // read: the file's tail is untrusted length, so never allocate from it.
+    let final_record = match usize::try_from(len - records_end) {
+        Ok(tail_len) if tail_len <= MAX_LOG_RECORD_BYTES => {
+            let mut unterminated = vec![0; tail_len];
+            reader.seek(SeekFrom::Start(records_end))?;
+            reader.read_exact(&mut unterminated)?;
+            std::str::from_utf8(&unterminated)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        }
+        _ => None,
+    };
     let cursor = if final_record.is_some() {
         len
     } else {
@@ -409,7 +423,25 @@ pub(crate) fn format_code(target: &str, level: &str, fields: &Value) -> String {
     }
 }
 
+/// Copy of `value` with every string scrubbed by [`redact_all`], so a token in
+/// any field never reaches rendered HTML. Redaction runs on the raw text,
+/// before HTML escaping, the same way the run and incident views do it.
+fn redact_strings(value: &Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(redact_all(s)),
+        Value::Array(items) => Value::Array(items.iter().map(redact_strings).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| (key.clone(), redact_strings(item)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn format_message_html(target: &str, fields: &Value) -> String {
+    let redacted = redact_strings(fields);
+    let fields = &redacted;
     let getf = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or("");
     let getn = |k: &str| -> String {
         fields

@@ -105,7 +105,13 @@ globalThis.document = {
     if (tabMatch) return tabs.find((tab) => tab.dataset.tab === tabMatch[1]) || null;
     return new Node();
   },
-  addEventListener: (name, fn) => { documentListeners[name] = fn; },
+  // A real document keeps every listener for an event; compose them so a
+  // later registration (the log tail's visibility handler) cannot displace an
+  // earlier one (the router's refresh-on-visible).
+  addEventListener: (name, fn) => {
+    const previous = documentListeners[name];
+    documentListeners[name] = previous ? (...args) => { previous(...args); fn(...args); } : fn;
+  },
 };
 const location = new URL("http://dashboard.test/?workspace=one");
 location.hash = "#tasks";

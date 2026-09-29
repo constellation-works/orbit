@@ -19,6 +19,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use super::super::plugins::plugin_to_json;
 use super::super::router;
 use super::test_support::{assert_isolated_child, body_json, enter_isolated_child};
 use crate::state::{DashboardState, WsEntry};
@@ -501,6 +502,44 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
         serde_json::json!({ "indexed": 7, "state": "ready" }),
         "the panel serves the source tool's output"
     );
+}
+
+/// `source` and `install_path` are display-only host paths, so the listing
+/// abbreviates the server's home directory instead of disclosing it.
+#[cfg(unix)]
+#[tokio::test]
+async fn plugin_projection_abbreviates_the_home_directory_in_paths() {
+    if !enter_isolated_child(
+        module_path!(),
+        "plugin_projection_abbreviates_the_home_directory_in_paths",
+    ) {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let source = fixture.source();
+    write_plugin(&source);
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            source.to_str().expect("utf8 source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install the fixture plugin");
+    let summaries = runtime.list_plugins().expect("list plugins");
+    let home = fixture._temp.path();
+
+    let projected = plugin_to_json(&summaries[0], Some(home));
+    for field in ["source", "install_path"] {
+        let value = projected[field].as_str().expect("path string");
+        assert!(
+            value.starts_with("~/"),
+            "{field} must be home-abbreviated, got {value}"
+        );
+        assert!(
+            !value.contains(home.to_str().expect("utf8 home")),
+            "{field} must not disclose the home directory, got {value}"
+        );
+    }
 }
 
 /// A plugin's secret value never reaches the dashboard: `/api/plugins`

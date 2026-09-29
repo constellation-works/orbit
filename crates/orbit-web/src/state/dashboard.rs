@@ -46,6 +46,9 @@ pub(super) struct StateInner {
     /// Per-server single-flight TTL memo for audited plugin panel reads.
     /// Keyed by `(namespace, panel)`.
     plugin_panels: RuntimeMemo<(String, String)>,
+    /// Per-server memo for `/api/diagnostics/errors`, keyed by the bounded
+    /// row limit. Collapses overlapping Errors-tab polls into one scan.
+    diagnostics_errors: RuntimeMemo<usize>,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope regardless of TTY
     /// or `ORBIT_OPERATOR`.
@@ -380,6 +383,7 @@ impl DashboardState {
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: RuntimeMemo::new("audit summary aggregation"),
                 plugin_panels: RuntimeMemo::new("plugin panel execution"),
+                diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
@@ -413,6 +417,11 @@ impl DashboardState {
     /// Process-local plugin panel memo shared by every dashboard tab.
     pub(crate) fn plugin_panel_memo(&self) -> &RuntimeMemo<(String, String)> {
         &self.inner.plugin_panels
+    }
+
+    /// Process-local `/api/diagnostics/errors` memo for this server instance.
+    pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<usize> {
+        &self.inner.diagnostics_errors
     }
 
     /// Whether this server was started with `--operator`, granting operator

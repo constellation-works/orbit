@@ -2,9 +2,10 @@
 //!
 //! Every visible dashboard tab polls the same endpoints. Keying by the live
 //! runtime plus a request key collapses overlapping polls into one compute,
-//! and a runtime rebuild naturally starts a fresh cache namespace. Two memos
+//! and a runtime rebuild naturally starts a fresh cache namespace. Three memos
 //! use it: `/api/audit/summary` (keyed by the raw `since` window, so relative
-//! cutoffs such as `24h` still hit) and audited plugin panel reads.
+//! cutoffs such as `24h` still hit), audited plugin panel reads, and
+//! `/api/diagnostics/errors` (keyed by its row limit).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -18,6 +19,11 @@ use serde_json::Value;
 /// Freshness bound for a cached audit summary. Short enough that header tiles
 /// still move, long enough that overlapping dashboard polls collapse.
 pub(crate) const AUDIT_SUMMARY_TTL: Duration = Duration::from_secs(15);
+
+/// Freshness bound for a cached diagnostics error list. The Errors tab polls
+/// every 30s and each miss scans up to 50k audit rows plus stderr blobs, so
+/// this only needs to collapse overlapping tabs, not hide new errors long.
+pub(crate) const DIAGNOSTICS_ERRORS_TTL: Duration = Duration::from_secs(15);
 
 /// In-process TTL cache and single-flight gate for one dashboard server.
 pub(crate) struct RuntimeMemo<K> {

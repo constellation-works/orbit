@@ -317,8 +317,19 @@ fn all_tasks_json(
     };
     let mut rows = Vec::with_capacity(candidates.len());
     for (task, runtime, entry) in candidates {
-        if let Some(row) = runtime.get_listed_task_row(&task.id)? {
-            rows.push((row, runtime, entry));
+        // Same contract as the per-workspace scan above: one unreadable row
+        // is logged and skipped rather than failing the whole fleet list.
+        match runtime.get_listed_task_row(&task.id) {
+            Ok(Some(row)) => rows.push((row, runtime, entry)),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    workspace = %entry.id,
+                    task = %task.id,
+                    %error,
+                    "fleet task list skipped an unreadable task row"
+                );
+            }
         }
     }
     // All runtimes in a dashboard share one coordination registry. Read its

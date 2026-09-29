@@ -506,6 +506,13 @@ pub(super) async fn get_task_artifact(
                 HeaderName::from_static("x-content-type-options"),
                 HeaderValue::from_static("nosniff"),
             );
+            // Artifacts are task-author content served from the dashboard's
+            // origin: sandbox them so an inline-rendered one (SVG, HTML-ish
+            // media) cannot run script or reach the API as this origin.
+            response.headers_mut().insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox; default-src 'none'"),
+            );
             if policy.attachment {
                 response.headers_mut().insert(
                     header::CONTENT_DISPOSITION,

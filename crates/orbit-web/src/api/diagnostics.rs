@@ -2,8 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::state::Ws;
-use axum::extract::Query;
+use std::sync::Arc;
+
+use crate::runtime_memo::DIAGNOSTICS_ERRORS_TTL;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::DateTime;
 use orbit_cmd::DiagnosticsCommands;
@@ -290,19 +293,24 @@ fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String 
 }
 
 pub(super) async fn list_diagnostics_errors(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
-    // Reads up to 50k audit rows and a blob per agent invocation: blocking
-    // pool, not the worker serving the request (see `blocking`).
-    match super::blocking("diagnostics errors", move || {
-        diagnostics_errors(&runtime, limit)
-    })
-    .await
+    // Reads up to 50k audit rows and a blob per agent invocation, and every
+    // Errors tab polls it: memoized so overlapping polls share one scan, and
+    // computed on the blocking pool, not the worker serving the request.
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .diagnostics_errors_memo()
+        .get_or_compute(&runtime, limit, DIAGNOSTICS_ERRORS_TTL, move || {
+            diagnostics_errors(&compute_runtime, limit).map(Value::Array)
+        })
+        .await
     {
-        Ok(rows) => Json(Value::Array(rows)).into_response(),
-        Err(response) => *response,
+        Ok(rows) => Json((*rows).clone()).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 
@@ -383,6 +391,13 @@ fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
     })
 }
 
+/// Most stderr blobs one `/api/diagnostics/errors` computation reads from
+/// disk. Each `cli_invocation_finished` event costs one blob read, so a long
+/// history of invocations with no structured error lines would otherwise read
+/// thousands of files per poll. Newest invocations are read first, so the cap
+/// only ever drops the oldest.
+pub(super) const MAX_STDERR_BLOBS_PER_REQUEST: usize = 256;
+
 fn agent_stderr_error_rows(
     runtime: &OrbitRuntime,
     limit: usize,
@@ -392,6 +407,7 @@ fn agent_stderr_error_rows(
     let step_index_by_id = step_index_by_id(&events);
     let blob_store = audit_blob_store(runtime);
     let mut rows = Vec::new();
+    let mut blobs_read = 0usize;
     // `events` is oldest-first so the step index above numbers steps in
     // execution order; the row scan walks newest-first because it stops at
     // `2 * limit` rows and the caller keeps only the newest `limit` of them.
@@ -402,6 +418,10 @@ fn agent_stderr_error_rows(
         let Some(blob_ref) = event.get("stderr_blob_ref").and_then(Value::as_str) else {
             continue;
         };
+        if blobs_read >= MAX_STDERR_BLOBS_PER_REQUEST {
+            break;
+        }
+        blobs_read += 1;
         let stderr = read_blob_text_best_effort(&blob_store, blob_ref);
         let fallback_ts = event
             .get("ts")

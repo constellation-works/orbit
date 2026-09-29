@@ -14,6 +14,7 @@
 //! That is what makes a panel safe to serve to any dashboard session while
 //! the dashboard's mutations still require an operator session.
 
+use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -31,6 +32,7 @@ use serde_json::{Value, json};
 use super::routines::{
     action_capability, authorization_denied, authorized_caller, record_operation_audit,
 };
+use super::workspaces::abbreviate_home;
 use super::{blocking, not_found, validate_id};
 use crate::state::{DashboardState, Ws};
 
@@ -40,19 +42,20 @@ pub(crate) const PANEL_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 pub(super) async fn list_plugins(State(state): State<DashboardState>, Ws(runtime): Ws) -> Response {
     let operator = state.operator_session();
     match blocking("list plugins", move || runtime.list_plugins()).await {
-        Ok(plugins) => Json(Value::Array(
+        Ok(plugins) => Json(Value::Array({
+            let home = orbit_common::fs::path::home_dir().ok();
             plugins
                 .iter()
                 .map(|plugin| {
-                    let mut value = plugin_to_json(plugin);
+                    let mut value = plugin_to_json(plugin, home.as_deref());
                     value["capabilities"] = json!({
                         "enable": action_capability(&DASHBOARD_PLUGIN_ENABLE, operator),
                         "disable": action_capability(&DASHBOARD_PLUGIN_DISABLE, operator),
                     });
                     value
                 })
-                .collect(),
-        ))
+                .collect()
+        }))
         .into_response(),
         Err(response) => *response,
     }
@@ -173,7 +176,8 @@ async fn mutate_plugin(
                 started,
             )
             .await;
-            Json(json!({"plugin": plugin_to_json(&summary)})).into_response()
+            let home = orbit_common::fs::path::home_dir().ok();
+            Json(json!({"plugin": plugin_to_json(&summary, home.as_deref())})).into_response()
         }
         Ok(None) => {
             let failure = format!("plugin not found: {namespace}");
@@ -301,7 +305,10 @@ fn bounded_panel_response(output: Value) -> Value {
     })
 }
 
-fn plugin_to_json(summary: &PluginSummary) -> Value {
+/// Projects one plugin for the dashboard. `source` and `install_path` are
+/// display-only and can be absolute host paths, so they are `~`-abbreviated
+/// like the workspace listing rather than disclosing the home directory.
+pub(super) fn plugin_to_json(summary: &PluginSummary, home: Option<&FsPath>) -> Value {
     json!({
         "name": summary.name,
         "version": summary.version,
@@ -310,8 +317,8 @@ fn plugin_to_json(summary: &PluginSummary) -> Value {
         "host_enabled": summary.host_enabled,
         "workspace_toggle": summary.workspace_toggle,
         "disabled_by": summary.disabled_by.map(|layer| layer.as_str()),
-        "source": summary.source,
-        "install_path": summary.install_path,
+        "source": abbreviate_home(FsPath::new(&summary.source), home),
+        "install_path": abbreviate_home(FsPath::new(&summary.install_path), home),
         "manifest_digest": summary.manifest_digest,
         "publisher": summary.publisher,
         "description": summary.description,

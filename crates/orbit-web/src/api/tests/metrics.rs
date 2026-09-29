@@ -20,7 +20,7 @@ use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use orbit_types::workflow::KnowledgeRunMetrics;
 use tower::ServiceExt;
 
-use super::super::router;
+use super::super::{HISTORY_MAX_LIMIT, router};
 use super::test_support::{body_json, seed_run, write_seeded_run};
 
 const RUN_ID: &str = "jrun-metrics-api";
@@ -470,4 +470,64 @@ async fn metrics_invocation_ingestion_preserves_worker_runs_and_aggregates() {
     assert_eq!(worker_metrics.total_cache_read_tokens, 85);
     assert_eq!(worker_metrics.total_cache_create_tokens, 4);
     assert_eq!(worker_metrics.total_output_tokens, 23);
+}
+
+/// An omitted or oversized `limit` must be clamped to `HISTORY_MAX_LIMIT`
+/// instead of aggregating (or returning) every stored row.
+#[tokio::test]
+async fn metrics_clamp_oversized_and_omitted_limits() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let total = HISTORY_MAX_LIMIT + 5;
+    for index in 0..total {
+        let mut run = seed_run(
+            &runtime,
+            &format!("jrun-clamp-{index:04}"),
+            JOB_ID,
+            JobRunState::Success,
+        );
+        run.knowledge_metrics = Some(KnowledgeRunMetrics {
+            raw_read_token_baseline: 1_000,
+            knowledge_pack_tokens: None,
+            compression_ratio: None,
+            actual_fs_read_tokens_during_run: 700,
+            double_read_rate: None,
+            knowledge_pack_used: false,
+            knowledge_pack_unresolved_count: 0,
+            total_llm_input_tokens: 1_200,
+        });
+        write_seeded_run(&runtime, &run);
+        seed_invocation(
+            &runtime,
+            SeedInvocation {
+                job_run_id: &format!("jrun-clamp-{index:04}"),
+                activity_id: "plan",
+                agent: "claude",
+                model: None,
+                duration_ms: 1,
+                input_tokens: 1,
+                cache_read_tokens: 0,
+                cache_create_tokens: 0,
+                output_tokens: 1,
+                task_ids: &[],
+                tool_calls: &[],
+            },
+        );
+    }
+
+    for uri in ["/metrics/knowledge", "/metrics/knowledge?limit=1000000"] {
+        let response = request_metrics(runtime.clone(), uri).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let summary: KnowledgeStatsSummary =
+            serde_json::from_slice(&body_bytes(response).await).expect("knowledge json");
+        assert_eq!(
+            summary.total_runs, HISTORY_MAX_LIMIT as u64,
+            "{uri} must aggregate at most HISTORY_MAX_LIMIT runs"
+        );
+    }
+
+    let response = request_metrics(runtime, "/metrics/invocations?limit=1000000").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let rows: Vec<InvocationRecord> =
+        serde_json::from_slice(&body_bytes(response).await).expect("invocations json");
+    assert_eq!(rows.len(), HISTORY_MAX_LIMIT);
 }

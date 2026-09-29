@@ -32,6 +32,12 @@ const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
 let logStreamOffset = 0;
 let logStreamRetryTimer = null;
 let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+// True once the snapshot resolved and a live stream is owed. A hidden tab
+// closes its stream (the server allows only a few, and a background tab would
+// hold a permit for nothing); this flag tells the visibility handler to reopen
+// it from `logStreamOffset` instead of before there is an offset to resume.
+let logStreamWanted = false;
+let logVisibilityWired = false;
 
 // ORB-10972: the log lives in the Tasks tab's right dock, which has two modes
 // — Drain (the auto-drain window card above locked files, ORB-12898) and Log
@@ -431,6 +437,7 @@ function renderLogEvent(ev, isFresh) {
 }
 
 export function initLogTail() {
+  wireLogVisibility();
   wireLogPanelResize();
   wireDockSplitter();
   wireLogWrapToggle();
@@ -623,7 +630,7 @@ function setLogStreamConnected(connected) {
   if (dock) dock.classList.toggle("disconnected", !connected);
 }
 
-function connectLogStream() {
+function closeLogStream() {
   if (logStreamRetryTimer !== null) {
     clearTimeout(logStreamRetryTimer);
     logStreamRetryTimer = null;
@@ -632,6 +639,28 @@ function connectLogStream() {
     logStream.close();
     logStream = null;
   }
+}
+
+function handleLogVisibilityChange() {
+  if (document.hidden) {
+    closeLogStream();
+  } else if (logStreamWanted && !logStream) {
+    logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
+    connectLogStream();
+  }
+}
+
+function wireLogVisibility() {
+  if (logVisibilityWired) return;
+  logVisibilityWired = true;
+  document.addEventListener("visibilitychange", handleLogVisibilityChange);
+}
+
+function connectLogStream() {
+  logStreamWanted = true;
+  closeLogStream();
+  // A hidden tab opens nothing; becoming visible reconnects from the offset.
+  if (document.hidden) return;
   logStream = new EventSource(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}`);
   logStream.onopen = () => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;

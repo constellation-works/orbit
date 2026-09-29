@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use axum::http::{HeaderName, HeaderValue, header};
 use axum::middleware;
+use axum::response::Response;
 use axum::routing::get;
 use clap::Args;
 use orbit_cmd::registry_runtime;
@@ -231,6 +233,38 @@ pub(crate) fn health_router() -> Router<state::DashboardState> {
         .layer(middleware::map_response(api::nosniff_json_responses))
 }
 
+/// The complete dashboard app: embedded assets, `/healthz` and `/api`, all
+/// behind [`security_headers`].
+pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
+    Ok(assets::dashboard_file_router()?
+        .merge(health_router())
+        .nest("/api", api::router())
+        // Outermost, so every response (assets, API, health, 403s, 404s)
+        // carries the baseline headers.
+        .layer(middleware::map_response(security_headers))
+        .with_state(state))
+}
+
+/// Baseline hardening headers for every response. A handler that already set
+/// one of these keeps its own value (for instance a stricter per-route CSP is
+/// untouched; this layer only fills gaps).
+pub(crate) async fn security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    for (name, value) in [
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (
+            HeaderName::from_static("cross-origin-resource-policy"),
+            "same-origin",
+        ),
+    ] {
+        headers
+            .entry(name)
+            .or_insert(HeaderValue::from_static(value));
+    }
+    response
+}
+
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
 fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
     check_bindable_host(args.host, args.port)?;
@@ -241,10 +275,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let no_open = args.no_open || std::env::var_os(HANDOVER_ENV).is_some();
     let handover = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
     let handover_target = Arc::clone(&handover);
-    let app = assets::dashboard_file_router()?
-        .merge(health_router())
-        .nest("/api", api::router())
-        .with_state(state);
+    let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

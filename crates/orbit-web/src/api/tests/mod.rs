@@ -16,6 +16,7 @@ mod incidents;
 mod log;
 mod metrics;
 mod origin;
+mod pagination;
 mod plugins;
 mod reliability;
 mod routines;

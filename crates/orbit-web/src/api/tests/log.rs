@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use super::super::LogQuery;
 use super::super::log::{
     LOG_MAX_LIMIT, LOG_STREAM_BATCH_BYTES, LOG_STREAM_BATCH_EVENTS, LOG_STREAM_MAX_RECORD_BYTES,
-    LogLineBuffer, LogSnapshot, LogStreamGate, format_sse_frame, last_event_id_header,
+    LogLineBuffer, LogSnapshot, LogStreamGate, PollBackoff, format_sse_frame, last_event_id_header,
     log_stream_unavailable, read_appended_log_events, read_log_snapshot_from_path,
     read_log_snapshot_then, spawn_log_sse_frames, stream_resume_offset,
 };
@@ -852,4 +852,84 @@ async fn log_snapshot_scan_runs_through_blocking_boundary() {
 
     assert_eq!(snapshot.events.len(), 1);
     assert!(snapshot.events[0].message_html.contains("blocked"));
+}
+
+#[test]
+fn poll_backoff_grows_while_idle_is_capped_and_resets_on_progress() {
+    let mut backoff = PollBackoff::new();
+    let mut previous = Duration::ZERO;
+    let mut capped = Duration::ZERO;
+    for _ in 0..16 {
+        let delay = backoff.next_delay(false);
+        assert!(delay >= previous, "idle delay must never shrink");
+        assert!(
+            delay <= Duration::from_secs(1),
+            "idle delay {delay:?} exceeded the 1s ceiling"
+        );
+        previous = delay;
+        capped = delay;
+    }
+    assert_eq!(
+        capped,
+        Duration::from_secs(1),
+        "idle polling reaches the cap"
+    );
+
+    let floor = backoff.next_delay(true);
+    assert!(
+        floor <= Duration::from_millis(50),
+        "new data resets to the fast interval, got {floor:?}"
+    );
+    assert!(
+        backoff.next_delay(false) > floor,
+        "backoff resumes after a reset"
+    );
+}
+
+/// A resume offset past the end of the file is clamped to the end: the
+/// stream must not replay the existing log, but must still deliver a line
+/// appended afterwards.
+#[test]
+fn stream_resume_past_the_end_replays_the_rotated_file() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    // The client last saw an offset in the pre-rotation file; the log rotated
+    // while its stream was closed, so the current file is shorter.
+    write_lines(&path, &[log_line("new-1"), log_line("new-2")]);
+
+    let frames = stream_frames_until_sentinel(&path, LogFilters::default(), u64::MAX, || {});
+    assert_eq!(
+        frames.len(),
+        2,
+        "a resume offset past the end must replay the rotated file, not skip it: {frames:?}"
+    );
+    assert!(frames[0].contains("new-1") && frames[1].contains("new-2"));
+}
+
+/// A file that shrinks while a stream is open (rotation) restarts from its
+/// beginning, so the new file's lines are not lost.
+#[test]
+fn stream_restarts_from_zero_when_the_open_file_shrinks() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.jsonl");
+    write_lines(
+        &path,
+        &[
+            log_line("before-1"),
+            log_line("before-2"),
+            log_line("before-3"),
+        ],
+    );
+    let gate = LogStreamGate::new(1);
+    let permit = gate.try_acquire().expect("stream permit");
+    let mut rx = spawn_log_sse_frames(path.clone(), LogFilters::default(), permit, Some(0));
+    // The replay proves the stream thread is running and positioned at the
+    // old end before the file is swapped.
+    let replay = collect_sse_frames(&mut rx, 3);
+    assert_eq!(replay.len(), 3, "the pre-rotation lines replay");
+
+    write_lines(&path, &[log_line("rotated")]);
+    let frames = collect_sse_frames(&mut rx, 1);
+    assert_eq!(frames.len(), 1, "the rotated file's line is delivered");
+    assert!(frames[0].contains("rotated"), "got {}", frames[0]);
 }

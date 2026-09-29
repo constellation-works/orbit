@@ -1472,6 +1472,11 @@ class Node {
   }
 }
 const byId = new Map();
+const documentListeners = {};
+const setDocumentHidden = (hidden) => {
+  document.hidden = hidden;
+  for (const fn of documentListeners.visibilitychange || []) fn();
+};
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
 const bar = get("log-statusbar");
 const label = new Node();
@@ -1486,7 +1491,8 @@ globalThis.document = {
   createElement: () => new Node(),
   querySelectorAll: () => [],
   querySelector: () => null,
-  addEventListener: () => {},
+  hidden: false,
+  addEventListener: (name, fn) => { (documentListeners[name] ||= []).push(fn); },
 };
 const location = new URL("http://dashboard.test/");
 globalThis.window = { location, innerHeight: 900, addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
@@ -1548,6 +1554,73 @@ if (sources.length !== 2) throw new Error(`retry did not open a new EventSource,
 if (!sources[1].url.includes("from=42")) throw new Error(`retry lost resume offset: ${sources[1].url}`);
 sources[1].readyState = EventSource.OPEN;
 sources[1].onopen();
+"#,
+        ]
+        .concat(),
+    );
+}
+
+#[test]
+fn dashboard_log_tail_closes_the_stream_while_hidden_and_resumes_from_the_last_offset() {
+    run_dashboard_javascript_test(
+        &[
+            LOG_TAIL_HARNESS,
+            r#"
+initLogTail();
+await tick();
+await tick();
+if (sources.length !== 1) throw new Error(`expected one EventSource, got ${sources.length}`);
+sources[0].readyState = EventSource.OPEN;
+sources[0].onopen();
+sources[0].onmessage({
+  lastEventId: "777",
+  data: JSON.stringify({ ts: "t", source: "job", code: "OK", level: "info", message_html: "seen" }),
+});
+
+// The 600ms "fresh" highlight timer is unrelated to the stream retry.
+const baselineTimers = retryFns().length;
+
+// Hiding the tab releases the server-side stream.
+setDocumentHidden(true);
+if (sources[0].readyState !== EventSource.CLOSED) throw new Error("a hidden tab kept its stream open");
+setDocumentHidden(true);
+if (sources.length !== 1) throw new Error("hiding must not open a stream");
+
+// Showing it again reopens exactly once, from the last delivered offset.
+setDocumentHidden(false);
+if (sources.length !== 2) throw new Error(`expected a reopened stream, got ${sources.length}`);
+if (!sources[1].url.includes("from=777")) throw new Error(`reopen lost the resume offset: ${sources[1].url}`);
+setDocumentHidden(false);
+if (sources.length !== 2) throw new Error("a visible tab with an open stream must not reconnect");
+
+// A pending error-retry does not fire into a hidden tab.
+sources[1].readyState = EventSource.CLOSED;
+sources[1].onerror();
+if (retryFns().length !== baselineTimers + 1) throw new Error(`expected one retry timer, got ${retryFns().length - baselineTimers}`);
+setDocumentHidden(true);
+if (retryFns().length !== baselineTimers) throw new Error("the retry timer survived hiding the tab");
+setDocumentHidden(false);
+if (sources.length !== 3) throw new Error(`visible again should reconnect once, got ${sources.length}`);
+"#,
+        ]
+        .concat(),
+    );
+}
+
+#[test]
+fn dashboard_log_tail_opens_no_stream_when_the_snapshot_lands_in_a_hidden_tab() {
+    run_dashboard_javascript_test(
+        &[
+            LOG_TAIL_HARNESS,
+            r#"
+document.hidden = true;
+initLogTail();
+await tick();
+await tick();
+if (sources.length !== 0) throw new Error(`a hidden tab opened ${sources.length} streams`);
+setDocumentHidden(false);
+if (sources.length !== 1) throw new Error(`expected the deferred stream, got ${sources.length}`);
+if (!sources[0].url.includes("from=42")) throw new Error(`deferred stream lost the snapshot offset: ${sources[0].url}`);
 "#,
         ]
         .concat(),
