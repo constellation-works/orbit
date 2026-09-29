@@ -47,6 +47,32 @@ fn readiness_payload_names_queued_drain_and_its_completion_policy() {
 }
 
 #[test]
+fn readiness_payload_names_a_live_pull_drain_and_whether_it_is_stopped() {
+    let payload = |stopped: bool| {
+        readiness_lines(&json!({
+            "capacity": {
+                "active_leaf_runs": 0,
+                "max_active_leaf_runs": 3,
+                "free_slots": 3,
+                "drain_run_id": null,
+                "pull_drain_run_id": "jrun-pull",
+                "pull_drain_admissions_stopped": stopped,
+            },
+            "tasks": [],
+        }))
+        .join("\n")
+    };
+    let live = payload(false);
+    assert!(live.contains("Running pull drain: jrun-pull."), "{live}");
+    assert!(!live.contains("Running drain:"), "{live}");
+    let stopped = payload(true);
+    assert!(
+        stopped.contains("Running pull drain: jrun-pull (admissions stopped)."),
+        "{stopped}"
+    );
+}
+
+#[test]
 fn readiness_payload_separates_lock_waiting_slots_from_working_ones() {
     let text = readiness_lines(&json!({
         "capacity": {

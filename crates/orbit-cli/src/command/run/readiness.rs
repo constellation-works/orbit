@@ -79,6 +79,14 @@ pub(super) fn readiness_lines(payload: &Value) -> Vec<String> {
     if let Some(run_id) = capacity["drain_run_id"].as_str() {
         lines.push(format!("Running drain: {run_id}."));
     }
+    if let Some(run_id) = capacity["pull_drain_run_id"].as_str() {
+        let stopped = if capacity["pull_drain_admissions_stopped"].as_bool() == Some(true) {
+            " (admissions stopped)"
+        } else {
+            ""
+        };
+        lines.push(format!("Running pull drain: {run_id}{stopped}."));
+    }
     if let Some(queued) = capacity["queued_drains"].as_array() {
         for drain in queued {
             let run_id = drain["run_id"].as_str().unwrap_or("-");

@@ -9,6 +9,7 @@ use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::distributed::PULL_DRAIN_JOB;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
 use crate::runtime::engine::crew::CrewAllowlist;
@@ -271,6 +272,7 @@ pub fn explain_workspace_auto_readiness(
     // the static default, so readiness and the drain cannot disagree about the
     // ceiling that decides `capacity_saturated`.
     let (active_drain, queued_drains) = workspace_drains(runtime)?;
+    let pull_drain = live_pull_drain(runtime)?;
     let recent_drain = if active_drain.is_none() {
         runtime
             .stores()
@@ -624,6 +626,17 @@ pub fn explain_workspace_auto_readiness(
             "admissions_stop": active_drain
                 .as_ref()
                 .and_then(|drain| drain.stop.clone()),
+            // A replica's live pull drain is a second coordinator the same
+            // stop control acts on; it is reported apart from `drain_run_id`
+            // because it admits leaves the owner assigned, under the owner's
+            // ceiling, and never reads this workspace's auto ceiling.
+            "pull_drain_run_id": pull_drain.as_ref().map(|drain| &drain.run_id),
+            "pull_drain_admissions_stopped": pull_drain
+                .as_ref()
+                .is_some_and(|drain| drain.stop.is_some()),
+            "pull_drain_admissions_stop": pull_drain
+                .as_ref()
+                .and_then(|drain| drain.stop.clone()),
             // [ORB-12968] A pending host shutdown or reboot; while present no
             // drain, sweep, or routine starts new work.
             "host_shutdown": host_shutdown,
@@ -764,6 +777,38 @@ fn workspace_drains(
         });
     }
     Ok((active, queued))
+}
+
+/// The live pull-drain run on a replica checkout, with its admissions stop.
+struct LivePullDrain {
+    run_id: String,
+    stop: Option<DrainAdmissionsStop>,
+}
+
+/// The running `workspace_pull_pipeline` run, if any. `orbit run auto --stop`
+/// stops its admissions along with the auto coordinator's, so readiness must
+/// show it or a replica's operator cannot tell a live drain from an idle one.
+fn live_pull_drain(runtime: &OrbitRuntime) -> Result<Option<LivePullDrain>, OrbitError> {
+    let runs = runtime
+        .stores()
+        .jobs()
+        .list_pending_or_running_job_runs(PULL_DRAIN_JOB)?;
+    Ok(runs
+        .into_iter()
+        .find(|run| run.state == orbit_types::workflow::JobRunState::Running)
+        .map(|run| {
+            let stop = runtime
+                .stores()
+                .jobs()
+                .read_run_state(&run.run_id)
+                .ok()
+                .flatten()
+                .and_then(|state| state.drain_admissions_stop);
+            LivePullDrain {
+                run_id: run.run_id,
+                stop,
+            }
+        }))
 }
 
 fn read_drain_worker_limit(runtime: &OrbitRuntime, run_id: &str) -> Option<DrainWorkerLimit> {
