@@ -37,7 +37,7 @@ use orbit_store::contracts::{
 };
 
 use super::adapters::{LeafPullLauncher, RoutedPullPeer};
-use super::drain::{PullDrain, SettleScope, is_owner_refusal, leaf_failure_settlement};
+use super::drain::{PullDrain, SettleScope, is_owner_transport_failure, leaf_failure_settlement};
 use crate::OrbitRuntime;
 use crate::application::distributed::{PULL_DRAIN_JOB, PullSettlementEntry};
 
@@ -190,27 +190,34 @@ impl OrbitRuntime {
             launcher: &launcher,
         };
         // One unreachable owner costs one delivery timeout per pass, not one
-        // per admission.
+        // per admission. Only a transport failure says the owner is
+        // unreachable: a local error (a store read, a missing binding, a failed
+        // cancel) belongs to that one admission and the others still go out.
         let mut unreachable = BTreeSet::new();
-        let carried = self.live_drain_destinations();
+        // Read again per admission, and again before anything is abandoned:
+        // delivery can block, and a drain may start meanwhile.
+        let drain_live = |record: &LocalPullAdmission| {
+            self.live_drain_destinations()
+                .as_ref()
+                .is_none_or(|live| live.contains(&record.destination))
+                || self.drain_run_live(&record.request.run_context.run_id)
+        };
         let mut entries = Vec::with_capacity(records.len());
         for mut record in records {
             if unreachable.contains(&record.destination.selector) {
                 entries.push(entry(&record, "owner_unreachable", None));
                 continue;
             }
-            let drain_live = carried
-                .as_ref()
-                .is_none_or(|live| live.contains(&record.destination))
-                || self.drain_run_live(&record.request.run_context.run_id);
-            let scope = if drain_live {
+            let scope = if drain_live(&record) {
                 SettleScope::Deliver
             } else {
                 SettleScope::Abandon
             };
-            let error = drain.carry_settlement(&mut record, scope).err();
+            let error = drain
+                .carry_settlement(&mut record, scope, &|record| !drain_live(record))
+                .err();
             if let Some(error) = &error {
-                if !is_owner_refusal(error) {
+                if is_owner_transport_failure(error) {
                     unreachable.insert(record.destination.selector.clone());
                 }
                 tracing::warn!(
@@ -222,7 +229,8 @@ impl OrbitRuntime {
                     "pull settlement did not complete; it stays recorded for the next pass",
                 );
             }
-            entries.push(classify(&record, drain_live, error));
+            let carried = scope == SettleScope::Deliver || drain_live(&record);
+            entries.push(classify(&record, carried, error));
         }
         entries
     }

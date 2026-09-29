@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 use super::super::adapters::{LeafPullLauncher, RoutedPullPeer};
 use super::super::drain::{PullDrain, PullLauncher};
+use super::super::refill::pull_refill;
 use super::drain::isolated_pull_test;
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
@@ -49,6 +50,12 @@ struct Owner {
     unreachable: Mutex<bool>,
     /// Answer new pulls with nothing ready.
     idle: Mutex<bool>,
+    /// Answer every pull as an unreachable destination, while the probe and
+    /// the other tools still answer.
+    pull_unreachable: Mutex<bool>,
+    /// Runs once, at the next bind call, before it is answered: something that
+    /// happens on this host while the pass waits on the owner.
+    on_bind: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Owner {
@@ -132,11 +139,31 @@ impl DrainOwnerTransport for Owner {
             )));
         }
         match name {
+            "orbit.drain.probe" => Ok(json!({
+                "owner_machine_id": OWNER,
+                "admits": true,
+                "ship": AdmissionShipContract {
+                    mode: "pr".into(),
+                    base_branch: "main".into(),
+                    landing_branch: "main".into(),
+                    review_policy: "none".into(),
+                    completion: "review".into(),
+                    authorization_reference: None,
+                },
+            })),
+            "orbit.task.pull" if *self.pull_unreachable.lock().unwrap() => {
+                Err(OrbitError::UnreachableDestination(format!(
+                    "{selector}: ssh: connect to host timed out"
+                )))
+            }
             "orbit.task.pull" => {
                 let request: AdmissionRequest = serde_json::from_value(input).expect("request");
                 Ok(json!({ "receipt": self.receipt(&request) }))
             }
             "orbit.drain.claim.bind" => {
+                if let Some(hook) = self.on_bind.lock().unwrap().take() {
+                    hook();
+                }
                 if std::mem::take(&mut *self.lose_next_bind.lock().unwrap()) {
                     return Err(OrbitError::Execution("lost bind response".into()));
                 }
@@ -666,4 +693,226 @@ fn a_live_drain_for_the_owner_keeps_a_cancelled_drains_unlaunched_claim() {
         "the live drain can still launch it"
     );
     assert!(owner.settlements().is_empty());
+}
+
+/// End a leaf at the store, with no settlement hook, as a worker that died
+/// would leave it: the next settle-only pass records and delivers its failure.
+fn leaf_ends_unrecorded(jobs: &dyn JobRunStoreBackend, record: &LocalPullAdmission) {
+    let leaf = leaf_of(record);
+    jobs.mark_job_run_running(&leaf, Utc::now(), std::process::id())
+        .expect("leaf running");
+    jobs.finalize_job_run(&leaf, JobRunState::Failed, Utc::now(), None)
+        .expect("leaf ended");
+}
+
+/// One admission's local error is that admission's problem. It used to mark
+/// the whole owner unreachable, so every admission after it was skipped even
+/// though the owner never failed a call.
+#[test]
+fn a_local_error_on_one_admission_does_not_stop_the_rest_of_the_pass() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::a_local_error_on_one_admission_does_not_stop_the_rest_of_the_pass",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let jobs = runtime.stores().jobs();
+    let (_drain_run, template) = pull_drain(&runtime);
+    let peer = RoutedPullPeer {
+        transport: owner.clone(),
+    };
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &AcknowledgingLauncher,
+    };
+    assert_eq!(
+        drain.refill(&destination(), &template, 2).expect("admit"),
+        2
+    );
+    let admitted = records(&runtime);
+    for record in &admitted {
+        leaf_ends_unrecorded(jobs, record);
+    }
+    // The first admission's leaf record is gone: a local fault, not the owner's.
+    jobs.delete_job_run(&leaf_of(&admitted[0]))
+        .expect("leaf record removed");
+
+    let entries = runtime.settle_pending_pulls();
+    assert_eq!(
+        outcomes(&entries),
+        [
+            (Some("task-1".into()), "pending".into()),
+            (Some("task-2".into()), "settled".into()),
+        ]
+    );
+    let detail = entries[0].detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("disappeared"),
+        "the real error is reported: {detail}"
+    );
+    assert_eq!(
+        owner.settlements(),
+        BTreeMap::from([(claim_of(&admitted[1]), vec!["Fail"])]),
+        "the owner was reachable and got the healthy admission's settlement"
+    );
+}
+
+/// A settle-only pass reads the live drains once, but delivery can block for
+/// the routed timeout. A drain that starts while it waits on the owner is
+/// carrying that admission now: its queued leaf must not be cancelled under it.
+#[test]
+fn a_drain_that_starts_mid_pass_keeps_its_queued_leaf() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::a_drain_that_starts_mid_pass_keeps_its_queued_leaf",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let jobs = runtime.stores().jobs();
+    let (drain_run, template) = pull_drain(&runtime);
+    let peer = RoutedPullPeer {
+        transport: owner.clone(),
+    };
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &AcknowledgingLauncher,
+    };
+    *owner.lose_next_bind.lock().unwrap() = true;
+    assert!(drain.refill(&destination(), &template, 1).is_err());
+    let queued = records(&runtime).remove(0);
+    assert_eq!(queued.phase, LocalPullPhase::Created);
+    // Its own drain ended and no other drain is live, so a pass would abandon
+    // the queued leaf — but a new drain for the owner starts during the bind.
+    jobs.finalize_job_run(&drain_run, JobRunState::Cancelled, Utc::now(), None)
+        .expect("drain ended");
+    let starter = runtime.clone();
+    *owner.on_bind.lock().unwrap() = Some(Box::new(move || {
+        starter
+            .stores()
+            .jobs()
+            .insert_job_run(
+                PULL_DRAIN_JOB,
+                1,
+                Utc::now(),
+                Some(json!({ "destination": destination() })),
+                None,
+            )
+            .expect("a drain starts");
+    }));
+
+    let entries = runtime.settle_pending_pulls();
+    assert_eq!(
+        outcomes(&entries),
+        [(Some("task-1".into()), "awaiting_drain".into())]
+    );
+    assert_eq!(
+        jobs.get_job_run(&leaf_of(&queued))
+            .expect("read")
+            .expect("queued leaf")
+            .state,
+        JobRunState::Pending,
+        "the new drain can still launch it"
+    );
+    assert!(owner.settlements().is_empty());
+}
+
+fn refill_input(drain_run: &str, window_expired: bool) -> Value {
+    json!({
+        "run_id": drain_run,
+        "destination": destination(),
+        "window_expired": window_expired,
+        "max_active_leaf_runs": 2,
+        "poll_sleep_seconds": 30,
+        "idle_sleep_seconds": 60,
+    })
+}
+
+/// A hung owner is contacted once per pass. When the refill itself ran and
+/// failed against it, the pass must not reconcile again on top: that would
+/// send the same unanswered request twice per iteration.
+#[test]
+fn a_refill_that_failed_against_an_unreachable_owner_does_not_call_it_twice() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::a_refill_that_failed_against_an_unreachable_owner_does_not_call_it_twice",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let (drain_run, _template) = pull_drain(&runtime);
+    *owner.pull_unreachable.lock().unwrap() = true;
+
+    let pass = pull_refill(&runtime, "pull_refill", &refill_input(&drain_run, false))
+        .expect("an unreachable owner does not fail the drain");
+    assert_eq!(pass["admitted"], 0);
+    assert!(
+        pass["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("unreachable")),
+        "{pass}"
+    );
+    assert_eq!(pass["sleep_seconds"], 30);
+    assert_eq!(pass["done"], false);
+    assert_eq!(owner.tool_calls("orbit.drain.probe").len(), 1);
+    assert_eq!(owner.tool_calls("orbit.task.pull").len(), 1);
+
+    // The next pass retries the same unanswered request once, not twice.
+    pull_refill(&runtime, "pull_refill", &refill_input(&drain_run, false)).expect("next pass");
+    assert_eq!(owner.tool_calls("orbit.task.pull").len(), 2);
+    assert_eq!(records(&runtime).len(), 1, "the same request ID, retried");
+}
+
+/// The drain reports a local store read that fails and tries again, like an
+/// owner that is unreachable; it neither ends the drain nor reads the failed
+/// count as "nothing left to settle".
+#[test]
+fn an_unreadable_admission_store_is_reported_and_retried_not_fatal() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::pull::tests::settle::an_unreadable_admission_store_is_reported_and_retried_not_fatal",
+    ) {
+        return;
+    }
+    let owner = Arc::new(Owner::default());
+    let (_temp, runtime) = follower(&owner);
+    let jobs = runtime.stores().jobs();
+    let (drain_run, template) = pull_drain(&runtime);
+    let peer = RoutedPullPeer {
+        transport: owner.clone(),
+    };
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &AcknowledgingLauncher,
+    };
+    assert_eq!(
+        drain.refill(&destination(), &template, 1).expect("admit"),
+        1
+    );
+    rusqlite::Connection::open(runtime.global_root().join("orbit.db"))
+        .expect("open orbit db")
+        .execute(
+            "UPDATE local_pull_admissions SET record_json='not json'",
+            [],
+        )
+        .expect("corrupt the admission row");
+    let probes = owner.tool_calls("orbit.drain.probe").len();
+
+    // A closed window would end the drain if the unreadable count read as zero.
+    let pass = pull_refill(&runtime, "pull_refill", &refill_input(&drain_run, true))
+        .expect("a store read failure does not fail the drain");
+    assert!(pass["error"].is_string(), "{pass}");
+    assert_eq!(pass["done"], false);
+    assert_eq!(pass["wait"], true);
+    assert_eq!(pass["sleep_seconds"], 30);
+    assert_eq!(pass["admitting"], false);
+    assert_eq!(pass["admitted"], 0);
+    assert_eq!(
+        owner.tool_calls("orbit.drain.probe").len(),
+        probes,
+        "nothing is requested while the breaker cannot be read"
+    );
 }

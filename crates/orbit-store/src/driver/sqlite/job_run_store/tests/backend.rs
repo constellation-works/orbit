@@ -487,7 +487,7 @@ fn execution_location_is_trusted_immutable_and_legacy_unknown() {
     assert_eq!(trusted.list_job_runs("job").expect("list").len(), 2);
 }
 
-fn pull_fixture() -> (
+pub(super) fn pull_fixture() -> (
     TempDir,
     SqliteJobRunStore,
     crate::contracts::PullDestination,
@@ -542,7 +542,7 @@ fn pull_fixture() -> (
     (temp, store, destination, request)
 }
 
-fn pull_receipt(
+pub(super) fn pull_receipt(
     request: &crate::contracts::AdmissionRequest,
 ) -> crate::contracts::AdmissionReceipt {
     use crate::contracts::*;
@@ -1181,7 +1181,7 @@ fn local_pull_idle_is_permanent_and_follower_local_is_refused() {
     );
 }
 
-fn isolated_pull_test(name: &str) -> bool {
+pub(super) fn isolated_pull_test(name: &str) -> bool {
     const CHILD: &str = "ORBIT_TEST_LOCAL_PULL_CHILD";
     if std::env::var(CHILD).ok().as_deref() == Some(name) {
         return false;
