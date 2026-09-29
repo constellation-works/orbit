@@ -206,6 +206,70 @@ pub(super) fn unsettled(
     })
 }
 
+/// How many of `run_id`'s most recent settled claims against `destination`
+/// failed in a row, without creating the feature schema.
+///
+/// The breaker that stops a failing drain reads this on every pass, so it must
+/// not decode the whole table: SQL narrows to this drain's settled claims,
+/// newest first, and the walk stops at the first one that did not fail. A claim
+/// closed obsolete (settled with an owner refusal) says nothing about this
+/// executor, so it neither extends nor resets the streak.
+///
+/// `claim_id IS NOT NULL` is the cheap column test that lets SQLite skip the
+/// idle polls and refused requests, the rows that pile up unbounded, without
+/// parsing their JSON: a settlement requires a claim, so a settled row always
+/// carries one.
+pub(super) fn consecutive_failed_settlements(
+    store: &Store,
+    workspace: &str,
+    destination: &PullDestination,
+    run_id: &str,
+) -> Result<usize, OrbitError> {
+    store.with_read_connection(|conn| {
+        if !admissions_table_exists(conn)? {
+            return Ok(0);
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT record_json FROM local_pull_admissions \
+                 WHERE workspace_id=?1 AND owner_machine=?2 AND owner_workspace=?3 \
+                 AND execution_machine=?4 AND claim_id IS NOT NULL \
+                 AND json_extract(record_json,'$.phase')='settled' \
+                 AND json_extract(record_json,'$.request.run_context.run_id')=?5 \
+                 AND json_extract(record_json,'$.destination.selector')=?6 \
+                 ORDER BY rowid DESC",
+            )
+            .map_err(db_error)?;
+        let mut rows = stmt
+            .query(params![
+                workspace,
+                destination.owner_machine_id,
+                destination.owner_workspace_id,
+                destination.execution_machine_id,
+                run_id,
+                destination.selector,
+            ])
+            .map_err(db_error)?;
+        let mut streak = 0;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let record = decode(row.get::<_, String>(0).map_err(db_error)?)?;
+            // SQL only narrows; the record stays the authority.
+            if record.destination != *destination
+                || record.request.run_context.run_id != run_id
+                || record.phase != LocalPullPhase::Settled
+                || record.refusal.is_some()
+            {
+                continue;
+            }
+            if !matches!(record.settlement, Some(ClaimMutation::Fail(_))) {
+                break;
+            }
+            streak += 1;
+        }
+        Ok(streak)
+    })
+}
+
 /// How far the wrapper lineage walk follows dispatch records. A loop guard for
 /// a malformed or cyclic dispatch chain, not a tuning knob.
 const MAX_WRAPPER_LINEAGE_DEPTH: usize = 64;

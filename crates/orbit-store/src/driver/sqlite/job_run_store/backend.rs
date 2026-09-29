@@ -14,7 +14,8 @@ use orbit_types::workflow::{
 use rusqlite::{OptionalExtension, TransactionBehavior};
 
 use super::queries::{
-    get_job_run_for_workspace_conn, next_run_id_conn, upsert_job_run_for_workspace_conn,
+    JOB_RUN_COLUMNS, get_job_run_for_workspace_conn, next_run_id_conn, read_steps_for_runs,
+    row_to_job_run, upsert_job_run_for_workspace_conn,
 };
 use crate::Store;
 use crate::contracts::{
@@ -105,6 +106,11 @@ fn live_lineage_run_conn(
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// The window read behind [`keyed_run_in_window_conn`]: one job's runs, newest
+/// first, in the order `idx_job_runs_ws_job_created` stores them.
+pub(super) const KEYED_RUN_WINDOW_SQL: &str = "SELECT run_id, input_json FROM job_runs \
+     WHERE workspace_id = ?1 AND job_id = ?2 ORDER BY created_at DESC, run_id ASC LIMIT ?3";
+
 /// The newest run among `params.job_id`'s newest `params.scan_limit` whose
 /// input carries `key` under `params.retry_key_field`. The window uses the
 /// run list's default `created_at DESC, run_id ASC` order.
@@ -115,10 +121,7 @@ fn keyed_run_in_window_conn(
     key: &str,
 ) -> Result<Option<String>, OrbitError> {
     let mut statement = conn
-        .prepare(
-            "SELECT run_id, input_json FROM job_runs WHERE workspace_id = ?1 AND job_id = ?2 \
-             ORDER BY created_at DESC, run_id ASC LIMIT ?3",
-        )
+        .prepare(KEYED_RUN_WINDOW_SQL)
         .map_err(|error| OrbitError::Store(error.to_string()))?;
     let rows = statement
         .query_map(
@@ -175,6 +178,18 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
         super::pull::list(&self.store, &self.workspace_id)
     }
+    fn consecutive_failed_local_pull_settlements(
+        &self,
+        destination: &crate::contracts::PullDestination,
+        run_id: &str,
+    ) -> Result<usize, OrbitError> {
+        super::pull::consecutive_failed_settlements(
+            &self.store,
+            &self.workspace_id,
+            destination,
+            run_id,
+        )
+    }
     fn unsettled_local_pull_admissions(
         &self,
     ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
@@ -209,13 +224,33 @@ impl JobRunStoreBackend for SqliteJobRunStore {
 
     fn job_run_retries(&self, run_id: &str, limit: usize) -> Result<Vec<JobRun>, OrbitError> {
         self.store.with_read_connection(|conn| {
-            let mut statement = conn.prepare("SELECT run_id FROM job_runs WHERE workspace_id=?1 AND retry_source_run_id=?2 ORDER BY created_at,run_id LIMIT ?3")
+            let mut statement = conn
+                .prepare(&format!(
+                    "SELECT {JOB_RUN_COLUMNS} FROM job_runs \
+                     WHERE workspace_id=?1 AND retry_source_run_id=?2 \
+                     ORDER BY created_at,run_id LIMIT ?3"
+                ))
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
-            let ids = statement.query_map(rusqlite::params![self.workspace_id,run_id,limit.min(1000)], |row|row.get::<_,String>(0))
+            let mut runs = statement
+                .query_map(
+                    rusqlite::params![self.workspace_id, run_id, limit.min(1000)],
+                    row_to_job_run,
+                )
                 .map_err(|error| OrbitError::Store(error.to_string()))?
-                .collect::<Result<Vec<_>,_>>().map_err(|error| OrbitError::Store(error.to_string()))?;
-            ids.into_iter().map(|id| get_job_run_for_workspace_conn(conn, &self.workspace_id, &id)?
-                .ok_or_else(|| OrbitError::Store("retry run disappeared".into()))).collect()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            drop(statement);
+            // One step read for every child instead of one run read (and one
+            // step read) each.
+            let ids = runs
+                .iter()
+                .map(|run| run.run_id.clone())
+                .collect::<Vec<_>>();
+            let mut steps = read_steps_for_runs(conn, &self.workspace_id, &ids)?;
+            for run in &mut runs {
+                run.steps = steps.remove(&run.run_id).unwrap_or_default();
+            }
+            Ok(runs)
         })
     }
 

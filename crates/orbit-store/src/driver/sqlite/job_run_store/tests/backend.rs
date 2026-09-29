@@ -1364,6 +1364,93 @@ fn resume_insert_refuses_a_live_lineage_run_and_reopens_once_it_is_terminal() {
         .expect("the source resumes again once its lineage is idle");
 }
 
+thread_local! {
+    /// Run and step reads the traced connection issued on this thread.
+    static RUN_READS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record_run_read(sql: &str) {
+    if sql.contains("FROM job_runs") || sql.contains("FROM job_run_steps") {
+        RUN_READS.with(|reads| reads.borrow_mut().push(sql.to_string()));
+    }
+}
+
+/// A source's retry children come back with their steps, in creation order,
+/// from one read of the runs and one of their steps, however many there are.
+#[test]
+fn job_run_retries_hydrates_children_without_a_read_per_child() {
+    const CHILDREN: usize = 6;
+    let store = Store::open_in_memory().expect("store");
+    let backend = SqliteJobRunStore::new(store.clone(), "ws_a");
+    let source = failed_run(&backend, None);
+    let mut expected = Vec::new();
+    for index in 0..CHILDREN {
+        let child = failed_run(&backend, Some(&source));
+        if index % 2 == 0 {
+            let at = Utc::now();
+            backend
+                .complete_job_run_step(
+                    &child,
+                    &JobRunStepParams {
+                        step_index: 0,
+                        target_type: JobTargetType::Activity,
+                        target_id: format!("activity-{index}"),
+                        started_at: at,
+                        finished_at: at,
+                        duration_ms: Some(1),
+                        exit_code: Some(0),
+                        agent_response_json: Some(serde_json::json!({"index": index})),
+                        state: JobRunState::Success,
+                        error_code: None,
+                        error_message: None,
+                    },
+                )
+                .expect("child step");
+        }
+        expected.push(child);
+    }
+    // Another lineage's child must not leak in.
+    let other = failed_run(&backend, None);
+    failed_run(&backend, Some(&other));
+
+    store
+        .conn
+        .lock()
+        .expect("writer connection")
+        .trace(Some(record_run_read));
+    RUN_READS.with(|reads| reads.borrow_mut().clear());
+    let retries = backend.job_run_retries(&source, 100).expect("retries");
+    let reads = RUN_READS.with(|reads| reads.borrow().len());
+    store.conn.lock().expect("writer connection").trace(None);
+
+    assert_eq!(
+        reads, 2,
+        "one read for the children and one for all their steps"
+    );
+    let ids = retries
+        .iter()
+        .map(|run| run.run_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, expected, "children in creation order");
+    for run in &retries {
+        assert_eq!(
+            Some(run),
+            backend.get_job_run(&run.run_id).expect("get").as_ref(),
+            "a hydrated child matches a direct read of it"
+        );
+    }
+    assert!(
+        retries.iter().any(|run| !run.steps.is_empty())
+            && retries.iter().any(|run| run.steps.is_empty()),
+        "steps attach to their own child only"
+    );
+    assert_eq!(
+        backend.job_run_retries(&source, 2).expect("limited").len(),
+        2,
+        "the limit still bounds the children"
+    );
+}
+
 /// Concurrent resumes of one source from independent connections — the
 /// dashboard, MCP server, and CLI are separate processes — admit exactly one
 /// run; every loser is told which run won.
