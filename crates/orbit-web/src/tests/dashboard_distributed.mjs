@@ -183,11 +183,21 @@ const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLoca
 const { setWorkspace } = await import("./js/common.js");
 await import("./js/tasks.js");
 
+// The block under test is on the page, as the task detail's is: a detached
+// node cannot take focus in a real browser.
+let mounted = null;
+const place = (block) => {
+  if (mounted) mounted.remove();
+  document.body.appendChild(block);
+  mounted = block;
+};
+
 const mount = async (taskId = "ORB-2", options = {}) => {
   invalidateDistributedConsole();
   confirms.length = 0;
   confirmAnswer = true;
   const block = buildDistributedBlock(taskId, options);
+  place(block);
   await settle();
   return block;
 };
@@ -814,10 +824,14 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   const readsAtChange = [];
   let rebuilt = null;
   const block = await mount("ORB-2", {
-    // The dashboard refreshes its task list, which rebuilds this detail.
+    // The dashboard refreshes its task list, which rebuilds this detail once
+    // the task read returns.
     onTaskChanged: () => {
       readsAtChange.push(consoleReads.length);
-      rebuilt = buildDistributedBlock("ORB-2");
+      setTimeout(() => {
+        rebuilt = buildDistributedBlock("ORB-2");
+        place(rebuilt);
+      }, 0);
     },
   });
   const before = consoleReads.length;
@@ -835,7 +849,11 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(button(rebuilt, "Revoke authority"));
   // Feedback survives the rebuild: it is in the block the operator now sees.
   assert.ok(rebuilt.querySelector(".claim-feedback.ok"), "the rebuilt detail carries the decision's outcome");
-  assert.ok(block.querySelector(".claim-feedback.ok"), "and so does the original if it is still on the page");
+  assert.ok(block.querySelector(".claim-feedback.ok"), "and so does the original");
+  // The old block left the page with the rebuild; focus follows the outcome
+  // into the block the operator now sees.
+  const focused = document.activeElement;
+  assert.ok(focused && rebuilt.contains(focused) && focused.classList.contains("claim-feedback"), "focus moves to the rebuilt outcome");
 }
 
 {
@@ -988,5 +1006,6 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(text.includes("pull request") && !text.includes("#"), `a missing pull request number is not shown as #undefined: ${text}`);
 }
 
+if (mounted) mounted.remove();
 globalThis.distributedTestsPassed = true;
 console.log("dashboard distributed claim provenance and owner handoff actions");

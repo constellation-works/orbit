@@ -678,7 +678,9 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     // An outcome reported just before the detail was rebuilt still belongs to
     // this task; show it once here rather than losing it with the old block.
     if (lastFeedback && lastFeedback.taskId === taskId && Date.now() - lastFeedback.at < FEEDBACK_TTL_MS) {
-      container.appendChild(feedbackNode(lastFeedback.text, lastFeedback.kind, lastFeedback.remedy));
+      const carried = feedbackNode(lastFeedback.text, lastFeedback.kind, lastFeedback.remedy);
+      container.appendChild(carried);
+      claimCarriedFocus(carried);
     }
     const capabilities = (payload && payload.capabilities) || {};
     for (const claim of claims) {
@@ -711,6 +713,28 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     // A note is not a tab stop, but it can take programmatic focus.
     if (target.tagName !== "BUTTON") target.tabIndex = -1;
     if (typeof target.focus === "function") target.focus();
+    // The task list rebuilds this detail after the action, which takes the
+    // focused note with it. The rebuilt block moves focus to its copy.
+    if (lastFeedback && lastFeedback.taskId === taskId && target.classList.contains("claim-feedback")) {
+      lastFeedback.focused = target;
+    }
+  };
+
+  // Take focus for the rebuilt copy of an outcome, once, and only while focus
+  // is still on the old note or has fallen to the page: an operator who has
+  // moved on keeps their place.
+  const claimCarriedFocus = (carried) => {
+    const previous = lastFeedback.focused;
+    if (!previous) return;
+    lastFeedback.focused = null;
+    // A render from the cached read runs before the caller has placed the
+    // rebuilt block on the page, where it could not take focus yet.
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== previous) return;
+      carried.tabIndex = -1;
+      if (typeof carried.focus === "function") carried.focus();
+    }, 0);
   };
 
   const act = async (run) => {
