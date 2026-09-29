@@ -1,0 +1,9 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+
+// The home page's custom hero carries the page's only <h1> (it also owns the
+// `#_top` skip-link target), so Starlight's title heading is not rendered there.
+const isHome = Astro.url.pathname === '/';
+---
+
+{!isHome && <Default {...Astro.props} />}
