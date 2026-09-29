@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -669,9 +669,12 @@ function buildExternalRefs(refs) {
   for (const ref of refs) {
     const label = `${ref.system || "external"}:${ref.id || ""}`;
     const line = el("div", { class: "external-ref-line" });
-    if (ref.url) {
+    // Task records are agent-writable, so a non-http(s) URL stays text.
+    if (isHttpUrl(ref.url)) {
       const link = el("a", { text: label });
       link.href = ref.url;
+      link.rel = "noopener noreferrer";
+      link.target = "_blank";
       line.appendChild(link);
     } else {
       line.textContent = label;

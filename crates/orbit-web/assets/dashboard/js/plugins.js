@@ -8,7 +8,7 @@
 // the dashboard uses, so plugin-authored text cannot introduce script or
 // event handlers.
 
-import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, getWorkspace, getWorkspaceRevision, isAggregateView, isHttpUrl, postJson, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 import { renderMarkdown } from './markdown.js';
 
 const $ = (id) => document.getElementById(id);
@@ -105,6 +105,8 @@ function pluginCard(plugin) {
     card.appendChild(el('div', { class: 'plugin-tools' }, tools.map(tool =>
       el('span', { class: `plugin-chip ${tool.active ? '' : 'plugin-chip-idle'}`, title: `${tool.execution_kind} · MCP ${tool.advertised_name || 'not advertised'}`, text: tool.name }))));
   }
+  // The manifest refuses non-http(s) links at validation; this is the second
+  // half of that rule, for a record written before it or by a hand-edited store.
   const links = (plugin.links || []).filter(link => isHttpUrl(link.url));
   if (links.length) {
     card.appendChild(el('div', { class: 'plugin-links' }, links.map(link => {
@@ -192,15 +194,6 @@ function retainCurrentPanelCache() {
   for (const key of panelReads.keys()) {
     if (!key.startsWith(prefix)) panelReads.delete(key);
   }
-}
-
-// A tile's URL is assigned straight to an anchor, so only the two schemes a
-// hyperlink may carry are drawn. The manifest refuses anything else at
-// validation; this is the second half of that rule, for a record written
-// before it or by a hand-edited store.
-function isHttpUrl(url) {
-  const scheme = String(url || '').trimStart().toLowerCase();
-  return scheme.startsWith('http://') || scheme.startsWith('https://');
 }
 
 async function loadPanel(plugin, panel) {
