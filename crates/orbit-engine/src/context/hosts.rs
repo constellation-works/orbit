@@ -1,7 +1,6 @@
 //! The host trait boundary between the engine and its runtime/store
 //! implementors, plus the task-update param types those traits consume.
 
-use orbit_agent::AgentConfig;
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_store::contracts::JobRunStepParams;
@@ -17,14 +16,14 @@ use orbit_types::task::{
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::activity_job::Provider;
-use orbit_types::workflow::{ActivityV2, JobRun, JobRunStartOutcome, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunStartOutcome, JobRunState, PipelineState};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::activity_job::{
-    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor, V2AuditWriter,
+    DispatchError, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -579,27 +578,8 @@ pub trait RuntimeHost: Send + Sync {
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
         Ok(())
     }
-    fn missing_required_environment_vars(&self, _required_env_vars: &[&str]) -> Vec<String> {
-        Vec::new()
-    }
 
     // ── Default implementations (use accessors above) ──────────────────
-
-    fn agent_config_for(
-        &self,
-        agent_cli: &str,
-        model: Option<&str>,
-    ) -> Result<AgentConfig, OrbitError> {
-        let config = self.agent_provider_config();
-        AgentConfig::from_cli_config(agent_cli, model, &config)
-    }
-
-    fn validate_agent_cli(&self, cli: &str, model: Option<&str>) -> Result<(), OrbitError> {
-        use orbit_agent::Agent;
-        let cfg = AgentConfig::cli(cli)?.with_model(model);
-        let _ = Agent::new(&cfg)?;
-        Ok(())
-    }
 
     fn record_event(&self, _event: OrbitEvent) -> Result<(), OrbitError> {
         Ok(())
@@ -674,46 +654,9 @@ pub trait RuntimeHost: Send + Sync {
     ) -> Result<Value, OrbitError> {
         crate::executor::automation::vcs::run_private_operation(operation, &input)
     }
-    fn v2_runtime_host(&self) -> Result<&dyn RuntimeHost, OrbitError> {
-        Err(OrbitError::Execution(
-            "v2 runtime host is not available on this host".to_string(),
-        ))
-    }
-    fn v2_activity(&self, name: &str) -> Result<ActivityV2, OrbitError> {
-        Err(OrbitError::Execution(format!(
-            "v2 activity '{name}' is not available on this host"
-        )))
-    }
-    fn v2_audit_writer(&self, run_id: &str) -> Result<Arc<V2AuditWriter>, OrbitError> {
-        Err(OrbitError::Execution(format!(
-            "v2 audit writer is not available for run '{run_id}'"
-        )))
-    }
-    /// Create a task capturing a job run failure, skipping creation if an open
-    /// task for the same `job_id` + `error_code` combination already exists.
-    /// When `agent` and `model` are provided, they are recorded on the created
-    /// task so attribution reflects the actual agent that was running.
-    fn maybe_create_failure_task(
-        &self,
-        job_id: &str,
-        run_id: &str,
-        error_code: &str,
-        error_message: &str,
-        agent: Option<&str>,
-        model: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let _ = (job_id, run_id, error_code, error_message, agent, model);
-        Ok(())
-    }
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         let _ = agent_cli;
         None
-    }
-    fn canonical_model_name(&self, _agent_cli: &str, model: Option<&str>) -> Option<String> {
-        model
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
     }
     fn scoring_enabled(&self) -> bool {
         false
