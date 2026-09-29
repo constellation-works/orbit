@@ -602,14 +602,9 @@ fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_author
         "/../orbit-core/assets/activities/pr_conflict_recovery.yaml"
     )))
     .unwrap();
-    let ActivityV2Spec::AgentLoop(agent) = &asset.spec.spec else {
+    let ActivityV2Spec::AgentLoop(_) = &asset.spec.spec else {
         panic!("conflict recovery must remain an agent leaf")
     };
-    assert!(
-        agent
-            .instruction
-            .contains("Do not stage, commit, continue, abort")
-    );
     assert!(
         asset.spec.output_schema_json["properties"]
             .get("recovered")

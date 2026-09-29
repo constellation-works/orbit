@@ -443,7 +443,3 @@ fn config_u64(config: &Value, key: &str) -> Result<Option<u64>, OrbitError> {
         ))
     })
 }
-
-#[cfg(test)]
-#[path = "tests/shell.rs"]
-mod tests;

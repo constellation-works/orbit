@@ -21,7 +21,9 @@ pub(super) async fn search(Ws(runtime): Ws, RawQuery(raw): RawQuery) -> Response
     }
 }
 
-fn parse_search_query(raw: Option<&str>) -> Result<GlobalSearchParams, String> {
+/// Parse the raw `/api/search` query string, accepting repeated and
+/// comma-separated filters and capping `limit` like the other list endpoints.
+pub(super) fn parse_search_query(raw: Option<&str>) -> Result<GlobalSearchParams, String> {
     let mut params = GlobalSearchParams {
         limit: 10,
         ..GlobalSearchParams::default()
@@ -70,38 +72,5 @@ fn parse_bool(field: &str, raw: &str) -> Result<bool, String> {
         _ => Err(format!(
             "invalid {field} `{raw}`; expected true, false, 1, or 0"
         )),
-    }
-}
-
-#[cfg(test)]
-mod query_tests {
-    use super::*;
-
-    #[test]
-    fn query_parser_accepts_repeated_and_csv_filters() {
-        let params = parse_search_query(Some(
-            "query=agent+loop&kind=task&tag=rust,search&tag=api&status=task%3Aopen&path=src%2Flib.rs&limit=7",
-        ))
-        .expect("parse query");
-
-        assert_eq!(params.query.as_deref(), Some("agent loop"));
-        assert_eq!(params.kind, GlobalSearchKind::Task);
-        assert_eq!(params.tags, ["rust", "search", "api"]);
-        assert_eq!(params.status, ["task:open"]);
-        assert_eq!(params.path.as_deref(), Some("src/lib.rs"));
-        assert_eq!(params.limit, 7);
-    }
-
-    #[test]
-    fn query_parser_caps_limit_like_every_other_list_endpoint() {
-        let params = parse_search_query(Some("q=a&limit=100000000")).expect("parse query");
-        assert_eq!(params.limit, super::super::HISTORY_MAX_LIMIT);
-    }
-
-    #[test]
-    fn query_parser_rejects_removed_doc_kind() {
-        let error = parse_search_query(Some("q=needle&kind=doc"))
-            .expect_err("the retired docs corpus must not be selectable");
-        assert!(error.contains("invalid search kind `doc`"), "{error}");
     }
 }

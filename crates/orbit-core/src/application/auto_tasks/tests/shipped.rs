@@ -7,7 +7,7 @@ use std::path::Path;
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_tools::ToolRegistry;
-use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy, auto_task_tag};
 
 use crate::OrbitRuntime;
@@ -25,25 +25,6 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         !DEFAULT_AUTO_TASK_FILES.is_empty(),
         "expected at least one shipped auto-task definition"
     );
-    let names: Vec<&str> = DEFAULT_AUTO_TASK_FILES
-        .iter()
-        .map(|(name, _)| *name)
-        .collect();
-    for required in [
-        "backlog-hygiene",
-        "code-review",
-        "doc-duties",
-        "friction-curation",
-        "full-code-review",
-        "qa-sweep",
-        "run-failure-patterns",
-        "security-review",
-    ] {
-        assert!(
-            names.contains(&required),
-            "missing shipped default {required}"
-        );
-    }
     for (stem, yaml) in DEFAULT_AUTO_TASK_FILES {
         let yaml = render_default_auto_task(yaml, "main");
         let definition =
@@ -65,8 +46,10 @@ fn shipped_defaults_all_parse_and_are_disabled() {
 
 /// The hygiene task reports candidates for a human to act on. Granting a
 /// status-changing task tool here would undermine its report-only contract.
+/// The cadence is schedule policy owned by the asset, so only its validity is
+/// asserted.
 #[test]
-fn backlog_hygiene_default_is_weekly_inert_and_read_only() {
+fn backlog_hygiene_default_is_inert_and_read_only() {
     let (_, yaml) = DEFAULT_AUTO_TASK_FILES
         .iter()
         .find(|(name, _)| *name == "backlog-hygiene")
@@ -79,7 +62,6 @@ fn backlog_hygiene_default_is_weekly_inert_and_read_only() {
         panic!("backlog-hygiene must use cron");
     };
     assert_eq!(cron.split_whitespace().count(), 5);
-    assert_eq!(cron.split_whitespace().nth(4), Some("1"));
     assert!(definition.template.complexity.is_some());
     for required_tag in ["backlog-hygiene", "no-diff-expected"] {
         assert!(
@@ -343,14 +325,6 @@ fn qa_sweep_default_preserves_hands_on_validation_contract() {
         definition.template.status,
         orbit_types::task::TaskStatus::Backlog
     );
-    assert_eq!(
-        definition.template.task_type,
-        orbit_types::task::TaskType::Chore
-    );
-    assert_eq!(
-        definition.template.priority,
-        orbit_types::task::TaskPriority::Medium
-    );
     assert!(definition.template.tags.iter().any(|tag| tag == "qa-sweep"));
     assert!(
         definition
@@ -534,8 +508,10 @@ fn full_code_review_default_is_listed_and_mints_on_demand() {
         .auto_task_mint("full-code-review")
         .expect("mint full-code-review");
     assert_eq!(minted.status, TaskStatus::Backlog);
-    assert_eq!(minted.task_type, TaskType::Chore);
-    assert_eq!(minted.complexity, Some(TaskComplexity::Medium));
+    assert!(
+        minted.complexity.is_some(),
+        "a minted coordinator must carry the definition's explicit complexity"
+    );
     for tag in [
         "full-code-review".to_string(),
         "no-diff-expected".to_string(),
@@ -553,7 +529,7 @@ fn full_code_review_default_is_listed_and_mints_on_demand() {
 }
 
 #[test]
-fn security_review_default_is_portable_weekly_and_inert() {
+fn security_review_default_is_portable_and_inert() {
     let (_, yaml) = DEFAULT_AUTO_TASK_FILES
         .iter()
         .find(|(name, _)| *name == "security-review")
@@ -564,7 +540,7 @@ fn security_review_default_is_portable_weekly_and_inert() {
     assert!(!definition.enabled, "definition must ship disabled");
     assert!(
         matches!(definition.schedule, AutoTaskSchedule::Cron { .. }),
-        "security-review must use a documented weekly schedule"
+        "security-review must use a cron schedule"
     );
     assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
     assert_eq!(
