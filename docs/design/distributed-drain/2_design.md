@@ -135,7 +135,11 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   fences stale work when the claim settles (`stale_claim`), so the agent re-reads nothing.
 - The CLI runner denies `orbit.task.show` and `orbit.task.update` on top of the activity's own
   list (`CLAIMED_MODE_DENIED_TOOLS` in `cli_runner/orchestrator.rs`; an allowlisted activity has
-  them removed instead). The prompt is not the only guard.
+  them removed instead). The prompt is not the only guard. The runner treats an invocation as
+  claimed when the host carries the claim's trusted worker binding, or the step input says
+  `claimed: true`. The binding covers every agent the leaf launches, so `step_failure_recovery`
+  and `pr_conflict_recovery`, which the claimed leaves use as step recovery hooks and whose input
+  never carries `claimed`, lose the same two tools. A run outside a claim keeps them.
 - The agent returns `execution_summary`, plus any `context_files_added` and `comment`, in the step
   output. The handoff step reads that output (`implementation: "{{ steps.implement_one.output }}"`,
   one iteration, since a claim binds exactly one task). `claim_handoff` composes the handoff's

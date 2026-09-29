@@ -20,8 +20,9 @@ spec:
         type: string
       repo_root:
         type: string
-      # Set by the claimed pipelines only. The runner also denies
-      # `orbit.task.show` and `orbit.task.update` for a claimed invocation.
+      # Set by the claimed pipelines only. The runner denies
+      # `orbit.task.show` and `orbit.task.update` for a claimed invocation,
+      # whether or not this is set: a claimed leaf's worker binding is enough.
       claimed:
         type: boolean
   output_schema_json:

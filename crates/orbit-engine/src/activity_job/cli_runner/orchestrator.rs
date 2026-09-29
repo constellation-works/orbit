@@ -160,7 +160,7 @@ pub fn activity_tool_policy_env(
     ]
 }
 
-/// Owner task tools a claimed-mode implementer is never granted
+/// Owner task tools an agent in a claimed leaf is never granted
 /// (distributed-drain design §3, "Claimed-mode implementation").
 ///
 /// A claimed leaf's task belongs to another machine. Its injected envelope is
@@ -171,11 +171,19 @@ pub fn activity_tool_policy_env(
 /// the agent runs cannot reach a remote owner anyway.
 pub(super) const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.show", "orbit.task.update"];
 
-/// Whether this invocation is a claimed leaf's implementation: the claimed
-/// pipelines pass `claimed: true`. The flag only ever removes tools and asks
-/// for output, so an input that sets it outside a claim narrows that run.
-pub(super) fn claimed_mode(input: &Value) -> bool {
-    input.get("claimed").and_then(Value::as_bool) == Some(true)
+/// Whether this invocation runs inside a claimed leaf.
+///
+/// The trusted fact is the host's worker binding: only the process a claim is
+/// bound to carries one, and it is the same for every agent step that leaf
+/// runs, including the recovery hooks the executor dispatches for a failed
+/// step, whose own input schema has no `claimed` field and which no pipeline
+/// input reaches. `claimed: true` in the step input (the claimed pipelines
+/// pass it to `agent_implement`, whose prompt also reads it) is honored too.
+/// Either signal only ever removes tools, so an input that sets it outside a
+/// claim narrows that run, and no input can lift the binding's guard.
+pub(super) fn claimed_mode(host: &dyn RuntimeHost, input: &Value) -> bool {
+    host.worker_invocation().is_some()
+        || input.get("claimed").and_then(Value::as_bool) == Some(true)
 }
 
 /// The activity's deny list, extended with [`CLAIMED_MODE_DENIED_TOOLS`] in
@@ -265,7 +273,7 @@ pub fn run_cli_backend(
         ));
     }
     let tool_policy = spec.tool_policy_mode();
-    let claimed = claimed_mode(input);
+    let claimed = claimed_mode(host, input);
     let tool_disallow_list =
         claimed_tool_disallow_list(spec.tool_disallow_list.as_deref(), claimed);
     let mut activity_tools = match tool_disallow_list.as_deref() {

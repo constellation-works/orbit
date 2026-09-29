@@ -598,7 +598,7 @@ fn run_cli_backend_omits_agent_model_and_task_env_vars_when_unknown() {
     assert!(!vars.iter().any(|(key, _)| key == "AGENT_TASK"));
 }
 
-fn policy_test_host(script: &std::path::Path, required_tools: &[&str]) -> TestHost {
+pub(super) fn policy_test_host(script: &std::path::Path, required_tools: &[&str]) -> TestHost {
     TestHost {
         command: script.display().to_string(),
         executor_args: Vec::new(),
@@ -615,7 +615,7 @@ fn policy_test_host(script: &std::path::Path, required_tools: &[&str]) -> TestHo
 }
 
 /// A grok stand-in that fails with `$code` unless every shell `checks` holds.
-fn policy_checking_script(dir: &std::path::Path, checks: &str) -> std::path::PathBuf {
+pub(super) fn policy_checking_script(dir: &std::path::Path, checks: &str) -> std::path::PathBuf {
     let script = dir.join("grok");
     write_executable(
         &script,
@@ -634,7 +634,7 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"policy":"ok"}}
     script
 }
 
-fn delegated_policy(
+pub(super) fn delegated_policy(
     audit: &V2AuditWriter,
 ) -> (
     Vec<String>,

@@ -295,7 +295,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - The implement step runs in **claimed mode**. The agent sandbox denies
   `~/.ssh`, so a sandboxed agent on a follower has no route to the owner; it
   does not need one. It works from the injected task envelope, is not granted
-  `orbit.task.show` or `orbit.task.update`, and returns its execution summary
+  `orbit.task.show` or `orbit.task.update` (nor is any recovery agent the leaf
+  launches, such as `step_failure_recovery`), and returns its execution summary
   in the step output. `claim_handoff` carries that summary in the typed
   handoff, and the owner writes it as the task's `execution_summary` when it
   accepts. Do not loosen the sandbox or add SSH credentials to it to "fix" a
