@@ -28,6 +28,31 @@ pub fn ceil_char_boundary(text: &str, index: usize) -> usize {
     start
 }
 
+/// Whether `haystack.to_lowercase()` contains `lowered_needle`, which the
+/// caller has already lowercased once, without allocating for ASCII text.
+///
+/// Matches the `haystack.to_lowercase().contains(lowered_needle)` idiom
+/// exactly, including its Unicode behavior (`'\u{212A}'` KELVIN SIGN lowercases
+/// to `'k'`): when both sides are ASCII the comparison is a windowed
+/// byte-wise ASCII case-insensitive one; any non-ASCII haystack falls back to
+/// the allocating lowercase, and an ASCII haystack cannot contain a
+/// non-ASCII needle.
+pub fn contains_lowercased(haystack: &str, lowered_needle: &str) -> bool {
+    if lowered_needle.is_empty() {
+        return true;
+    }
+    if !haystack.is_ascii() {
+        return haystack.to_lowercase().contains(lowered_needle);
+    }
+    if !lowered_needle.is_ascii() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(lowered_needle.len())
+        .any(|window| window.eq_ignore_ascii_case(lowered_needle.as_bytes()))
+}
+
 #[cfg(test)]
 #[path = "tests/text.rs"]
 mod tests;

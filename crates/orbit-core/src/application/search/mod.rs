@@ -163,10 +163,18 @@ impl OrbitRuntime {
         let candidates = if let Some(query) = query {
             self.lexical_task_candidates(query, limit, accepts)?
         } else {
-            // No query → enumerate tasks (used by `--path` and `--tag`).
-            self.list_tasks()?
+            // No query → enumerate tasks (used by `--path` and `--tag`). Tags
+            // narrow through the task index so only matching bundles hydrate;
+            // `accepts` still applies every predicate to what comes back.
+            let tasks = if tag_filter.is_empty() {
+                self.list_tasks()?
+            } else {
+                self.list_tasks_by_tags(tag_filter)?
+            };
+            tasks
                 .into_iter()
                 .filter(|task| accepts(task))
+                .take(limit)
                 .map(|task| (lexical_task_hit(&task), task))
                 .collect()
         };
