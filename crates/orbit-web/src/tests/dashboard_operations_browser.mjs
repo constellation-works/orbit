@@ -237,6 +237,12 @@ try {
   await page.waitForFunction(() => globalThis.logFixtureStream?.onmessage);
   const logToolbarCheck = async (label, viewport, dockWidth, paused) => {
     await page.setViewportSize(viewport);
+    // The dashboard re-applies the saved dock width (or clears --dock-w when
+    // none is saved) from a window resize listener, and Chromium delivers that
+    // event on the next rendered frame. Let it fire before forcing this
+    // fixture's width, or it clears the width mid-measurement and the dock
+    // falls back to its 32% default (384px at 1440).
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.evaluate((width) => document.querySelector('main.tasks-layout').style.setProperty('--dock-w', `${width}px`), dockWidth);
     const ids = ['all', 'err', 'deny', 'warn'].map(filter => `.log-filters .filter-pill[data-filter="${filter}"]`)
       .concat(['#log-follow-tail', '#log-wrap-lines'], paused ? ['#log-buffered-count'] : []);
@@ -305,6 +311,10 @@ try {
   await assertNoOverflow('375x812 / tasks');
   await page.screenshot({ path: path.join(evidence, 'tasks-375x812.png'), fullPage: true });
 
+  // The Health views are only shown while Health is the open section (the
+  // router hides the other sections' views), so open it before measuring.
+  await page.click('.tab[data-tab="diagnostics"]');
+  await page.waitForTimeout(200);
   const navReachable = await page.evaluate(() => {
     const unique = [...document.querySelectorAll('.rail .tab')];
     const subtabs = [...document.querySelectorAll('#diag-subtabs .subtab')];
