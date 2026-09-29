@@ -100,6 +100,21 @@ impl CallSecrets {
         spec.secrets.resolve().map(Self)
     }
 
+    /// `text` with every secret value this call carried replaced by a marker.
+    ///
+    /// For backend text the host relays to the caller, such as the stderr of a
+    /// failed process. The backend was handed the values and can print them;
+    /// the caller it reports to must not be able to read them there.
+    pub(crate) fn mask_delivered(&self, text: &str) -> String {
+        let mut masked = text.to_string();
+        for secret in self.0.iter().flat_map(BTreeMap::values) {
+            if !secret.value.is_empty() {
+                masked = masked.replace(&secret.value, "[secret]");
+            }
+        }
+        masked
+    }
+
     /// Record that this call's request is about to carry these secrets, so
     /// the audit row for the call can name them. Called once the request
     /// is built and immediately before it is sent.

@@ -306,9 +306,10 @@ service side regardless.
   contexts in two invocations cannot share a child. Within a pool, the existing workspace
   and allowed-tools session keys still separate callers, and CLI and MCP calls reuse the
   matching child.
-- One audit row per call, with `brokered: true`, `peer_pid`, the request's `cwd` as the
-  working directory, the role derived from the run's agent, and the run's task, job run and
-  activity. None of it is read from the request, the tool input or the host's environment.
+- One audit row per call, with `brokered: true`, `peer_pid`, the resolved `cwd` as the
+  working directory (the directory the check resolved to, which is also where the backend
+  runs, so a link the agent repoints after the check changes nothing), the role derived from
+  the run's agent, and the run's task, job run and activity. None of it is read from the request, the tool input or the host's environment.
   Rows written before this change read back as not brokered.
 - `secret_updates` are applied by compare-and-swap inside the dispatch, and the response
   carries only `output`. A backend's own structured error keeps its code, message, `retryable`

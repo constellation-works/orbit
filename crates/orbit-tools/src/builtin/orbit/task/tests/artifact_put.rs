@@ -261,6 +261,31 @@ fn artifact_put_rejects_symlink_inside_workspace_pointing_outside() {
     assert!(host.call.lock().expect("host call").is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn artifact_put_refuses_a_fifo_source_instead_of_blocking_on_it() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let fifo = workspace.path().join("pipe.txt");
+    let path = std::ffi::CString::new(fifo.to_str().expect("utf8 path")).expect("c path");
+    // SAFETY: `path` is a valid NUL-terminated string that outlives the call.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0, "mkfifo");
+    let host = RecordingHost::default();
+    let ctx = context_in(workspace.path(), host.clone());
+
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = OrbitTaskArtifactPutTool
+            .execute(&ctx, json!({"id": "ORB-00001", "source_path": "pipe.txt"}));
+        let _ = done.send(result);
+    });
+    let result = finished
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("a FIFO source must be refused, not waited on for a writer");
+
+    assert!(result.is_err(), "a FIFO is not a regular file");
+    assert!(host.call.lock().expect("host call").is_none());
+}
+
 #[test]
 fn artifact_put_accepts_file_inside_workspace_root() {
     let workspace = tempfile::tempdir().expect("workspace");

@@ -308,6 +308,28 @@ fn an_activity_that_allows_no_tool_admits_no_brokered_call() {
 }
 
 #[test]
+fn a_cwd_that_is_a_link_runs_and_is_audited_at_the_directory_that_was_checked() {
+    let fixture = Fixture::new();
+    fixture.plugin("demo", ECHO_BACKEND, None);
+    let serving = serve(&fixture, fixture.run(&["demo.hello"]));
+    let real = fixture.worktree.join("real");
+    let alias = fixture.worktree.join("alias");
+    std::fs::create_dir_all(&real).expect("create real dir");
+    std::os::unix::fs::symlink(&real, &alias).expect("create link");
+
+    let response = serving.call(request("demo.hello", json!({}), &alias));
+
+    assert_eq!(response["ok"], true, "{response}");
+    let rows = serving.rows("demo.hello");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].working_directory,
+        real.display().to_string(),
+        "a link the agent can repoint after the check must not be what the call runs in"
+    );
+}
+
+#[test]
 fn a_request_outside_the_run_is_refused_before_the_backend_runs() {
     let fixture = Fixture::new();
     fixture.plugin("demo", ECHO_BACKEND, None);

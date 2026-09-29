@@ -99,6 +99,10 @@ orbit task import /tmp/tasks.tar.zst \
   --task-workspace <target-task-workspace-id> --on-conflict=renumber
 ```
 
+Archives hold only directories and regular files. Export refuses a bundle that
+contains a link, so an archive never carries the bytes of a file the link points
+at, and import refuses an archive entry that is a link or special file.
+
 Import validates the manifest version and every bundle's integrity *before*
 touching state, so a corrupt or version-incompatible archive fails with no
 partial writes. During the mutation phase, fresh bundles and a source workspace

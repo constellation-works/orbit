@@ -40,7 +40,8 @@ pub(super) fn write_archive(
                     dir.display()
                 )));
             }
-            reject_pending_write(task_id, dir)
+            reject_pending_write(task_id, dir)?;
+            reject_linked_entries(task_id, dir)
         })?;
     }
 
@@ -58,6 +59,9 @@ pub(super) fn write_archive(
     let encoder =
         zstd::stream::write::Encoder::new(file, ZSTD_LEVEL).map_err(map_io("zstd encoder"))?;
     let mut builder = tar::Builder::new(encoder);
+    // A link that appears after the check above is archived as a link, which
+    // import refuses, and never as a copy of its target.
+    builder.follow_symlinks(false);
     // Deterministic mode zeroes mtimes/uid/gid so archives don't leak host
     // ownership and re-exports of unchanged bundles are stable.
     builder.mode(tar::HeaderMode::Deterministic);
@@ -81,6 +85,7 @@ pub(super) fn write_archive(
                 )));
             }
             reject_pending_write(task_id, dir)?;
+            reject_linked_entries(task_id, dir)?;
             append_bundle_tree(&mut builder, &arcname, dir)
         })?;
     }
@@ -142,6 +147,27 @@ fn append_bundle_tree_level<W: std::io::Write>(
     Ok(())
 }
 
+/// Refuse a bundle that contains anything but directories and regular files.
+///
+/// A bundle is written only by Orbit, so a link inside one was planted. The
+/// archive leaves the machine; following the link would pack whatever it
+/// points at, such as a credential file, into it.
+fn reject_linked_entries(task_id: &str, dir: &Path) -> Result<(), OrbitError> {
+    for entry in std::fs::read_dir(dir).map_err(map_io("read bundle directory"))? {
+        let entry = entry.map_err(map_io("read bundle directory"))?;
+        let file_type = entry.file_type().map_err(map_io("inspect bundle entry"))?;
+        if file_type.is_dir() {
+            reject_linked_entries(task_id, &entry.path())?;
+        } else if !file_type.is_file() {
+            return Err(OrbitError::Store(format!(
+                "cannot export task '{task_id}': {} is not a regular file",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn reject_pending_write(task_id: &str, bundle_dir: &Path) -> Result<(), OrbitError> {
     let pending_path = bundle_dir.join(PENDING_WRITE_FILE_NAME);
     if pending_path
@@ -158,6 +184,10 @@ fn reject_pending_write(task_id: &str, bundle_dir: &Path) -> Result<(), OrbitErr
 
 /// Extract a tar.zst archive into `dest`. Path-traversal entries are rejected by
 /// the tar reader, so `dest` fully contains the extracted tree.
+///
+/// Only directories and regular files are extracted. Exports never contain
+/// anything else, and a link would let an archive author have a later read
+/// (blob verification, the copy into the store) follow it to a host file.
 pub(super) fn extract_archive(archive_path: &Path, dest: &Path) -> Result<(), OrbitError> {
     let file = File::open(archive_path).map_err(|e| {
         OrbitError::Io(format!(
@@ -171,13 +201,28 @@ pub(super) fn extract_archive(archive_path: &Path, dest: &Path) -> Result<(), Or
             archive_path.display()
         ))
     })?;
-    let mut archive = tar::Archive::new(decoder);
-    archive.unpack(dest).map_err(|e| {
+    let extract_error = |e: std::io::Error| {
         OrbitError::Store(format!(
             "failed to extract archive '{}': {e}",
             archive_path.display()
         ))
-    })?;
+    };
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries().map_err(extract_error)? {
+        let mut entry = entry.map_err(extract_error)?;
+        let kind = entry.header().entry_type();
+        if kind.is_pax_global_extensions() {
+            continue;
+        }
+        if !(kind.is_file() || kind.is_dir()) {
+            return Err(OrbitError::Store(format!(
+                "archive '{}' holds an entry that is a link or special file; only files and \
+                 directories are imported",
+                archive_path.display()
+            )));
+        }
+        entry.unpack_in(dest).map_err(extract_error)?;
+    }
     Ok(())
 }
 

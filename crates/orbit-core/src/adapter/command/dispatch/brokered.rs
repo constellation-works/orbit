@@ -52,38 +52,46 @@ impl RunDispatch {
         }
     }
 
-    /// Why the request itself cannot run, whatever the tool: a `cwd` outside
-    /// the run's worktree, another workspace, or a dry run, which the nested
-    /// `orbit` answers without the broker.
-    fn request_refusal(
+    /// The directory the call runs in, or why the request itself cannot run,
+    /// whatever the tool: a `cwd` outside the run's worktree, another
+    /// workspace, or a dry run, which the nested `orbit` answers without the
+    /// broker.
+    ///
+    /// The result is the resolved directory that was checked, never the
+    /// caller's spelling of it. The worktree is the agent's to write, so a
+    /// link that resolved inside it here could be repointed before the backend
+    /// starts; the call runs, and is audited, at the resolved path instead.
+    fn checked_cwd(
         &self,
         cwd: &Path,
         workspace: Option<&str>,
         dry_run: bool,
-    ) -> Option<OrbitError> {
+    ) -> Result<PathBuf, OrbitError> {
         if dry_run {
-            return Some(OrbitError::PolicyDenied(
+            return Err(OrbitError::PolicyDenied(
                 "the plugin broker runs calls; a dry run is answered by the nested orbit"
                     .to_string(),
             ));
         }
-        let within_worktree = cwd
+        let resolved = cwd
             .canonicalize()
-            .is_ok_and(|cwd| cwd.starts_with(&self.worktree));
-        if !within_worktree {
-            return Some(OrbitError::PolicyDenied(format!(
-                "the plugin broker runs calls only from within this run's worktree; `{}` is not",
-                cwd.display()
-            )));
-        }
+            .ok()
+            .filter(|resolved| resolved.starts_with(&self.worktree))
+            .ok_or_else(|| {
+                OrbitError::PolicyDenied(format!(
+                    "the plugin broker runs calls only from within this run's worktree; `{}` is \
+                     not",
+                    cwd.display()
+                ))
+            })?;
         if let Some(workspace) = workspace
             && self.run.workspace.as_deref() != Some(workspace)
         {
-            return Some(OrbitError::PolicyDenied(format!(
+            return Err(OrbitError::PolicyDenied(format!(
                 "the plugin broker serves only this run's workspace, not `{workspace}`"
             )));
         }
-        None
+        Ok(resolved)
     }
 
     /// The run's own activity policy, applied fail-closed: an allowlist
@@ -142,7 +150,8 @@ impl BrokerDispatch for RunDispatch {
             entry_point,
             dry_run,
         } = request;
-        let refusal = self.request_refusal(&cwd, workspace.as_deref(), dry_run);
+        let checked = self.checked_cwd(&cwd, workspace.as_deref(), dry_run);
+        let cwd = checked.as_ref().map_or(cwd, Clone::clone);
         let run = &self.run;
         // The agent's sandbox is what the broker authenticated, so the call
         // runs with an agent's authority — never the host's.
@@ -175,9 +184,7 @@ impl BrokerDispatch for RunDispatch {
                 session_context.clone(),
                 audit,
                 |input| {
-                    if let Some(refusal) = refusal {
-                        return Err(refusal);
-                    }
+                    checked?;
                     // A built-in tool is answered by the nested `orbit`
                     // itself; the broker exists to run plugin backends.
                     if self.runtime.tool_registry().plugin_binding(&tool).is_none() {
