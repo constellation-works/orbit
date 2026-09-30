@@ -31,7 +31,10 @@ spec:
     lock acquisition stays with `reserve_locks`; this is a prediction, not a
     reservation. `max_tasks` bounds how much backlog one iteration expands
     footprints for, and `candidate_pool_truncated` reports the case where that
-    bound, not the free slots, ended the wave.
+    bound, not the free slots, ended the wave. Each pass also records what it
+    left waiting — admissible tasks it did not start, lock deferrals, and
+    backlog tasks it could not admit at all — on the drain run's state, where
+    `orbit run show` reports it after the drain ends.
     `idle` means the iteration started nothing, which includes a saturated
     drain with a full backlog behind it; `sleep_seconds` is the wait that fits
     — the short poll when work is queued, the long one when nothing is. The
@@ -81,16 +84,6 @@ spec:
         type: array
         items:
           type: object
-      excluded_backlog:
-        description: >-
-          Backlog tasks this pass could not take at all, each with its
-          `reason` and the tasks it is `blocked_by`. Bounded; the full count
-          is `excluded_backlog_total`.
-        type: array
-        items:
-          type: object
-      excluded_backlog_total:
-        type: number
       candidate_pool_size:
         type: number
       candidate_pool_truncated:

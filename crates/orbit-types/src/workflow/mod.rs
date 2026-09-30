@@ -73,7 +73,8 @@ pub use routine::{
 };
 pub use run_id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use run_state::{
-    DrainAdmissionsStop, DrainWorkerLimit, FailureActivityCheckpoint, PipelineState,
+    DrainAdmissionPass, DrainAdmissionsStop, DrainWaitingTask, DrainWorkerLimit,
+    FailureActivityCheckpoint, PipelineState,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;

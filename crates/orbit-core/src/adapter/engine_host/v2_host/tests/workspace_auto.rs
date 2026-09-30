@@ -1350,17 +1350,6 @@ fn crew_allowlist_skips_excluded_tasks_and_keeps_draining_the_rest() {
     let classified = classify_with(&runtime, json!({ "allowed_crews": ["opus"] }));
     assert_eq!(classified["loose_task_ids"], json!([permitted]));
     assert_eq!(classified["has_leaves"], json!(true));
-    // The pass records what it could not admit, so `run show` can say what a
-    // finished drain left waiting.
-    assert_eq!(classified["excluded_backlog_total"], json!(1));
-    assert_eq!(
-        classified["excluded_backlog"][0]["task_id"],
-        json!(excluded)
-    );
-    assert_eq!(
-        classified["excluded_backlog"][0]["reason"],
-        json!("crew_not_allowed")
-    );
 
     let readiness = readiness_allowing(&runtime, &[], None, &["opus".to_string()]);
     assert_eq!(readiness_task(&readiness, &permitted)["reason"], "ready");
@@ -1388,6 +1377,33 @@ fn crew_allowlist_skips_excluded_tasks_and_keeps_draining_the_rest() {
         admitted,
         BTreeSet::from([permitted.as_str(), excluded.as_str()])
     );
+}
+
+/// The drain's run state keeps the backlog its last pass could not start, so
+/// `orbit run show` can report it once the drain has ended.
+#[test]
+fn a_pass_records_the_backlog_it_left_waiting_on_the_drain_run() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(ALLOWLIST_CREW_CONFIG));
+    let permitted = seed_crewed_backlog_task(&runtime, "Permitted leaf", "opus");
+    let excluded = seed_crewed_backlog_task(&runtime, "Excluded leaf", "fable");
+    let run_id = seed_running_drain(&runtime, 5);
+
+    let classified = classify_with(
+        &runtime,
+        json!({ "run_id": run_id, "allowed_crews": ["opus"] }),
+    );
+    assert_eq!(classified["loose_task_ids"], json!([permitted]));
+
+    let pass = runtime
+        .read_run_state(&run_id)
+        .expect("read drain state")
+        .expect("drain state")
+        .drain_last_pass
+        .expect("the pass is recorded on the run");
+    assert_eq!(pass.queued, 0, "the one admissible task was admitted");
+    assert_eq!(pass.excluded_total, 1);
+    assert_eq!(pass.excluded[0].task_id, excluded);
+    assert_eq!(pass.excluded[0].reason.as_deref(), Some("crew_not_allowed"));
 }
 
 /// A crew that resolves to the *same* configured provider/model as a permitted

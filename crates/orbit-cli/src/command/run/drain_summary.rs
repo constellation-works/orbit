@@ -10,7 +10,7 @@
 
 use orbit_core::JobRun;
 use orbit_core::application::job::run_error_step;
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{DrainWaitingTask, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::format::summarize_error_message;
@@ -40,6 +40,11 @@ pub(super) struct FailedLeaf {
     pub(super) state: JobRunState,
     pub(super) task_ids: Vec<String>,
     pub(super) error: Option<String>,
+    /// The run whose `orbit job resume` retries the failed work. A leaf fails
+    /// because a run beneath it did, and resuming the wrapper only re-checks
+    /// that failure, so this is the deepest resumable failed run, or the leaf
+    /// itself. Set by the caller, which can read the run tree.
+    pub(super) resume_run_id: Option<String>,
 }
 
 /// Backlog tasks the drain's last admission pass left unstarted.
@@ -101,6 +106,7 @@ impl DrainLeafSummary {
                 "state": leaf.state.to_string(),
                 "task_ids": leaf.task_ids,
                 "error": leaf.error,
+                "resume_run_id": leaf.resume_run_id,
             })).collect::<Vec<_>>(),
             "waiting": {
                 "queued": self.waiting.queued,
@@ -152,10 +158,12 @@ impl DrainLeafSummary {
                     leaf.state,
                     summarize_error_message(leaf.error.as_deref()),
                 ));
-                lines.push(format!(
-                    "    retry: `orbit job resume {}` (or move the task back to backlog)",
-                    leaf.run_id
-                ));
+                lines.push(match &leaf.resume_run_id {
+                    Some(resume) => format!(
+                        "    retry: `orbit job resume {resume}` (or move the task back to backlog)"
+                    ),
+                    None => "    retry: move the task back to backlog".to_string(),
+                });
             }
         }
         if self.has_starved_tasks() {
@@ -243,6 +251,7 @@ pub(super) fn summarize_drain_leaves(
                     state: leaf.state,
                     task_ids,
                     error: run_error_step(&leaf).and_then(|step| step.error_message.clone()),
+                    resume_run_id: None,
                 });
             }
             _ => summary.running += 1,
@@ -254,60 +263,26 @@ pub(super) fn summarize_drain_leaves(
     Some(summary)
 }
 
-/// The drain's last classification pass, read from its checkpoint by shape:
-/// the classifier's output is the only step output carrying `pending_backlog`.
+/// What the drain's last admission pass left waiting, from the record it keeps
+/// on its own run state.
 fn last_pass_waiting(state: &PipelineState) -> WaitingBacklog {
-    let Some(pass) = state
-        .step_outputs
-        .values()
-        .rev()
-        .find(|output| output.get("pending_backlog").is_some())
-    else {
+    let Some(pass) = state.drain_last_pass.as_ref() else {
         return WaitingBacklog::default();
     };
-    let admitted_now = pass
-        .get("loose_task_ids")
-        .and_then(Value::as_array)
-        .map_or(0, |ids| ids.len() as u64);
-    let queued = pass
-        .get("pending_backlog")
-        .and_then(Value::as_u64)
-        .map(|pending| pending.saturating_sub(admitted_now));
-    let tasks = |key: &str, blocked_key: &str| -> Vec<WaitingTask> {
-        pass.get(key)
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| {
-                let task_id = entry.get("task_id").and_then(Value::as_str)?.to_string();
-                let blocked_by = entry
-                    .get(blocked_key)
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect();
-                Some(WaitingTask {
-                    task_id,
-                    reason: entry
-                        .get("reason")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    blocked_by,
-                })
+    let tasks = |tasks: &[DrainWaitingTask]| -> Vec<WaitingTask> {
+        tasks
+            .iter()
+            .map(|task| WaitingTask {
+                task_id: task.task_id.clone(),
+                reason: task.reason.clone(),
+                blocked_by: task.blocked_by.clone(),
             })
             .collect()
     };
-    let excluded = tasks("excluded_backlog", "blocked_by");
-    let excluded_total = pass
-        .get("excluded_backlog_total")
-        .and_then(Value::as_u64)
-        .unwrap_or(excluded.len() as u64);
     WaitingBacklog {
-        queued,
-        deferred: tasks("deferred_conflicts", "blocking_task_ids"),
-        excluded,
-        excluded_total,
+        queued: Some(pass.queued),
+        deferred: tasks(&pass.deferred),
+        excluded: tasks(&pass.excluded),
+        excluded_total: pass.excluded_total,
     }
 }
