@@ -612,6 +612,48 @@ fn registered_task_resolves_a_dependency_owned_by_another_local_workspace() {
     );
 }
 
+/// A store reached through a symlinked ancestor (macOS `/tmp` and `/var`, a
+/// symlinked home) registers a binding whose path is symlink-resolved once the
+/// bundle exists, while the owner derives its path lexically from the store
+/// root. Reading a dependency must not treat that spelling difference as a
+/// foreign bundle.
+#[cfg(unix)]
+#[test]
+fn registered_task_resolves_a_dependency_when_the_store_sits_behind_a_symlink() {
+    let temp = TempDir::new().unwrap();
+    let real = temp.path().join("real");
+    std::fs::create_dir_all(&real).expect("create real root");
+    let linked = temp.path().join("linked");
+    std::os::unix::fs::symlink(&real, &linked).expect("link the store root");
+
+    let registry = TaskRegistryStore::open(&task_registry_path(&linked)).expect("open registry");
+    let dependent = bound_store_at(&registry, &linked, "orbit-test-123456", "repo");
+    let owner = bound_store_at(&registry, &linked, "orbit-test-654321", "other-repo");
+    let prerequisite = owner
+        .create_task(create_params("Prerequisite", TaskStatus::Backlog))
+        .expect("create prerequisite");
+
+    // Re-register from the now-existing bundle so the stored spelling is the
+    // resolved one, as a binding written after the directory exists is.
+    let bundle = owner.bundle_store.bundle_path(&prerequisite.id).unwrap();
+    let binding = dependent
+        .registry
+        .register_task_bundle(&prerequisite.id, &owner.workspace_id, &bundle)
+        .expect("re-register the binding");
+    assert_ne!(
+        binding.canonical_path, bundle,
+        "the fixture must exercise a resolved binding against a lexical owner path"
+    );
+
+    let resolved = dependent
+        .registered_task(&prerequisite.id)
+        .expect("resolve prerequisite behind a symlinked root");
+    assert_eq!(
+        resolved,
+        RegisteredTaskResolution::Resolved(Box::new(prerequisite))
+    );
+}
+
 /// The archived-dependency rule reads a prerequisite's status history through
 /// its registered owner, and a listing's dependency projection applies it: an
 /// archived prerequisite that reached `done` first projects as `done`.
