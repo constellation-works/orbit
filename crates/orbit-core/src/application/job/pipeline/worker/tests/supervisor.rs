@@ -1035,6 +1035,10 @@ fn unexpected_exit_retains_reservations_until_provider_evidence_closes() {
             }
         );
         assert!(!reserved(), "settlement releases reservation");
+        assert!(
+            stored.finished_at.is_some() && stored.duration_ms.is_some(),
+            "a run a dead worker left behind is stored complete, so later reads have nothing to repair"
+        );
         let step = stored.steps.last().expect("original exit diagnostic");
         assert_eq!(
             step.error_code.as_deref(),
