@@ -1,5 +1,6 @@
 {
   "name": "orbit",
+  "description": "Orbit plugin for Claude Code: durable tasks, sandboxed parallel runs, and PR-gated delivery.",
   "owner": {
     "name": "constellation-works",
     "url": "https://github.com/constellation-works"
