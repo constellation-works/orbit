@@ -413,3 +413,53 @@ fn task_dependencies_warn_when_unreadable_like_parent_but_are_still_recorded() {
     let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
     assert_eq!(shown["dependencies"], serde_json::json!(["NOPE-1"]));
 }
+
+#[test]
+fn plain_search_rows_and_empty_plugin_doctor_have_no_dangling_separators() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+    fixture
+        .orbit()
+        .args([
+            "task",
+            "add",
+            "--title",
+            "searchable widget",
+            "--complexity",
+            "low",
+        ])
+        .assert()
+        .success();
+
+    let output = fixture
+        .orbit()
+        .args(["search", "widget"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("utf8 search output");
+    assert!(
+        stdout.contains("widget"),
+        "the task should be found:\n{stdout}"
+    );
+    for line in stdout.lines() {
+        assert!(
+            !line.ends_with('\t'),
+            "a plain row must not end with an empty field: {line:?}"
+        );
+    }
+
+    let output = fixture
+        .orbit()
+        .args(["plugin", "doctor"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).expect("utf8 doctor output");
+    assert!(
+        !stdout.starts_with('\n'),
+        "no rows means no separator before the summary: {stdout:?}"
+    );
+}
