@@ -159,10 +159,18 @@ fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_ar
         );
         assert!(store.get_task_row(&old.id, false).is_err());
         assert!(store.list_tasks().is_err());
+        // A residual filter is judged from envelopes, so it follows the bounded
+        // rule too: only the returned page is hydrated and must be intact.
+        let residual_page = store
+            .query_task_rows(&TaskListFilter::default(), 1, Some(&|_, _| true))
+            .unwrap();
+        assert_eq!(residual_page.total, 2);
+        assert_eq!(residual_page.items[0].task.id, newest.id);
         assert!(
             store
-                .query_task_rows(&TaskListFilter::default(), 1, Some(&|_, _| true))
-                .is_err()
+                .query_task_rows(&TaskListFilter::default(), 2, Some(&|_, _| true))
+                .is_err(),
+            "{corruption}"
         );
         let conn = rusqlite::Connection::open(task_registry_path(temp.path())).unwrap();
         conn.execute("DELETE FROM task_bundle_index", []).unwrap();
