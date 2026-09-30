@@ -316,3 +316,33 @@ fn task_update_note_requires_approve() {
     };
     assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
 }
+
+#[test]
+fn task_update_pr_status_accepts_review_decisions_and_the_clearing_empty_string() {
+    for value in [
+        "approve",
+        "request-changes",
+        "APPROVED",
+        "changes_requested",
+        "",
+    ] {
+        Cli::try_parse_from(["orbit", "task", "update", "ORB-00001", "--pr-status", value])
+            .unwrap_or_else(|error| panic!("pr status {value:?} must parse: {error}"));
+    }
+}
+
+#[test]
+fn task_update_pr_status_rejects_values_no_reader_recognizes() {
+    let err = match Cli::try_parse_from([
+        "orbit",
+        "task",
+        "update",
+        "ORB-00001",
+        "--pr-status",
+        "aproved",
+    ]) {
+        Ok(_) => panic!("a misspelt PR status must be rejected at parse time"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), ErrorKind::ValueValidation);
+}
