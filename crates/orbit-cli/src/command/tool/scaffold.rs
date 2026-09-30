@@ -5,7 +5,9 @@ use clap::Args;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::tool::ToolParam;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::manifest::{ExternalToolManifest, infer_tool_name, sidecar_manifest_path};
 
@@ -80,15 +82,20 @@ impl Execute for ToolScaffoldArgs {
             OrbitError::Io(format!("write {}: {error}", manifest_path.display()))
         })?;
 
-        println!("Created starter plugin:");
-        println!("  executable: {}", script_path.display());
-        println!("  manifest:   {}", manifest_path.display());
-        println!("\nNext steps:");
-        println!("  orbit tool add {}", script_path.display());
-        println!("  orbit tool show {}", tool_name);
-        println!("  orbit mcp serve");
-        println!("\nTo author this as a v2 plugin instead: orbit plugin scaffold <namespace>");
-        Ok(CommandOutput::Silent)
+        let text = format!(
+            "Created starter plugin:\n  executable: {script}\n  manifest:   {manifest}\n\nNext steps:\n  orbit tool add {script}\n  orbit tool show {tool_name}\n  orbit mcp serve\n\nTo author this as a v2 plugin instead: orbit plugin scaffold <namespace>",
+            script = script_path.display(),
+            manifest = manifest_path.display(),
+        );
+        Ok(Payload::detail(
+            json!({
+                "tool": tool_name,
+                "executable": script_path.display().to_string(),
+                "manifest": manifest_path.display().to_string(),
+            }),
+            text,
+        )
+        .into())
     }
 }
 

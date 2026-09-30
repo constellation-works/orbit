@@ -6,7 +6,9 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::support::{LEGACY_SKILL_DISCOVERY_DIRS, remove_owned_skill_links};
 
@@ -65,8 +67,6 @@ impl Execute for WorkspaceTeardownArgs {
                 )));
             }
 
-            println!("teardown plan:\n{plan}");
-
             let mut removed: Vec<String> = Vec::new();
 
             // 1. Deregister from workspace registry (before deleting .orbit/)
@@ -111,15 +111,24 @@ impl Execute for WorkspaceTeardownArgs {
                 removed.push(format!("deleted {}", orbit_dir.display()));
             }
 
-            println!("teardown complete:");
+            let mut text = format!("teardown plan:\n{plan}\nteardown complete:");
             for item in &removed {
-                println!("  - {item}");
+                text.push_str(&format!("\n  - {item}"));
             }
             if removed.is_empty() {
-                println!("  (nothing to remove)");
+                text.push_str("\n  (nothing to remove)");
             }
 
-            Ok(CommandOutput::Silent)
+            Ok(Payload::detail(
+                json!({
+                    "workspace": workspace_name,
+                    "id": workspace_id,
+                    "checkout": repo_root.display().to_string(),
+                    "removed": removed,
+                }),
+                text,
+            )
+            .into())
         })
     }
 }

@@ -1,9 +1,10 @@
 use std::path::Path;
 
-use crate::command::{CommandOut, CommandOutput};
+use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_core::application::routines::install_clock;
 use orbit_registry::load_machine_identity;
+use serde_json::json;
 
 #[derive(Args)]
 #[command(
@@ -24,28 +25,53 @@ impl RoutineInitArgs {
         // Read-only: machine identity is owned by `orbit init`. Fail closed
         // with an actionable error when it is absent.
         let identity = load_machine_identity(global_root)?;
-        println!(
+        let mut text = format!(
             "machine identity: name=\"{}\", id={}",
             identity.name, identity.id
         );
 
         if !self.install_clock {
-            println!("clock unit not installed (pass --install-clock to set up `orbit sweep`)");
-            return Ok(CommandOutput::Silent);
+            text.push_str(
+                "\nclock unit not installed (pass --install-clock to set up `orbit sweep`)",
+            );
+            return Ok(Payload::detail(
+                json!({
+                    "machine": { "name": identity.name, "id": identity.id },
+                    "clock": { "installed": false },
+                }),
+                text,
+            )
+            .into());
         }
 
         let report = install_clock(global_root)?;
         for file in &report.files_written {
-            println!("wrote {}", file.display());
+            text.push_str(&format!("\nwrote {}", file.display()));
         }
         if report.activated {
-            println!("clock unit active: `orbit sweep` runs every minute on this machine");
+            text.push_str("\nclock unit active: `orbit sweep` runs every minute on this machine");
         } else {
-            println!("clock unit files written but not activated; run:");
+            text.push_str("\nclock unit files written but not activated; run:");
             for step in &report.manual_steps {
-                println!("  {step}");
+                text.push_str(&format!("\n  {step}"));
             }
         }
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(
+            json!({
+                "machine": { "name": identity.name, "id": identity.id },
+                "clock": {
+                    "installed": true,
+                    "activated": report.activated,
+                    "files_written": report
+                        .files_written
+                        .iter()
+                        .map(|file| file.display().to_string())
+                        .collect::<Vec<_>>(),
+                    "manual_steps": report.manual_steps,
+                },
+            }),
+            text,
+        )
+        .into())
     }
 }
