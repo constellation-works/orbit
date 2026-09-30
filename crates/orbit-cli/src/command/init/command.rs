@@ -16,7 +16,9 @@ use super::collect_config_seed_for_init;
 use super::prompt_stdin;
 #[cfg(test)]
 use super::prompt_stdin::STDIN_CLOSED_BEFORE_PROMPT;
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
 #[derive(Args)]
 #[command(about = "Initialize the global Orbit root (~/.orbit)")]
@@ -63,10 +65,7 @@ pub struct InitCommand {
 
 impl Execute for InitCommand {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        {
-            self.run(None)?;
-            Ok(CommandOutput::Silent)
-        }
+        self.run(None)
     }
 }
 
@@ -84,13 +83,10 @@ impl InitCommand {
     }
 
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        {
-            self.run(root_override)?;
-            Ok(CommandOutput::Silent)
-        }
+        self.run(root_override)
     }
 
-    fn run(self, root_override: Option<&Path>) -> Result<(), OrbitError> {
+    fn run(self, root_override: Option<&Path>) -> CommandOut {
         if self.host_prerequisites_only {
             if root_override.is_some()
                 || self.force
@@ -104,7 +100,7 @@ impl InitCommand {
             }
             #[cfg(target_os = "linux")]
             self.prepare_linux_host()?;
-            return Ok(());
+            return Ok(CommandOutput::Silent);
         }
         // Reject a malformed or (non-interactively) missing --machine-name/
         // --task-prefix before anything is written: skills, activities, jobs,
@@ -146,28 +142,30 @@ impl InitCommand {
         // `orbit init` is its sole writer. This runs after `init_global` has
         // written that file so the `[machine]` table joins an existing
         // document rather than replacing one.
-        ensure_machine_identity_for_init(
+        let identity = ensure_machine_identity_for_init(
             root_override,
             self.non_interactive,
             self.machine_name,
             self.task_prefix,
         )?;
         let paths = reported_init_paths(root_override);
-        print_init_result(InitOutput {
-            skills_root: paths.skills_root,
-            refreshed_skill_files: result.refreshed_skill_files,
-            created_skills_symlink: result.created_skills_symlink,
-            config_path: paths.config_path,
-            created_config: result.created_config,
-            refreshed_default_activities: result.refreshed_default_activities,
-            retired_default_activities: result.retired_default_activities,
-            refreshed_default_jobs: result.refreshed_default_jobs,
-            retired_default_jobs: result.retired_default_jobs,
-            managed_asset_warnings: result.managed_asset_warnings,
-            refreshed_default_executors: result.refreshed_default_executors,
-            refreshed_default_policies: result.refreshed_default_policies,
-        });
-        Ok(())
+        Ok(init_payload(
+            &identity,
+            InitOutput {
+                skills_root: paths.skills_root,
+                refreshed_skill_files: result.refreshed_skill_files,
+                created_skills_symlink: result.created_skills_symlink,
+                config_path: paths.config_path,
+                created_config: result.created_config,
+                refreshed_default_activities: result.refreshed_default_activities,
+                retired_default_activities: result.retired_default_activities,
+                refreshed_default_jobs: result.refreshed_default_jobs,
+                retired_default_jobs: result.retired_default_jobs,
+                managed_asset_warnings: result.managed_asset_warnings,
+                refreshed_default_executors: result.refreshed_default_executors,
+                refreshed_default_policies: result.refreshed_default_policies,
+            },
+        ))
     }
 }
 
@@ -251,8 +249,10 @@ fn ensure_machine_identity_for_init(
     non_interactive: bool,
     machine_name: Option<String>,
     task_prefix: Option<String>,
-) -> Result<(), OrbitError> {
+) -> Result<IdentityReport, OrbitError> {
     let global_root = resolve_global_root(root_override)?;
+    let requested_name = machine_name.clone();
+    let requested_prefix = task_prefix.clone();
     let outcome = ensure_machine_identity(&global_root, move || {
         validate_fresh_identity_flags(
             non_interactive,
@@ -273,21 +273,43 @@ fn ensure_machine_identity_for_init(
         })
     })?;
 
-    report_machine_identity(&outcome);
-    Ok(())
+    let identity = outcome.identity();
+    // The identity is immutable once created, so a differing flag would
+    // otherwise be dropped without a word.
+    if matches!(outcome, MachineIdentityOutcome::Unchanged(_)) {
+        if let Some(name) = requested_name.filter(|name| name.trim() != identity.name) {
+            eprintln!(
+                "warning: --machine-name '{name}' ignored: this machine is already named '{}' \
+                 (change it with `orbit config set --global machine.name`)",
+                identity.name
+            );
+        }
+        if let Some(prefix) = requested_prefix.filter(|prefix| *prefix != identity.task_prefix) {
+            eprintln!(
+                "warning: --task-prefix '{prefix}' ignored: the task prefix '{}' was fixed when \
+                 this machine was initialized and cannot change",
+                identity.task_prefix
+            );
+        }
+    }
+    Ok(IdentityReport {
+        outcome: match outcome {
+            MachineIdentityOutcome::Created(_) => "created",
+            MachineIdentityOutcome::Migrated(_) => "migrated",
+            MachineIdentityOutcome::Unchanged(_) => "unchanged",
+        },
+        name: identity.name.clone(),
+        id: identity.id.to_string(),
+        task_prefix: identity.task_prefix.to_string(),
+    })
 }
 
-fn report_machine_identity(outcome: &MachineIdentityOutcome) {
-    let identity = outcome.identity();
-    let verb = match outcome {
-        MachineIdentityOutcome::Created(_) => "created",
-        MachineIdentityOutcome::Migrated(_) => "migrated",
-        MachineIdentityOutcome::Unchanged(_) => "unchanged",
-    };
-    println!(
-        "machine identity ({verb}): name=\"{}\", id={}, task_prefix={}",
-        identity.name, identity.id, identity.task_prefix
-    );
+/// The machine identity as `orbit init` reports it.
+struct IdentityReport {
+    outcome: &'static str,
+    name: String,
+    id: String,
+    task_prefix: String,
 }
 
 fn prompt_machine_name() -> Result<String, OrbitError> {
@@ -390,9 +412,14 @@ fn read_line_from(
     Ok(line.trim().to_string())
 }
 
-fn print_init_result(output: InitOutput) {
-    println!(
-        "skills: root={}, refreshed={}, symlink_created={}; config: path={}, created={}; default_activities_refreshed={}, retired={}; default_jobs_refreshed={}, retired={}; default_executors_refreshed={}; default_policies_refreshed={}",
+fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput {
+    let text = format!(
+        "machine identity ({}): name=\"{}\", id={}, task_prefix={}\n\
+         skills: root={}, refreshed={}, symlink_created={}; config: path={}, created={}; default_activities_refreshed={}, retired={}; default_jobs_refreshed={}, retired={}; default_executors_refreshed={}; default_policies_refreshed={}",
+        identity.outcome,
+        identity.name,
+        identity.id,
+        identity.task_prefix,
         output.skills_root,
         output.refreshed_skill_files,
         output.created_skills_symlink,
@@ -405,9 +432,36 @@ fn print_init_result(output: InitOutput) {
         output.refreshed_default_executors,
         output.refreshed_default_policies,
     );
-    for warning in output.managed_asset_warnings {
+    for warning in &output.managed_asset_warnings {
         eprintln!("warning: {warning}");
     }
+    let doc = json!({
+        "machine": {
+            "outcome": identity.outcome,
+            "name": identity.name,
+            "id": identity.id,
+            "task_prefix": identity.task_prefix,
+        },
+        "skills": {
+            "root": output.skills_root,
+            "refreshed": output.refreshed_skill_files,
+            "symlink_created": output.created_skills_symlink,
+        },
+        "config": {
+            "path": output.config_path,
+            "created": output.created_config,
+        },
+        "defaults": {
+            "activities_refreshed": output.refreshed_default_activities,
+            "activities_retired": output.retired_default_activities,
+            "jobs_refreshed": output.refreshed_default_jobs,
+            "jobs_retired": output.retired_default_jobs,
+            "executors_refreshed": output.refreshed_default_executors,
+            "policies_refreshed": output.refreshed_default_policies,
+        },
+        "warnings": output.managed_asset_warnings,
+    });
+    Payload::detail(doc, text).into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

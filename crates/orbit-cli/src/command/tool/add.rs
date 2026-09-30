@@ -3,7 +3,9 @@ use std::path::Path;
 use clap::Args;
 use orbit_core::{OrbitError, OrbitRuntime};
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::manifest::{infer_tool_name, load_external_tool_manifest, resolve_manifest_path};
 
@@ -51,10 +53,18 @@ impl Execute for ToolAddArgs {
         let parameters = manifest.map(|entry| entry.parameters).unwrap_or_default();
 
         runtime.add_tool(&name, &self.path, &description, parameters)?;
-        println!("Added tool '{name}' from {}", self.path);
-        if let Some(path) = manifest_path {
-            println!("Loaded plugin manifest from {}", path.display());
+        let mut text = format!("Added tool '{name}' from {}", self.path);
+        if let Some(path) = manifest_path.as_deref() {
+            text.push_str(&format!("\nLoaded plugin manifest from {}", path.display()));
         }
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(
+            json!({
+                "tool": name,
+                "path": self.path,
+                "manifest": manifest_path.as_deref().map(|path| path.display().to_string()),
+            }),
+            text,
+        )
+        .into())
     }
 }

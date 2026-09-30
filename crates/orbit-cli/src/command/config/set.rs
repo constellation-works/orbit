@@ -2,7 +2,9 @@ use clap::Args;
 use orbit_config::{ConfigScope, ConfigStore, WorkspaceInitMode, admit_config_key};
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 use super::support::{global_config_path, workspace_config_path};
 
@@ -56,12 +58,12 @@ impl Execute for ConfigSetArgs {
         store.validate_for_set(&self.key)?;
         store.save()?;
 
-        println!(
-            "set {} ({} config: {})",
-            self.key,
-            store.scope().label(),
-            store.path().to_string_lossy()
-        );
-        Ok(CommandOutput::Silent)
+        let scope = store.scope().label();
+        let path = store.path().to_string_lossy().into_owned();
+        Ok(Payload::detail(
+            json!({ "key": self.key, "scope": scope, "path": path }),
+            format!("set {} ({scope} config: {path})", self.key),
+        )
+        .into())
     }
 }
