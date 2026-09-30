@@ -565,3 +565,30 @@ fn read_only_probe_reports_malformed_database_without_repair() {
     assert!(probe.quick_check().is_err());
     assert_eq!(std::fs::read(&path).expect("unchanged file"), content);
 }
+
+#[test]
+fn is_read_only_tells_observational_handles_from_writable_ones() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let writable = Store::open(&path).expect("open store");
+    assert!(!writable.is_read_only(), "a writable file store can write");
+    assert!(
+        !Store::open_in_memory()
+            .expect("in-memory store")
+            .is_read_only(),
+        "an in-memory store is writable even though it has no reader pool"
+    );
+    drop(writable);
+
+    let observational = Store::open_read_only(&path).expect("open read-only");
+    assert!(observational.is_read_only());
+    let refused = observational.with_transaction(|tx| {
+        tx.connection()
+            .execute("CREATE TABLE probe(x)", [])
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    });
+    assert!(
+        refused.is_err_and(|error| error.is_readonly_or_access_failure()),
+        "the flag must agree with what the database actually refuses"
+    );
+}

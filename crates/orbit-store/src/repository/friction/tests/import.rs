@@ -522,3 +522,82 @@ fn assert_no_partial_import(root: &std::path::Path, workspace_id: &str) {
         "a failed import must leave no completion marker"
     );
 }
+
+/// A read-only store (unwritable file, read-only mount) can never persist the
+/// legacy import, so opening friction over it must not attempt one: no doomed
+/// write transaction, no warning per call, no marker. The next writable open
+/// still imports the corpus, so nothing is lost.
+#[test]
+fn a_read_only_store_skips_the_legacy_import_quietly_and_a_writable_open_still_imports() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = temp.path().join("ws_one");
+    legacy_record(&source, "F2026-05-001", "codex", FrictionStatus::Open);
+    drop(store(temp.path()));
+    let observational =
+        crate::Store::open_read_only(&temp.path().join("orbit.db")).expect("open read-only");
+
+    let (frictions, logs) = capture_warnings(|| {
+        // Twice: the skip must hold on every open, not just the first.
+        crate::compose::workspace_friction_store(observational.clone(), "ws_one", &source)
+            .expect("a read-only store still opens for reads");
+        crate::compose::workspace_friction_store(observational.clone(), "ws_one", &source)
+            .expect("a read-only store still opens for reads")
+    });
+    assert!(
+        !logs.contains("legacy-friction import"),
+        "a read-only open must not attempt (and warn about) the import: {logs}"
+    );
+    assert!(
+        frictions
+            .list(&FrictionListFilter::default())
+            .expect("list")
+            .is_empty(),
+        "nothing was imported through the read-only handle"
+    );
+    assert_no_partial_import(temp.path(), "ws_one");
+
+    let writable = crate::compose::workspace_friction_store(store(temp.path()), "ws_one", &source)
+        .expect("writable open imports");
+    assert_eq!(
+        writable
+            .list(&FrictionListFilter::default())
+            .expect("list")
+            .len(),
+        1
+    );
+}
+
+fn capture_warnings<T>(f: impl FnOnce() -> T) -> (T, String) {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Capture {
+        type Writer = Capture;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(Capture(Arc::clone(&buffer)))
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let logs = String::from_utf8(buffer.lock().expect("capture lock").clone()).expect("utf8 logs");
+    (result, logs)
+}
