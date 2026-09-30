@@ -250,13 +250,14 @@ fn pipeline_wait_entry_failure(label: &str, entry: &Value) -> Option<String> {
             .get("unresolved_count")
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        let counts = format!("{applied} applied, {unresolved} unresolved");
         return Some(match error {
-            Some(error) => format!(
-                "{label} task-pilot apply status {status}: {error} ({applied} applied, {unresolved} unresolved)"
-            ),
-            None => format!(
-                "{label} task-pilot apply status {status} ({applied} applied, {unresolved} unresolved)"
-            ),
+            // The apply step's own error already carries these counts.
+            Some(error) if error.contains(&counts) => {
+                format!("{label} task-pilot apply status {status}: {error}")
+            }
+            Some(error) => format!("{label} task-pilot apply status {status}: {error} ({counts})"),
+            None => format!("{label} task-pilot apply status {status} ({counts})"),
         });
     }
     let run_id = entry
