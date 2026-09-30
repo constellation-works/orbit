@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::{Value, ValueRef};
-use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
+use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::contracts::ForwardCompatibleOpen;
 use crate::driver::sqlite::migration;
@@ -403,6 +403,25 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(1))
             .map_err(|error| OrbitError::Store(error.to_string()))?;
         check_connection_writable(&conn)
+    }
+
+    /// True when this handle can never persist a write: the database was
+    /// opened observationally (read-only mount, unwritable file, or an
+    /// explicit read-only open) or pinned read-only by a forward-compatible
+    /// open. Cheap and non-mutating, unlike [`Store::check_writable`], so
+    /// callers can skip incidental persistence instead of attempting it.
+    pub fn is_read_only(&self) -> bool {
+        if self
+            .forward_compatible
+            .as_ref()
+            .is_some_and(|forward| !forward.writable)
+        {
+            return true;
+        }
+        self.conn
+            .lock()
+            .map(|conn| conn.is_readonly(DatabaseName::Main).unwrap_or(false))
+            .unwrap_or(false)
     }
 
     /// Prove the database accepts writes without mutating it: acquire the
