@@ -227,6 +227,46 @@ fn toggle_disables_without_deleting() {
     assert!(enabled.enabled);
 }
 
+/// A workspace reached through a symlinked ancestor (macOS `/tmp` and `/var`,
+/// a symlinked `~/workspace`) is an ordinary setup. Discovery lists the
+/// resolved directory, so an edit must recognise its own definition file
+/// rather than refuse it as stored at a non-canonical path.
+#[cfg(unix)]
+#[test]
+fn edits_work_when_the_workspace_is_reached_through_a_symlinked_ancestor() {
+    let temp = tempdir().expect("tempdir");
+    let real = temp.path().join("real");
+    fs::create_dir_all(real.join("global")).expect("global root");
+    fs::create_dir_all(real.join("repo/.orbit")).expect("orbit dir");
+    let linked = temp.path().join("linked");
+    std::os::unix::fs::symlink(&real, &linked).expect("link the workspace parent");
+
+    let runtime = OrbitRuntime::from_roots(&linked.join("global"), &linked.join("repo/.orbit"))
+        .expect("runtime behind a symlink");
+    assert!(
+        runtime.paths().local_dir.starts_with(&linked),
+        "the fixture must keep the symlinked spelling: {}",
+        runtime.paths().local_dir.display()
+    );
+    runtime
+        .auto_task_add(interval_params("chore", 60))
+        .expect("add");
+
+    let disabled = runtime
+        .auto_task_toggle("chore", false)
+        .expect("toggle off");
+    assert!(!disabled.enabled);
+    runtime
+        .auto_task_update("chore", AutoTaskUpdateParams::default())
+        .expect("update");
+    assert!(
+        runtime
+            .auto_task_toggle("chore", true)
+            .expect("toggle on")
+            .enabled
+    );
+}
+
 #[test]
 fn update_missing_definition_errors() {
     let runtime = runtime();
