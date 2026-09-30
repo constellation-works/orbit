@@ -19,7 +19,7 @@
 // still in flight, so the summary spells out the excluded bucket rather than
 // letting the two visible numbers imply they add up.
 
-import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors } from './common.js';
+import { el, syncNodes, fetchJson, requestPanel, getWindow, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -319,8 +319,14 @@ function renderOverTime(payload) {
     a.bucket_start < b.bucket_start ? -1 : a.bucket_start > b.bucket_start ? 1 : 0,
   );
 
-  if (series.length === 0) {
-    syncNodes(host, [emptyState("No job runs in this window.")]);
+  // The server buckets the whole window even when nothing ran, so a window with
+  // no settled runs arrives as a full series of empty buckets. Drawing that
+  // would show a blank chart with nothing saying why.
+  const hasSettledRuns = series.some((point) => point.succeeded + point.failed > 0);
+  if (!hasSettledRuns) {
+    syncNodes(host, [emptyState("No settled job runs in this window.")]);
+    const axis = $("reliability-over-time-axis");
+    if (axis) axis.textContent = "";
     return;
   }
 
@@ -439,10 +445,13 @@ function renderReliability(payload) {
   renderActivities(payload);
 }
 
+// `reliability-status` holds only the panel's load state: a cold load reads
+// "Loading…" and a failed read says so, instead of leaving four blank panels
+// under a green connection line.
 function fetchAndRenderReliability() {
   const rel = reliabilityWindowFor(getWindow());
-  return fetchJson(`/api/metrics/reliability?window=${encodeURIComponent(rel.window)}`)
-    .then(renderReliability);
+  const path = `/api/metrics/reliability?window=${encodeURIComponent(rel.window)}`;
+  return requestPanel("reliability-status", path, () => fetchJson(path), renderReliability, "reliability-count");
 }
 
 // Idempotent attach, matching the scoreboard selector's contract.

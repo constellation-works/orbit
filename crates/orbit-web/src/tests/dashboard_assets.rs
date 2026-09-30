@@ -3397,6 +3397,17 @@ fn dashboard_rows_are_keyboard_operable_without_changing_click_behaviour() {
     ));
 }
 
+// Reliability states a failed read and a window with nothing to chart instead
+// of rendering blank panels.
+#[test]
+fn dashboard_reliability_states_failed_reads_and_empty_windows() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_reliability.mjs")
+    ));
+}
+
 // A link naming a workspace the server does not serve must not strand the
 // dashboard on a scope its selector cannot show.
 #[test]
