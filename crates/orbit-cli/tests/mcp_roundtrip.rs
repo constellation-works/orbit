@@ -2275,6 +2275,43 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
 }
 
 #[test]
+fn mcp_workspace_argument_must_be_a_string_and_a_blank_one_defers_to_the_session() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task_id = author_task(&workspace, "selector probe");
+
+    // A selector of the wrong type used to be read as absent, so the call was
+    // silently served from the session's workspace instead of the one named.
+    for wrong_type in [json!(5), json!(["other"]), json!({ "name": "other" })] {
+        let refused = client.call_tool_err("orbit_task_list", json!({ "workspace": wrong_type }));
+        assert_eq!(refused["code"], "invalid_input", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("`workspace` must be a string")),
+            "the refusal must name the argument and its type: {refused}"
+        );
+    }
+
+    // A blank selector names nothing. It must not override the bound session
+    // and then fail as if no workspace were bound.
+    for blank in ["", "   "] {
+        let listed = client.call_tool_ok("orbit_task_list", json!({ "workspace": blank }));
+        assert!(
+            listed["tasks"]
+                .as_array()
+                .is_some_and(|tasks| tasks.iter().any(|task| task["id"] == json!(task_id))),
+            "a blank selector must fall back to the session workspace: {listed}"
+        );
+        let shown = client.call_tool_ok(
+            "orbit_task_show",
+            json!({ "id": task_id, "workspace": blank, "fields": ["title", "status"] }),
+        );
+        assert_eq!(shown["title"], "selector probe", "{shown}");
+    }
+}
+
+#[test]
 fn mcp_task_add_and_update_validate_context_selectors() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();

@@ -470,14 +470,18 @@ impl ServerMcpHost {
             .collect()
     }
 
+    /// The selector this call lands in: the call's own, else the session's.
     fn workspace_selector<'a>(
-        input: &'a Value,
+        explicit: Option<&'a str>,
         context: &'a ToolSessionContext,
     ) -> Option<&'a str> {
-        call_workspace_selector(input)
-            .or(context.workspace.as_deref())
-            .map(str::trim)
-            .filter(|selector| !selector.is_empty())
+        explicit.or_else(|| {
+            context
+                .workspace
+                .as_deref()
+                .map(str::trim)
+                .filter(|selector| !selector.is_empty())
+        })
     }
 
     fn workspace_required(&self, name: &str) -> OrbitError {
@@ -586,11 +590,12 @@ impl ServerMcpHost {
         input: &Value,
         context: &ToolSessionContext,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name) && call_workspace_selector(input).is_none() {
+        let explicit = call_workspace_selector(input)?;
+        if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name) && explicit.is_none() {
             let task_id = required_string(input, &["id"], "id")?;
             return task_owner::resolve_task_owner(&self.global_root, &task_id);
         }
-        let selector = Self::workspace_selector(input, context)
+        let selector = Self::workspace_selector(explicit, context)
             .ok_or_else(|| self.workspace_required(name))?;
         RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, selector)
     }
@@ -821,11 +826,23 @@ impl McpHost for ServerMcpHost {
     }
 }
 
-/// The selector the call itself passed, untrimmed. Distinguishing "the caller
+/// The selector the call itself passed, trimmed. Distinguishing "the caller
 /// named a workspace" from "the session announced one" is what makes an
 /// explicit selector a filter and the ambient one a default.
-fn call_workspace_selector(input: &Value) -> Option<&str> {
-    input.get("workspace").and_then(Value::as_str)
+///
+/// A blank selector names nothing, so it is absent (the session's binding
+/// applies) rather than an override that then fails as if none were bound. A
+/// selector of any other type is refused: reading it as absent would send the
+/// call to the session's workspace instead of the one the caller meant.
+fn call_workspace_selector(input: &Value) -> Result<Option<&str>, OrbitError> {
+    match input.get("workspace") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(selector)) => Ok(Some(selector.trim()).filter(|s| !s.is_empty())),
+        Some(_) => Err(OrbitError::InvalidInput(
+            "`workspace` must be a string: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute checkout path"
+                .to_string(),
+        )),
+    }
 }
 
 fn execute_core_tool(
