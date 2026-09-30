@@ -146,16 +146,18 @@
   font-weight: 600;
 }
 
+/* The line reads "refreshed <destination> · <time>" and is wider than the
+   rail, so it wraps under the dot instead of clipping the time. */
 .rail-conn {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 2px;
   font-size: 12px;
+  line-height: 1.4;
   color: var(--fg-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+.rail-conn .status-dot { flex: none; margin-top: 5px; }
+.rail-conn #meta-text { min-width: 0; overflow-wrap: anywhere; }
 
 .main-col {
   display: flex;
