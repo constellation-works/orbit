@@ -34,10 +34,20 @@ pub struct JobRunCancelResult {
     pub source: String,
     pub signal_attempted: bool,
     pub signal_outcome: Option<String>,
+    /// Provider CLI processes this cancellation stopped. They run in their own
+    /// process groups, so the owner signal never reaches them.
+    pub provider_processes_stopped: usize,
     /// [ORB-13663] Pull settlements this cancellation carried: for a follower
     /// pull drain, every admission a settle-only pass touched (the drain's
     /// unlaunched claims are ended as failures; live leaves keep running and
     /// settle themselves); for a claimed leaf, its own settlement. Empty for
     /// every other run.
     pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
+}
+
+impl JobRunCancelResult {
+    pub(super) fn with_providers_stopped(mut self, stopped: usize) -> Self {
+        self.provider_processes_stopped = stopped;
+        self
+    }
 }

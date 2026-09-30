@@ -396,6 +396,7 @@ pub(super) async fn cancel_run_action(
             "source": result.source,
             "signal_attempted": result.signal_attempted,
             "signal_outcome": result.signal_outcome,
+            "provider_processes_stopped": result.provider_processes_stopped,
             // [ORB-13663] Cancelling a follower pull drain settles what it
             // carried: unlaunched claims end as failures, recorded
             // settlements are delivered, and live leaves settle themselves.

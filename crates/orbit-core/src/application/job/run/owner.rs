@@ -116,6 +116,103 @@ pub(super) fn signal_run_owner_process(_run: &JobRun) -> Result<String, OrbitErr
     Ok("unsupported_platform".to_string())
 }
 
+/// What became of one provider child a cancellation went looking for.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProviderStop {
+    /// The provider was alive, verified as the recorded process, and is gone.
+    Stopped,
+    /// Nothing to stop: the recorded process had already exited (or its pid
+    /// now belongs to a different process).
+    NotRunning,
+    /// Liveness or identity could not be established, so nothing was signalled.
+    Unverified,
+}
+
+/// Stop a provider child recorded on a run's audit trail (TERM, then KILL).
+///
+/// Provider CLIs are spawned in their own process group, so signalling the
+/// run owner's group never reaches them; without this a cancelled run leaves
+/// its agent editing the worktree and spending provider budget after its
+/// reservations were released. Only a process whose recorded start token
+/// still matches is signalled, so a recycled pid is never touched.
+#[cfg(unix)]
+pub(super) fn stop_provider_process(
+    pid: u32,
+    pid_start_time: Option<&str>,
+) -> Result<ProviderStop, OrbitError> {
+    stop_provider_process_with_probe(
+        pid,
+        pid_start_time,
+        orbit_common::process::identity::probe_process_liveness,
+    )
+}
+
+#[cfg(unix)]
+fn stop_provider_process_with_probe<P>(
+    pid: u32,
+    pid_start_time: Option<&str>,
+    probe: P,
+) -> Result<ProviderStop, OrbitError>
+where
+    P: Fn(u32, Option<&str>) -> orbit_common::process::identity::ProcessLiveness,
+{
+    use orbit_common::process::identity::ProcessLiveness;
+
+    if pid <= 1 || pid > i32::MAX as u32 || pid == std::process::id() {
+        return Ok(ProviderStop::Unverified);
+    }
+    match probe(pid, pid_start_time) {
+        ProcessLiveness::Exited => return Ok(ProviderStop::NotRunning),
+        ProcessLiveness::Unknown => return Ok(ProviderStop::Unverified),
+        ProcessLiveness::Alive => {}
+    }
+    // An unversioned token cannot prove the pid still names the provider.
+    if !pid_start_time.is_some_and(is_stable_token) {
+        return Ok(ProviderStop::Unverified);
+    }
+
+    // Signal the whole group only when the provider leads its own (which is
+    // how Orbit spawns it); otherwise a shared group would take unrelated
+    // processes down with it.
+    let pgid = owner_process_group_id(pid)
+        .filter(|pgid| *pgid as u32 == pid && *pgid != unsafe { libc::getpgrp() });
+    let stopped = |pid: u32, pgid: Option<libc::pid_t>| match pgid {
+        Some(pgid) => !process_group_is_alive(pgid),
+        None => !process_is_alive(pid),
+    };
+    let signal = |signal: libc::c_int| match pgid {
+        Some(pgid) => match send_signal_to_process_group(pgid, signal) {
+            Err(error) if error.raw_os_error() != Some(libc::ESRCH) => Err(OrbitError::Execution(
+                format!("failed to signal provider process group {pgid}: {error}"),
+            )),
+            _ => Ok(()),
+        },
+        None => send_signal_to_pid(pid, signal),
+    };
+    let wait = |timeout: Duration| {
+        let started = Instant::now();
+        while started.elapsed() < timeout {
+            if stopped(pid, pgid) {
+                return true;
+            }
+            thread::sleep(RUN_OWNER_TERMINATION_POLL);
+        }
+        stopped(pid, pgid)
+    };
+
+    signal(libc::SIGTERM)?;
+    if !wait(RUN_OWNER_TERMINATION_GRACE) {
+        signal(libc::SIGKILL)?;
+        if !wait(RUN_OWNER_TERMINATION_GRACE) {
+            return Err(OrbitError::Execution(format!(
+                "provider process {pid} survived SIGTERM and SIGKILL"
+            )));
+        }
+    }
+    Ok(ProviderStop::Stopped)
+}
+
 #[cfg(unix)]
 fn send_signal_to_pid(pid: u32, signal: libc::c_int) -> Result<(), OrbitError> {
     let rc = unsafe { libc::kill(pid as libc::pid_t, signal) };

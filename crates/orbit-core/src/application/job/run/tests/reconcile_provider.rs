@@ -187,7 +187,7 @@ fn reservation_is_active(runtime: &OrbitRuntime, run_id: &str) -> bool {
         .any(|owner| owner == run_id)
 }
 
-fn write_provider_spawn(
+pub(super) fn write_provider_spawn(
     runtime: &OrbitRuntime,
     run_id: &str,
     event_id: &str,

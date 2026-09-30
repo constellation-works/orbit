@@ -25,6 +25,8 @@ use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
 
 use super::owner::signal_run_owner_process;
+#[cfg(unix)]
+use super::owner::{ProviderStop, stop_provider_process};
 use super::types::JobRunCancelResult;
 
 /// `source` recorded on a cancellation a parent propagated to its child.
@@ -181,6 +183,28 @@ impl OrbitRuntime {
             None
         };
 
+        // Provider CLIs run in their own process groups, so the owner signal
+        // above never reaches them. Stop the ones this run still has open
+        // before its reservations are released, or the agent keeps editing
+        // the worktree under a run that reports `cancelled`.
+        let providers_stopped = match self.stop_run_provider_processes(&run) {
+            Ok(stopped) => stopped,
+            Err(error) => {
+                log_best_effort(
+                    "record cancellation failure",
+                    &run.run_id,
+                    self.record_cancellation_completion(
+                        &run,
+                        &request_id,
+                        "failed",
+                        None,
+                        Some(&error.to_string()),
+                    ),
+                );
+                return Err(error);
+            }
+        };
+
         // The worker can reach a real terminal outcome while its owner is
         // being signalled. That outcome is authoritative: cancellation lost
         // the race and is an idempotent already-terminal result, not a second
@@ -204,7 +228,8 @@ impl OrbitRuntime {
                 signal_outcome,
                 actor,
                 source,
-            ));
+            )
+            .with_providers_stopped(providers_stopped));
         }
 
         let now = chrono::Utc::now();
@@ -244,7 +269,8 @@ impl OrbitRuntime {
                     signal_outcome,
                     actor,
                     source,
-                ));
+                )
+                .with_providers_stopped(providers_stopped));
             }
             let detail = cancelled_run
                 .state
@@ -296,7 +322,52 @@ impl OrbitRuntime {
             signal_outcome,
             actor,
             source,
-        ))
+        )
+        .with_providers_stopped(providers_stopped))
+    }
+
+    /// Stop the provider children `run` still has open on its audit trail and
+    /// return how many were running. A survivor fails the cancellation, like a
+    /// surviving owner does, so the run is not reported cancelled while its
+    /// agent keeps working.
+    #[cfg(unix)]
+    fn stop_run_provider_processes(&self, run: &JobRun) -> Result<usize, OrbitError> {
+        let processes = match self.collect_run_provider_processes_with(
+            &run.run_id,
+            orbit_common::process::identity::probe_process_liveness,
+        ) {
+            Ok(processes) => processes,
+            Err(error) => {
+                // Unreadable evidence is not proof of a survivor: keep the
+                // established cancellation semantics rather than blocking it.
+                tracing::warn!(
+                    target: "orbit.core.job_run",
+                    run_id = %run.run_id,
+                    error = %error,
+                    "cancellation could not read provider process evidence",
+                );
+                return Ok(0);
+            }
+        };
+        let mut stopped = 0usize;
+        for process in processes.iter().filter(|process| !process.finished) {
+            match stop_provider_process(process.pid, process.pid_start_time.as_deref())? {
+                ProviderStop::Stopped => stopped += 1,
+                ProviderStop::NotRunning => {}
+                ProviderStop::Unverified => tracing::warn!(
+                    target: "orbit.core.job_run",
+                    run_id = %run.run_id,
+                    pid = process.pid,
+                    "cancellation left a provider process it could not verify",
+                ),
+            }
+        }
+        Ok(stopped)
+    }
+
+    #[cfg(not(unix))]
+    fn stop_run_provider_processes(&self, _run: &JobRun) -> Result<usize, OrbitError> {
+        Ok(0)
     }
 
     fn record_run_cancelled_audit(
@@ -670,6 +741,7 @@ fn cancellation_result(
         source: source.to_string(),
         signal_attempted,
         signal_outcome,
+        provider_processes_stopped: 0,
         pull_settlements: Vec::new(),
     }
 }
