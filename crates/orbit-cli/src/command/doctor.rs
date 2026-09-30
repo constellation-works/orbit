@@ -14,7 +14,10 @@ use crate::output::color::{Domain, Role};
 /// `orbit doctor` — workspace-level self-diagnostics [ORB-10005].
 #[derive(Args)]
 #[command(
-    about = "Diagnose workspace health (config, database, disk, indexes, locks, runs)",
+    about = "Diagnose workspace health, provider CLIs, and filesystem access",
+    long_about = "Diagnose workspace health, provider CLIs, and filesystem access\n\n\
+        With no subcommand, checks the workspace: config, database, disk, indexes, locks, and \
+        runs. The subcommands run focused diagnostics for provider CLIs and filesystem access.",
     args_conflicts_with_subcommands = true
 )]
 pub struct DoctorCommand {
