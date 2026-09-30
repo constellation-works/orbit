@@ -53,12 +53,6 @@ pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
 /// Codex model used by the standard Astra crew and provider default.
 pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
 
-/// Default codex model (Astra is the provider default).
-pub const CODEX_DEFAULT_MODEL: &str = CODEX_ASTRA_MODEL;
-
-/// Default gemini model for the provider-default map.
-pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.8-flash";
-
 /// Default gemini model seeded into crew roles.
 pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
 
@@ -112,22 +106,3 @@ pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
 /// Version pinned like [`ANTHROPIC_HTTP_DEFAULT_MODEL`] because the examples
 /// hit the Anthropic Messages API directly, which rejects bare aliases.
 pub const ANTHROPIC_EXAMPLE_MODEL: &str = "claude-haiku-4-5-20251001";
-
-/// Provider → default model used to seed prompt defaults.
-///
-/// Mirrors the historical `agent_detect::default_model_for` map; `claude` now
-/// resolves to the unversioned [`CLAUDE_DEFAULT_STRONG`] alias. codex/gemini/
-/// grok/copilot/cursor/pi use their provider-specific defaults.
-pub fn default_model_for_provider(provider: &str) -> Option<&'static str> {
-    match provider {
-        "claude" => Some(CLAUDE_DEFAULT_STRONG),
-        "codex" => Some(CODEX_DEFAULT_MODEL),
-        "gemini" => Some(GEMINI_DEFAULT_MODEL),
-        "antigravity" => Some(ANTIGRAVITY_DEFAULT_MODEL),
-        "grok" => Some(GROK_DEFAULT_MODEL),
-        "copilot" => Some(COPILOT_DEFAULT_MODEL),
-        "cursor" => Some(CURSOR_DEFAULT_MODEL),
-        "pi" => Some(PI_DEFAULT_MODEL),
-        _ => None,
-    }
-}
