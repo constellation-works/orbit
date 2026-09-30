@@ -380,6 +380,10 @@ input.field-editor-input {
 .field-editor-input:focus {
   border-color: var(--accent);
 }
+.field-editor-input:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 1px;
+}
 .field-editor-controls {
   display: flex;
   align-items: center;

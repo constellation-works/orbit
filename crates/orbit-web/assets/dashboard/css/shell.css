@@ -353,6 +353,7 @@
 }
 .workspace-select:hover { border-color: var(--accent); }
 .workspace-select:focus { border-color: var(--accent); outline: none; }
+.workspace-select:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 1px; }
 .workspace-select.scope-ignored {
   opacity: 0.55;
   border-style: dashed;

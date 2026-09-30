@@ -77,6 +77,14 @@
 #friction-search:focus {
   border-color: var(--accent);
 }
+/* Text fields drop the browser ring for a border colour change, which is easy
+   to miss on the dark surface; keep a real ring for keyboard focus too. */
+#task-search:focus-visible,
+#audit-search:focus-visible,
+#friction-search:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 1px;
+}
 
 .chip {
   font: inherit;
