@@ -187,6 +187,21 @@ impl McpBackend {
         verb: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
+        let secrets = CallSecrets::resolve(&self.spec)?;
+        self.call_with_secrets(ctx, tool_name, verb, input, &secrets)
+            .map(|output| secrets.mask_json(output))
+            .map_err(|error| secrets.mask_error(error))
+    }
+
+    /// Keep the original answer inside PluginTool until schema validation.
+    pub(crate) fn call_with_secrets(
+        &self,
+        ctx: &ToolContext,
+        tool_name: &str,
+        verb: &str,
+        input: Value,
+        secrets: &CallSecrets,
+    ) -> Result<Value, OrbitError> {
         let timeout = Duration::from_millis(self.spec.timeout_ms());
         let deadline = Instant::now() + timeout;
         let key = self.session_key(ctx, tool_name)?;
@@ -195,8 +210,7 @@ impl McpBackend {
         // envelope rides the request (§4.2). So do the plugin's secrets, read
         // for this call: a value set since the child started reaches it
         // without a respawn, and none is ever in its environment.
-        let secrets = CallSecrets::resolve(&self.spec)?;
-        let params = tools_call_params(&self.spec, ctx, tool_name, verb, input, &secrets);
+        let params = tools_call_params(&self.spec, ctx, tool_name, verb, input, secrets);
         // At most one retry: the session this call found may have been ended
         // by another caller's failure between the lookup and the lock, and
         // that caller's broken wire is not this one's error.
@@ -226,6 +240,7 @@ impl McpBackend {
                     apply_secret_updates(
                         &self.spec,
                         tool_name,
+                        secrets,
                         response.pointer("/result/_meta/orbit/secret_updates"),
                     );
                     tool_result(tool_name, &response)

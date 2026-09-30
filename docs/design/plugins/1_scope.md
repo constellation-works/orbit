@@ -344,9 +344,18 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   call's audit row records each name as `applied` or `refused` (§4.4). An entry whose name is
   not a valid secret name is refused without being logged or audited by name.
 
-  When an `exec` backend exits non-zero, the host includes its stderr in the tool error. Any
-  secret value that call delivered is replaced by `[secret]` there, so a backend that prints
-  a credential while failing does not hand it to the caller.
+  **Response masking.** The host replaces every known secret value delivered for that call
+  with `[secret]` before returning backend results or errors. This covers `exec` JSON output
+  and zero-exit failures as well as nonzero-exit stderr; `mcp` structured content, JSON or raw
+  text, fallback content and tool/transport errors receive the same guard. Nested JSON string
+  values and object keys, error code/message/detail, schema diagnostics and rotation
+  diagnostics/audit names are masked without relying on credential patterns or environment
+  values. Ordinary fields and nonstring types retain their meaning; a masked object key that
+  collides with another key gains a numeric suffix to preserve both fields. `output_schema` checks
+  the original output, and rotations apply to the original update values before masking;
+  a valid response can therefore contain a masked string that no longer satisfies a schema
+  constraint on that string. This is exact-value masking (including JSON-escaped diagnostic
+  text), not protection against a backend deliberately encoding or splitting credentials.
 
   OAuth refresh with X, which invalidates the old refresh token on every refresh: the backend
   reads `refresh_token` from `context.secrets`, exchanges it for an access token and a new

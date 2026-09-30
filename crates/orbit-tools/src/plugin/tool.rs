@@ -102,8 +102,24 @@ impl Tool for PluginTool {
         // deterministic step with no agent in the loop, by the operator's
         // grant re-read for this call (`ToolCaller`).
         self.backend.spec().enforce_programs(ctx, &self.name)?;
+        let secrets = CallSecrets::resolve(self.backend.spec())?;
+        self.execute_with_secrets(ctx, input, &secrets)
+            .map(|output| secrets.mask_json(output))
+            .map_err(|error| secrets.mask_error(error))
+    }
+}
+
+impl PluginTool {
+    // Validate the original answer, then mask it at the common return boundary.
+    // A mask must neither make an invalid answer valid nor reject a valid one.
+    fn execute_with_secrets(
+        &self,
+        ctx: &ToolContext,
+        input: Value,
+        secrets: &CallSecrets,
+    ) -> Result<Value, OrbitError> {
         let output = match &self.backend {
-            PluginBackend::Exec(spec) => self.execute_process(spec, ctx, input)?,
+            PluginBackend::Exec(spec) => self.execute_process(spec, ctx, input, secrets)?,
             PluginBackend::Mcp(backend) if ctx.brokered_caller.is_some() => {
                 let call = ctx.broker_call.as_ref().ok_or_else(|| {
                     OrbitError::PolicyDenied(
@@ -112,9 +128,11 @@ impl Tool for PluginTool {
                 })?;
                 call.sessions
                     .backend(backend)
-                    .call(ctx, &self.name, &self.verb, input)?
+                    .call_with_secrets(ctx, &self.name, &self.verb, input, secrets)?
             }
-            PluginBackend::Mcp(backend) => backend.call(ctx, &self.name, &self.verb, input)?,
+            PluginBackend::Mcp(backend) => {
+                backend.call_with_secrets(ctx, &self.name, &self.verb, input, secrets)?
+            }
         };
         validate_output(&self.name, self.output_schema.as_ref(), &output)?;
         Ok(output)
@@ -127,6 +145,7 @@ impl PluginTool {
         spec: &PluginBackendSpec,
         ctx: &ToolContext,
         input: Value,
+        secrets: &CallSecrets,
     ) -> Result<Value, OrbitError> {
         let cwd = ctx.cwd.clone().ok_or_else(|| {
             OrbitError::InvalidInput(format!(
@@ -134,8 +153,7 @@ impl PluginTool {
                 self.name
             ))
         })?;
-        let secrets = CallSecrets::resolve(spec)?;
-        let envelope = exec_envelope(spec, ctx, &self.name, input, &secrets);
+        let envelope = exec_envelope(spec, ctx, &self.name, input, secrets);
         let stdin = serde_json::to_vec(&envelope).map_err(|error| {
             OrbitError::Execution(format!("serialize plugin envelope: {error}"))
         })?;
@@ -192,7 +210,7 @@ impl PluginTool {
         // ended the process; a service-side rotation cannot be rolled back.
         let response = parse_response_json(&self.name, &output.stdout);
         if let Ok(response) = &response {
-            apply_secret_updates(spec, &self.name, response.get("secret_updates"));
+            apply_secret_updates(spec, &self.name, secrets, response.get("secret_updates"));
         }
 
         if output.timed_out {

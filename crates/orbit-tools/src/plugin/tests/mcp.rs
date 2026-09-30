@@ -665,6 +665,154 @@ fn tools_call_carries_the_declared_secrets_per_call_and_never_in_env() {
     assert!(!after.to_string().contains(value));
 }
 
+/// The server reads the per-call value and echoes it verbatim through every
+/// response channel. The host, not a cooperative backend or a credential
+/// pattern, must keep it out of the caller's JSON and diagnostics.
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn mcp_responses_mask_opaque_delivered_values_on_success_and_failure() {
+    use super::support::capture_logs;
+
+    require_sandbox();
+    require_python3();
+    let canary = "opaque-mcp-canary-4bcc9";
+    let source = CasSource::holding(&[("api_token", canary, "v1")]);
+    let fixture = Fixture::with_secrets(PluginSecretDelivery::new(
+        vec!["api_token".into()],
+        Arc::clone(&source) as Arc<dyn PluginSecretSource>,
+    ));
+    let echo = fixture.tool("echo", None);
+    let ctx = fixture.context(&[]);
+    let expected = json!({"message":"echo [secret]", "nested":[{"[secret]":"[secret]"}],
+        "count":7,"retryable":false,"empty":null});
+    for mode in ["structured", "text_json"] {
+        let output = echo
+            .execute(&ctx, json!({"secret_response":mode}))
+            .expect("success");
+        assert_eq!(output, expected, "{mode}");
+        assert!(!output.to_string().contains(canary));
+    }
+    let raw = echo
+        .execute(&ctx, json!({"secret_response":"raw_text"}))
+        .expect("raw text");
+    assert_eq!(raw, json!("echo [secret]"));
+    let content = echo
+        .execute(&ctx, json!({"secret_response":"content_array"}))
+        .expect("content array");
+    assert_eq!(
+        content,
+        json!([{"type":"text","text":"[secret]"},{"type":"text","text":"ordinary"}])
+    );
+
+    for mode in [
+        "structured_error",
+        "text_error",
+        "fallback",
+        "structured_fallback",
+        "rpc_error",
+        "rpc_detail",
+    ] {
+        let (error, logs) = capture_logs(|| {
+            echo.execute(&ctx, json!({"secret_response":mode}))
+                .expect_err("failure")
+        });
+        for rendered in [
+            error.to_string(),
+            serde_json::to_string(&error).expect("caller error"),
+            format!("{error:?}"),
+            logs,
+        ] {
+            assert!(
+                !rendered.contains(canary),
+                "{mode} leaked a delivered value: {rendered}"
+            );
+        }
+        if mode == "structured_error" || mode == "text_error" {
+            match error {
+                OrbitError::RemoteTool {
+                    code,
+                    message,
+                    payload,
+                } => {
+                    assert_eq!(code, "auth_[secret]");
+                    assert!(message.contains("rejected [secret]"));
+                    assert_eq!(
+                        payload,
+                        json!({"code":"auth_[secret]","message":"rejected [secret]","retryable":true,
+                        "detail":{"[secret]":["[secret]",7,false,null],"reason":"expired"}})
+                    );
+                }
+                other => panic!("{mode} lost the structured error: {other}"),
+            }
+        } else {
+            assert!(matches!(&error, OrbitError::Execution(_)));
+            assert!(error.to_string().contains("[secret]"));
+        }
+    }
+
+    let constrained = fixture.tool(
+        "echo",
+        Some(json!({"type":"object", "properties":{
+            "message":{"enum":[format!("echo {canary}")]},"count":{"type":"integer"}
+        }})),
+    );
+    assert_eq!(
+        constrained
+            .execute(&ctx, json!({"secret_response":"structured"}))
+            .expect("valid raw enum"),
+        expected
+    );
+    let invalid = fixture
+        .tool(
+            "echo",
+            Some(json!({"type":"object","properties":{"message":{"type":"integer"}}})),
+        )
+        .execute(&ctx, json!({"secret_response":"text_json"}))
+        .expect_err("invalid raw output");
+    assert!(invalid.to_string().contains("violates its output_schema"));
+    assert!(
+        !serde_json::to_string(&invalid)
+            .expect("schema error")
+            .contains(canary)
+    );
+
+    // Resolve once per call, even while the same server remains alive.
+    let next = "changed-mcp-\"canary\\5d22e\n";
+    source.values.lock().expect("store").insert(
+        "api_token".into(),
+        DeliveredPluginSecret {
+            value: next.into(),
+            version: "v2".into(),
+        },
+    );
+    let output = echo
+        .execute(&ctx, json!({"secret_response":"structured"}))
+        .expect("next call");
+    assert_eq!(output, expected);
+    assert!(!output.to_string().contains(next));
+    let direct = fixture
+        .backend
+        .call(
+            &ctx,
+            "mcpdemo.echo",
+            "echo",
+            json!({"secret_response":"structured"}),
+        )
+        .expect("public backend boundary");
+    assert_eq!(direct, expected);
+    let escaped_error = echo
+        .execute(&ctx, json!({"secret_response":"rpc_detail"}))
+        .expect_err("JSON-escaped transport error");
+    assert!(escaped_error.to_string().contains("[secret]"));
+    let quoted = serde_json::to_string(next).expect("quoted secret");
+    assert!(
+        !escaped_error
+            .to_string()
+            .contains(&quoted[1..quoted.len() - 1])
+    );
+}
+
 /// An `mcp` backend rotates a secret through its result's
 /// `_meta.orbit.secret_updates`: an update at the delivered version is stored
 /// and the next `tools/call` carries it; one from a version that has since

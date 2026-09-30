@@ -16,6 +16,8 @@ handshake, list tools, and call them. Tools:
              name the server returns `<delivered value>-rotated` from that
              version as the result's `_meta.orbit.secret_updates`, the way a
              backend rotates a secret, so no value travels in the arguments.
+             `secret_response` instead selects deliberately leaking response
+             modes for testing the host's response boundary.
 - `slow`   — sleeps `seconds` before answering, for timeout and concurrency
              tests.
 - `crash`  — exits without answering, for dead-child tests.
@@ -125,6 +127,11 @@ def call(request_id, params):
     name = params.get("name")
     arguments = params.get("arguments") or {}
     if name == "echo":
+        # Deliberately uncooperative response modes: echo the delivered value
+        # itself, without knowing the test's canary or redacting at the server.
+        if arguments.get("secret_response"):
+            secret_response(request_id, params, arguments["secret_response"])
+            return
         arguments = dict(arguments)
         rotate = arguments.pop("rotate", None)
         server_request = os.environ.get("MCP_FIXTURE_SERVER_REQUEST")
@@ -151,6 +158,38 @@ def call(request_id, params):
     else:
         reply(request_id, {"isError": True,
                            "content": [{"type": "text", "text": f"unknown tool {name}"}]})
+
+
+def secret_response(request_id, params, mode):
+    value = params["_meta"]["orbit"]["secrets"]["api_token"]["value"]
+    payload = {"message": "echo " + value, "nested": [{value: value}],
+               "count": 7, "retryable": False, "empty": None}
+    error = {"code": "auth_" + value, "message": "rejected " + value,
+             "retryable": True, "detail": {value: [value, 7, False, None], "reason": "expired"}}
+    if mode == "rpc_error":
+        send({"jsonrpc": "2.0", "id": request_id,
+              "error": {"code": -32603, "message": "rejected " + value}})
+        return
+    if mode == "rpc_detail":
+        send({"jsonrpc": "2.0", "id": request_id,
+              "error": {"code": -32603, "data": {value: value}}})
+        return
+    result = {}
+    if mode.endswith("error") or mode.endswith("fallback"):
+        result["isError"] = True
+        payload = error
+    if mode.startswith("structured"):
+        if mode == "structured_fallback":
+            payload["retryable"] = "invalid"
+        result["structuredContent"] = payload
+    elif mode == "raw_text" or mode == "fallback":
+        result["content"] = [{"type": "text", "text": "echo " + value}]
+    elif mode == "content_array":
+        result["content"] = [{"type": "text", "text": value},
+                             {"type": "text", "text": "ordinary"}]
+    else:
+        result["content"] = [{"type": "text", "text": json.dumps(payload)}]
+    reply(request_id, result)
 
 
 while True:

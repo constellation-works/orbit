@@ -399,6 +399,70 @@ fn masking_hides_a_secret_that_contains_another_secret_whole() {
     assert_eq!(masked, "auth failed for [secret] and [secret]");
 }
 
+#[test]
+fn json_masking_handles_decoded_escaped_values_keys_and_empty_secrets() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let value = "opaque\"canary\\with\nlines";
+    let spec = secret_spec(
+        temp.path(),
+        RecordingSource::holding(&[("api_token", value, "v1"), ("refresh_token", "", "v2")]),
+    );
+    let secrets = CallSecrets::resolve(&spec).expect("resolve");
+    let original =
+        json!({"ordinary":[7,false,null,""],value:{"message":format!("prefix {value} suffix")}});
+    let masked = secrets.mask_json(original.clone());
+    assert_eq!(
+        masked,
+        json!({"ordinary":[7,false,null,""],"[secret]":{"message":"prefix [secret] suffix"}})
+    );
+    assert_eq!(CallSecrets::default().mask_json(original.clone()), original);
+    let quoted = serde_json::to_string(value).expect("quoted JSON");
+    let diagnostic =
+        secrets.mask_error(OrbitError::Execution(format!("invalid instance {quoted}")));
+    assert!(
+        matches!(diagnostic, OrbitError::Execution(message) if message == "invalid instance \"[secret]\"")
+    );
+    let collision = secrets.mask_json(json!({"[secret]":"ordinary",value:"sensitive field"}));
+    assert_eq!(
+        collision,
+        json!({"[secret]":"ordinary","[secret] (2)":"sensitive field"})
+    );
+}
+
+#[test]
+fn a_delivered_value_in_an_update_name_cannot_reach_diagnostics_or_audit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    // Valid secret-name syntax alone cannot prevent an opaque value being
+    // smuggled into the backend-controlled name of a refused update.
+    let value = "opaque-review-canary-8d44d9";
+    let spec = secret_spec(
+        temp.path(),
+        RecordingSource::holding(&[("api_token", value, "v1")]),
+    );
+    let secrets = CallSecrets::resolve(&spec).expect("resolve");
+    let (outcomes, logs) = capture_logs(|| {
+        apply_secret_updates(
+            &spec,
+            "demo.hello",
+            &secrets,
+            Some(&json!({value:{"value":"unused","expected_version":null}})),
+        )
+    });
+    assert_eq!(
+        outcomes,
+        BTreeMap::from([("[secret]".into(), PluginSecretUpdateStatus::Refused)])
+    );
+    assert_eq!(take_plugin_secret_updates(), outcomes);
+    assert!(
+        !logs.contains(value),
+        "delivered value reached a diagnostic: {logs}"
+    );
+    assert!(
+        logs.contains("does not declare it"),
+        "cause preserved: {logs}"
+    );
+}
+
 /// A plugin that declares no secrets has no `secrets` key at all, and one that
 /// declares some but has none set gets an empty object.
 #[test]
@@ -466,6 +530,7 @@ fn an_update_at_the_delivered_version_is_applied_and_the_next_call_sees_it() {
     let outcomes = apply_secret_updates(
         &spec,
         "demo.hello",
+        &CallSecrets::default(),
         Some(&json!({
             "refresh_token": { "value": "new-token-22b", "expected_version": "v1" },
         })),
@@ -517,6 +582,7 @@ fn two_updates_from_the_same_version_apply_exactly_one() {
                 let outcome = apply_secret_updates(
                     &spec,
                     "demo.hello",
+                    &CallSecrets::default(),
                     Some(&json!({
                         "refresh_token": { "value": value, "expected_version": "v1" },
                     })),
@@ -568,8 +634,9 @@ fn undeclared_non_rotatable_stale_and_malformed_updates_are_refused_without_a_va
         "Not A Name ghost-value-99c": { "value": "x", "expected_version": null },
     });
 
-    let (outcomes, logs) =
-        capture_logs(|| apply_secret_updates(&spec, "demo.hello", Some(&updates)));
+    let (outcomes, logs) = capture_logs(|| {
+        apply_secret_updates(&spec, "demo.hello", &CallSecrets::default(), Some(&updates))
+    });
 
     let refused = PluginSecretUpdateStatus::Refused;
     assert_eq!(
@@ -619,6 +686,7 @@ fn undeclared_non_rotatable_stale_and_malformed_updates_are_refused_without_a_va
     let malformed = apply_secret_updates(
         &spec,
         "demo.hello",
+        &CallSecrets::default(),
         Some(&json!({
             "refresh_token": { "value": 7, "expected_version": "v1" },
         })),
@@ -627,6 +695,7 @@ fn undeclared_non_rotatable_stale_and_malformed_updates_are_refused_without_a_va
     let missing_version = apply_secret_updates(
         &spec,
         "demo.hello",
+        &CallSecrets::default(),
         Some(&json!({ "refresh_token": { "value": "new-token-22b" } })),
     );
     assert_eq!(
@@ -634,7 +703,13 @@ fn undeclared_non_rotatable_stale_and_malformed_updates_are_refused_without_a_va
         "`expected_version` must be stated, even as null"
     );
     assert!(
-        apply_secret_updates(&spec, "demo.hello", Some(&json!(["refresh_token"]))).is_empty(),
+        apply_secret_updates(
+            &spec,
+            "demo.hello",
+            &CallSecrets::default(),
+            Some(&json!(["refresh_token"]))
+        )
+        .is_empty(),
         "an update list that is not an object stores nothing"
     );
     assert_eq!(source.stored("refresh_token").expect("kept").1, "v1");
@@ -654,11 +729,16 @@ fn a_source_without_a_store_refuses_updates() {
     let update = json!({ "refresh_token": { "value": "new", "expected_version": "v1" } });
 
     assert_eq!(
-        apply_secret_updates(&spec, "demo.hello", Some(&update))["refresh_token"],
+        apply_secret_updates(&spec, "demo.hello", &CallSecrets::default(), Some(&update))["refresh_token"],
         PluginSecretUpdateStatus::Refused
     );
     assert_eq!(
-        apply_secret_updates(&configured_spec(temp.path()), "demo.hello", Some(&update))["refresh_token"],
+        apply_secret_updates(
+            &configured_spec(temp.path()),
+            "demo.hello",
+            &CallSecrets::default(),
+            Some(&update)
+        )["refresh_token"],
         PluginSecretUpdateStatus::Refused
     );
 }
