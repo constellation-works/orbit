@@ -205,7 +205,7 @@ Nextra is reserved for a future scenario where interactive React widgets become 
 - **Headings:** start at `h2` within content (Starlight renders `h1` from frontmatter).
 - **Code blocks:** always language-tagged. Long examples collapsible.
 - **Cross-links:** relative paths only; no hardcoded domains.
-- **Internal references:** do not publish repository-internal artifact identifiers.
+- **Internal references:** do not publish repository-internal artifact identifiers in docs pages. The one exception is the changelog page: it renders `CHANGELOG.md` as-is, and its bracketed task IDs stay because they are the pointer from a release note to the pull request that delivered it.
 - **Voice:** terse, declarative, second-person ("you run", not "the user runs"). No marketing adjectives.
 
 ---
