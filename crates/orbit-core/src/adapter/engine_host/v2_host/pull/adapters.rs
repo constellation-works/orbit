@@ -4,9 +4,9 @@
 //! [`super::drain::PullDrain`] was proven against injected doubles when the
 //! foundation landed; these are the production implementations of its seams.
 //!
-//! - **Owner-local** ([`OwnerPullPeer`]): owner and executor are the same
-//!   machine and workspace, so admission runs on this owner's commit boundary
-//!   and binding and settlement on this owner's claim journal.
+//! - **Owner-local** (`OwnerPullPeer`, test-only): owner and executor are the
+//!   same machine and workspace, so admission runs on this owner's commit
+//!   boundary and binding and settlement on this owner's claim journal.
 //! - **Follower** ([`RoutedPullPeer`]): the owner is another machine. Every
 //!   call goes over the composition-supplied [`DrainOwnerTransport`] to the
 //!   owner's registered `orbit.task.pull`, `orbit.drain.claim.bind`,
@@ -23,11 +23,14 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
+#[cfg(test)]
+use orbit_store::contracts::{AdmissionIdentity, ClaimInvocation, ClaimRun};
 use orbit_store::contracts::{
-    AdmissionIdentity, AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimInvocation,
-    ClaimMutation, ClaimRun, ExecutionClaim, LocalPullAdmission, PullDestination,
+    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimMutation, ExecutionClaim,
+    LocalPullAdmission, PullDestination,
 };
 use orbit_tools::DrainOwnerTransport;
+#[cfg(test)]
 use orbit_types::task::ExecutionLocation;
 use orbit_types::tool::WorkerInvocation;
 use serde_json::{Value, json};
@@ -50,15 +53,15 @@ fn admitted_claim(admission: &LocalPullAdmission) -> Result<ExecutionClaim, Orbi
 
 /// The owner half of the pull protocol, served from this process.
 ///
-/// No production drain selects it yet: `orbit run auto --pull` is a replica
-/// entry point and always reaches its owner through [`RoutedPullPeer`]. It is
-/// kept as the owner-local variant the lifecycle fixtures drive end to end.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Test-only: `orbit run auto --pull` is a replica entry point and always
+/// reaches its owner through [`RoutedPullPeer`]. This owner-local variant
+/// exists so the lifecycle fixtures can drive the protocol end to end.
+#[cfg(test)]
 pub(crate) struct OwnerPullPeer<'a> {
     pub(crate) runtime: &'a OrbitRuntime,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 impl OwnerPullPeer<'_> {
     /// Confirm this process may serve `destination` at all.
     ///
@@ -113,6 +116,7 @@ impl OwnerPullPeer<'_> {
     }
 }
 
+#[cfg(test)]
 impl PullPeer for OwnerPullPeer<'_> {
     fn request(
         &self,
