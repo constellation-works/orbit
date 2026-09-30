@@ -47,6 +47,25 @@ fn allocator_uses_host_prefix_and_expands_past_five_digits() {
     );
 }
 
+#[test]
+fn allocated_prefix_is_reported_only_once_ids_have_been_minted() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    assert_eq!(
+        store.allocated_task_prefix().expect("pristine registry"),
+        None,
+        "a registry that minted nothing can still adopt a prefix"
+    );
+
+    let workspace = bind(&store, temp.path());
+    store.allocate_task_id(&workspace.partition_id).expect("id");
+
+    assert_eq!(
+        store.allocated_task_prefix().expect("allocated registry"),
+        Some(("ORB".to_string(), 1))
+    );
+}
+
 /// Runtime construction reasserts the configured prefix on every command, so
 /// the matching case has to stay observational: a registry on read-only
 /// storage must answer it instead of failing on a write it never needed.

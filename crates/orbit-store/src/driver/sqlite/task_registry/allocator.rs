@@ -268,6 +268,35 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))
     }
 
+    /// The prefix this registry has already minted ids under, when allocation
+    /// has begun; `None` for a pristine registry that can still adopt one.
+    ///
+    /// The second value is how many ids the allocator has handed out. This is
+    /// the read-only counterpart of the guard in
+    /// [`set_task_prefix`](Self::set_task_prefix): callers can refuse a prefix
+    /// choice up front instead of discovering the contradiction at the next
+    /// allocation.
+    pub fn allocated_task_prefix(&self) -> Result<Option<(String, u32)>, OrbitError> {
+        let conn = self.read()?;
+        let (prefix, next): (String, i64) = conn
+            .prepare_cached(
+                "SELECT task_prefix, next_number FROM allocator_state WHERE authority = 'local'",
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let bound: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_bundle_bindings", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        if next == 0 && bound == 0 {
+            return Ok(None);
+        }
+        let minted = u32::try_from(next.max(bound)).unwrap_or(u32::MAX);
+        Ok(Some((prefix, minted)))
+    }
+
     /// Prefixes recognized by the local registry: the active minting prefix
     /// plus every prefix already present in registered task bundles.
     pub fn known_task_prefixes(&self) -> Result<BTreeSet<String>, OrbitError> {
