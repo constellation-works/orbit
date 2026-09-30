@@ -190,6 +190,7 @@ networkDown = false;
 metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
+check(text('meta-text').includes('refreshed') && !text('meta-text').includes('diagnostics/'), 'connection line names the destination, not its route');
 const realTimeout = globalThis.setTimeout;
 const realFetch = globalThis.fetch;
 globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 30000 ? 1 : ms, ...args);

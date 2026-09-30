@@ -9,7 +9,7 @@ import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/r
 import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
 import { renderDiagnosticsSideCard, renderDiagnostics } from './js/diagnostics.js';
 import { renderMarkdown } from './js/markdown.js';
-import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './js/operations.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -1613,10 +1613,10 @@ function renderSparkline(buckets) {
   svg.appendChild(path);
 }
 
+// The connection line names the destination the way the rail does, not by its
+// route: an operator on Runs should not read "diagnostics/runs".
 function refreshLabel() {
-  if (activeTab === "diagnostics") return `diagnostics/${activeDiagSubtab}`;
-  if (activeTab === "run-detail") return `run/${getActiveRunId() || "?"}`;
-  return activeTab;
+  return destinationLabel(activeTab, activeDiagSubtab);
 }
 
 

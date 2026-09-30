@@ -67,6 +67,14 @@ const RAIL_LABELS = {
   "run-detail": "Run detail",
 };
 
+/// The operator-facing name of a destination, as the rail and the top bar spell
+/// it. The run list lives under the `diagnostics` route but is the Runs entry,
+/// and a single run's page belongs to that entry too.
+export function destinationLabel(top, diagSubtab) {
+  const railKey = top === "run-detail" || (top === "diagnostics" && diagSubtab === "runs") ? "runs" : top;
+  return RAIL_LABELS[railKey] || RAIL_LABELS[top] || top;
+}
+
 // Runs is its own rail entry, so Health opens its remembered view unless that
 // view is the run list, in which case it opens Incidents.
 function railRoute(ctx, tab) {
@@ -283,7 +291,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     : null;
   const railKey = top === "run-detail" || diagSub === "runs" ? "runs" : top;
   const crumb = $("topbar-crumb");
-  if (crumb) crumb.textContent = RAIL_LABELS[railKey] || RAIL_LABELS[top] || top;
+  if (crumb) crumb.textContent = destinationLabel(top, diagSub);
   document.body.classList.toggle("operations-active", top === "operations" || top === "config");
   // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
   // so the remembered-subtab highlight must be muted while another destination
