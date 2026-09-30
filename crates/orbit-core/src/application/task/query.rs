@@ -7,7 +7,7 @@ use orbit_types::task::{
 
 use orbit_store::RegisteredTaskResolution;
 
-use super::listing::TaskListFilter;
+use super::listing::list_task_metadata_in;
 
 use crate::OrbitRuntime;
 
@@ -143,20 +143,10 @@ impl OrbitRuntime {
             return self.list_tasks();
         }
 
-        Ok(self
-            .task_candidates(&TaskListFilter::default(), usize::MAX)?
-            .items
-            .into_iter()
-            .map(|envelope| {
-                Task::from_envelope_parts(
-                    envelope,
-                    String::new(),
-                    Vec::new(),
-                    String::new(),
-                    String::new(),
-                )
-            })
-            .collect())
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        list_task_metadata_in(self.stores().tasks())
     }
 
     /// Returns the coordination registry's global status projection for

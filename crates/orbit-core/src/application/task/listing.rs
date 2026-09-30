@@ -30,6 +30,30 @@ impl Default for TaskListQuery {
     }
 }
 
+/// Every task `store` lists, newest first, without body documents:
+/// `description`, `acceptance_criteria`, `plan` and `execution_summary` are
+/// empty and every envelope field is populated as a full read populates it.
+///
+/// One index-validated envelope read per task instead of a bundle read, for
+/// callers that read status, attribution, tags, relations, context files or
+/// timestamps of the whole workspace.
+pub(crate) fn list_task_metadata_in(store: &dyn TaskStoreBackend) -> Result<Vec<Task>, OrbitError> {
+    Ok(store
+        .task_candidates(&TaskListFilter::default(), usize::MAX)?
+        .items
+        .into_iter()
+        .map(|envelope| {
+            Task::from_envelope_parts(
+                envelope,
+                String::new(),
+                Vec::new(),
+                String::new(),
+                String::new(),
+            )
+        })
+        .collect())
+}
+
 /// Readiness and path matching retain their existing application policy. Both
 /// are decided from envelope metadata, so the store applies them to every
 /// candidate before the limit and hydrates only the rows that fill the page.
