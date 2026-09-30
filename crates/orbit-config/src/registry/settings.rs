@@ -525,8 +525,17 @@ pub(crate) fn read_optional<T: DeserializeOwned>(
         value = next;
     }
     value.clone().try_into().map(Some).map_err(|error| {
+        // `orbit config set` falls back to a plain string when the value is not
+        // a TOML literal, so `A,B` for a list key lands here as a string.
+        let error = error.to_string();
+        let error = error.trim_end();
+        let hint = if value.is_str() && error.contains("expected a sequence") {
+            "; a list is a TOML array, e.g. '[\"A\",\"B\"]' (quote it in the shell)"
+        } else {
+            ""
+        };
         OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': invalid value for '{key}': {error}",
+            "invalid runtime config '{}': invalid value for '{key}': {error}{hint}",
             redact_home_dir(&config_path.display().to_string())
         ))
     })
