@@ -188,6 +188,51 @@ cargo install cargo-deny --locked   # one-time
 make audit                          # == cargo deny check
 ```
 
+**YAML parser provenance and compatibility.**
+
+The workspace's `serde_yaml` dependency key aliases
+[`yaml_serde`](https://github.com/yaml/yaml-serde), the YAML organization's
+continuation of David Tolnay's archived `serde-yaml`. The shared alias follows
+the upstream migration instructions and preserves callers' typed codecs,
+`Value`/`Mapping` operations and error types without adding crate dependencies.
+It covers persisted tasks/frontmatter, workflow catalogs, routines, auto-tasks,
+policies, workspace identities, model prices, plugin manifests, schemas and
+conformance files.
+
+Selection checked on 2026-09-30: the
+[`0.10.7` registry release](https://crates.io/crates/yaml_serde/0.10.7) was
+published on 2026-08-18, is not yanked, and declares Rust 1.82 (below Orbit's
+MSRV). The [upstream history](https://github.com/yaml/yaml-serde/commits/main/)
+retains the original development history and includes August 2026 fixes for
+I/O error sources and compiler compatibility. Its
+[CI](https://github.com/yaml/yaml-serde/blob/main/.github/workflows/ci.yml)
+includes stable/MSRV tests, Miri and fuzz-target compilation. Registry package
+metadata, source revision and the Cargo.lock checksum identify the selected
+release; the fork is MIT OR Apache-2.0 licensed.
+
+The parser backend is now
+[`libyaml-rs` 0.3.0](https://github.com/yaml/libyaml-rs), maintained by the same
+organization as a fork of `unsafe-libyaml`. It remains a C-to-unsafe-Rust
+translation of libyaml: this migration addresses maintenance, and is not a
+claim of memory safety or exhaustive malformed-input coverage. Continue to
+run `make audit` and review upstream activity on upgrades. The similarly named
+`serde_yaml_ng` and `serde_norway` had older registry releases at selection;
+`serde-saphyr` is actively developed but lacks the compatible YAML `Value` API
+used here and would require a broader migration.
+
+No persisted-format migration is required. Behavioral coverage in
+`orbit-common`'s protocol YAML tests and `orbit-tools`' plugin loader tests
+checks round trips, anchors, explicit scalar tags, block/quoted scalars,
+timestamps, invalid documents and plugin field/location diagnostics. Existing
+type, storage, plugin and golden tests guard the surrounding contracts. Run the
+focused codecs and plugin fixtures when changing the parser:
+
+```bash
+cargo test --locked -p orbit-common --lib protocol::tests::yaml
+cargo test --locked -p orbit-types --lib
+cargo test --locked -p orbit-tools --tests
+```
+
 **Adding a license.** If a new dependency introduces a license not in the
 `[licenses].allow` list, `cargo deny check` fails. Add the SPDX identifier to
 the list in `deny.toml` **only** if it is a permissive/public-domain-equivalent

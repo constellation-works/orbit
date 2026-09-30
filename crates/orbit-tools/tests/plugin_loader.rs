@@ -118,6 +118,107 @@ fn rejects_unknown_keys_naming_the_field() {
 }
 
 #[test]
+fn plugin_manifest_round_trips_anchors_and_block_scalars() {
+    let temp = scratch_example();
+    rewrite_manifest(
+        temp.path(),
+        "  publisher: constellation-works",
+        "  publisher: &publisher constellation-works",
+    );
+    rewrite_manifest(
+        temp.path(),
+        "  description: Leakage-safe file/symbol recommendations from verified change history.",
+        "  description: |-\n    Unicode: café\n    literal: on, null",
+    );
+    rewrite_manifest(
+        temp.path(),
+        "    programs: [git]",
+        "    programs: [*publisher]",
+    );
+    let loaded = load_plugin_dir(temp.path()).expect("compatible YAML loads");
+    assert_eq!(
+        loaded.manifest.metadata.description,
+        "Unicode: café\nliteral: on, null"
+    );
+    assert_eq!(
+        loaded.manifest.spec.requires.programs,
+        ["constellation-works"]
+    );
+    std::fs::write(
+        temp.path().join("plugin.yaml"),
+        serde_yaml::to_string(&loaded.manifest).expect("serialize manifest"),
+    )
+    .expect("save manifest");
+    let reloaded = load_plugin_dir(temp.path()).expect("serialized manifest loads");
+    assert_eq!(reloaded.manifest, loaded.manifest);
+    assert_eq!(reloaded.tools.len(), loaded.tools.len());
+}
+
+#[test]
+fn malformed_plugin_yaml_preserves_field_and_location_diagnostics() {
+    for (from, to, field, detail) in [
+        ("  version: 0.4.1", "", "version", "missing field"),
+        (
+            "  version: 0.4.1",
+            "  version: 0.4.1\n  version: 0.5.0",
+            "manifest",
+            "duplicate field",
+        ),
+        ("  version: 0.4.1", "  version: [", "manifest", "line"),
+    ] {
+        let temp = scratch_example();
+        rewrite_manifest(temp.path(), from, to);
+        let error = load_plugin_dir(temp.path()).expect_err("invalid YAML refused");
+        let message = error.to_string();
+        assert_eq!(manifest_field(error), field);
+        assert!(
+            message.contains("invalid plugin.yaml") && message.contains(detail),
+            "{message}"
+        );
+        assert!(
+            message.contains("line") && message.contains("column"),
+            "{message}"
+        );
+    }
+    let temp = scratch_example();
+    let path = temp.path().join("plugin.yaml");
+    let mut bytes = std::fs::read(&path).expect("read manifest");
+    bytes.extend_from_slice(b"\n---\nschemaVersion: 2\n");
+    std::fs::write(&path, bytes).expect("write document stream");
+    assert!(load_plugin_dir(temp.path()).is_err());
+    std::fs::write(&path, [0xff, 0xfe]).expect("write invalid encoding");
+    assert!(load_plugin_dir(temp.path()).is_err());
+}
+
+#[test]
+fn referenced_yaml_schema_resolves_aliases_and_reports_invalid_yaml() {
+    let temp = scratch_example();
+    rewrite_manifest(
+        temp.path(),
+        "schemas/recommend.request.json",
+        "schemas/recommend.request.yaml",
+    );
+    let path = temp.path().join("schemas/recommend.request.yaml");
+    std::fs::write(&path, "type: object\nproperties:\n  query: &text {type: string}\n  repository: *text\nrequired: [query]\n")
+        .expect("write YAML schema");
+    let loaded = load_plugin_dir(temp.path()).expect("YAML schema loads");
+    assert_eq!(
+        loaded.tools[0].input_schema["properties"]["repository"]["type"],
+        "string"
+    );
+    assert!(
+        loaded.tools[0]
+            .parameters
+            .iter()
+            .any(|param| param.name == "query" && param.required)
+    );
+    std::fs::write(&path, "type: [").expect("write invalid YAML schema");
+    let error = load_plugin_dir(temp.path()).expect_err("invalid schema refused");
+    assert!(error.to_string().contains("not valid YAML"), "{error}");
+    assert_eq!(manifest_field(error), "spec.tools[0].input_schema.$ref");
+}
+
+#[test]
 fn rejects_a_ref_escaping_the_plugin_root() {
     let temp = tempfile::tempdir().expect("tempdir");
     let plugin_root = temp.path().join("plugin");

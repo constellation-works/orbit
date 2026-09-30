@@ -1481,6 +1481,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libyaml-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e126dda6f34391ab7b444f9922055facc83c07a910da3eb16f1e4d9c45dc777"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1754,10 +1760,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tiktoken-rs",
  "tracing",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1805,7 +1811,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml",
  "tempfile",
  "tokio",
  "toml",
@@ -1813,6 +1818,7 @@ dependencies = [
  "tower",
  "tracing",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1858,7 +1864,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
@@ -1868,6 +1873,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1910,13 +1916,13 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
  "toml",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1935,13 +1941,13 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
  "tracing",
  "tracing-subscriber",
  "wait-timeout",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -2034,12 +2040,12 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tar",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "yaml_serde",
  "zstd",
 ]
 
@@ -2060,13 +2066,13 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tar",
  "tempfile",
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "yaml_serde",
  "zip",
 ]
 
@@ -2080,11 +2086,11 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "tempfile",
  "thiserror",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -2106,13 +2112,13 @@ dependencies = [
  "orbit-types",
  "serde",
  "serde_json",
- "serde_yaml",
  "tempfile",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -2758,19 +2764,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "serdect"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3404,12 +3397,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3768,6 +3755,19 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "yaml_serde"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b729a08a9a6be689bbad3e2bf8015926db54b6622cc89c3a5f7dc174b9e918"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "libyaml-rs",
+ "ryu",
+ "serde",
 ]
 
 [[package]]
