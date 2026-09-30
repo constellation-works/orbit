@@ -13,6 +13,10 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
     description:
       'Orbit task IDs in pull requests point at workspace-local records. Find the delivery on GitHub instead.',
     tableOfContents: false,
+    // A utility landing for redirected pull-request links, not documentation:
+    // keep it out of search results and the ⌘K index.
+    pagefind: false,
+    head: [{ tag: 'meta', attrs: { name: 'robots', content: 'noindex' } }],
   }}
 >
   <p>
