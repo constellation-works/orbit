@@ -1345,10 +1345,7 @@ function activeRefreshJobs() {
     // the `Ws` extractor, so it answers in aggregate mode too — it is fetched
     // ahead of the guard below rather than being placeheld with the rest.
     if (activeDiagSubtab === "reliability") {
-      jobs.push(
-        fetchAndRenderReliability()
-          .catch((e) => console.error("Failed to fetch reliability metrics", e))
-      );
+      jobs.push(fetchAndRenderReliability());
       return jobs;
     }
     if (aggregate && activeDiagSubtab === "runs") {
