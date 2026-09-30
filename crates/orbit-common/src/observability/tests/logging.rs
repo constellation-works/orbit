@@ -17,9 +17,7 @@ use tracing_subscriber::{
     layer::SubscriberExt,
 };
 
-use super::super::logging::{
-    RedactingFields, env_filter, jsonl_layer_at_path, stderr_ansi_enabled,
-};
+use super::super::logging::{RedactingFields, ansi_allowed, env_filter, jsonl_layer_at_path};
 
 // Every environment mutation and every read that depends on it (log path
 // resolution, rotation config the background writer loads from `HOME`) goes
@@ -525,12 +523,10 @@ mod subscriber {
 }
 
 mod stderr_style {
-    use std::ffi::OsStr;
-
     use tracing::Dispatch;
     use tracing_subscriber::{Registry, fmt, layer::SubscriberExt};
 
-    use super::{BufferMakeWriter, RedactingFields, stderr_ansi_enabled};
+    use super::{BufferMakeWriter, RedactingFields, ansi_allowed};
 
     fn logged_stderr(ansi: bool) -> String {
         let stderr = BufferMakeWriter::default();
@@ -545,12 +541,17 @@ mod stderr_style {
     }
 
     #[test]
-    fn only_a_terminal_without_no_color_gets_ansi_styling() {
-        assert!(stderr_ansi_enabled(true, None));
-        assert!(stderr_ansi_enabled(true, Some(OsStr::new(""))));
-        assert!(!stderr_ansi_enabled(true, Some(OsStr::new("1"))));
-        assert!(!stderr_ansi_enabled(false, None));
-        assert!(!stderr_ansi_enabled(false, Some(OsStr::new(""))));
+    fn only_a_capable_terminal_without_no_color_gets_ansi_styling() {
+        let xterm = Some("xterm-256color");
+        assert!(ansi_allowed(true, xterm, None, None));
+        assert!(ansi_allowed(true, None, Some(""), None));
+        assert!(!ansi_allowed(true, xterm, Some("1"), None));
+        assert!(!ansi_allowed(true, Some("dumb"), None, None));
+        assert!(!ansi_allowed(false, xterm, None, None));
+        assert!(!ansi_allowed(false, xterm, Some(""), None));
+        // Forcing color never reaches a non-terminal or a dumb one.
+        assert!(!ansi_allowed(false, xterm, None, Some("1")));
+        assert!(!ansi_allowed(true, Some("dumb"), None, Some("1")));
     }
 
     #[test]
@@ -559,7 +560,7 @@ mod stderr_style {
         // below can fail.
         assert!(logged_stderr(true).contains('\u{1b}'));
 
-        let captured = logged_stderr(stderr_ansi_enabled(false, None));
+        let captured = logged_stderr(ansi_allowed(false, None, None, None));
         assert!(captured.contains("styled?"));
         assert!(
             !captured.contains('\u{1b}'),

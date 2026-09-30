@@ -368,10 +368,7 @@ pub fn init_default_subscriber(default_filter: &str) {
     let filter = env_filter(default_filter);
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
-        .with_ansi(stderr_ansi_enabled(
-            io::stderr().is_terminal(),
-            std::env::var_os("NO_COLOR").as_deref(),
-        ))
+        .with_ansi(stderr_ansi_enabled())
         .fmt_fields(RedactingFields::default());
 
     match global_jsonl_log_path() {
@@ -401,16 +398,41 @@ pub fn init_default_subscriber(default_filter: &str) {
     }
 }
 
-/// Whether the stderr log layer styles its output with ANSI escapes.
+/// Whether a stream may carry ANSI styling, given its terminal-ness and the
+/// color environment (`TERM`, `NO_COLOR`, `CLICOLOR_FORCE`).
 ///
-/// Only a terminal renders them. Everywhere else stderr is captured as text —
-/// an MCP client keeps a stdio server's stderr as its log, a supervisor writes
-/// it to a file — and the escapes arrive as literal `\x1b[2m` noise around
-/// every timestamp and level. `NO_COLOR` (non-empty) disables them on a
-/// terminal too.
-// Visible to sibling-layout logging tests.
-pub(super) fn stderr_ansi_enabled(is_terminal: bool, no_color: Option<&std::ffi::OsStr>) -> bool {
-    is_terminal && no_color.is_none_or(|value| value.is_empty())
+/// This is the one color policy for the process: the CLI output sink decides
+/// stdout with it and the stderr log layer decides stderr with it, so the two
+/// cannot disagree. Only a terminal renders escapes. Everywhere else the
+/// stream is captured as text — an MCP client keeps a stdio server's stderr as
+/// its log, a supervisor writes it to a file — and the escapes would arrive as
+/// literal `\x1b[2m` noise. On a terminal, `TERM=dumb` and a non-empty
+/// `NO_COLOR` disable styling; a non-empty `CLICOLOR_FORCE` only restates the
+/// terminal default, since forcing color into a non-terminal is not offered.
+pub fn ansi_allowed(
+    is_terminal: bool,
+    term: Option<&str>,
+    no_color: Option<&str>,
+    clicolor_force: Option<&str>,
+) -> bool {
+    let is_set = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
+    if !is_terminal || term == Some("dumb") || is_set(no_color) {
+        return false;
+    }
+    // `CLICOLOR_FORCE` cannot turn on what the terminal check refused above.
+    let _ = clicolor_force;
+    true
+}
+
+/// [`ansi_allowed`] for stderr, reading the color environment from the process.
+fn stderr_ansi_enabled() -> bool {
+    let var = |key: &str| std::env::var_os(key).map(|value| value.to_string_lossy().into_owned());
+    ansi_allowed(
+        io::stderr().is_terminal(),
+        var("TERM").as_deref(),
+        var("NO_COLOR").as_deref(),
+        var("CLICOLOR_FORCE").as_deref(),
+    )
 }
 
 /// Roll and prune the global JSONL feed.

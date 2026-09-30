@@ -273,23 +273,17 @@ fn parse_width(raw: &str) -> Option<u16> {
 
 /// Color precedence, per `specs/color-and-styling.md` §2.
 ///
-/// A non-TTY sink and `TERM=dumb` disable color before environment overrides
-/// are considered. A non-empty `NO_COLOR` disables color, then a non-empty
-/// `CLICOLOR_FORCE` enables it; otherwise a TTY gets color.
+/// Delegates to the process-wide policy shared with the stderr log layer
+/// (`orbit_common::observability::logging::ansi_allowed`): a non-TTY sink,
+/// `TERM=dumb`, or a non-empty `NO_COLOR` disable color; otherwise a TTY gets
+/// color.
 fn resolve_color(is_tty: bool, env: &SinkEnv) -> bool {
-    if !is_tty {
-        return false;
-    }
-    if env.term.as_deref() == Some("dumb") {
-        return false;
-    }
-    if is_set(env.no_color.as_deref()) {
-        return false;
-    }
-    if is_set(env.clicolor_force.as_deref()) {
-        return true;
-    }
-    true
+    orbit_common::observability::logging::ansi_allowed(
+        is_tty,
+        env.term.as_deref(),
+        env.no_color.as_deref(),
+        env.clicolor_force.as_deref(),
+    )
 }
 
 /// Mode precedence, per `specs/output-modes.md` §2. First match wins.
@@ -330,10 +324,6 @@ fn render_as(format: FormatArg, is_tty: bool) -> OutputMode {
         FormatArg::Json => OutputMode::Json,
         FormatArg::Ndjson => OutputMode::Ndjson,
     }
-}
-
-fn is_set(value: Option<&str>) -> bool {
-    value.is_some_and(|value| !value.is_empty())
 }
 
 /// Ask the terminal attached to stdout for its column count.
