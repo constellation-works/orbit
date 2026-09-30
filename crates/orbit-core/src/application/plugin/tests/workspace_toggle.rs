@@ -27,7 +27,10 @@ impl TwoWorkspaces {
     /// Install `graph` enabled on the host, seeded into A by the enable and
     /// into B by a sync of B's pin, with no toggle written anywhere.
     fn new() -> Self {
-        let fixture = PluginFixture::new();
+        Self::with_fixture(PluginFixture::new())
+    }
+
+    fn with_fixture(fixture: PluginFixture) -> Self {
         let source = DefinitionPlugin::new("graph").with_panel().write(&fixture);
         install_plugin(
             &fixture.runtime,
@@ -242,6 +245,50 @@ fn disabling_in_one_workspace_takes_its_whole_surface_off_there_and_leaves_the_o
     ));
     b.plugin_panel_refresh_ms("graph", "status")
         .expect("B still serves the panel");
+}
+
+/// A workspace behind a symlinked ancestor is an ordinary setup. Discovery
+/// lists resolved paths, so the per-workspace toggle has to match them against
+/// a resolved routines directory: otherwise a workspace disable is silently
+/// ignored for that workspace's routines and its seeded schedules keep firing.
+#[cfg(unix)]
+#[test]
+fn a_workspace_disable_holds_when_the_workspace_sits_behind_a_symlink() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "a_workspace_disable_holds_when_the_workspace_sits_behind_a_symlink",
+    ) {
+        return;
+    }
+    let ws = TwoWorkspaces::with_fixture(PluginFixture::new_behind_symlink());
+    assert!(
+        ws.fixture
+            .workspace_root
+            .starts_with(ws.fixture._root.path().join("linked")),
+        "the fixture must keep the symlinked spelling"
+    );
+    disable_plugin_in_workspace(&ws.fixture.runtime, "graph").expect("disable in A");
+    let a = ws.runtime_a();
+    let b = ws.runtime_b();
+
+    let reason = skip_reason(&a).expect("A skips the seeded auto-task");
+    assert!(
+        reason.contains("switched off in this workspace"),
+        "{reason}"
+    );
+    assert_eq!(skip_reason(&b), None);
+
+    let collection = crate::application::routines::collect_routines(&[
+        (workspace_record("alpha"), a),
+        (workspace_record("beta"), b),
+    ]);
+    let skipped = collection
+        .retired
+        .iter()
+        .filter(|routine| routine.name == "graph-refresh")
+        .collect::<Vec<_>>();
+    assert_eq!(skipped.len(), 1, "only A's copy is skipped: {skipped:?}");
+    assert_eq!(skipped[0].source_workspace, "alpha");
 }
 
 #[test]

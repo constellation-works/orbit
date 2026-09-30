@@ -45,7 +45,9 @@ fn seeded_names_follow_the_workspace_name_not_the_checkout_directory() {
 /// writing the duplicate would disable both workspaces' routines.
 #[test]
 fn collisions_report_names_another_workspace_already_declares() {
-    let root = tempdir().expect("create tempdir");
+    // Discovery reports resolved paths, which this test compares with `other_orbit`.
+    let root =
+        tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("create tempdir");
     let other_orbit = root.path().join("other/.orbit");
     seed_default_routines(&other_orbit.join("routines"), "server", false)
         .expect("seed the other workspace");

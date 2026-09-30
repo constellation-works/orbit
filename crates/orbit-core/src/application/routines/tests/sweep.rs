@@ -688,7 +688,7 @@ fn tick_reports_every_retired_default_as_skipped_rather_than_a_load_error() {
         return;
     }
     let _tz = orbit_common::test_env::unset(["TZ"]);
-    let root = tempfile::tempdir().expect("root");
+    let root = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("root");
     let global = root.path().join("global");
     let orbit_dir = root.path().join("upgraded/.orbit");
     std::fs::create_dir_all(orbit_dir.join("routines")).expect("routines dir");
