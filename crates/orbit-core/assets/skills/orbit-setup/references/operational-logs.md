@@ -165,9 +165,10 @@ end as `interrupted` / `process_not_found`; then correlate with the kernel log
 
 By default, containment falls back to the old behaviour, with one warning per
 Orbit process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
-workers launch without a bounded systemd scope"), when it is disabled, on
-macOS, or when `systemd-run --user --scope` cannot reach a user manager
-(containers, sandboxes, sessions without `XDG_RUNTIME_DIR`). With
+workers launch without a bounded systemd scope"), when it is disabled or when
+`systemd-run --user --scope` cannot reach a user manager on Linux (containers,
+sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS and other platforms
+without systemd launch uncontained silently: no warning is logged. With
 `machine.worker_containment_strict=true` or `--strict-worker-containment` on
 `orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
 worker before spawn; `orbit run show` reports
