@@ -743,3 +743,57 @@ fn staged_write_removes_partial_temp_file_when_writing_fails() {
         b"complete payload"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn private_open_repairs_a_permissive_existing_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().expect("tempdir");
+    let path = temp.path().join("shared.lock");
+    std::fs::write(&path, b"").expect("create lock file");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+        .expect("make the file permissive");
+
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    let _file = crate::fs::io::open_private_file(&path, &mut options).expect("open private");
+
+    let mode = std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o7777;
+    assert_eq!(mode, 0o600, "a permissive file is restricted to its owner");
+}
+
+/// An `fchmod` counts as a metadata change even when the mode is unchanged, and
+/// on macOS it makes the following `close` cost milliseconds. Lock files are
+/// opened once per task bundle on every listing, so an already-private file
+/// must be opened without touching its inode metadata.
+#[cfg(unix)]
+#[test]
+fn private_open_leaves_an_already_private_file_untouched() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let temp = TempDir::new().expect("tempdir");
+    let path = temp.path().join("private.lock");
+    std::fs::write(&path, b"").expect("create lock file");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .expect("make the file private");
+    let before = std::fs::metadata(&path).expect("metadata before");
+
+    // Let the filesystem's timestamp granularity separate a metadata change
+    // from the fixture setup above.
+    std::thread::sleep(Duration::from_millis(50));
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    drop(crate::fs::io::open_private_file(&path, &mut options).expect("open private"));
+
+    let after = std::fs::metadata(&path).expect("metadata after");
+    assert_eq!(
+        (before.ctime(), before.ctime_nsec()),
+        (after.ctime(), after.ctime_nsec()),
+        "reopening a private file must not rewrite its inode metadata"
+    );
+}
