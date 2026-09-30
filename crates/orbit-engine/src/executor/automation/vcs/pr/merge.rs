@@ -247,11 +247,21 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     if host.scoring_enabled()
         && let Some(model) = batch_author
     {
-        let _ = if batch_requires_revision {
+        // The PR is already merged, so a scoreboard failure must not fail the
+        // step; it is reported instead of silently dropping the count.
+        let recorded = if batch_requires_revision {
             pr_scoreboard::record_pr_count_with_revision(host.scoreboard_dir(), &model)
         } else {
             pr_scoreboard::record_pr_count_without_revision(host.scoreboard_dir(), &model)
         };
+        if let Err(error) = recorded {
+            tracing::warn!(
+                target: "orbit.engine.pr_merge",
+                pr = %pr_number,
+                error = %error,
+                "failed to record the merged PR in the scoreboard",
+            );
+        }
     }
 
     Ok(json!({
