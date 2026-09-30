@@ -631,7 +631,11 @@ fn repeated_resume_failure_publishes_partial_repair_to_the_existing_pr() {
         .find(|call| call.operation == PUSH_OPERATION)
         .expect("the recovered candidate is published");
     assert_eq!(push.input["branch"], json!("orbit/test-batch"));
-    assert_eq!(push.input["repo_root"], json!(workspace.repo));
+    // The push resolves its checkout before recording it.
+    assert_eq!(
+        push.input["repo_root"],
+        json!(workspace.repo.canonicalize().expect("resolve checkout"))
+    );
     assert!(
         !host
             .inner
