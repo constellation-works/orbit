@@ -245,8 +245,18 @@ fn publish_replacement_bundle(staging_dir: &Path, bundle_dir: &Path) -> std::io:
     };
 
     if let Err(error) = fs::rename(staging_dir, bundle_dir) {
-        if let Some(retired) = &retired {
-            let _ = fs::rename(retired, bundle_dir);
+        if let Some(retired) = &retired
+            && let Err(restore_error) = fs::rename(retired, bundle_dir)
+        {
+            // The original bundle now only exists under `retired`; say so
+            // instead of reporting the failed swap alone.
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "{error}; restoring the superseded bundle from {} also failed: {restore_error}",
+                    retired.display()
+                ),
+            ));
         }
         return Err(error);
     }
