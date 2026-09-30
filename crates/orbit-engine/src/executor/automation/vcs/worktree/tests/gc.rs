@@ -23,7 +23,10 @@ use super::super::{
     WorktreeIdentity, is_registered_worktree, resolve_shared_worktree_path,
     resolve_worktree_path_from_prefix,
 };
+#[cfg(unix)]
 use crate::executor::automation::vcs::git::{GitTimeoutBudget, GitTimeoutBudgetGuard};
+#[cfg(unix)]
+use crate::executor::automation::vcs::tests::with_fake_git;
 
 // Environment variables are process-global: mutating ORBIT_WORKTREE_ROOT in
 // this parallel test binary races every test that resolves a worktree path.
@@ -997,14 +1000,19 @@ fn large_synthetic_worktree_is_reclaimed_within_the_gc_budget() {
 }
 
 /// A supervisor timeout can land before `git worktree remove` has finished
-/// its clean and lock checks. A budget of [`GitTimeoutBudget::MIN_MS`]
-/// reliably forces exactly that — spawning `git` alone takes longer than 1ms,
-/// so Git never reaches its checks — and the recovery's own verification
-/// cannot finish inside that budget either. The timeout alone must not
-/// authorize deletion: the dirty bytes and the registration stay put, now and
-/// after any background work would have had time to run.
+/// its clean and lock checks. A Git that hangs once armed forces exactly that
+/// — Git never reaches its checks — and the recovery's own verification cannot
+/// finish either. The timeout alone must not authorize deletion: the dirty
+/// bytes and the registration stay put, now and after any background work
+/// would have had time to run.
+#[cfg(unix)]
 #[test]
 fn removal_timeout_before_safety_checks_preserves_a_dirty_worktree() {
+    let Some(stall) =
+        StalledGit::in_child("removal_timeout_before_safety_checks_preserves_a_dirty_worktree")
+    else {
+        return;
+    };
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
@@ -1012,14 +1020,10 @@ fn removal_timeout_before_safety_checks_preserves_a_dirty_worktree() {
     add_worktree(&repo, &worktree, "orbit/timeout");
     fs::write(worktree.join("marker.txt"), "still here").unwrap();
 
-    let error = {
-        let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
-            default_ms: GitTimeoutBudget::MIN_MS,
-            ..GitTimeoutBudget::DEFAULT
-        });
+    let error = stall.during(|| {
         remove_worktree(&repo, &worktree, None, false)
             .expect_err("an unverified git worktree remove timeout must not count as removal")
-    };
+    });
 
     assert!(
         format!("{error}").contains("preserved worktree"),
@@ -1040,23 +1044,29 @@ fn removal_timeout_before_safety_checks_preserves_a_dirty_worktree() {
 
 /// Even a clean tree is not deleted on the strength of a timeout: when the
 /// independent verification cannot complete, the worktree stays registered.
+#[cfg(unix)]
 #[test]
 fn removal_timeout_never_deletes_an_unverified_clean_worktree() {
+    let Some(stall) =
+        StalledGit::in_child("removal_timeout_never_deletes_an_unverified_clean_worktree")
+    else {
+        return;
+    };
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
     init_repo(&repo);
     let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-unverified");
     add_worktree(&repo, &worktree, "orbit/unverified");
 
-    {
-        let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
-            default_ms: GitTimeoutBudget::MIN_MS,
-            ..GitTimeoutBudget::DEFAULT
-        });
+    let error = stall.during(|| {
         remove_worktree_without_force(&repo, &worktree)
-            .expect_err("a timeout whose recovery cannot verify the tree must fail closed");
-    }
+            .expect_err("a timeout whose recovery cannot verify the tree must fail closed")
+    });
 
+    assert!(
+        format!("{error}").contains("preserved worktree"),
+        "the recovery must refuse, not some earlier step: {error}"
+    );
     assert!(worktree.join("base.txt").exists());
     assert!(is_registered_worktree(&repo, &worktree).unwrap());
     assert_eq!(trash_siblings(&worktree), 0);
@@ -1649,6 +1659,51 @@ fn git(current_dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A Git on PATH that hangs on every invocation while armed. It lives in an
+/// isolated copy of the test process, so PATH never changes for concurrent
+/// tests, and it is armed only after the fixture is built with real Git.
+#[cfg(unix)]
+struct StalledGit {
+    armed: PathBuf,
+}
+
+#[cfg(unix)]
+impl StalledGit {
+    const ARMED_ENV: &str = "ORBIT_TEST_GIT_STALL_ARMED";
+
+    /// `Some` inside the isolated child, where the test body runs; `None` in
+    /// the parent once the child has passed.
+    fn in_child(test: &str) -> Option<Self> {
+        let arm_dir = tempdir().unwrap();
+        let armed = arm_dir.path().join("armed");
+        with_fake_git(
+            module_path!(),
+            test,
+            &[(Self::ARMED_ENV, armed.display().to_string())],
+        )
+        .then(|| Self {
+            armed: PathBuf::from(
+                std::env::var_os(Self::ARMED_ENV).expect("the parent names the arm file"),
+            ),
+        })
+    }
+
+    /// Run `action` while every Git call hangs past a short budget, then
+    /// restore real Git and the default budget for the assertions.
+    fn during<T>(&self, action: impl FnOnce() -> T) -> T {
+        fs::write(&self.armed, "").unwrap();
+        let outcome = {
+            let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
+                default_ms: 200,
+                ..GitTimeoutBudget::DEFAULT
+            });
+            action()
+        };
+        fs::remove_file(&self.armed).unwrap();
+        outcome
+    }
 }
 
 fn is_resolver_env_child(case: &str) -> bool {
