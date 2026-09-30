@@ -302,6 +302,63 @@ fn routine_commands_honor_orbit_root_and_mutate_only_the_selected_root() {
     assert_home_empty(&fixture.home);
 }
 
+#[test]
+fn routine_pause_rejects_unknown_names_and_reports_json_for_known_ones() {
+    let fixture = Fixture::initialized();
+    let root_arg = fixture.root.to_string_lossy().into_owned();
+
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&fixture.repo)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .args(["--root", &root_arg, "routine", "pause", "no-such-routine"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "no routine named 'no-such-routine'",
+        ));
+
+    let paused = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &[
+            "--root",
+            &root_arg,
+            "routine",
+            "pause",
+            &fixture.routine_name,
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(paused["routine"], fixture.routine_name.as_str());
+    assert_eq!(paused["paused"], true);
+    assert_eq!(paused["changed"], true);
+
+    let resumed = run_json(
+        &fixture.repo,
+        &fixture.home,
+        &[
+            "--root",
+            &root_arg,
+            "routine",
+            "resume",
+            &fixture.routine_name,
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(resumed["paused"], false);
+    assert_eq!(resumed["changed"], true);
+    assert_home_empty(&fixture.home);
+}
+
 fn run_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
