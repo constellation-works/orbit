@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "orbit_agent_invoke",
-      "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability \u2014 the same test for a session that arrived over SSH as for a local one. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
+      "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability \u2014 the same test for a session that arrived over SSH as for a local one. Track it with `orbit_workflow_run_show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -51,6 +51,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
@@ -111,6 +117,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -141,6 +153,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -162,6 +180,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -184,6 +206,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -211,6 +239,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -283,6 +317,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -334,6 +374,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
@@ -351,6 +397,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -360,7 +410,7 @@
         "additionalProperties": true,
         "properties": {
           "claim_id": {
-            "description": "The claim `orbit.task.pull` admitted to this machine.",
+            "description": "The claim `orbit_task_pull` admitted to this machine.",
             "type": "string"
           },
           "run_id": {
@@ -393,6 +443,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -434,6 +490,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -463,6 +525,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -493,6 +559,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -506,7 +576,7 @@
             "type": "string"
           },
           "during_task": {
-            "description": "Optional task ID being worked on when friction occurred",
+            "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
             "type": "string"
           },
           "model": {
@@ -561,6 +631,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -624,6 +700,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -651,6 +731,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -716,6 +802,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -824,6 +916,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -976,11 +1072,17 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
       "name": "orbit_task_artifact_get",
-      "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
+      "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit_task_show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
@@ -1003,7 +1105,7 @@
             "type": "string"
           },
           "path": {
-            "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
+            "description": "Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`. Absolute paths and `..` are rejected.",
             "type": "string"
           },
           "workspace": {
@@ -1017,6 +1119,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1058,6 +1164,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1082,7 +1194,7 @@
                 "type": "string"
               }
             ],
-            "description": "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`."
+            "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit_task_show`."
           },
           "job_run_id": {
             "description": "Filter by job run ID",
@@ -1155,6 +1267,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1205,7 +1321,7 @@
                 "type": "array"
               }
             ],
-            "description": "The ship contract this owner resolves, exactly as `orbit.drain.probe` reported it. A new request carrying anything else is refused as `ship_contract_mismatch`, because the receipt freezes it."
+            "description": "The ship contract this owner resolves, exactly as `orbit_drain_probe` reported it. A new request carrying anything else is refused as `ship_contract_mismatch`, because the receipt freezes it."
           },
           "workspace": {
             "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
@@ -1222,6 +1338,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -1275,6 +1397,10 @@
           "id"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1483,6 +1609,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
       }
     },
     {
@@ -1516,6 +1648,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1542,6 +1678,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
@@ -1564,6 +1706,10 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1603,6 +1749,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
       }
     },
     {
@@ -1671,6 +1823,12 @@
           "workspace"
         ],
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true
       }
     },
     {
@@ -1680,6 +1838,10 @@
         "additionalProperties": true,
         "properties": {},
         "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
       }
     }
   ]
