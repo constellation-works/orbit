@@ -49,7 +49,9 @@ pub(super) fn with_fake_gh(module: &str, test: &str, script: &str) -> bool {
 /// Isolate PATH in a child test process so Git-shim fixtures cannot leak into
 /// concurrent Rust tests. The shim delegates to the real Git binary except for
 /// owned `worktree add` / `rebase` mutations, which hang after the requested
-/// side effect so the parent timeout can fire.
+/// side effect so the parent timeout can fire. `ORBIT_TEST_GIT_STALL_ARMED`
+/// names a file whose existence makes every Git invocation hang, so a test
+/// can build its fixture with real Git and then arm a deterministic timeout.
 #[cfg(unix)]
 pub(crate) fn with_fake_git(module: &str, test: &str, extra_env: &[(&str, String)]) -> bool {
     use std::fs;
@@ -91,6 +93,11 @@ pub(crate) fn with_fake_git(module: &str, test: &str, extra_env: &[(&str, String
         .find(|(key, _)| *key == "ORBIT_TEST_GIT_PHRASE_FAIL")
         .map(|(_, value)| value.as_str())
         .unwrap_or("");
+    let stall_armed = extra_env
+        .iter()
+        .find(|(key, _)| *key == "ORBIT_TEST_GIT_STALL_ARMED")
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("");
     let script = format!(
         r#"#!/bin/bash
 set -eu
@@ -98,6 +105,10 @@ real={real}
 worktree_once={worktree_once}
 rebase_once={rebase_once}
 phrase_fail={phrase_fail}
+stall_armed={stall_armed}
+if [ -n "$stall_armed" ] && [ -e "$stall_armed" ]; then
+  exec sleep 30
+fi
 cmd=""
 sub=""
 skip=0
@@ -174,7 +185,8 @@ exec "$real" "$@"
         real = quote(&real_git),
         worktree_once = quote(worktree_once),
         rebase_once = quote(rebase_once),
-        phrase_fail = quote(phrase_fail)
+        phrase_fail = quote(phrase_fail),
+        stall_armed = quote(stall_armed)
     );
 
     let bin = tempfile::tempdir().expect("fake git directory");
