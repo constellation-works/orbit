@@ -556,9 +556,18 @@ impl OrbitRuntime {
             return Ok(task);
         }
 
+        let next_step = match task.status {
+            // Delivery already ran for these; re-shipping opens a second PR
+            // or repeats landed work, so it must be a deliberate choice.
+            TaskStatus::Review | TaskStatus::Done => {
+                "Its delivery already ran; move it back to the backlog only if you mean to ship it again."
+            }
+            _ => {
+                "Move it back to the backlog (or start it explicitly) before automation may run it."
+            }
+        };
         Err(OrbitError::InvalidInput(format!(
-            "task '{id}' is in status '{}'; workflow admission for '{workflow}' requires 'backlog' or 'in-progress'. \
-             Move it back to the backlog (or start it explicitly) before automation may run it.",
+            "task '{id}' is in status '{}'; workflow admission for '{workflow}' requires 'backlog' or 'in-progress'. {next_step}",
             task.status
         )))
     }
