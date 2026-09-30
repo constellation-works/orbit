@@ -112,6 +112,7 @@ impl OrbitRuntime {
             })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_from_resolved_config(
         global_root: &Path,
         shared_root: &Path,

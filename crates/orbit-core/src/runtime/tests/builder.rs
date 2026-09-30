@@ -625,13 +625,16 @@ fn coordinated_partition_on_unwritable_storage_stays_readable() {
         modes
     }
 
+    /// The task's title, the listed ids, and the outcome of a write.
+    type Observed = (String, Vec<String>, Result<(), OrbitError>);
+
     /// Collect everything the assertions need while the partition refuses
     /// writes, so the fixture restores its modes before any of them unwind.
     fn observe(
         global_root: &std::path::Path,
         workspace_root: &std::path::Path,
         task_id: &str,
-    ) -> Result<(String, Vec<String>, Result<(), OrbitError>), OrbitError> {
+    ) -> Result<Observed, OrbitError> {
         let runtime = OrbitRuntime::from_roots(global_root, workspace_root)?;
         let title = runtime.get_task(task_id)?.title;
         let listed = runtime
