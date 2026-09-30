@@ -3430,6 +3430,17 @@ fn dashboard_all_workspaces_survives_reload_through_the_address() {
     ));
 }
 
+// Keyboard focus survives the rebuilds the dashboard does: expanding a row,
+// refreshing a panel, and cancelling an inline edit.
+#[test]
+fn dashboard_keeps_keyboard_focus_across_rebuilds() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_focus.mjs")
+    ));
+}
+
 // Click-to-copy ids and commands confirm a copy only when the browser made
 // one, and say so when it could not (no async clipboard on plain HTTP).
 #[test]

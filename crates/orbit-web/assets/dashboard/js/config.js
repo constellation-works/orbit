@@ -10,7 +10,7 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 
-import { el, fetchJson, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, fetchJson, getWorkspace, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -80,9 +80,20 @@ export async function fetchAndRenderConfig() {
   );
 }
 
+// Every interaction here re-renders the whole tab (a chip, Reload, opening or
+// closing an editor), which removes the control that was just used. Handing
+// focus to its rebuilt counterpart keeps a keyboard user where they were.
 function render(payload) {
   const body = $("config-body");
   if (!body) return;
+  const restoreBody = captureFocus(body);
+  const restoreControls = captureFocus($("config-controls"));
+  renderPanels(payload, body);
+  restoreBody();
+  restoreControls();
+}
+
+function renderPanels(payload, body) {
   body.replaceChildren();
   renderControls(payload);
   if (activeSubtab === "keys") {
@@ -415,11 +426,38 @@ function displayValue(value) {
 function startEdit(next) {
   editing = { ...next, error: null, pending: false, draft: {}, workspace: getWorkspace() };
   if (lastPayload) render(lastPayload);
+  // The control that opened the editor is gone; land in the editor's first field.
+  const field = $("config-body")?.querySelector(".config-editor input, .config-editor select, .config-editor textarea");
+  if (field && typeof field.focus === "function") field.focus();
 }
 
 function cancelEdit() {
+  const closing = editing;
   editing = null;
   if (lastPayload) render(lastPayload);
+  focusEditAffordance(closing);
+}
+
+/// After an editor closes, focus returns to the pencil that opened it.
+function focusEditAffordance(session) {
+  if (!session) return;
+  const key = session.kind === "crew" ? `crews.${session.name}` : session.key;
+  const rows = $("config-body")?.querySelectorAll(".config-row") || [];
+  for (const row of rows) {
+    if (row.dataset.key !== key) continue;
+    row.querySelector(".config-pencil")?.focus();
+    return;
+  }
+}
+
+/// Escape leaves an editor the way Cancel does, unless a save is in flight.
+function cancelOnEscape(editor) {
+  editor.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || editing?.pending) return;
+    event.stopPropagation();
+    cancelEdit();
+  });
+  return editor;
 }
 
 /// Writes are governed; a caller without the operator capability sees the
@@ -467,7 +505,7 @@ function keyEditor(row, payload, node) {
     editing.error ? el("div", { class: "config-row-error", text: editing.error }) : null,
     ...initChoices(payload, (init) => submitKey(row, input.read(), init)),
   ]);
-  return editor;
+  return cancelOnEscape(editor);
 }
 
 /// The fail-closed first write: when the workspace file does not exist yet,
@@ -656,6 +694,7 @@ async function submit(request) {
     if (editing === session) editing = null;
     if (session.workspace !== getWorkspace()) return;
     await fetchAndRenderConfig();
+    if (editing === null) focusEditAffordance(session);
   } catch (error) {
     // The admission layer's message is the useful part; it names the key, the
     // value, and what was expected instead. The draft is untouched, so the
@@ -823,7 +862,7 @@ function crewEditor(crew, payload, isNew) {
     editing.error ? el("div", { class: "config-row-error", text: editing.error }) : null,
     ...initChoices(payload, (init) => submitCrew(crew, fields, isNew, init)),
   ]);
-  return editor;
+  return cancelOnEscape(editor);
 }
 
 function fieldRow(label, input) {

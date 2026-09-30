@@ -18,7 +18,8 @@ class Node {
     this.value = "";
     this.hidden = false;
     this.disabled = false;
-    this.tabIndex = -1;
+    // Native form controls are tab stops; everything else has to be granted one.
+    this.tabIndex = ["BUTTON", "SELECT", "INPUT", "TEXTAREA", "A"].includes(this.tagName) ? 0 : -1;
     this._text = "";
     this.parentNode = null;
   }

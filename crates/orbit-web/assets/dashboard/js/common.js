@@ -565,7 +565,77 @@ export function patchJson(path, body) {
   return requestJson(path, "PATCH", body);
 }
 
+// A control keeps its first class through state changes (`config-chip` gains
+// and loses `on`), so that is what identifies it across a rebuild.
+const firstClass = (node) => String(node.className || "").split(/\s+/)[0];
+const isFocusable = (node) => !!node && typeof node.focus === "function" && node.tabIndex >= 0;
+
+function findKeyed(root, key) {
+  for (const child of root.children || []) {
+    if (child.dataset && child.dataset.key === key) return child;
+    const found = findKeyed(child, key);
+    if (found) return found;
+  }
+  return null;
+}
+
+/// A panel refresh or an expand rebuilds nodes rather than mutating them, and a
+/// browser drops focus to <body> when the focused node is removed, so a keyboard
+/// user loses their place on every Enter. Call this before the rebuild and the
+/// function it returns afterwards: it hands focus to the rebuilt counterpart.
+///
+/// The counterpart is found by the nearest ancestor carrying `data-key` (a
+/// stable identity) plus the child-index path below it; a control deeper than
+/// the keyed node must also match in tag and leading class, otherwise focus goes to the
+/// keyed node itself when that is focusable. Nothing happens when focus was
+/// outside `container`, still sits in it, or the user has since moved on.
+export function captureFocus(container) {
+  const active = document.activeElement;
+  if (!container || !active || active === container || !container.contains(active)) return () => {};
+  const chain = [];
+  for (let node = active; node && node !== container; node = node.parentNode) chain.unshift(node);
+  let ownerAt = -1;
+  chain.forEach((node, index) => {
+    if (node.dataset && node.dataset.key) ownerAt = index;
+  });
+  const key = ownerAt >= 0 ? chain[ownerAt].dataset.key : null;
+  const path = [];
+  for (let index = ownerAt + 1; index < chain.length; index++) {
+    path.push(Array.prototype.indexOf.call(chain[index].parentNode.children, chain[index]));
+  }
+  const remembered = {
+    tagName: active.tagName,
+    kind: firstClass(active),
+    selection: typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null,
+  };
+  return () => {
+    if (container.contains(active)) return;
+    const now = document.activeElement;
+    if (now && now !== active && now !== document.body) return;
+    const owner = key === null ? container : findKeyed(container, key);
+    if (!owner) return;
+    let leaf = owner;
+    for (const index of path) {
+      const next = leaf.children[index];
+      if (!next) break;
+      leaf = next;
+    }
+    const exact = leaf !== owner && leaf.tagName === remembered.tagName && firstClass(leaf) === remembered.kind;
+    const target = exact ? leaf : owner;
+    if (!isFocusable(target)) return;
+    try {
+      target.focus({ preventScroll: true });
+      if (exact && remembered.selection && typeof target.setSelectionRange === "function") {
+        target.setSelectionRange(...remembered.selection);
+      }
+    } catch (_) {
+      // A control that cannot take focus or a selection just keeps the default.
+    }
+  };
+}
+
 export function syncNodes(container, newNodesArr) {
+  const restoreFocus = captureFocus(container);
   const state = panelRequests.get(container.id);
   if (state) {
     panelMessage(container.id, state);
@@ -628,6 +698,7 @@ export function syncNodes(container, newNodesArr) {
   }
 
   if (state) panelMessage(container.id, state);
+  restoreFocus();
 }
 
 // One entry per admission a follower's settle-only pass carried (`orbit run
