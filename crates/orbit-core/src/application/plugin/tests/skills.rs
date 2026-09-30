@@ -666,6 +666,15 @@ impl NamespaceLayout {
         for root in [&discovery, &other_discovery] {
             std::fs::create_dir_all(root).expect("create discovery root");
         }
+        // `relative_to` counts path components, so the discovery roots must be
+        // spelled as the plugin root is: symlink-free. Under a symlinked temp
+        // directory (macOS `/var`) the spelled root has one component fewer
+        // than the physical one and every relative alias would climb one level
+        // short.
+        let discovery = discovery.canonicalize().expect("resolve discovery root");
+        let other_discovery = other_discovery
+            .canonicalize()
+            .expect("resolve other discovery root");
         Self {
             family,
             sources,
