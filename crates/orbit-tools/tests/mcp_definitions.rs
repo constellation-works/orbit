@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::PluginToolBinding;
-use orbit_tools::{Tool, ToolContext, ToolRegistry, canonical_builtin_mcp_tool_definitions};
+use orbit_tools::{
+    Tool, ToolContext, ToolExecutionKind, ToolRegistry, canonical_builtin_mcp_tool_definitions,
+};
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
 use orbit_types::tool::{McpToolDefinitionError, McpToolScope, ToolSchema};
 use serde_json::Value;
@@ -177,4 +179,132 @@ fn register_plugin_tool_refuses_to_overwrite_a_builtin_name() {
             && registry.plugin_binding("orbit.command.exec").is_none(),
         "the built-in still holds orbit.command.exec"
     );
+}
+
+struct ReadOnlyPlugin;
+
+impl Tool for ReadOnlyPlugin {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "demo.inspect".to_string(),
+            description: "read-only plugin tool".to_string(),
+            parameters: Vec::new(),
+            builtin: false,
+        }
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
+    }
+
+    fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
+        Ok(Value::Null)
+    }
+}
+
+#[test]
+fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
+    let definitions =
+        canonical_builtin_mcp_tool_definitions().expect("builtin MCP definitions are valid");
+    let annotations_of = |name: &str| {
+        definitions
+            .iter()
+            .find(|definition| definition.schema.name == name)
+            .unwrap_or_else(|| panic!("{name} is advertised"))
+            .annotations
+            .unwrap_or_else(|| panic!("{name} advertises annotations"))
+    };
+
+    for name in [
+        "orbit.task.list",
+        "orbit.task.show",
+        "orbit.task.artifact.get",
+        "orbit.search",
+        "orbit.friction.list",
+        "orbit.auto_task.list",
+        "orbit.workflow.run.list",
+        "orbit.workflow.run.show",
+        "orbit.drain.probe",
+        "orbit.drain.receipt.lookup",
+    ] {
+        assert_eq!(annotations_of(name).read_only, Some(true), "{name}");
+    }
+    for name in [
+        "orbit.task.add",
+        "orbit.task.update",
+        "orbit.task.artifact.put",
+        "orbit.friction.add",
+        "orbit.friction.update",
+        "orbit.friction.rehome",
+        "orbit.auto_task.delete",
+        "orbit.workflow.ship",
+        "orbit.agent.invoke",
+        "orbit.command.exec",
+    ] {
+        assert_eq!(annotations_of(name).read_only, Some(false), "{name}");
+    }
+
+    assert_eq!(
+        annotations_of("orbit.auto_task.delete").destructive,
+        Some(true)
+    );
+    assert_eq!(
+        annotations_of("orbit.friction.rehome").destructive,
+        Some(true)
+    );
+    assert_eq!(annotations_of("orbit.task.add").destructive, Some(false));
+    assert_eq!(annotations_of("orbit.command.exec").open_world, Some(true));
+    assert_eq!(annotations_of("orbit.task.list").open_world, Some(false));
+}
+
+#[test]
+fn advertised_read_only_hint_agrees_with_every_tools_execution_kind() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let definitions = registry
+        .mcp_tool_definitions()
+        .expect("builtin MCP definitions are valid");
+    for definition in definitions {
+        let name = definition.schema.name.as_str();
+        let kind = registry
+            .execution_kind(name)
+            .unwrap_or_else(|| panic!("{name} is registered"));
+        let annotations = definition
+            .annotations
+            .unwrap_or_else(|| panic!("{name} advertises annotations"));
+        assert_eq!(
+            annotations.read_only,
+            Some(kind == ToolExecutionKind::ReadOnly),
+            "{name}: clients auto-approve on readOnlyHint, so it must be true exactly when the \
+             tool's execution kind is ReadOnly"
+        );
+        if annotations.read_only == Some(true) {
+            assert_eq!(annotations.destructive, None, "{name}");
+        }
+    }
+}
+
+#[test]
+fn plugin_tools_advertise_only_the_read_only_fact_their_kind_proves() {
+    let mut registry = ToolRegistry::new();
+    let binding = Arc::new(PluginToolBinding {
+        provenance: PluginProvenance {
+            name: "demo".to_string(),
+            version: "1.0.0".to_string(),
+            manifest_digest: "0".repeat(64),
+            grants: Vec::new(),
+        },
+        execution_kind: PluginExecutionKind::ReadOnly,
+        diagnostic: None,
+    });
+    registry.register_plugin_tool(
+        ReadOnlyPlugin,
+        Some(McpToolScope::WorkspaceRequired),
+        binding,
+    );
+    let definitions = registry.mcp_tool_definitions().expect("valid");
+    let annotations = definitions[0].annotations.expect("annotations");
+    assert_eq!(annotations.read_only, Some(true));
+    assert_eq!(annotations.destructive, None);
+    assert_eq!(annotations.open_world, None);
 }

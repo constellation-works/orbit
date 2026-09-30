@@ -379,7 +379,11 @@ impl ServerHandler for OrbitToolServer {
                 let input_schema = self
                     .input_schema_for(&definition)
                     .map_err(invalid_definitions_mcp_error)?;
-                Ok(schema_to_tool(definition.schema, input_schema))
+                Ok(schema_to_tool(
+                    definition.schema,
+                    input_schema,
+                    definition.annotations,
+                ))
             })
             .collect::<Result<Vec<_>, McpError>>()?;
         let result = ListToolsResult::with_all_items(tools);

@@ -6,16 +6,36 @@ use orbit_common::governance::friction::{
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
 #[cfg(test)]
 use orbit_common::protocol::tool_schema::tool_parameter_schema;
-use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolParam, ToolSchema};
-use rmcp::model::{JsonObject, Tool};
+use orbit_types::tool::{
+    McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam, ToolSchema,
+};
+use rmcp::model::{JsonObject, Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
 use super::name_map::sanitize_tool_name;
 
-pub(super) fn schema_to_tool(schema: ToolSchema, input_schema: JsonObject) -> Tool {
+pub(super) fn schema_to_tool(
+    schema: ToolSchema,
+    input_schema: JsonObject,
+    annotations: Option<McpToolAnnotations>,
+) -> Tool {
     let description = schema.description.clone();
     let advertised_name = sanitize_tool_name(&schema.name);
-    Tool::new(advertised_name, description, Arc::new(input_schema))
+    let tool = Tool::new(advertised_name, description, Arc::new(input_schema));
+    match annotations {
+        Some(annotations) => tool.with_annotations(tool_annotations(annotations)),
+        None => tool,
+    }
+}
+
+/// The rmcp hints for one definition; an unset hint stays unadvertised.
+fn tool_annotations(annotations: McpToolAnnotations) -> ToolAnnotations {
+    let mut hints = ToolAnnotations::new();
+    hints.read_only_hint = annotations.read_only;
+    hints.destructive_hint = annotations.destructive;
+    hints.idempotent_hint = annotations.idempotent;
+    hints.open_world_hint = annotations.open_world;
+    hints
 }
 
 /// Canonical name of the authoritative server's workspace selector.
