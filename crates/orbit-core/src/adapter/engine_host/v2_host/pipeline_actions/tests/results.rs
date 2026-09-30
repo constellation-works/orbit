@@ -91,6 +91,33 @@ fn pipeline_success_guard_reports_task_pilot_apply_without_unknown_run() {
     assert!(!message.contains("<unknown>"));
 }
 
+/// The apply step's own error already ends with its applied/unresolved
+/// counts; the guard used to append the same counts a second time.
+#[test]
+fn pipeline_success_guard_states_task_pilot_apply_counts_once() {
+    let error = pipeline_success_guard(
+        "pipeline_success_guard",
+        &json!({
+            "context": "task-pilot apply",
+            "result": {
+                "status": "failed",
+                "error": "task-pilot apply unresolved: partition 0, task ORB-11991: invalid; 0 applied, 1 unresolved",
+                "partition_decisions": [],
+                "applied_count": 0,
+                "unresolved_count": 1,
+            }
+        }),
+    )
+    .expect_err("unresolved apply fails the guard");
+
+    let message = action_failure_message(error, "pipeline_success_guard");
+    assert_eq!(
+        message.matches("1 unresolved").count(),
+        1,
+        "the counts must appear once: {message}"
+    );
+}
+
 #[test]
 fn pipeline_success_guard_rejects_mixed_results() {
     let err = pipeline_success_guard(
