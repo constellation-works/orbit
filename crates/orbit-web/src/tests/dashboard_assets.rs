@@ -3419,6 +3419,17 @@ fn dashboard_replaces_an_unknown_linked_workspace_with_the_default() {
     ));
 }
 
+// "All workspaces" is a scope the address can carry: a reload or shared link
+// must reopen the aggregate view instead of falling back to the default.
+#[test]
+fn dashboard_all_workspaces_survives_reload_through_the_address() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_workspace_all.mjs")
+    ));
+}
+
 // Click-to-copy ids and commands confirm a copy only when the browser made
 // one, and say so when it could not (no async clipboard on plain HTTP).
 #[test]
