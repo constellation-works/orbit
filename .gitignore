@@ -68,6 +68,12 @@ dist/
 build/
 .astro/
 
+# dotenv — local credentials at any depth; share only credential-free examples.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
 # direnv — per-repo env vars (holds secrets like ANTHROPIC_API_KEY)
 .envrc
 .direnv/
