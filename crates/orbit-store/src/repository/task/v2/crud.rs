@@ -342,18 +342,21 @@ impl TaskV2Store {
     /// Stream the tasks matching `query` in listing order (newest first) to
     /// `visit` until it returns `false`.
     ///
-    /// `admit` sees each candidate's envelope-only task before its bundle is
-    /// read, so tasks the caller would discard anyway (a status, tag or path
-    /// filter) cost no bundle read, and stopping early costs none for the
-    /// tasks that were never reached. Each admitted task is read once on the
-    /// lightweight listing path; artifact payloads stay unopened and only the
-    /// manifest paths participate in matching. A match is admitted again as
-    /// hydrated, so an update that raced the envelope read is judged on the
-    /// task actually returned.
+    /// `admit` sees each candidate's envelope-only task before anything of it
+    /// is read, so tasks the caller would discard anyway (a status, tag or path
+    /// filter) cost no read, and stopping early costs none for the tasks that
+    /// were never reached. An admitted task is first pruned from its envelope
+    /// and search documents (no event log, no consistency checks); only a task
+    /// that can match is read whole on the lightweight listing path, which
+    /// decides the match. Artifact payloads stay unopened and only the manifest
+    /// paths participate in matching. A match is admitted again as hydrated, so
+    /// an update that raced the envelope read is judged on the task actually
+    /// returned.
     ///
-    /// Integrity is judged for the bundles this reads: a damaged bundle the
-    /// caller does not admit, or that lies past the point where `visit`
-    /// stopped, no longer fails the search.
+    /// Integrity is judged for the bundles this reads whole: a damaged bundle
+    /// the caller does not admit, that lies past the point where `visit`
+    /// stopped, or whose search documents hold no match, no longer fails the
+    /// search.
     pub(crate) fn search_tasks_visit(
         &self,
         query: &str,
@@ -374,6 +377,9 @@ impl TaskV2Store {
         )?;
         for envelope in candidates.items {
             if !admit(&Self::metadata_task(&envelope)) {
+                continue;
+            }
+            if !self.may_match(&envelope, &lowered) {
                 continue;
             }
             let Some(bundle) = self.bundle_store.read_bundle_if_settled(&envelope.id)? else {

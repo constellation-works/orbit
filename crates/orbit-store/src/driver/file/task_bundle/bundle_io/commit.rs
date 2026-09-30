@@ -250,6 +250,13 @@ fn write_pending(bundle_dir: &Path, pending: &PendingWrite) -> Result<(), OrbitE
     })
 }
 
+/// Whether an incomplete multi-file write is recorded for this bundle. Its
+/// documents are then not the ones a reader should see; only the full read
+/// applies the recorded view. An unanswerable probe counts as pending.
+pub(crate) fn has_pending_write(bundle_dir: &Path) -> bool {
+    pending_path(bundle_dir).try_exists().unwrap_or(true)
+}
+
 fn read_pending(bundle_dir: &Path) -> Result<Option<PendingWrite>, OrbitError> {
     let path = pending_path(bundle_dir);
     match fs::read_to_string(&path) {

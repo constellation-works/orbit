@@ -1,7 +1,7 @@
 //! Bundle and envelope reads with migration and consistency validation.
 
 use super::super::migrations as task_migrations;
-use super::super::types::TaskBundleV2;
+use super::super::types::{TaskBundleV2, TaskSearchDocs};
 use crate::driver::file::task_bundle::bundle_io::artifacts::ArtifactPayloadCheck;
 use crate::driver::file::task_bundle::bundle_io::artifacts::read_artifact_manifest;
 use crate::driver::file::task_bundle::bundle_io::commit;
@@ -37,6 +37,29 @@ pub(crate) fn read_bundle_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErr
 /// every `artifacts/files/**` blob named by the manifest.
 pub(crate) fn read_bundle_lightweight_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
     read_bundle_at_with(bundle_dir, ArtifactPayloadCheck::Defer)
+}
+
+/// Read only the documents task search matches on: the four text documents,
+/// the comments and the manifest paths. The envelope (the caller has it), the
+/// event log, and the checks that need them are skipped, so this is a pruning
+/// read: it says whether a task can match, and the caller re-reads the whole
+/// bundle with [`read_bundle_lightweight_at`] before returning a match.
+///
+/// `None` when an incomplete write is recorded for the bundle, whose visible
+/// documents only the full read reconstructs. Callers hold the bundle's shared
+/// lock, as for any multi-file read.
+pub(crate) fn read_search_docs_at(bundle_dir: &Path) -> Result<Option<TaskSearchDocs>, OrbitError> {
+    if commit::has_pending_write(bundle_dir) {
+        return Ok(None);
+    }
+    Ok(Some(TaskSearchDocs {
+        description: read_required_text(&bundle_dir.join(TASK_DESCRIPTION_FILE_NAME))?,
+        acceptance: read_required_text(&bundle_dir.join(TASK_ACCEPTANCE_FILE_NAME))?,
+        plan: read_required_text(&bundle_dir.join(TASK_PLAN_FILE_NAME))?,
+        execution_summary: read_required_text(&bundle_dir.join(TASK_EXECUTION_SUMMARY_FILE_NAME))?,
+        comments: read_task_comments(&bundle_dir.join(TASK_COMMENTS_FILE_NAME))?,
+        artifact_manifest: read_artifact_manifest(bundle_dir, ArtifactPayloadCheck::Defer)?,
+    }))
 }
 
 fn read_bundle_at_with(

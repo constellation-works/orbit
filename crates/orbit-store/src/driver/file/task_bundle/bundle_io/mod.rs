@@ -27,7 +27,9 @@ pub(crate) use commit::{
     publish_envelope, recover_pending_bundle_at, truncate_jsonl_file,
 };
 pub(crate) use jsonl::append_jsonl_row;
-pub(crate) use read::{read_bundle_at, read_bundle_lightweight_at, read_envelope_at};
+pub(crate) use read::{
+    read_bundle_at, read_bundle_lightweight_at, read_envelope_at, read_search_docs_at,
+};
 pub use stub::is_unpublished_stub;
 pub(crate) use stub::reap_unpublished_stub;
 pub(crate) use write::{
