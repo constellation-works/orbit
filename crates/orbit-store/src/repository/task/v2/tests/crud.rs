@@ -409,7 +409,7 @@ fn search_tasks_skips_binary_artifacts_without_poisoning_results() {
                     origin: None,
                     path: "payload.bin".to_string(),
                     blob: "files/payload.bin".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(&binary)),
+                    sha256: sha256_hex(&binary),
                     media_type: "application/octet-stream".to_string(),
                     size_bytes: binary.len() as u64,
                     created_by: "codex:gpt-5.5".to_string(),

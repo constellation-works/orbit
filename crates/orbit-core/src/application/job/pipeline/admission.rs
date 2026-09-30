@@ -407,5 +407,5 @@ pub(super) fn pipeline_run_is_runnable(
 
 pub(crate) fn input_hash(input: &Value) -> String {
     let encoded = serde_json::to_vec(input).unwrap_or_default();
-    format!("{:x}", Sha256::digest(encoded))
+    sha256_hex(&encoded)
 }

@@ -1,11 +1,11 @@
 //! State-member invariants use the same transaction and receipt tables.
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
     members::{MemberAttempt, MemberBatchEvidence, MemberState},
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 pub(super) fn validate(
@@ -114,8 +114,8 @@ pub(super) fn validate(
 
         if receipt.batch_id != active.id
             || active.action_id.as_ref() != Some(&receipt.action_id)
-            || receipt.input_digest != format!("{:x}", Sha256::digest(bytes))
-            || receipt.evidence_digest != format!("{:x}", Sha256::digest(&receipt.evidence))
+            || receipt.input_digest != sha256_hex(&bytes)
+            || receipt.evidence_digest != sha256_hex(&receipt.evidence)
             || evidence.action_id != receipt.action_id
             || evidence.attempt_id != active.id
             || evidence.applied.is_empty()

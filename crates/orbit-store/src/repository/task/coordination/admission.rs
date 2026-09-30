@@ -8,9 +8,9 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{TaskStatus, automatic_dispatch_cmp};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::TaskCommitBoundary;
 use crate::contracts::*;
@@ -40,7 +40,7 @@ fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, OrbitError> 
     serde_json::from_str(value).map_err(|e| OrbitError::Store(e.to_string()))
 }
 fn digest<T: Serialize>(value: &T) -> Result<String, OrbitError> {
-    Ok(format!("{:x}", Sha256::digest(encode(value)?.as_bytes())))
+    Ok(sha256_hex(encode(value)?.as_bytes()))
 }
 fn receipt_key(machine: &str, request: &str) -> Result<String, OrbitError> {
     digest(&(machine, request))

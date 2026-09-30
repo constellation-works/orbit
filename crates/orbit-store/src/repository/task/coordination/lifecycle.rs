@@ -5,12 +5,12 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, with_shared_file_lock};
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskCommentRowV2, TaskStatus,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::{COORDINATION_LOCK_LABEL, TaskCommitBoundary, TaskCommitIntent};
 use crate::contracts::*;
@@ -168,10 +168,7 @@ impl TaskCommitBoundary {
             auth.operator,
             &identity,
         ))?;
-        let receipt_id = format!(
-            "{:x}",
-            Sha256::digest(encode(&(&auth.claim_id, mutation_id))?)
-        );
+        let receipt_id = sha256_hex(encode(&(&auth.claim_id, mutation_id))?.as_bytes());
         if let Some(receipt) = self.coordination_row(RECEIPT, &receipt_id)? {
             let receipt: MutationReceipt = decode(&receipt.payload_json)?;
             if receipt.input != input {
@@ -659,7 +656,7 @@ impl TaskCommitBoundary {
                 if path == orbit_types::workflow::automation::EVIDENCE_AUTHORITY_ARTIFACT {
                     return Err(invalid("automation evidence authority is reserved"));
                 }
-                let digest = format!("{:x}", Sha256::digest(&artifact.content));
+                let digest = sha256_hex(&artifact.content);
                 files.insert(
                     path.clone(),
                     ArtifactManifestFileV2 {

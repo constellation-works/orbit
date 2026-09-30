@@ -3,12 +3,12 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::{
     ReviewAttempt, ReviewAttemptState, ReviewCertificate, ReviewLanding, ReviewLedger,
     ReviewReservation, ReviewVerdict,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use sha2::{Digest, Sha256};
 
 use crate::Store;
 use crate::contracts::{ReviewReserveRequest, ReviewSettlement, ReviewStoreBackend};
@@ -113,7 +113,7 @@ fn write_ledger(
 }
 
 fn attempt_id(lineage_key: &str, index: u32) -> String {
-    let digest = format!("{:x}", Sha256::digest(lineage_key.as_bytes()));
+    let digest = sha256_hex(lineage_key.as_bytes());
     format!("rvw-{}-{index}", &digest[..12])
 }
 

@@ -19,6 +19,7 @@ use std::os::unix::fs::MetadataExt;
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
     AuditEventInsertParams, ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams,
@@ -32,7 +33,6 @@ use orbit_types::workflow::{
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use orbit_engine::activity_job::load_job_asset;
 use orbit_types::workflow::JobV2;

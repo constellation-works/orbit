@@ -338,9 +338,9 @@ fn validate_transition(
             return Err(invalid());
         }
 
-        use sha2::{Digest, Sha256};
+        use orbit_common::security::release::sha256_hex;
 
-        if receipt.evidence_digest != format!("{:x}", Sha256::digest(&receipt.evidence)) {
+        if receipt.evidence_digest != sha256_hex(&receipt.evidence) {
             return Err(invalid());
         }
 
