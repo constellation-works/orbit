@@ -86,14 +86,38 @@ pub(super) fn compile_plan_with_credentials(
         "--tmpfs".to_string(),
         "/tmp".to_string(),
     ]);
+    let writable_roots = positive_mount_roots(profile, &expanded)?;
+    let mut anchors = BTreeSet::new();
+    let mut scratch_anchors = BTreeSet::new();
+    for denied in profile
+        .modify
+        .iter()
+        .filter_map(|rule| rule.strip_prefix('!'))
+    {
+        for path in mount_paths_for_rule(denied, false, &expanded)? {
+            for ancestor in path.ancestors().skip(1) {
+                if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
+                    anchors.insert(ancestor.to_path_buf());
+                } else if ancestor.starts_with("/tmp") && ancestor != Path::new("/tmp") {
+                    scratch_anchors.insert(ancestor.to_path_buf());
+                }
+            }
+        }
+    }
+    // Bubblewrap creates missing mount parents on the private /tmp tmpfs.
+    // Those scaffold entries are writable even without a positive rule, so a
+    // leaf could rename a denied path's ancestor or plant redirects there.
+    // Restore them read-only, parent first, before granting any child writes.
+    // Keep /tmp itself private and writable for ordinary process scratch.
+    for anchor in scratch_anchors {
+        push_mount(&mut out, "--ro-bind", &anchor);
+    }
     // Before any policy mount, so a policy deny that covers one of these paths
     // is still emitted afterwards and still wins. A profile with no positive
     // modify rule gains no writable bind at all, cargo caches included.
     if profile_grants_write(profile) {
         append_cargo_download_cache_mounts(&mut out, cargo_home_dir().as_deref());
     }
-    let writable_roots = positive_mount_roots(profile, &expanded)?;
-
     for (index, rule) in profile.modify.iter().enumerate() {
         if rule.starts_with('!') || is_narrow_reallow(&profile.modify[..index], rule) {
             continue;
@@ -105,20 +129,6 @@ pub(super) fn compile_plan_with_credentials(
     // Bind every writable ancestor entry of an existing deny before applying
     // restrictions. Linux permits renaming an ancestor of a mount; making each
     // such entry a mountpoint prevents moving it aside to replace the path.
-    let mut anchors = BTreeSet::new();
-    for denied in profile
-        .modify
-        .iter()
-        .filter_map(|rule| rule.strip_prefix('!'))
-    {
-        for path in mount_paths_for_rule(denied, false, &expanded)? {
-            for ancestor in path.ancestors().skip(1) {
-                if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
-                    anchors.insert(ancestor.to_path_buf());
-                }
-            }
-        }
-    }
     for anchor in anchors {
         let rendered = anchor.display().to_string();
         let already_mounted = out

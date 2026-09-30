@@ -1,7 +1,7 @@
 //! Live Bubblewrap checks that a managed leaf cannot reach the recovery
 //! authority through any path shape it can actually construct.
 //!
-//! These run a real sandbox rather than inspecting rules, because the four
+//! These run a real sandbox rather than inspecting rules, because the
 //! vectors below are enforced by mount semantics, not by glob matching: a
 //! read-only bind (`EROFS`), a mountpoint that cannot be renamed aside
 //! (`EBUSY`), and symlink resolution landing back on the same mount.
@@ -15,7 +15,8 @@
 
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::process::Stdio;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use orbit_engine::RuntimeHost;
 use orbit_exec::{
@@ -33,7 +34,7 @@ use crate::runtime::recovery_authority::RecoveryAuthority;
 /// that got through instead of only the exit status.
 const PROBE_SCRIPT: &str = r#"
 probe() {
-  if : > "$2" 2>/dev/null; then echo "$1=WRITABLE"; else echo "$1=denied"; fi
+  if ( : > "$2" ) 2>/dev/null; then echo "$1=WRITABLE"; else echo "$1=denied"; fi
 }
 rename() {
   if mv "$2" "$2.moved" 2>/dev/null; then echo "$1=REPLACED"; else echo "$1=denied"; fi
@@ -50,9 +51,51 @@ rename authority_parent "$GLOBAL/state"
 probe authority_parent_entry "$GLOBAL/state/planted-file"
 plant authority_root_redirect "$GLOBAL/state/planted-link"
 plant global_child_redirect "$GLOBAL/planted-link"
+path="$AUTHORITY"
+index=0
+while [ "$path" != / ]; do
+  path=$(dirname "$path")
+  if [ "$path" = / ]; then break; fi
+  rename "ancestor_$index" "$path"
+  index=$((index + 1))
+done
 probe leaf_task "$GLOBAL/tasks/leaf-write.json"
 probe leaf_audit "$GLOBAL/state/audit/leaf-write.jsonl"
+probe scratch /tmp/leaf-scratch
 "#;
+
+/// Run mutable fixtures without inherited managed-run routing or host state.
+fn run_isolated_test(function_name: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_AUTHORITY_SANDBOX_CHILD";
+    let test_name = function_name
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(function_name);
+    if std::env::var(CHILD).ok().as_deref() == Some(test_name) {
+        return false;
+    }
+    let home = tempfile::tempdir().expect("isolated test home");
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, test_name)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("isolated test child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{test_name}: {stdout}\n{stderr}");
+    assert!(
+        stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+        "child did not execute exactly one test ({test_name}): {stdout}\n{stderr}"
+    );
+    println!("{stdout}");
+    true
+}
 
 #[test]
 fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
@@ -62,6 +105,11 @@ fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
             "skipping live recovery authority sandbox test: {}",
             probe.detail
         );
+        return;
+    }
+    if run_isolated_test(std::any::type_name_of_val(
+        &a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build,
+    )) {
         return;
     }
 
@@ -144,6 +192,7 @@ fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
     let output = child.wait_with_output().expect("probe output");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    println!("{stdout}");
     assert!(
         output.status.success(),
         "probe script failed: {stdout}\n{stderr}"
@@ -174,6 +223,22 @@ fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
             "admitted leaf write `{admitted}` regressed: {stdout}\n{stderr}"
         );
     }
+    for (index, ancestor) in authority_root
+        .ancestors()
+        .skip(1)
+        .take_while(|ancestor| *ancestor != Path::new("/"))
+        .enumerate()
+    {
+        assert!(
+            stdout.contains(&format!("ancestor_{index}=denied")),
+            "leaf renamed authority ancestor `{}`: {stdout}",
+            ancestor.display(),
+        );
+    }
+    assert!(
+        stdout.contains("scratch=WRITABLE"),
+        "private /tmp scratch must remain writable: {stdout}\n{stderr}"
+    );
 
     // Denial has to mean the host record is intact, and admission has to mean
     // the bytes actually landed outside the sandbox rather than on its tmpfs.
@@ -201,6 +266,11 @@ fn a_leaf_cannot_reach_the_recovery_authority_through_any_path_it_can_build() {
 /// covers it, while the admitted leaf write roots are still bound read-write.
 #[test]
 fn the_compiled_sandbox_mounts_the_authority_read_only() {
+    if run_isolated_test(std::any::type_name_of_val(
+        &the_compiled_sandbox_mounts_the_authority_read_only,
+    )) {
+        return;
+    }
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     seed_executor(
         &runtime,
@@ -261,6 +331,30 @@ fn the_compiled_sandbox_mounts_the_authority_read_only() {
                 && target == &path),
             "admitted leaf write root `{admitted}` must stay read-write: {mounts:?}"
         );
+    }
+    for ancestor in authority_root
+        .ancestors()
+        .skip(1)
+        .take_while(|ancestor| ancestor.starts_with("/tmp") && *ancestor != Path::new("/tmp"))
+    {
+        let path = ancestor.display().to_string();
+        let anchor_index = mounts.iter().position(|(kind, source, target)| {
+            kind == "--ro-bind" && source == &path && target == &path
+        });
+        assert!(
+            anchor_index.is_some(),
+            "private tmpfs scaffold `{path}` must be anchored read-only: {mounts:?}"
+        );
+        for admitted in ["tasks", "state/audit"] {
+            let child = global.join(admitted).display().to_string();
+            let grant_index = mounts
+                .iter()
+                .position(|(kind, _, target)| kind == "--bind" && target == &child);
+            assert!(
+                anchor_index.is_some_and(|anchor| grant_index.is_some_and(|grant| anchor < grant)),
+                "scaffold protection must precede the `{admitted}` write grant: {mounts:?}"
+            );
+        }
     }
     assert!(
         !plan
