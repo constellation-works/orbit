@@ -60,6 +60,23 @@ fn insert_audit_event_record_on_connection(
 ) -> Result<(), OrbitError> {
     let capabilities_json = serde_json::to_string(&params.effective_capabilities)
         .map_err(|error| OrbitError::Store(format!("serialize MCP capability set: {error}")))?;
+    // Plugin provenance columns are recorded evidence: a serialization failure
+    // must fail the insert rather than store an empty, unparseable value.
+    let plugin_grants_json = invocation
+        .plugin
+        .map(|plugin| serde_json::to_string(&plugin.grants))
+        .transpose()
+        .map_err(|error| OrbitError::Store(format!("serialize plugin grants: {error}")))?;
+    let plugin_secrets_json = (!invocation.plugin_secrets.is_empty())
+        .then(|| serde_json::to_string(invocation.plugin_secrets))
+        .transpose()
+        .map_err(|error| OrbitError::Store(format!("serialize plugin secret names: {error}")))?;
+    let plugin_secret_updates_json = invocation
+        .plugin_secret_updates
+        .filter(|updates| !updates.is_empty())
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| OrbitError::Store(format!("serialize plugin secret updates: {error}")))?;
     // ORB-10888: the canonical actor is derived from the same label the row
     // stores, by the same alias map the backfill uses, so new rows and
     // migrated rows land in identical aggregate buckets.
@@ -130,15 +147,9 @@ fn insert_audit_event_record_on_connection(
             invocation.plugin.map(|plugin| plugin.name.as_str()),
             invocation.plugin.map(|plugin| plugin.version.as_str()),
             invocation.plugin.map(|plugin| plugin.manifest_digest.as_str()),
-            invocation
-                .plugin
-                .map(|plugin| serde_json::to_string(&plugin.grants).unwrap_or_default()),
-            (!invocation.plugin_secrets.is_empty())
-                .then(|| serde_json::to_string(invocation.plugin_secrets).unwrap_or_default()),
-            invocation
-                .plugin_secret_updates
-                .filter(|updates| !updates.is_empty())
-                .map(|updates| serde_json::to_string(updates).unwrap_or_default()),
+            plugin_grants_json,
+            plugin_secrets_json,
+            plugin_secret_updates_json,
             // A brokered row stores 1; every other row leaves both NULL, as
             // rows written before the columns existed read.
             invocation.brokered_peer_pid.map(|_| 1_i64),
