@@ -1,4 +1,6 @@
-use super::super::name_map::{build_name_map, sanitize_tool_name};
+use super::super::name_map::{
+    advertise_tool_names, advertise_tool_names_in_schema, build_name_map, sanitize_tool_name,
+};
 use serde_json::Value;
 
 use super::super::test_support::tool_schema;
@@ -50,6 +52,73 @@ fn build_name_map_rejects_sanitized_name_collisions() {
     assert_eq!(
         data.get("advertised_name").and_then(Value::as_str),
         Some("foo_bar")
+    );
+}
+
+const NAMES: &[&str] = &[
+    "orbit.task.artifact.get",
+    "orbit.task.show",
+    "orbit.drain.probe",
+];
+
+#[test]
+fn advertise_tool_names_rewrites_only_whole_known_tool_names() {
+    assert_eq!(
+        advertise_tool_names(
+            "List with `orbit.task.show` and `orbit.task.artifact.get`.",
+            NAMES
+        ),
+        "List with `orbit_task_show` and `orbit_task_artifact_get`."
+    );
+    // Sentence punctuation after a name is not part of it.
+    assert_eq!(
+        advertise_tool_names(
+            "Call orbit.task.show. Then orbit.drain.probe, or orbit.task.show",
+            NAMES
+        ),
+        "Call orbit_task_show. Then orbit_drain_probe, or orbit_task_show"
+    );
+    // Not a tool name: a metadata key, a longer path, a tool that is not advertised.
+    for untouched in [
+        "`_meta.orbit.workspace` selects the workspace",
+        "orbit.task.show.extra is not a tool",
+        "xorbit.task.show is not a tool",
+        "`orbit tool run orbit.task.reject` is a CLI verb",
+    ] {
+        assert_eq!(advertise_tool_names(untouched, NAMES), untouched);
+    }
+}
+
+#[test]
+fn advertise_tool_names_in_schema_reaches_nested_descriptions_only() {
+    let mut schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "fields": {
+                "description": "Names `orbit.task.show` accepts.",
+                "items": { "description": "See orbit.drain.probe" }
+            },
+            "orbit.task.show": { "type": "string" }
+        }
+    })
+    .as_object()
+    .cloned()
+    .expect("schema object");
+    advertise_tool_names_in_schema(&mut schema, NAMES);
+    assert_eq!(
+        schema["properties"]["fields"]["description"],
+        "Names `orbit_task_show` accepts."
+    );
+    assert_eq!(
+        schema["properties"]["fields"]["items"]["description"],
+        "See orbit_drain_probe"
+    );
+    assert!(
+        schema["properties"]
+            .as_object()
+            .expect("properties")
+            .contains_key("orbit.task.show"),
+        "a property key is a wire name, not prose"
     );
 }
 

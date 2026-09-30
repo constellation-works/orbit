@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use orbit_common::OrbitError;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener, OrbitToolServer};
 use orbit_types::tool::{
-    McpToolDefinition, McpToolScope, ToolParam, ToolSchema, ToolSessionContext,
+    McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam, ToolSchema, ToolSessionContext,
 };
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, ClientInfo, Meta};
@@ -55,10 +55,10 @@ fn definition(name: &str) -> McpToolDefinition {
     McpToolDefinition::new(
         ToolSchema {
             name: name.to_string(),
-            description: "Echo one generic value.".to_string(),
+            description: "Echo one generic value; inspect it with `demo.inspect`.".to_string(),
             parameters: vec![ToolParam {
                 name: "value".to_string(),
-                description: "Value to echo.".to_string(),
+                description: "Value to echo, as `demo.inspect` reports it.".to_string(),
                 param_type: "string".to_string(),
                 required: true,
             }],
@@ -66,6 +66,7 @@ fn definition(name: &str) -> McpToolDefinition {
         },
         McpToolScope::WorkspaceRequired,
     )
+    .with_annotations((name == "demo.inspect").then_some(McpToolAnnotations::READ_ONLY))
 }
 
 #[tokio::test]
@@ -128,6 +129,31 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         .find(|tool| tool.name.as_ref() == "demo_echo")
         .expect("agent-tagged tool listed");
     assert_eq!(tool.name.as_ref(), "demo_echo");
+    assert_eq!(
+        tool.description.as_deref(),
+        Some("Echo one generic value; inspect it with `demo_inspect`."),
+        "prose names other tools by the name tools/list advertises"
+    );
+    assert_eq!(
+        tool.input_schema["properties"]["value"]["description"],
+        json!("Value to echo, as `demo_inspect` reports it.")
+    );
+    assert!(
+        tool.annotations.is_none(),
+        "an undeclared tool advertises no annotations"
+    );
+    let inspect = listed
+        .tools
+        .iter()
+        .find(|tool| tool.name.as_ref() == "demo_inspect")
+        .expect("inspect tool listed");
+    assert_eq!(
+        inspect
+            .annotations
+            .as_ref()
+            .and_then(|hints| hints.read_only_hint),
+        Some(true)
+    );
     assert_eq!(tool.input_schema["required"], json!(["value"]));
     assert!(
         tool.input_schema["properties"]["value"]
