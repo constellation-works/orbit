@@ -104,7 +104,11 @@ impl OrbitRuntime {
 
             let (yaml_path, spec) = self.resolve_run_definition(&run)?;
             if spec.state != JobScheduleState::Enabled {
-                let _ = self.cancel_job_run(&run.run_id);
+                log_best_effort(
+                    "cancel disabled job run",
+                    &run.run_id,
+                    self.cancel_job_run(&run.run_id),
+                );
                 return Err(OrbitError::InvalidInput(format!(
                     "job '{}' is disabled",
                     run.job_id
@@ -113,7 +117,11 @@ impl OrbitRuntime {
 
             if let Err(error) = self.verify_routine_dispatch_workspace(&run) {
                 self.record_routine_dispatch_workspace_mismatch(&run, &error);
-                let _ = self.cancel_job_run(&run.run_id);
+                log_best_effort(
+                    "cancel run after workspace mismatch",
+                    &run.run_id,
+                    self.cancel_job_run(&run.run_id),
+                );
                 return Err(error);
             }
 
@@ -185,13 +193,17 @@ impl OrbitRuntime {
     /// run from being cancelled or the original error from propagating.
     fn record_routine_dispatch_workspace_mismatch(&self, run: &JobRun, error: &OrbitError) {
         let now = Utc::now();
-        let _ = self.record_pipeline_diagnostic_step(
-            run,
-            run.scheduled_at,
-            now,
-            Some(ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE),
-            &error.to_string(),
-            JobRunState::Cancelled,
+        log_best_effort(
+            "record workspace mismatch diagnostic",
+            &run.run_id,
+            self.record_pipeline_diagnostic_step(
+                run,
+                run.scheduled_at,
+                now,
+                Some(ROUTINE_DISPATCH_WORKSPACE_MISMATCH_ERROR_CODE),
+                &error.to_string(),
+                JobRunState::Cancelled,
+            ),
         );
     }
     /// Reopen the shared SQLite store before the worker claims a run.
@@ -343,13 +355,17 @@ impl OrbitRuntime {
         };
         let message = format!("{}; run failure: {failure}", breach.describe());
         tracing::warn!(target: "orbit.core.job_run", run_id = run.run_id, "{message}");
-        let _ = self.record_pipeline_diagnostic_step(
-            run,
-            started_at,
-            finished_at,
-            Some(scope::WORKER_RESOURCE_LIMIT_ERROR_CODE),
-            &message,
-            JobRunState::Failed,
+        log_best_effort(
+            "record resource limit diagnostic",
+            &run.run_id,
+            self.record_pipeline_diagnostic_step(
+                run,
+                started_at,
+                finished_at,
+                Some(scope::WORKER_RESOURCE_LIMIT_ERROR_CODE),
+                &message,
+                JobRunState::Failed,
+            ),
         );
     }
     pub(crate) fn record_pipeline_failure_step(

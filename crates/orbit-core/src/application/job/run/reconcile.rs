@@ -8,6 +8,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use crate::OrbitRuntime;
+use crate::application::job::log_best_effort;
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -307,13 +308,17 @@ impl OrbitRuntime {
         }
 
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);
-        let _ = self.record_pipeline_diagnostic_step(
-            &current,
-            step_started_at,
-            finished_at,
-            Some(&error_code),
-            &message,
-            JobRunState::Interrupted,
+        log_best_effort(
+            "record reconciliation diagnostic",
+            &current.run_id,
+            self.record_pipeline_diagnostic_step(
+                &current,
+                step_started_at,
+                finished_at,
+                Some(&error_code),
+                &message,
+                JobRunState::Interrupted,
+            ),
         );
         self.record_event(OrbitEvent::JobRunCompleted {
             job_id: current.job_id.clone(),

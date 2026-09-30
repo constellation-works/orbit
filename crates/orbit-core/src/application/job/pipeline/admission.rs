@@ -209,11 +209,15 @@ impl OrbitRuntime {
             if let SubmittedDefinition::Snapshot { yaml, .. } = &definition
                 && let Err(error) = self.write_run_definition_snapshot(&run.run_id, yaml)
             {
-                let _ = self.finalize_pipeline_worker_startup_failure(
-                    &run,
-                    &error.to_string(),
-                    None,
-                    actor,
+                log_best_effort(
+                    "finalize startup failure",
+                    &run.run_id,
+                    self.finalize_pipeline_worker_startup_failure(
+                        &run,
+                        &error.to_string(),
+                        None,
+                        actor,
+                    ),
                 );
                 return Err(error);
             }
@@ -244,8 +248,13 @@ impl OrbitRuntime {
                 );
                 let error_code = matches!(error, OrbitError::WorkerContainmentUnavailable { .. })
                     .then_some(worker::scope::WORKER_CONTAINMENT_UNAVAILABLE_ERROR_CODE);
-                let _ = self
-                    .finalize_pipeline_worker_startup_failure(&run, &message, error_code, actor);
+                log_best_effort(
+                    "finalize startup failure",
+                    &run.run_id,
+                    self.finalize_pipeline_worker_startup_failure(
+                        &run, &message, error_code, actor,
+                    ),
+                );
                 return Err(error);
             }
             Ok(ChildSubmission::Submitted(PipelineInvokeResult {
