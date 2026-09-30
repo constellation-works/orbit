@@ -224,7 +224,15 @@ impl OrbitRuntime {
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
         for task_id in task_ids {
-            let task = self.get_task(task_id)?;
+            // A task the pipeline cannot start from (`blocked`, `review`,
+            // `done`, `proposed`, ...) would only be discovered after the
+            // run was accepted, reported `submitted`, and then failed or
+            // no-oped at the gate. Refuse it here, naming the status and the
+            // way back into the backlog.
+            let task = self.ensure_task_can_enter_workflow_as_system(
+                task_id,
+                crate::application::workflow::SHIP_WORKFLOW_ALIAS,
+            )?;
             if let Some(allowlist) = allowlist.as_ref() {
                 // [ORB-12606] Report against the crew admission will draw, not
                 // the default chain: a crew-less task whose complexity pool
