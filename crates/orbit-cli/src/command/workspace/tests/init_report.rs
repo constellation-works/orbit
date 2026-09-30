@@ -13,9 +13,13 @@ use super::super::init::WorkspaceInitArgs;
 use super::super::show::WorkspaceShowArgs;
 
 struct IsolatedWorkspace {
+    // Declared first so it drops first: the guard must restore the process cwd
+    // before `workspace` is deleted. Dropped last, the guard would still hold the
+    // crate-wide env lock while the process cwd pointed at a deleted directory,
+    // and any test that reads the cwd without the lock would fail with ENOENT.
+    _env: EnvGuard,
     workspace: tempfile::TempDir,
     home: tempfile::TempDir,
-    _env: EnvGuard,
 }
 
 impl IsolatedWorkspace {
@@ -33,9 +37,9 @@ impl IsolatedWorkspace {
         .expect("write host identity");
         let env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
         Self {
+            _env: env,
             workspace,
             home,
-            _env: env,
         }
     }
 }
