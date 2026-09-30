@@ -84,11 +84,21 @@ impl PipelineRunHost for OrbitRuntime {
         state: JobRunState,
         finished_at: DateTime<Utc>,
     ) -> Result<bool, OrbitError> {
+        // A run a dead worker leaves behind still ran for a measurable time.
+        // Storing no duration leaves the record "incomplete", which every
+        // later read then tries to repair.
+        let duration_ms = self.get_job_run_backend(run_id)?.map(|run| {
+            let started_at = run.started_at.unwrap_or(run.scheduled_at);
+            finished_at
+                .signed_duration_since(started_at)
+                .num_milliseconds()
+                .max(0) as u64
+        });
         self.finalize_job_run_with_reservation_cleanup(
             run_id,
             state,
             finished_at,
-            None,
+            duration_ms,
             TaskReservationReleaseReason::RunTerminal,
         )
     }
