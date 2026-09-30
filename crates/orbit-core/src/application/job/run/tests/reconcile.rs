@@ -218,6 +218,84 @@ fn show_job_run_repairs_terminal_run_missing_timing() {
     assert_eq!(repaired.duration_ms, Some(5_000));
 }
 
+/// A process that joined another executable's live generation opens Orbit's
+/// state write-free. `orbit run show` and `orbit run history` reconcile lazily,
+/// and a reconcile that needed a write used to abort the whole read with
+/// "attempt to write a readonly database" (an orphaned worker's run, or a
+/// finished run whose duration was never stored, was enough). A write-free
+/// reader must report the stored records as they are.
+#[test]
+fn write_free_runtime_reads_runs_without_attempting_to_reconcile_them() {
+    let (_root, runtime) = test_runtime();
+    let orphan = insert_pending_run(&runtime, "qa_write_free_orphan");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&orphan.run_id, Utc::now() - Duration::seconds(3), 999_999)
+        .expect("mark running with impossible pid");
+    let untimed = insert_pending_run(&runtime, "qa_write_free_untimed");
+    let started_at = Utc::now() - Duration::seconds(8);
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&untimed.run_id, started_at, std::process::id())
+        .expect("mark running");
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(
+            &untimed.run_id,
+            JobRunState::Failed,
+            started_at + Duration::seconds(5),
+            Some(5_000),
+        )
+        .expect("finalize failed");
+    let finalized = runtime.show_job_run(&untimed.run_id).expect("show untimed");
+    strip_run_timing(&runtime, &finalized);
+
+    let resolved = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))
+    .expect("load config");
+    let write_free = OrbitRuntime::build_from_resolved_config_write_free(
+        &runtime.global_root(),
+        &runtime.shared_root(),
+        &runtime.local_root(),
+        None,
+        &resolved,
+        orbit_store::workflow::layout::LayoutUpgradeReport::default(),
+        crate::runtime::HostLifetime::ShortLived,
+    )
+    .expect("open a write-free runtime");
+    assert!(write_free.is_write_free());
+
+    let shown = write_free
+        .show_job_run(&orphan.run_id)
+        .expect("a write-free show must not fail on a run it would have finalized");
+    assert_eq!(shown.state, JobRunState::Running);
+    let listed = write_free
+        .list_job_runs(JobRunListParams::default())
+        .expect("a write-free history must not fail on a run whose timing needs repair");
+    assert_eq!(listed.len(), 2);
+    assert!(
+        listed
+            .iter()
+            .find(|run| run.run_id == untimed.run_id)
+            .is_some_and(|run| run.duration_ms.is_none()),
+        "a write-free reader reports the stored timing without repairing it"
+    );
+
+    // The same records reconcile normally once a writer looks at them.
+    assert_eq!(
+        runtime
+            .show_job_run(&orphan.run_id)
+            .expect("show orphan as a writer")
+            .state,
+        JobRunState::Interrupted
+    );
+}
+
 /// [ORB-10070] The workspace-open orphan scan terminalizes `pending` children
 /// left behind by an interrupted parent run: never claimed by any worker and
 /// far older than the claim grace window, they finalize as `interrupted`

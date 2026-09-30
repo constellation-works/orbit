@@ -191,6 +191,12 @@ impl OrbitRuntime {
         F: FnOnce(),
         P: Fn(u32, Option<&str>) -> ProcessLiveness,
     {
+        // Reconciliation finalizes orphans and repairs timing: it writes. A
+        // write-free process can only read what the run record already says,
+        // and attempting the write would fail the whole read command.
+        if self.is_write_free() {
+            return Ok(false);
+        }
         if terminal_run_timing_is_incomplete(run) {
             return self.repair_terminal_job_run_timing(run);
         }

@@ -37,6 +37,10 @@ pub struct OrbitRuntime {
     /// than reaching for a local store.
     pub(super) drain_owner_transport: Option<Arc<dyn orbit_tools::DrainOwnerTransport>>,
     pub(crate) context: OrbitContext,
+    /// This process joined a live executable generation other than its own
+    /// without recording itself, so it opened Orbit's state without write
+    /// access. Reads work; anything that would mutate state must be skipped.
+    write_free: bool,
     workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
     /// A higher-level registry may mark this local checkout as a replica. Core
     /// stays registry-neutral; it only carries the refusal supplied by that
@@ -153,7 +157,7 @@ impl OrbitRuntime {
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
     ) -> Result<Self, OrbitError> {
-        Self::finish_from_context(
+        let mut runtime = Self::finish_from_context(
             builder::build_context_from_roots(
                 global_root,
                 shared_root,
@@ -166,7 +170,17 @@ impl OrbitRuntime {
             binding,
             global_root,
             layout_report,
-        )
+        )?;
+        runtime.write_free = true;
+        Ok(runtime)
+    }
+
+    /// Whether this runtime opened Orbit's state without write access because
+    /// the process joined a live generation it may not record itself into.
+    /// Reads work; operations that would repair or finalize stored state must
+    /// be skipped rather than attempted.
+    pub fn is_write_free(&self) -> bool {
+        self.write_free
     }
 
     fn finish_from_context(
@@ -177,6 +191,7 @@ impl OrbitRuntime {
     ) -> Result<Self, OrbitError> {
         Ok(Self {
             context,
+            write_free: false,
             workspace_binding: binding.map(Arc::new),
             worker_invocation: worker_coordination::restore_process_binding(global_root)?,
             owner_coordinator: None,
@@ -223,6 +238,7 @@ impl OrbitRuntime {
         )?;
         Ok(Self {
             context,
+            write_free: false,
             workspace_binding: Some(Arc::new(binding)),
             worker_invocation: None,
             owner_coordinator: None,

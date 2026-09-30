@@ -107,6 +107,12 @@ retains the original exit status and worker-log diagnostic until it can finalize
 It does not kill surviving providers. If the observer itself stops, lazy orphan
 reconciliation remains available with its ordinary stale-owner diagnostic.
 
+A process running a different executable than the one recorded for a live Orbit root (for
+example, right after the binary was replaced while workers from the previous build are still
+running) opens the state write-free. It can read every run record but finalizes and repairs
+none of them, so `run history` and `run show` report stored records as they are rather than
+failing; the next process that can write records reconciles them.
+
 Reconciliation runs best-effort at workspace open and lazily on
 `orbit run history` / `show` / `logs` / `events`. Pass `--no-reconcile` to any of those four
 to read stored run records without finalizing anything; the run-failure and backlog-hygiene
