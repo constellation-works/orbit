@@ -230,15 +230,13 @@ impl crate::OrbitRuntime {
         }
         let request_id = request_id.trim();
         if request_id.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "invalid_input: `request_id` is required".into(),
-            ));
+            return Err(OrbitError::InvalidInput("`request_id` is required".into()));
         }
         let session_machine = session_machine_id(session);
         let machine_id = match requested_machine.map(str::trim).filter(|m| !m.is_empty()) {
             None => session_machine.clone().ok_or_else(|| {
                 OrbitError::InvalidInput(
-                    "invalid_input: no trusted caller machine on this session; name the original \
+                    "no trusted caller machine on this session; name the original \
                      caller machine with `machine_id` from an operator session"
                         .into(),
                 )
