@@ -29,7 +29,18 @@ pub(super) fn bound_store(
     partition_id: &str,
     checkout: &str,
 ) -> TaskV2Store {
-    let repo_dir = temp.path().join(checkout);
+    bound_store_at(registry, temp.path(), partition_id, checkout)
+}
+
+/// [`bound_store`] with the checkout under an explicit `root`, for fixtures
+/// that need a root other than a temp directory's own path.
+pub(super) fn bound_store_at(
+    registry: &TaskRegistryStore,
+    root: &std::path::Path,
+    partition_id: &str,
+    checkout: &str,
+) -> TaskV2Store {
+    let repo_dir = root.join(checkout);
     let orbit_dir = repo_dir.join(".orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry

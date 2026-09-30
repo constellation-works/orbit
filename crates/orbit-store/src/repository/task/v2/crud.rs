@@ -1,4 +1,5 @@
 use super::*;
+use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
     pub(crate) fn create_task(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
@@ -271,7 +272,12 @@ impl TaskV2Store {
         let id = binding.task_id.as_str();
         let owner = TaskBundleStoreV2::new(self.registry.clone(), binding.partition_id.clone());
         let canonical = owner.bundle_path(id)?;
-        if canonical != binding.canonical_path {
+        // The registry normalizes a path when it stores the binding, resolving
+        // symlinks once the directory exists, while the owner derives its path
+        // lexically from its root. Normalize both sides the same way so a
+        // store under a symlinked ancestor (macOS `/tmp`, `/var`) is not
+        // refused; a binding that names any other bundle still differs.
+        if normalize_path(&canonical) != normalize_path(&binding.canonical_path) {
             return Err(OrbitError::Store(format!(
                 "task '{id}' is bound to workspace '{}' at '{}', which is not its canonical bundle path '{}'; reindex that workspace before reading it as a dependency",
                 binding.partition_id,
