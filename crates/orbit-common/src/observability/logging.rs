@@ -38,7 +38,7 @@ use std::{
     collections::BTreeMap,
     fmt as std_fmt,
     fs::File,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -368,6 +368,10 @@ pub fn init_default_subscriber(default_filter: &str) {
     let filter = env_filter(default_filter);
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
+        .with_ansi(stderr_ansi_enabled(
+            io::stderr().is_terminal(),
+            std::env::var_os("NO_COLOR").as_deref(),
+        ))
         .fmt_fields(RedactingFields::default());
 
     match global_jsonl_log_path() {
@@ -395,6 +399,18 @@ pub fn init_default_subscriber(default_filter: &str) {
             emit_log_init_warning(&err.to_string());
         }
     }
+}
+
+/// Whether the stderr log layer styles its output with ANSI escapes.
+///
+/// Only a terminal renders them. Everywhere else stderr is captured as text —
+/// an MCP client keeps a stdio server's stderr as its log, a supervisor writes
+/// it to a file — and the escapes arrive as literal `\x1b[2m` noise around
+/// every timestamp and level. `NO_COLOR` (non-empty) disables them on a
+/// terminal too.
+// Visible to sibling-layout logging tests.
+pub(super) fn stderr_ansi_enabled(is_terminal: bool, no_color: Option<&std::ffi::OsStr>) -> bool {
+    is_terminal && no_color.is_none_or(|value| value.is_empty())
 }
 
 /// Roll and prune the global JSONL feed.

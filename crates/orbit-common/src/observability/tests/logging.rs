@@ -17,7 +17,9 @@ use tracing_subscriber::{
     layer::SubscriberExt,
 };
 
-use super::super::logging::{RedactingFields, env_filter, jsonl_layer_at_path};
+use super::super::logging::{
+    RedactingFields, env_filter, jsonl_layer_at_path, stderr_ansi_enabled,
+};
 
 // Every environment mutation and every read that depends on it (log path
 // resolution, rotation config the background writer loads from `HOME`) goes
@@ -519,6 +521,50 @@ mod subscriber {
         use std::os::unix::fs::PermissionsExt;
 
         fs::metadata(path).expect("metadata").permissions().mode() & 0o777
+    }
+}
+
+mod stderr_style {
+    use std::ffi::OsStr;
+
+    use tracing::Dispatch;
+    use tracing_subscriber::{Registry, fmt, layer::SubscriberExt};
+
+    use super::{BufferMakeWriter, RedactingFields, stderr_ansi_enabled};
+
+    fn logged_stderr(ansi: bool) -> String {
+        let stderr = BufferMakeWriter::default();
+        let buffer = stderr.buffer();
+        let layer = fmt::layer()
+            .with_writer(stderr)
+            .with_ansi(ansi)
+            .fmt_fields(RedactingFields::default());
+        let dispatch = Dispatch::new(Registry::default().with(layer));
+        tracing::dispatcher::with_default(&dispatch, || tracing::warn!(line = "styled?"));
+        String::from_utf8(buffer.lock().expect("stderr lock").clone()).expect("stderr utf8")
+    }
+
+    #[test]
+    fn only_a_terminal_without_no_color_gets_ansi_styling() {
+        assert!(stderr_ansi_enabled(true, None));
+        assert!(stderr_ansi_enabled(true, Some(OsStr::new(""))));
+        assert!(!stderr_ansi_enabled(true, Some(OsStr::new("1"))));
+        assert!(!stderr_ansi_enabled(false, None));
+        assert!(!stderr_ansi_enabled(false, Some(OsStr::new(""))));
+    }
+
+    #[test]
+    fn captured_stderr_carries_no_escape_sequences() {
+        // The control: the layer does emit escapes when asked, so the assertion
+        // below can fail.
+        assert!(logged_stderr(true).contains('\u{1b}'));
+
+        let captured = logged_stderr(stderr_ansi_enabled(false, None));
+        assert!(captured.contains("styled?"));
+        assert!(
+            !captured.contains('\u{1b}'),
+            "a non-terminal stderr (an MCP client's log file) must be plain text: {captured:?}"
+        );
     }
 }
 
