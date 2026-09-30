@@ -721,6 +721,29 @@ enum RecoveryCheckpointLookup {
 /// The run store these entries come from is writable by managed leaves, so a
 /// matching entry is a candidate, not authority. Every candidate must also
 /// carry the host's certificate from [`RuntimeHost::verify_rebase_recovery`].
+/// Whether a checkpoint's recorded workspace directory is `workspace`.
+///
+/// The host records the checkout it certified at its resolved path, while the
+/// workspace of a later retry is whatever spelling its input carried. When the
+/// worktree root is reached through a symlinked ancestor (macOS `/tmp` and
+/// `/var`, a symlinked home) those differ in spelling only, and the checkpoint
+/// of the very same directory must not be discarded as foreign. Two spellings
+/// match when they name one existing directory; anything unresolvable does
+/// not match, so a checkpoint for another checkout is still refused.
+pub(super) fn recorded_workspace_matches(recorded: Option<&str>, workspace: &Path) -> bool {
+    let Some(recorded) = recorded else {
+        return false;
+    };
+    let recorded = Path::new(recorded);
+    if recorded == workspace {
+        return true;
+    }
+    matches!(
+        (recorded.canonicalize(), workspace.canonicalize()),
+        (Ok(recorded), Ok(workspace)) if recorded == workspace
+    )
+}
+
 fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
     host: &H,
     run_id: &str,
@@ -734,7 +757,10 @@ fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
     for (step_id, checkpoint) in &state.rebase_recovery_checkpoints {
         if !matches!(step_id.as_str(), "sync_base" | "complete_pr")
             || checkpoint.get("head_sha").and_then(Value::as_str) != Some(head_sha)
-            || checkpoint.get("workspace_path").and_then(Value::as_str) != workspace.to_str()
+            || !recorded_workspace_matches(
+                checkpoint.get("workspace_path").and_then(Value::as_str),
+                workspace,
+            )
             || checkpoint.get("step_id").and_then(Value::as_str) != Some(step_id)
             || checkpoint.get("rewritten").and_then(Value::as_bool) != Some(true)
         {

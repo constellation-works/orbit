@@ -6,7 +6,7 @@ use std::process::Command;
 use serde_json::json;
 use tempfile::tempdir;
 
-use super::super::freshness::{prepare_pr_handoff, rebase_pr_branch};
+use super::super::freshness::{prepare_pr_handoff, rebase_pr_branch, recorded_workspace_matches};
 use super::super::pr::tests::test_support::{
     PrOpenTestHost, PrWorkspace, batch_task, pr_workspace, rebase_conflict_pr_workspace,
 };
@@ -683,5 +683,46 @@ fn conflicting_rebase_still_uses_conflict_recovery_not_timeout_abort() {
     assert!(
         rebase_in_progress(&workspace.repo),
         "conflicted rebase must not be aborted as a timeout"
+    );
+}
+
+/// A recovery checkpoint records the checkout at its resolved path, while a
+/// retry's workspace is spelled however its input spelled it. Behind a
+/// symlinked ancestor the two differ in spelling only; a checkpoint for another
+/// directory, or one whose directory is gone, must still not match.
+#[cfg(unix)]
+#[test]
+fn a_recorded_workspace_matches_the_same_directory_spelled_through_a_symlink() {
+    let temp = tempdir().expect("tempdir");
+    let real = temp.path().join("real");
+    fs::create_dir_all(real.join("repo")).expect("checkout");
+    fs::create_dir_all(real.join("other")).expect("other checkout");
+    let linked = temp.path().join("linked");
+    std::os::unix::fs::symlink(&real, &linked).expect("link the checkout parent");
+    let recorded = linked
+        .join("repo")
+        .canonicalize()
+        .expect("resolve checkout");
+    let recorded = recorded.to_str().expect("utf8 path");
+
+    assert!(recorded_workspace_matches(
+        Some(recorded),
+        &linked.join("repo")
+    ));
+    assert!(recorded_workspace_matches(
+        Some(recorded),
+        &real.join("repo")
+    ));
+    assert!(!recorded_workspace_matches(
+        Some(recorded),
+        &linked.join("other")
+    ));
+    assert!(!recorded_workspace_matches(None, &linked.join("repo")));
+    assert!(
+        !recorded_workspace_matches(
+            Some(real.join("gone").to_str().expect("utf8 path")),
+            &linked.join("gone")
+        ),
+        "two spellings of a directory that no longer exists cannot be proven equal"
     );
 }
