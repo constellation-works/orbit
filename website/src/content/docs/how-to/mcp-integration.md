@@ -130,6 +130,10 @@ exposed.
 ### Response shapes
 
 `orbit.task.list` returns `{ tasks, total, truncated }`; read the `tasks` array.
+Each task is a full record by default, descriptions and plans included, so a long
+listing can be large. Pass `fields` (a string or array of `orbit.task.show` field
+names, such as `["id", "title", "status"]`) to get objects holding only those
+fields, then fetch details for the few tasks that matter with `orbit.task.show`.
 The task-write tools — `orbit.task.add`, `orbit.task.update`, and
 `orbit.task.reject` — omit `comments` and `history` unless you request them
 with `fields` (or `field`).

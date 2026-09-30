@@ -69,6 +69,14 @@ impl Tool for OrbitTaskListTool {
                 param_type: "integer".to_string(),
                 required: false,
             },
+            ToolParam {
+                name: "fields".to_string(),
+                description:
+                    "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`."
+                        .to_string(),
+                param_type: "string_list".to_string(),
+                required: false,
+            },
         ];
         parameters.extend(super::super::identity_params());
         ToolSchema {

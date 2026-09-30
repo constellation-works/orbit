@@ -141,6 +141,9 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let ready = optional_bool_alias(&input, &["ready"])?;
     let path = optional_string(&input, "path")?;
     let limit = super::input::task_list_limit(&input)?;
+    // Validated before the query so an unknown field is refused even when no
+    // task matches, instead of only surfacing on the first listed task.
+    let fields = write_response_fields(&input)?.filter(|fields| !fields.is_empty());
     let page = runtime.query_task_rows_status_aware(&crate::application::task::TaskListQuery {
         filter: crate::application::task::TaskListFilter {
             statuses,
@@ -158,8 +161,11 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let tasks = page
         .items
         .into_iter()
-        .map(|row| task_to_json(&row.task, &status_by_id))
-        .collect::<Vec<_>>();
+        .map(|row| match &fields {
+            None => Ok(task_to_json(&row.task, &status_by_id)),
+            Some(fields) => project_listed_task(runtime, &row.task, fields),
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()?;
     let total = page.total;
     let truncated = tasks.len() < total;
     Ok(json!({
@@ -167,6 +173,24 @@ pub(super) fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         "total": total,
         "truncated": truncated,
     }))
+}
+
+/// One listed task reduced to the requested fields, always as an object keyed by
+/// field name (`orbit.task.show` returns a bare value for a single field, which
+/// would make the list's element shape depend on how many fields were asked for).
+fn project_listed_task(
+    runtime: &OrbitRuntime,
+    task: &orbit_types::task::Task,
+    fields: &[String],
+) -> Result<Value, OrbitError> {
+    let mut projected = serde_json::Map::new();
+    for field in fields {
+        projected.insert(
+            field.clone(),
+            task_fields_to_json(runtime, task, std::slice::from_ref(field))?,
+        );
+    }
+    Ok(Value::Object(projected))
 }
 
 pub(super) fn reject(

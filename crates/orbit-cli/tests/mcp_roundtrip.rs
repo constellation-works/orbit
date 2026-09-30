@@ -2312,6 +2312,58 @@ fn mcp_workspace_argument_must_be_a_string_and_a_blank_one_defers_to_the_session
 }
 
 #[test]
+fn mcp_task_list_fields_projects_each_task_to_an_object_of_just_those_fields() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task_id = author_task(&workspace, "projection probe");
+
+    // Full records are the default and carry the bulky fields.
+    let full = client.call_tool_ok("orbit_task_list", json!({}));
+    assert!(
+        full["tasks"][0]["description"].is_string(),
+        "an unprojected list keeps full records: {full}"
+    );
+
+    // A single field must still be an object per task; `orbit_task_show`'s
+    // bare-value shape for one field would make the element shape depend on
+    // how many fields were asked for.
+    for fields in [json!(["id"]), json!("id"), json!(" id ")] {
+        let listed = client.call_tool_ok("orbit_task_list", json!({ "fields": fields }));
+        assert_eq!(
+            listed["tasks"],
+            json!([{ "id": task_id }]),
+            "one field: {listed}"
+        );
+        assert_eq!(listed["total"], 1);
+        assert_eq!(listed["truncated"], false);
+    }
+
+    let listed = client.call_tool_ok(
+        "orbit_task_list",
+        json!({ "fields": "id, title,status", "status": ["proposed"] }),
+    );
+    assert_eq!(
+        listed["tasks"],
+        json!([{ "id": task_id, "title": "projection probe", "status": "proposed" }]),
+        "comma-separated fields: {listed}"
+    );
+
+    // An unknown field is refused even when the filter matches no task, so a
+    // typo is not mistaken for "nothing to project".
+    let refused = client.call_tool_err(
+        "orbit_task_list",
+        json!({ "fields": ["id", "titel"], "status": ["done"] }),
+    );
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("titel")),
+        "the refusal must name the unknown field: {refused}"
+    );
+}
+
+#[test]
 fn mcp_task_add_and_update_validate_context_selectors() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
