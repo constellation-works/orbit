@@ -1,5 +1,5 @@
 use crate::OrbitError;
-use crate::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
+use crate::protocol::yaml::{parse_auto_task_yaml, parse_policy_resource, parse_routine_yaml};
 use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy, RoutineTarget};
 
 const VALID_ROUTINE: &str = r#"
@@ -264,4 +264,90 @@ fn target_round_trips_through_serde() {
     assert!(serialized.contains("target: job:almanac_commit_pipeline"));
     let reparsed = parse_routine_yaml(&serialized).expect("reparse");
     assert_eq!(reparsed, routine);
+}
+
+#[test]
+fn routine_yaml_preserves_anchors_block_scalars_and_explicit_tags() {
+    let routine = parse_routine_yaml(
+        r#"---
+schemaVersion: 1
+name: &name yaml-compat
+description: |-
+  Unicode: café
+  literal: on, off, null
+enabled: !!bool true
+trigger: { cron: "0 22 * * *", missed_run: skip }
+target: job:yaml-compat
+hosts: [*name]
+"#,
+    )
+    .expect("legacy YAML forms load");
+    assert_eq!(routine.description, "Unicode: café\nliteral: on, off, null");
+    assert_eq!(
+        routine.legacy_hosts.as_deref(),
+        Some(std::slice::from_ref(&routine.name))
+    );
+    let serialized = serde_yaml::to_string(&routine).expect("serialize routine");
+    let mut expected = routine;
+    // Retired host pins intentionally disappear when the document is saved.
+    expected.legacy_hosts = None;
+    assert_eq!(parse_routine_yaml(&serialized).expect("reload"), expected);
+}
+
+#[test]
+fn persisted_yaml_rejects_duplicate_fields_bad_syntax_and_document_streams() {
+    for yaml in [
+        VALID_ROUTINE.replace("enabled: true", "enabled: true\nenabled: false"),
+        VALID_ROUTINE.replace("enabled: true", "enabled: ["),
+        format!("{VALID_ROUTINE}\n---\n{VALID_ROUTINE}"),
+        VALID_ROUTINE.replace("schemaVersion: 1", "schemaVersion: [1]"),
+    ] {
+        assert!(matches!(
+            parse_routine_yaml(&yaml),
+            Err(OrbitError::InvalidInput(_))
+        ));
+    }
+    let error = parse_routine_yaml(&VALID_ROUTINE.replace("enabled: true", "enabled: ["))
+        .expect_err("malformed YAML fails");
+    let message = error.to_string();
+    assert!(message.contains("routine header:"), "{message}");
+    assert!(
+        message.contains("line") && message.contains("column"),
+        "{message}"
+    );
+}
+
+#[test]
+fn policy_yaml_round_trips_timestamps_patterns_and_quoted_scalars() {
+    let yaml = r#"
+schemaVersion: 2
+kind: Policy
+metadata: { name: yaml-compat }
+spec:
+  description: "null"
+  created_at: 2026-09-08T12:00:00Z
+  denyRead: ["**/.env", "secrets/**"]
+  denyModify: ["**/.git/**"]
+  fsProfiles:
+    developer: { read: ["./**"], modify: ["src/**"] }
+"#;
+    let policy = parse_policy_resource(yaml, "policy fixture").expect("policy parses");
+    assert_eq!(policy.spec.description.as_deref(), Some("null"));
+    assert!(policy.spec.created_at.is_some());
+    assert_eq!(policy.spec.deny_read, ["**/.env", "secrets/**"]);
+    let serialized = serde_yaml::to_string(&policy).expect("serialize policy");
+    assert_eq!(
+        parse_policy_resource(&serialized, "policy fixture").expect("reload"),
+        policy
+    );
+    for invalid in [
+        yaml.replace("schemaVersion: 2", "schemaVersion: 1"),
+        yaml.replace("kind: Policy", "kind: Job"),
+        yaml.replace("2026-09-08T12:00:00Z", "not-a-timestamp"),
+    ] {
+        assert!(matches!(
+            parse_policy_resource(&invalid, "policy fixture"),
+            Err(OrbitError::InvalidInput(_))
+        ));
+    }
 }
