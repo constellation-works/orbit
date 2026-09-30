@@ -156,6 +156,19 @@ prices:
     cache_create_1h_per_million_usd: 12.5
     output_per_million_usd: 50.0
 
+  # GPT-6.1 Sol standard short-context rates verified at
+  # https://developers.openai.com/api/docs/pricing on 2026-09-29.
+  # Retain GPT-6 Sol's separate row for historical invocation accounting.
+  - model: "gpt-6.1-sol"
+    effective_from: "2026-09-29T00:00:00Z"
+    effective_until: null
+    input_token_basis: gross_includes_cache
+    input_per_million_usd: 2.0
+    cache_read_per_million_usd: 0.1
+    cache_create_per_million_usd: 2.5
+    cache_create_1h_per_million_usd: 2.5
+    output_per_million_usd: 10.0
+
   # GPT-6 Sol and Luna standard short-context rates, published at
   # developers.openai.com/api/docs/pricing on 2026-09-22. OpenAI does not
   # publish a distinct 1h cache-write rate; use the 5m rate as a fallback.

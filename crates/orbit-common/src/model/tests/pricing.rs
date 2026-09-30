@@ -159,6 +159,7 @@ fn every_fleet_model_string_is_priced() {
         "claude-fable-5-1",
         "gpt-5.6-terra",
         "gpt-6-sol",
+        "gpt-6.1-sol",
         "gpt-6-luna",
         "gpt-6-astra",
         "gemini-3.5-flash",
@@ -236,6 +237,30 @@ fn september_22_model_onboarding_has_published_rates_and_closes_old_defaults() {
             "{model} retired row remains open"
         );
     }
+}
+
+#[test]
+fn gpt_6_1_sol_cache_discount_preserves_gpt_6_sol_accounting() {
+    // developers.openai.com/api/docs/pricing: the new Sol model keeps $2/$10
+    // input/output and $2.50 cache writes, but cached reads drop to $0.10.
+    let usage = TokenUsage {
+        input: 4_000_000,
+        cache_read: 1_000_000,
+        cache_create: 1_000_000,
+        cache_create_1h: 1_000_000,
+        output: 1_000_000,
+    };
+    let at = dt("2026-09-29T00:00:00Z");
+    let cost =
+        derive_cost_usd("gpt-6.1-sol", at, &usage).expect("gpt-6.1-sol has a covering price row");
+    assert!((cost - 17.1).abs() < 1e-9, "cost was {cost}");
+    let previous = derive_cost_usd("gpt-6-sol", at, &usage)
+        .expect("gpt-6-sol keeps its price row for recorded runs");
+    assert!((previous - 17.2).abs() < 1e-9, "cost was {previous}");
+    assert!(
+        derive_cost_usd("gpt-6.1-sol", dt("2026-09-28T23:59:59Z"), &usage).is_none(),
+        "the new price row starts on its effective date"
+    );
 }
 
 #[test]

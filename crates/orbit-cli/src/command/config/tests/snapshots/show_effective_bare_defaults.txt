@@ -39,7 +39,7 @@ Crews (crews.*)              15 defined, all from built-in
   opencode     true     built-in  opencode     anthropic/claude-sonnet-4-5  –       –
   opus         true     built-in  claude       opus                         –       –  ← workflow.default_crew
   pi           true     built-in  pi           sonnet                       –       –
-  sol          true     built-in  codex        gpt-6-sol                    –       –
+  sol          true     built-in  codex        gpt-6.1-sol                  –       –
   sonnet       true     built-in  claude       sonnet                       –       –
   system       true     built-in  claude       sonnet                       –       –  ← workflow.system_crew
   terra        true     built-in  codex        gpt-5.6-terra                –       –
