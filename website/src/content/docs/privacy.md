@@ -131,7 +131,7 @@ described in [AI coding agents you choose](#ai-coding-agents-you-choose).
 
 - It has no analytics, tracking pixels, advertising, or third-party scripts, and
   it loads no fonts or other assets from other domains.
-- The site's code sets no cookies. It defaults to light mode without writing to
+- The site's code sets no cookies. It defaults to dark mode without writing to
   browser storage. If you use the theme toggle, it stores your light or dark
   choice (`orbit-theme-choice`) in local storage. That choice never leaves your
   browser. A previous version stored `starlight-theme` automatically; the site
