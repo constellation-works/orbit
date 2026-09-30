@@ -97,10 +97,12 @@ the given fields, `relations` as given (e.g. `[{"type":"regression_from","target
 
 ## orbit_task_update — enforced lifecycle
 
-Legal moves: proposed→backlog|rejected; backlog→in-progress|blocked|archived;
-in-progress→review|blocked|backlog|archived; review→done|backlog|in-progress|rejected;
-someday→backlog|in-progress; blocked→backlog|in-progress; rejected→backlog|in-progress;
-any open status→blocked|archived. `done` and `archived` are terminal.
+Legal moves: proposed→backlog|someday|in-progress|rejected;
+backlog→proposed|someday|in-progress|rejected;
+someday→backlog|in-progress|rejected; in-progress→backlog|someday|review|rejected;
+review→backlog|in-progress|done|rejected; blocked→backlog|in-progress;
+rejected→backlog|in-progress; any open status except `rejected`→blocked|archived.
+`done` and `archived` are terminal. (This is the real server's table.)
 
 On an illegal move return `isError` with
 `{"error":"invalid_transition","id":"<id>","from":"<status>","to":"<status>","allowed":[...]}`.
