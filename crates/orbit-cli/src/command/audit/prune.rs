@@ -1,7 +1,9 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute, require_confirmation};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload, require_confirmation};
 use crate::parse::parse_since;
 
 #[derive(Args)]
@@ -16,10 +18,15 @@ pub struct AuditPruneArgs {
 
 impl Execute for AuditPruneArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        require_confirmation(self.confirm, "audit pruning")?;
+        // Validate the duration first so a typo is reported as a typo rather
+        // than hidden behind the confirmation prompt.
         let cutoff = parse_since(&self.older_than)?;
+        require_confirmation(self.confirm, "audit pruning")?;
         let pruned = runtime.prune_audit_events(&cutoff)?;
-        println!("Pruned {pruned} audit events");
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(
+            json!({ "pruned": pruned }),
+            format!("Pruned {pruned} audit events"),
+        )
+        .into())
     }
 }

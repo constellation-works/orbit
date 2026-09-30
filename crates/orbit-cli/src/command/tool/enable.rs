@@ -1,7 +1,9 @@
 use clap::Args;
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 pub struct ToolEnableArgs {
@@ -12,7 +14,10 @@ pub struct ToolEnableArgs {
 impl Execute for ToolEnableArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         runtime.enable_tool(&self.name)?;
-        println!("Enabled tool '{}'", self.name);
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(
+            json!({ "tool": self.name, "enabled": true }),
+            format!("Enabled tool '{}'", self.name),
+        )
+        .into())
     }
 }

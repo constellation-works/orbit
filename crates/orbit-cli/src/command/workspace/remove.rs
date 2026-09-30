@@ -6,7 +6,9 @@ use orbit_core::OrbitRuntime;
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::WorkspaceRegistry;
 
-use crate::command::{CommandOut, CommandOutput, Execute};
+use serde_json::json;
+
+use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 pub struct WorkspaceRemoveArgs {
@@ -46,18 +48,31 @@ impl Execute for WorkspaceRemoveArgs {
             Ok((removed, leftover))
         })?;
 
-        println!("workspace '{}' removed from registry", removed.name);
-        if let Some(partition) = leftover.filter(|partition| partition.task_bundles > 0) {
-            println!(
-                "left task-store partition {} ({} task bundle(s)); \
+        let mut text = format!("workspace '{}' removed from registry", removed.name);
+        let leftover = leftover.filter(|partition| partition.task_bundles > 0);
+        if let Some(partition) = leftover.as_ref() {
+            text.push_str(&format!(
+                "\nleft task-store partition {} ({} task bundle(s)); \
                  the task-registry workspace binding is retained as checkout evidence \
                  so `orbit doctor` can classify it. Reclaim with \
                  `orbit doctor --fix-orphan-task-stores --confirm`.",
                 partition.path.display(),
                 partition.task_bundles
-            );
+            ));
         }
-        Ok(CommandOutput::Silent)
+        Ok(Payload::detail(
+            json!({
+                "workspace": removed.name,
+                "id": removed.id,
+                "removed": true,
+                "left_task_store": leftover.as_ref().map(|partition| json!({
+                    "path": partition.path.display().to_string(),
+                    "task_bundles": partition.task_bundles,
+                })),
+            }),
+            text,
+        )
+        .into())
     }
 }
 

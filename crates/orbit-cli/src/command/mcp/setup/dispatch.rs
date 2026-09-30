@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use orbit_core::OrbitError;
 
 use crate::command::mcp::ORBIT_MCP_SERVER_ID;
+use crate::command::{CommandOutput, Payload};
 
 use super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
 use super::format::{load_toml_document, write_or_remove_toml_document};
@@ -636,20 +637,27 @@ pub(super) fn auto_detected_providers(
 /// Home scope (ORB-12139) writes under `home_dir` instead — each provider's
 /// `ConfigTarget::resolve` output is named there so the line still points at
 /// the file the run actually touched, not the unrelated checkout.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn print_action_summary(
+pub(super) fn action_payload(
     action: McpAction<'_>,
     providers: &[McpProvider],
     repo_root: &Path,
     home_dir: Option<&Path>,
     scope: ScopeArg,
     workspace_id: Option<&str>,
-) -> Result<(), OrbitError> {
-    println!(
-        "{}",
-        format_action_summary(action, providers, repo_root, home_dir, scope, workspace_id)?
-    );
-    Ok(())
+) -> Result<CommandOutput, OrbitError> {
+    let text = format_action_summary(action, providers, repo_root, home_dir, scope, workspace_id)?;
+    let scope_label = match scope {
+        ScopeArg::Workspace => "workspace",
+        ScopeArg::Home => "home",
+    };
+    let doc = serde_json::json!({
+        "action": action.label(),
+        "scope": scope_label,
+        "workspace_id": workspace_id,
+        "repo_root": repo_root.display().to_string(),
+        "providers": providers.iter().map(|provider| provider.label()).collect::<Vec<_>>(),
+    });
+    Ok(Payload::detail(doc, text).into())
 }
 
 #[allow(clippy::too_many_arguments)]

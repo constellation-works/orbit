@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use clap::{Args, ValueEnum};
 use orbit_core::OrbitError;
 
-use super::dispatch::{ConfigTarget, auto_detected_providers, print_action_summary, run_action};
+use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run_action};
 use super::providers::ServerLaunch;
 use super::workspace::{env_home_dir, resolve_workspace_layout};
-use crate::command::{CommandOut, CommandOutput};
+use crate::command::CommandOut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScopeArg {
@@ -216,15 +216,14 @@ impl InitArgs {
             home_dir.clone(),
             self.scope,
         )?;
-        print_action_summary(
+        action_payload(
             McpAction::Init(launch),
             &providers,
             &layout.repo_root,
             home_dir.as_deref(),
             self.scope,
             layout.workspace_id.as_deref(),
-        )?;
-        Ok(CommandOutput::Silent)
+        )
     }
 }
 
@@ -259,15 +258,14 @@ impl RemoveArgs {
             home_dir.clone(),
             self.scope,
         )?;
-        print_action_summary(
+        action_payload(
             action,
             &providers,
             &layout.repo_root,
             home_dir.as_deref(),
             self.scope,
             layout.workspace_id.as_deref(),
-        )?;
-        Ok(CommandOutput::Silent)
+        )
     }
 }
 
