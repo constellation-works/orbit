@@ -42,6 +42,9 @@ orbit tool run orbit.friction.add --input '{
 }'
 ```
 
+`during_task` must name an existing task; an id that names none is refused as not
+found instead of being recorded.
+
 **Write the `title` yourself.** It is the record's handle everywhere the corpus
 is scanned — `friction list`, the dashboard, and the search someone runs before
 filing a duplicate. A handle that doesn't name its subject is invisible to that

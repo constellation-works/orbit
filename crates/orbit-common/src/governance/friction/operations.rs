@@ -369,8 +369,9 @@ const REHOME_TO_HELP: Description = Description::Static(
 );
 const TO_WORKSPACE_HELP: Description =
     Description::Static("Registered name or ID of the workspace that owns this friction");
-const DURING_TASK_HELP: Description =
-    Description::Static("Optional task ID being worked on when friction occurred");
+const DURING_TASK_HELP: Description = Description::Static(
+    "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
+);
 
 /// The positional record id used by `show` and `resolve`.
 ///

@@ -561,7 +561,7 @@
           "type": "string"
         },
         "during_task": {
-          "description": "Optional task ID being worked on when friction occurred",
+          "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
           "type": "string"
         },
         "model": {

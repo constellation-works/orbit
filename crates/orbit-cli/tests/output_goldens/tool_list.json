@@ -551,7 +551,7 @@
         "required": false
       },
       {
-        "description": "Optional task ID being worked on when friction occurred",
+        "description": "Optional task ID being worked on when friction occurred; an ID that names no task is refused",
         "name": "during_task",
         "param_type": "string",
         "required": false

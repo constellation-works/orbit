@@ -1,7 +1,8 @@
 //! Runtime-owned access to the workspace-partitioned friction repository.
 
 use chrono::Utc;
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_store::RegisteredTaskResolution;
 use orbit_store::compose::workspace_friction_store;
 use orbit_store::contracts::{FrictionRehomeOutcome, FrictionRehomeParams, FrictionStoreBackend};
 use std::path::PathBuf;
@@ -33,6 +34,27 @@ impl OrbitRuntime {
     /// Workspace tag names and descriptions used to advertise friction inputs.
     pub fn friction_tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
         store_for(self)?.tag_taxonomy()
+    }
+
+    /// Refuse a `during_task` that names no task, so a typo cannot record
+    /// friction against a task that does not exist and skew the per-task
+    /// friction rates.
+    ///
+    /// Task ids are machine-global, so the lookup follows the registry to
+    /// whichever local workspace owns the id, the way a dependency read does.
+    /// An id whose prefix this registry has never issued belongs to another
+    /// host's authority: this machine cannot show it is unknown, so it is
+    /// accepted as written.
+    pub(crate) fn ensure_friction_task_exists(&self, task_id: &str) -> Result<(), OrbitError> {
+        match self.stores().tasks().registered_task(task_id)? {
+            RegisteredTaskResolution::Resolved(_) | RegisteredTaskResolution::ForeignAuthority => {
+                Ok(())
+            }
+            RegisteredTaskResolution::Missing => Err(OrbitError::not_found(
+                NotFoundKind::Task,
+                task_id.to_string(),
+            )),
+        }
     }
 
     /// Move friction `id` into the registered workspace `to_workspace` names.
