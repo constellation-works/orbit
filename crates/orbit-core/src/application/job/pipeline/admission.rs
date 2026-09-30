@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::application::job::crew_pools;
+use orbit_common::fs::io::open_read_only_no_follow;
 
 impl OrbitRuntime {
     /// Record the `pipeline.invoke` audit for a direct-path submission, which
@@ -294,26 +295,38 @@ impl OrbitRuntime {
     ///
     /// Direct-path submission writes the snapshot so a later worker — and a
     /// later resume — executes that definition. A missing file means the run
-    /// is catalog-backed. A present file that cannot be read or parsed is an
-    /// error: resume must not silently substitute a catalog asset of the same
-    /// name.
+    /// is catalog-backed. A symlink, non-regular file, or present file that
+    /// cannot be read or parsed is an error: resume must not silently
+    /// substitute a catalog asset of the same name.
     pub(crate) fn read_run_definition_snapshot(
         &self,
         run_id: &str,
     ) -> Result<Option<(JobV2, String)>, OrbitError> {
-        let job_runs_dir = &self.paths().job_runs_dir;
-        let snapshot = run_definition_snapshot_path(job_runs_dir, run_id)?;
-        // Re-checked beside the reads: code scanning does not credit the
-        // run-id validation inside the helper that built the path.
-        if !snapshot.starts_with(job_runs_dir) {
+        let snapshot = run_definition_snapshot_path(&self.paths().job_runs_dir, run_id)?;
+        // The shared filename validator confines the leaf to job_runs_dir.
+        // Resolve its parent and open it without following the final component;
+        // all checks and the read then use that same descriptor.
+        let mut file = match open_read_only_no_follow(&snapshot) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "open job run definition snapshot '{}': {error}",
+                    snapshot.display()
+                )));
+            }
+        };
+        let metadata = file.metadata().map_err(|error| {
+            OrbitError::InvalidInput(format!("inspect {}: {error}", snapshot.display()))
+        })?;
+        if !metadata.is_file() {
             return Err(OrbitError::InvalidInput(format!(
-                "job run definition snapshot escapes the job runs directory: {run_id}"
+                "job run definition snapshot must be a regular file: {}",
+                snapshot.display()
             )));
         }
-        if !snapshot.is_file() {
-            return Ok(None);
-        }
-        let yaml = std::fs::read_to_string(&snapshot).map_err(|error| {
+        let mut yaml = String::new();
+        file.read_to_string(&mut yaml).map_err(|error| {
             OrbitError::InvalidInput(format!("read {}: {error}", snapshot.display()))
         })?;
         let asset = load_job_asset(&yaml).map_err(|error| {

@@ -949,6 +949,8 @@ Direct YAML execution retains its explicit-definition/input contract.
 
 A direct YAML path names an unmanaged file, so its exact validated definition is snapshotted to `state/job-runs/<run_id>.job.yaml` before submission returns; the worker prefers that snapshot over catalog resolution, and an edit or deletion of the source afterwards cannot change the submitted run. Catalog ids keep name resolution as their contract ([Job catalog discovery honors layer precedence](./4_decisions.md)).
 
+Snapshot reads validate the run ID as a filename stem, resolve the owning directory, and open the leaf without following symlinks. The reader checks the opened descriptor is a regular file and reads that same descriptor. Only an absent snapshot permits catalog resolution; a symlink, directory, unreadable file, or malformed definition refuses execution and resume.
+
 So early v2 failures never leave `steps: []` without a surfaced `error_message` [T20260423-0445]:
 
 - if a persisted v2 pipeline fails and no recorded step already carries error detail, the pipeline worker writes a synthetic failed `JobRunStep`
