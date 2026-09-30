@@ -277,7 +277,7 @@ impl V2AuditWriter {
     /// failure. Non-fatal: returns the event_id on success, `None` on failure.
     /// Used at emission sites whose event id is not load-bearing for parent
     /// nesting.
-    pub(crate) fn emit_lossy(&self, kind: V2AuditEventKind) -> Option<String> {
+    pub fn emit_lossy(&self, kind: V2AuditEventKind) -> Option<String> {
         let event_kind = kind.event_type();
         match self.emit(kind) {
             Ok(event_id) => Some(event_id),
