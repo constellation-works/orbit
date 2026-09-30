@@ -293,7 +293,7 @@ fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> CommandOut {
         }) => args.execute_without_runtime(context.root_override),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Listen(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
         _ => dispatch_mismatch("Mcp"),
     }
 }

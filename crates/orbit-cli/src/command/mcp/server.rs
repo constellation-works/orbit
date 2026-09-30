@@ -169,6 +169,7 @@ fn finish_stdio_session(exit: orbit_mcp::StdioExit) -> Result<(), OrbitError> {
 pub(super) fn serve_mcp_listener(
     addr: SocketAddr,
     exposure: ListenerExposure,
+    bound_workspace: Option<String>,
 ) -> Result<(), OrbitError> {
     // A listener has no forwarding proxy in front of it, so there is no caller
     // machine label to trust; each accepted connection contributes only the
@@ -178,15 +179,25 @@ pub(super) fn serve_mcp_listener(
     // authenticates no client, so every accepted connection would otherwise
     // inherit whatever authority the listening process was started with.
     //
-    // For the same reason it binds no workspace: a socket is shared by
-    // whoever can reach it, so each session names its own workspace.
+    // It binds a workspace only when the operator names one (`orbit --workspace
+    // <selector> mcp listen`). That is a default and never authority: it is
+    // resolved against the registry per call, a client that announces a
+    // workspace or passes one per call takes precedence, and any peer could
+    // already name the same workspace itself. Without it a socket is shared by
+    // whoever can reach it, so each session names its own workspace, and the
+    // managed-child `ORBIT_WORKSPACE` envelope is not read here.
     //
     // This reasoning is unchanged by argv-propagated remote authority: SSH
     // authenticates the caller before Orbit runs, and a socket authenticates
     // nobody at all [ORB-12564].
     let global_root = resolve_global_root()?;
-    let (host, session_context) =
-        compose_server(global_root, None, McpSessionAuthority::Agent, None, None)?;
+    let (host, session_context) = compose_server(
+        global_root,
+        None,
+        McpSessionAuthority::Agent,
+        bound_workspace,
+        None,
+    )?;
     block_on_server(async move {
         let listener = McpListener::bind(addr, exposure, host, session_context).await?;
         tracing::info!(address = %listener.local_addr()?, "orbit mcp listener bound");

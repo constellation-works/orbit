@@ -45,7 +45,7 @@ fn a_wider_bind_requires_the_explicit_flag() {
 #[test]
 fn a_workspace_root_override_is_refused_before_any_socket_opens() {
     let error = parse(&["listen"])
-        .execute_without_runtime(Some(&PathBuf::from("/tmp/does-not-matter")))
+        .execute_without_runtime(Some(&PathBuf::from("/tmp/does-not-matter")), None)
         .expect_err("root override must be refused");
     assert!(
         matches!(&error, OrbitError::InvalidInput(message) if message.contains("orbit mcp listen")),

@@ -195,9 +195,11 @@ orbit mcp listen 127.0.0.1:9000
 ```
 
 It serves the same tool surface as `orbit mcp serve`, one independent session per
-connection. The socket authenticates no client, so it binds loopback; a wider bind
-requires `--allow-non-loopback` and a network path you have restricted by other
-means.
+connection. Pass `--workspace <selector>` to bind each accepted session to a
+registered workspace by default, exactly as `orbit mcp serve --workspace` does;
+without it each session names its own. The socket authenticates no client, so it
+binds loopback; a wider bind requires `--allow-non-loopback` and a network path
+you have restricted by other means.
 
 ## Remove
 

@@ -52,6 +52,11 @@ pub enum McpSubcommand {
     /// wider bind is asked for explicitly. Local processes can still connect to
     /// loopback. HTTP requests, including those sent by browser pages, are
     /// closed before their bodies can be dispatched as MCP messages.
+    ///
+    /// `--workspace <selector>` binds every accepted session to that workspace
+    /// by default, as `orbit mcp serve --workspace` does; a client that
+    /// announces a workspace, or passes one on a call, still takes precedence.
+    /// Without it each session names its own.
     Listen(ListenArgs),
 }
 
@@ -65,7 +70,7 @@ impl Execute for McpSubcommand {
             Self::Init(args) => args.execute_without_runtime(None),
             Self::Remove(args) => args.execute_without_runtime(None),
             Self::Serve(args) => args.execute_without_runtime(None),
-            Self::Listen(args) => args.execute_without_runtime(None),
+            Self::Listen(args) => args.execute_without_runtime(None, None),
         }
     }
 }
