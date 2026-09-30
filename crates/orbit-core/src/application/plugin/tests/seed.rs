@@ -41,6 +41,43 @@ fn managed_manifest_path(fixture: &PluginFixture, directory: &str) -> PathBuf {
         .join(".orbit-managed-plugin-assets.json")
 }
 
+/// The redirect guard polices the catalog directories and what is inside them.
+/// A workspace whose parent is a symlink (macOS `/tmp` and `/var`, a symlinked
+/// `~/workspace`) is an ordinary setup and must still be seeded.
+#[cfg(unix)]
+#[test]
+fn seeding_works_when_the_workspace_sits_behind_a_symlinked_ancestor() {
+    if !super::fixture::enter_isolated_child(
+        module_path!(),
+        "seeding_works_when_the_workspace_sits_behind_a_symlinked_ancestor",
+    ) {
+        return;
+    }
+    let fixture = PluginFixture::new_behind_symlink();
+    assert!(
+        fixture
+            .workspace_root
+            .starts_with(fixture._root.path().join("linked")),
+        "the fixture must keep the symlinked spelling"
+    );
+    install(&fixture, &DefinitionPlugin::new("graph"));
+    let runtime = fixture.reopen();
+
+    let result = enable_plugin(&runtime, "graph", &PluginEnableOptions::default())
+        .expect("a symlinked ancestor is not a redirected seed destination");
+
+    assert!(
+        result
+            .seeded
+            .iter()
+            .all(|outcome| outcome.action == PluginSeedAction::Created),
+        "{:?}",
+        result.seeded
+    );
+    assert!(routine_path(&fixture).is_file());
+    assert!(auto_task_path(&fixture).is_file());
+}
+
 #[cfg(unix)]
 #[test]
 fn redirected_seed_destinations_are_refused_before_either_catalog_changes() {

@@ -171,15 +171,27 @@ fn refuse_redirected_destinations(
     if files.is_empty() {
         return Ok(());
     }
-    check_destination_components(dir, true)?;
-    check_destination_components(&dir.join(PLUGIN_ASSET_MANIFEST_FILE), false)?;
+    // The Orbit directory holding the catalog is the controlled root: the
+    // runtime resolved it, and an operator may legitimately reach it through a
+    // symlinked ancestor (macOS `/tmp` and `/var`, a symlinked `~/workspace`).
+    // Only the catalog directory and everything inside it can redirect a seed.
+    let trusted_root = dir.parent().unwrap_or(dir);
+    check_destination_components(dir, true, trusted_root)?;
+    check_destination_components(&dir.join(PLUGIN_ASSET_MANIFEST_FILE), false, trusted_root)?;
     for (name, _) in files {
-        check_destination_components(&dir.join(format!("{name}.yaml")), false)?;
+        check_destination_components(&dir.join(format!("{name}.yaml")), false, trusted_root)?;
     }
     Ok(())
 }
 
-fn check_destination_components(path: &Path, directory: bool) -> Result<(), OrbitError> {
+/// Refuse `path` when a component below `trusted_root` is a symlink, has the
+/// wrong type, or is not a directory where a directory is required. Components
+/// that are `trusted_root` or its ancestors are not inspected.
+fn check_destination_components(
+    path: &Path,
+    directory: bool,
+    trusted_root: &Path,
+) -> Result<(), OrbitError> {
     if path
         .components()
         .any(|component| matches!(component, Component::ParentDir))
@@ -190,7 +202,7 @@ fn check_destination_components(path: &Path, directory: bool) -> Result<(), Orbi
         )));
     }
     for component in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
-        if component.as_os_str().is_empty() {
+        if component.as_os_str().is_empty() || trusted_root.starts_with(component) {
             continue;
         }
         match std::fs::symlink_metadata(component) {
