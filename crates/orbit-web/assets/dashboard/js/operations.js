@@ -1,6 +1,6 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { requestPanel, describePullSettlements, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
+import { requestPanel, describePullSettlements, copyText, detailsPanel, el, fetchJson, getWorkspace, getWorkspaceRevision, onWorkspaceChange, postJson, statusPill } from './common.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { renderAutomation } from './automation.js';
 
@@ -1158,13 +1158,8 @@ function jobRow(job, workspace) {
   const copy = el("button", { class: "operation-button secondary", text: "Copy command", title: "Copy the CLI command" });
   copy.type = "button";
   copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard?.writeText(command);
-      copy.textContent = "Copied";
-      setTimeout(() => { copy.textContent = "Copy command"; }, 1500);
-    } catch (_) {
-      copy.textContent = "Copy failed";
-    }
+    copy.textContent = (await copyText(command)) ? "Copied" : "Copy failed";
+    setTimeout(() => { copy.textContent = "Copy command"; }, 1500);
   });
   const recent = job.runs.slice(0, 5);
   const card = el("article", { class: `operation-card operation-row job-card ${jobFamily(job.id)}` });

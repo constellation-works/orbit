@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { panelCanRender, describePullSettlements, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
+import { panelCanRender, describePullSettlements, copyWithFeedback, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -844,14 +844,7 @@ export function renderRuns(runs) {
     const runIdSpan = el("span", { class: "run-id", text: r.run_id, title: "Click to copy run ID" });
     runIdSpan.addEventListener("click", (e) => {
       e.stopPropagation();
-      navigator.clipboard.writeText(r.run_id).catch(() => {});
-      const oldText = runIdSpan.textContent;
-      runIdSpan.textContent = "copied!";
-      runIdSpan.style.color = "var(--state-success)";
-      setTimeout(() => {
-        runIdSpan.textContent = oldText;
-        runIdSpan.style.color = "";
-      }, 1000);
+      copyWithFeedback(runIdSpan, r.run_id);
     });
     const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
     if (r.retry_source_run_id) {
