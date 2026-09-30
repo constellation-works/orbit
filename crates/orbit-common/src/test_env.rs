@@ -37,6 +37,22 @@ pub(crate) fn scoped_env_active() -> bool {
     ACTIVE_SCOPED_ENVS.load(Ordering::SeqCst) != 0
 }
 
+/// The system temporary directory with every symlink resolved.
+///
+/// macOS points `TMPDIR` under `/var`, a symlink to `/private/var`, so a
+/// `tempfile::tempdir()` root is spelled through a link. Orbit resolves
+/// symlinks in the roots it is given (discovery lists a canonical directory and
+/// reports canonical paths), so a fixture that compares those paths with the
+/// spelled root, or hands a path to code that must see one physical spelling,
+/// passes on Linux and fails on macOS. Create such a fixture's root with
+/// `tempfile::tempdir_in(canonical_temp_dir())` instead of overriding `TMPDIR`
+/// for the whole suite: fixtures that do not care keep the ordinary root, so a
+/// symlinked ancestor keeps being exercised where it should be.
+pub fn canonical_temp_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir();
+    std::fs::canonicalize(&dir).unwrap_or(dir)
+}
+
 /// The identity pair consulted when a command carries no explicit
 /// `--agent`/`--model` and no input attribution.
 pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL", "ORBIT_ACTOR"];

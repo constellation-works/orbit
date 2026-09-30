@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
 
 use crate::OrbitRuntime;
 use crate::application::job::catalog::{
@@ -46,9 +46,21 @@ struct SourceWorkspace {
 }
 
 fn seed_source_workspace() -> SourceWorkspace {
-    let tmp = tempdir().unwrap();
-    let global = tmp.path().join("global");
-    let ws_root = tmp.path().join("polaris");
+    seed_source_workspace_at(false)
+}
+
+/// [`seed_source_workspace`], optionally spelling every root through a symlink
+/// to its parent, as a workspace under macOS `/tmp` or a symlinked home is.
+fn seed_source_workspace_at(behind_symlink: bool) -> SourceWorkspace {
+    // Discovery reports resolved paths, which the tests compare with these.
+    let tmp = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).unwrap();
+    let base = if behind_symlink {
+        symlinked_parent(tmp.path())
+    } else {
+        tmp.path().to_path_buf()
+    };
+    let global = base.join("global");
+    let ws_root = base.join("polaris");
     let ws_orbit = ws_root.join(".orbit");
     let routines_dir = ws_orbit.join("routines");
     let local_dir = routines_dir.join("local");
@@ -80,8 +92,23 @@ fn seed_source_workspace() -> SourceWorkspace {
     }
 }
 
+/// A path to a fresh directory under `root` that is reached through a symlink.
+#[cfg(unix)]
+fn symlinked_parent(root: &Path) -> PathBuf {
+    let real = root.join("real");
+    fs::create_dir_all(&real).unwrap();
+    let linked = root.join("linked");
+    std::os::unix::fs::symlink(&real, &linked).unwrap();
+    linked
+}
+
+#[cfg(not(unix))]
+fn symlinked_parent(root: &Path) -> PathBuf {
+    root.to_path_buf()
+}
+
 fn seed_shared_source_workspace() -> SourceWorkspace {
-    let tmp = tempdir().unwrap();
+    let tmp = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).unwrap();
     let shared_root = tmp.path().join("shared");
     let routines_dir = shared_root.join("routines");
     let local_dir = routines_dir.join("local");
@@ -384,6 +411,40 @@ fn orbit_seeded_retired_default_keeps_the_sync_advice() {
         return;
     }
     let ws = seed_source_workspace();
+    write_routine(
+        &ws.routines_dir,
+        "auto_task_scheduler.yaml",
+        &retired_scheduler_template("auto-task-scheduler-polaris"),
+    );
+
+    let collection = collect(&ws);
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    let retired = collection
+        .retired
+        .iter()
+        .find(|routine| routine.name == "auto-task-scheduler-polaris")
+        .expect("the definition is reported as retired");
+    assert!(
+        retired.reason.contains("orbit workspace sync"),
+        "the reason names the command that retires the file: {}",
+        retired.reason
+    );
+}
+
+/// A workspace reached through a symlinked ancestor is an ordinary setup.
+/// Discovery reports resolved paths, so deciding whether synchronization
+/// retires a file has to resolve the routines directory the same way; otherwise
+/// the operator is sent to delete a file that `orbit workspace sync` clears.
+#[cfg(unix)]
+#[test]
+fn a_seeded_retired_default_keeps_the_sync_advice_behind_a_symlinked_ancestor() {
+    if super::isolated_child(
+        module_path!(),
+        "a_seeded_retired_default_keeps_the_sync_advice_behind_a_symlinked_ancestor",
+    ) {
+        return;
+    }
+    let ws = seed_source_workspace_at(true);
     write_routine(
         &ws.routines_dir,
         "auto_task_scheduler.yaml",

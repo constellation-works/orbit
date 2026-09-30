@@ -185,7 +185,9 @@ fn sweep_log_path_rejects_symlinked_directory() {
 
 #[test]
 fn sweep_log_path_accepts_absent_and_existing_regular_files() {
-    let root = tempdir().expect("create global root");
+    // The validated path is resolved, so the expected one must be spelled so.
+    let root = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir())
+        .expect("create global root");
     let logs = root.path().join("logs");
     fs::create_dir(&logs).expect("create log directory");
     let expected_path = logs.join("sweep.log");

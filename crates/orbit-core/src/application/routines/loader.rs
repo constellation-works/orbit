@@ -50,6 +50,19 @@ pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineColl
     collection
 }
 
+/// The routines directory as discovery spells the paths under it.
+///
+/// Discovery resolves symlinks in the Orbit directory before it lists, so every
+/// loaded or retired routine path is symlink-free. A caller that matches those
+/// paths against a workspace's routines directory has to resolve the directory
+/// the same way, or a workspace reached through a symlinked ancestor (macOS
+/// `/tmp` and `/var`, a symlinked home) never matches its own files.
+fn discovered_routines_dir(orbit_dir: &Path) -> PathBuf {
+    std::fs::canonicalize(orbit_dir)
+        .unwrap_or_else(|_| orbit_dir.to_path_buf())
+        .join(ROUTINES_DIR)
+}
+
 /// One discovered workspace's plugin surface, keyed by its routines
 /// directory so a seeded file is judged by the workspace it lives in.
 struct WorkspacePluginState {
@@ -69,7 +82,7 @@ fn workspace_plugin_states(workspaces: &[(Workspace, OrbitRuntime)]) -> Vec<Work
             let load = runtime.plugin_load();
             WorkspacePluginState {
                 workspace: workspace.name.clone(),
-                routines_dir: runtime.shared_root().join(ROUTINES_DIR),
+                routines_dir: discovered_routines_dir(&runtime.shared_root()),
                 active: load
                     .active()
                     .map(|plugin| plugin.namespace().to_string())
@@ -145,7 +158,7 @@ fn narrow_retired_advice(sources: &[RoutineSource], collection: &mut RoutineColl
         .map(|source| {
             (
                 source.workspace.as_str(),
-                source.orbit_dir.join(ROUTINES_DIR),
+                discovered_routines_dir(&source.orbit_dir),
             )
         })
         .collect();
