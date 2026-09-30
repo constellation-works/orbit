@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -446,11 +446,9 @@ function relationTypeKey(value) {
     .toLowerCase();
 }
 
-export function copyTaskIdWithNotice(taskId, context) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(taskId).catch(() => {});
-  }
-  taskActionNotice = `${taskId} is not in the filtered task list; copied ID`;
+export async function copyTaskIdWithNotice(taskId, context) {
+  const copied = await copyText(taskId);
+  taskActionNotice = `${taskId} is not in the filtered task list; ${copied ? "copied ID" : "could not copy the ID"}`;
   renderTasks(taskList(context), context);
 }
 
@@ -1321,17 +1319,6 @@ function commentActionButton(label, title) {
   return button;
 }
 
-function copyCommentText(text, button) {
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-    navigator.clipboard.writeText(text).catch(() => {});
-  }
-  const label = button.textContent;
-  button.textContent = "copied";
-  setTimeout(() => {
-    button.textContent = label;
-  }, 1000);
-}
-
 function commentPermalink(anchorId) {
   const href = window.location && window.location.href ? String(window.location.href) : "";
   return `${href.split("#")[0]}#${anchorId}`;
@@ -1519,14 +1506,14 @@ function buildCommentCard(task, comment, index, context) {
   });
   copy.addEventListener("click", (event) => {
     event.stopPropagation();
-    copyCommentText(message, copy);
+    copyWithFeedback(copy, message);
   });
   permalink.addEventListener("click", (event) => {
     event.stopPropagation();
     if (typeof card.scrollIntoView === "function") {
       card.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-    copyCommentText(commentPermalink(card.id), permalink);
+    copyWithFeedback(permalink, commentPermalink(card.id));
   });
 
   card.appendChild(head);
@@ -2537,11 +2524,12 @@ function takeTaskActionNotice() {
 // The pinned global-resolver result: a task outside the active filter, shown
 // above the list with its own dismiss control.
 function buildPinnedTask(ptask, context) {
+  const idSpan = el("span", { class: "id mono", text: ptask.id });
   const row = el("div", {
     class: "row pinned-external",
     title: `${ptask.title} (global resolver; status ${ptask.status})`
   }, [
-    el("span", { class: "id mono", text: ptask.id }),
+    idSpan,
     el("span", { class: "title", text: ptask.title }),
     buildStatusUpdateControl(ptask, context),
     buildCrewUpdateControl(ptask, context),
@@ -2551,7 +2539,7 @@ function buildPinnedTask(ptask, context) {
   makeToggleRow(row, {
     onToggle: (e) => {
       e.stopPropagation();
-      if (navigator.clipboard) navigator.clipboard.writeText(ptask.id).catch(() => {});
+      copyWithFeedback(idSpan, ptask.id);
     },
   });
   row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, ptask.id)}-${feedbackSignature(crewFeedback, ptask.id)}`;
@@ -2823,14 +2811,7 @@ export function renderTasks(tasks, context) {
         const idSpan = el("span", { class: "id mono", text: t.id, title: "Click to copy ID" });
         idSpan.addEventListener("click", (e) => {
           e.stopPropagation();
-          navigator.clipboard.writeText(t.id).catch(() => {});
-          const oldText = idSpan.textContent;
-          idSpan.textContent = "copied!";
-          idSpan.style.color = "var(--state-success)";
-          setTimeout(() => {
-            idSpan.textContent = oldText;
-            idSpan.style.color = "";
-          }, 1000);
+          copyWithFeedback(idSpan, t.id);
         });
         const titleCell = aggregate && t.workspace_name
           ? el("span", { class: "title" }, [

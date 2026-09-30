@@ -394,6 +394,63 @@ export function stateCell(state) {
   return node;
 }
 
+// The async clipboard API exists only in secure contexts (HTTPS or localhost),
+// and rejects when the page is not focused. A dashboard served over plain HTTP
+// on a LAN address has neither, so fall back to the legacy selection copy.
+function legacyCopy(text) {
+  if (typeof document.execCommand !== "function") return false;
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.setAttribute("readonly", "");
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  const previous = document.activeElement;
+  document.body.appendChild(scratch);
+  scratch.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (_) {
+    copied = false;
+  }
+  scratch.remove();
+  if (previous && typeof previous.focus === "function") previous.focus();
+  return copied;
+}
+
+/// Puts `text` on the clipboard. Resolves true only when the browser accepted
+/// it, so a caller never reports a copy that did not happen.
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {
+    // Fall through to the legacy path.
+  }
+  return legacyCopy(text);
+}
+
+const COPY_FEEDBACK_MS = 1000;
+
+/// Copies `text` and shows the outcome on `node` for a moment: "copied!" only
+/// when the clipboard took it, "copy failed" otherwise. The node's own text is
+/// remembered once, so clicking again mid-flash cannot leave the feedback
+/// word behind as the node's permanent label.
+export async function copyWithFeedback(node, text) {
+  if (node.dataset.copyLabel === undefined) node.dataset.copyLabel = node.textContent;
+  const copied = await copyText(text);
+  node.textContent = copied ? "copied!" : "copy failed";
+  node.style.color = copied ? "var(--state-success)" : "var(--state-error)";
+  clearTimeout(node.copyFeedbackTimer);
+  node.copyFeedbackTimer = setTimeout(() => {
+    node.textContent = node.dataset.copyLabel;
+    node.style.color = "";
+    delete node.dataset.copyLabel;
+  }, COPY_FEEDBACK_MS);
+}
+
 export async function fetchJson(path) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);

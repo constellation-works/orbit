@@ -3397,6 +3397,17 @@ fn dashboard_rows_are_keyboard_operable_without_changing_click_behaviour() {
     ));
 }
 
+// Click-to-copy ids and commands confirm a copy only when the browser made
+// one, and say so when it could not (no async clipboard on plain HTTP).
+#[test]
+fn dashboard_copy_controls_report_the_real_outcome() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_clipboard.mjs")
+    ));
+}
+
 // DANI-10391: list rows are summaries; the detail behind a row comes from
 // `GET /api/tasks/:id` when it opens. The scenario drives the shipped module
 // against a fetch stub and observes the reads it issues and what it paints.
