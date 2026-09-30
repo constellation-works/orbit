@@ -144,10 +144,13 @@ fn provider_diagnostics_reports_launcher_availability_and_sandbox() {
     assert_eq!(found["cli_available"], true, "{found}");
     assert_eq!(found["launcher"], present.display().to_string(), "{found}");
     assert_eq!(found["sandbox"], "off", "{found}");
+    assert!(found["sandbox_ready"].is_null(), "{found}");
     let absent = row("fake-missing");
     assert_eq!(absent["cli_available"], false, "{absent}");
     assert!(absent["launcher"].is_null(), "{absent}");
     assert_eq!(absent["sandbox"], "linux-bwrap", "{absent}");
+    assert!(absent["sandbox_ready"].is_boolean(), "{absent}");
+    assert!(absent["sandbox_readiness_detail"].is_string(), "{absent}");
 }
 
 #[test]

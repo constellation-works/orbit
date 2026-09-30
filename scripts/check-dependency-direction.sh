@@ -77,7 +77,7 @@ allowed_dev_only_deps() {
       echo "orbit-engine orbit-exec orbit-tools"
       ;;
     orbit-core)
-      echo "orbit-exec"
+      echo ""
       ;;
     *)
       echo ""

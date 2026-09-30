@@ -30,6 +30,7 @@ orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-search = { path = "../orbit-search" }
 orbit-engine = { path = "../orbit-engine" }
+orbit-exec = { path = "../orbit-exec" }
 orbit-policy = { path = "../orbit-policy" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
@@ -48,4 +49,3 @@ libc.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
-orbit-exec = { path = "../orbit-exec" }

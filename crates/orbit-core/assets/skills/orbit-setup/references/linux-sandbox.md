@@ -1,62 +1,34 @@
-# Prepare a Linux Host for Sandboxed Dispatch
+# Linux sandbox onboarding
 
-Complete this setup after `orbit init` and before dispatching an agent on Linux.
-Orbit's Linux executor uses Bubblewrap and fails closed when the host cannot
-run its namespace-and-mount capability probe.
+Run the shell installer or `orbit init` as the unprivileged account that will
+execute Orbit. Both prepare and verify the Linux host automatically. npm
+postinstall only installs the binary; `orbit init` performs preparation for
+npm and direct-binary installs without a separate setup command. No privileged
+operation runs during dispatch.
 
-## What the Linux sandbox guarantees
+Orbit checks the trusted `/usr/bin/bwrap` for `--bind-fd` and runs its
+namespace-and-mount probe as the intended user. A ready host is left alone.
+When needed, onboarding uses the distribution package manager to install
+Bubblewrap. On Ubuntu 24.04, it loads only the packaged
+`bwrap-userns-restrict` AppArmor profile, and refuses to overwrite a custom
+profile. Interactive onboarding uses the normal administrator authentication
+prompt. `orbit init --non-interactive` requires root or already-authorized
+passwordless sudo and never waits for a password.
 
-The `linux-bwrap` executor resolves `/usr/bin/bwrap` and requires an
-unprivileged user to create user namespaces and mounts. A failed capability
-probe stops dispatch; Orbit does not silently fall back to an in-process-only
-boundary.
+Automatic preparation code paths: Ubuntu 24.04, Debian 13, Fedora 43–45,
+Enterprise Linux 10 (`rhel`, `rocky`, `almalinux`, `centos`) and Arch. Older or
+unknown versions receive an explicit unsupported result when preparation is
+needed. Package availability has been checked; native package/security-policy
+and sandboxed subprocess integration has **not yet been validated** for these
+rows. The actual user-scoped capability probe is always the readiness gate.
 
-The enforced boundary protects writes according to the resolved policy. Host
-filesystem reads and host network access remain available, so this sandbox
-does not provide worktree-only reads or policy-gated network egress.
+Use `orbit doctor providers --json` to compare configured `sandbox` with
+`sandbox_ready` and `sandbox_readiness_detail`. A false readiness result can
+mean missing privileges, package failure, incompatible Bubblewrap, a custom
+profile conflict, AppArmor denial, or an enclosing container/kernel blocking
+user namespaces. Correct the reported cause and rerun `orbit init`. Do not
+weaken global namespace policy, enable `allow_fallback`, install a setuid
+workaround, or switch the executor off as an automatic recovery step.
 
-## Ubuntu 24.04
-
-Ubuntu 24.04 can restrict unprivileged user namespaces with AppArmor. Install
-Bubblewrap and the distro's narrow profile, load the profile, verify that
-AppArmor knows it, then run the same probe shape used by Orbit:
-
-```bash
-sudo apt-get update
-sudo apt-get install --yes bubblewrap apparmor-profiles
-test -x /usr/bin/bwrap
-test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
-sudo install -m 0644 \
-  /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
-  /etc/apparmor.d/bwrap-userns-restrict
-test -f /etc/apparmor.d/bwrap-userns-restrict
-sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-grep -Fq 'bwrap-userns-restrict' /sys/kernel/security/apparmor/profiles
-
-/usr/bin/bwrap \
-  --die-with-parent \
-  --new-session \
-  --unshare-all \
-  --share-net \
-  --ro-bind / / \
-  -- /bin/true
-```
-
-The final command must exit successfully. The profile path and probe are
-specific to Ubuntu 24.04; use the corresponding packaged profile and the same
-namespace-and-mount capability requirements on another Linux distribution.
-
-## If the probe fails
-
-Re-check that `/usr/bin/bwrap` is executable, that the packaged profile exists,
-and that `apparmor_parser` loaded it. Read the parser output and rerun the
-probe after correcting the host setup.
-
-Do not disable `kernel.apparmor_restrict_unprivileged_userns` globally and do
-not enable `allow_fallback`. Both changes weaken or bypass Orbit's fail-closed
-boundary. Orbit supports fixing the narrow host prerequisite; it does not
-support an implicit sandbox fallback.
-
-Non-Linux hosts are unaffected by this prerequisite: macOS uses `sandbox-exec`,
-and platforms without a shipped OS-level backend rely on in-process filesystem
-guards only.
+`linux-bwrap` confines writes according to the resolved policy, but host reads
+and host network access remain available. Non-Linux hosts are unaffected.

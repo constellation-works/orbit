@@ -61,6 +61,7 @@ fn workspace_init_before_machine_identity_is_repaired_after_orbit_init() {
 
     InitCommand {
         force: false,
+        host_prerequisites_only: false,
         non_interactive: true,
         machine_name: Some("late-identity-host".to_string()),
         task_prefix: Some("LATE".to_string()),

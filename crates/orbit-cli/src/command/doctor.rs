@@ -57,7 +57,7 @@ pub struct DoctorCommand {
 
 #[derive(Subcommand)]
 pub enum DoctorSubcommand {
-    /// Show each executor's provider CLI, whether dispatch can find it, and its sandbox mode
+    /// Show each executor's provider CLI, configured sandbox, and Linux sandbox readiness
     Providers(ProvidersArgs),
     /// Dry-run a workspace-relative path against a filesystem profile's read and modify rules
     FsAccess(FsAccessArgs),
@@ -435,6 +435,15 @@ pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
     use crate::output::table::{Column, Table};
 
     let defs = runtime.list_executor_defs()?;
+    // One fresh user-scoped probe for this diagnostic. The configured executor
+    // mode alone does not establish that the host can create the namespace.
+    let linux_probe = defs
+        .iter()
+        .any(|def| {
+            def.sandbox
+                .is_some_and(|kind| kind.as_str() == "linux-bwrap")
+        })
+        .then(orbit_core::bootstrap::linux_sandbox_host::probe_bwrap_fresh);
     let mut values = Vec::with_capacity(defs.len());
     let mut table = Table::new(vec![
         Column::new("EXECUTOR").fixed(),
@@ -442,6 +451,7 @@ pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("CLI").fixed(),
         Column::new("FOUND").fixed(),
         Column::new("SANDBOX").fixed(),
+        Column::new("READY").fixed(),
         Column::new("LAUNCHER").path(),
     ])
     .empty_message("no executors defined");
@@ -454,6 +464,9 @@ pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         // provider CLI, so availability does not apply rather than failing.
         let cli_available = def.command.as_ref().map(|_| launcher.is_some());
         let sandbox = def.sandbox.map_or("unspecified", |kind| kind.as_str());
+        let readiness = (sandbox == "linux-bwrap")
+            .then_some(linux_probe.as_ref())
+            .flatten();
         values.push(json!({
             "name": def.name,
             "executor_type": def.executor_type.to_string(),
@@ -462,6 +475,8 @@ pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "cli_available": cli_available,
             "launcher": launcher.as_ref().map(|path| path.display().to_string()),
             "sandbox": def.sandbox,
+            "sandbox_ready": readiness.map(|probe| probe.available),
+            "sandbox_readiness_detail": readiness.map(|probe| probe.detail.as_str()),
             "allow_fallback": def.allow_fallback,
         }));
         table.add_row(vec![
@@ -475,6 +490,10 @@ pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             }
             .to_string(),
             sandbox.to_string(),
+            readiness.map_or_else(
+                || "-".to_string(),
+                |probe| if probe.available { "yes" } else { "no" }.to_string(),
+            ),
             launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
         ]);
     }

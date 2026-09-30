@@ -165,9 +165,7 @@ fn compile_reuses_its_walk_for_the_post_run_guard() {
     assert_eq!(direct.take_post_run_guard(), None);
 }
 
-/// The process-level probe is stable across calls. On a host without the
-/// trusted binary the outcome is the deterministic unavailable message, which
-/// is exactly the case a per-dispatch re-probe kept paying for.
+/// Repeated probes on an unchanged host report the same outcome.
 #[test]
 fn probe_bwrap_returns_the_same_outcome_on_repeat() {
     let first = probe_bwrap();
@@ -207,18 +205,31 @@ fn probe_bwrap_reprobes_after_a_failed_capability_probe() {
     assert_eq!(settled.get(), Some(&available));
 }
 
-/// Settled host properties stay cached so dispatch does not re-spawn two
+#[test]
+fn probe_bwrap_retries_missing_and_incompatible_binary_after_onboarding() {
+    for detail in [
+        "trusted Bubblewrap not available at /usr/bin/bwrap",
+        "Bubblewrap does not support the required --bind-fd object-authority mount",
+    ] {
+        let settled = OnceLock::new();
+        let unavailable = synthetic_probe(false, detail);
+        let first = probe_bwrap_with(&settled, || BwrapProbeMemo::Unsettled(unavailable.clone()));
+        assert_eq!(first, unavailable);
+        assert!(
+            settled.get().is_none(),
+            "negative probe must not outlive package changes"
+        );
+        let available = synthetic_probe(true, "capability probe succeeded");
+        let second = probe_bwrap_with(&settled, || BwrapProbeMemo::Settled(available.clone()));
+        assert_eq!(second, available);
+    }
+}
+
+/// A successful probe stays cached so dispatch does not re-spawn two
 /// processes per call.
 #[test]
 fn probe_bwrap_memoises_settled_outcomes() {
-    let cases = [
-        synthetic_probe(true, "capability probe succeeded"),
-        synthetic_probe(false, "trusted Bubblewrap not available at /usr/bin/bwrap"),
-        synthetic_probe(
-            false,
-            "Bubblewrap does not support the required --bind-fd object-authority mount",
-        ),
-    ];
+    let cases = [synthetic_probe(true, "capability probe succeeded")];
     for expected in cases {
         let settled = OnceLock::new();
         let calls = Cell::new(0);

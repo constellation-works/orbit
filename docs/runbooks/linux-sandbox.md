@@ -1,64 +1,77 @@
 ---
 type: runbook
-summary: Install and verify the Bubblewrap host prerequisite that Orbit's Linux sandbox fails closed without.
+summary: Explain automatic Linux Bubblewrap onboarding, distro eligibility, readiness, and native validation status.
 tags: [operations, sandbox, linux, bubblewrap, apparmor]
 paths:
+  - "install.sh"
+  - "crates/orbit-cli/src/command/init/**"
   - "crates/orbit-exec/src/**"
   - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/**"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
-last_validated: 2026-09-14
 ---
 
-# Prepare a Linux Host for Sandboxed Dispatch
+# Linux sandbox onboarding and diagnostics
 
-Use this runbook after `orbit init` on a Linux host, before dispatching any agent, or when a
-run fails with `bwrap: setting up uid map: Permission denied`.
+The shell installer prepares the Linux host after installing the signed Orbit binary.
+For npm and direct-binary installs, normal `orbit init` performs the same preparation;
+npm postinstall does not run `sudo` or prompt. Run installation and `orbit init` as the
+unprivileged account that will execute Orbit. An installer invoked through `sudo` uses
+`SUDO_UID`/`SUDO_GID` to probe that account; a root invocation without an identifiable
+unprivileged account stops before changing the host.
+
+Preparation first runs Orbit's exact `/usr/bin/bwrap` namespace-and-mount probe as that
+account and checks `--bind-fd`. A ready host causes no package or profile writes. When
+required, Orbit uses the distribution's package manager and, on Ubuntu 24.04, only the
+packaged `bwrap-userns-restrict` AppArmor rule. Administrator authentication is requested
+only during explicit interactive installation/onboarding. `orbit init --non-interactive`
+requires root or existing/passwordless `sudo` authority and never waits for a password.
+Package/profile failures are retryable by rerunning `orbit init` after correcting the
+reported cause. Dispatch itself never elevates, installs, reloads a profile, or falls back.
+
+`orbit doctor providers --json` reports each executor's configured `sandbox` separately
+from `sandbox_ready` and `sandbox_readiness_detail` for `linux-bwrap`. Readiness is a fresh
+capability check for the invoking user, not an inference from the executor setting.
+
+## Distribution matrix
+
+These are the **automatic preparation code paths**, based on distribution package
+inventories. Native package/profile/onboarding and sandboxed-subprocess validation is
+**not yet available** for any row; this change does not claim a validated supported row.
+The final probe refuses a package that lacks `--bind-fd` or cannot create the namespace.
+
+| Distribution/version | Package path | Security-policy handling | Native integration |
+|---|---|---|---|
+| Ubuntu 24.04 | `apt-get`: `bubblewrap`, `apparmor-profiles` | Install/load packaged `bwrap-userns-restrict` only if the probe still fails and no custom profile conflicts | Not run |
+| Debian 13 | `apt-get`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| Fedora 43–45 | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| RHEL, Rocky, AlmaLinux, CentOS 10 | `dnf5` or `dnf`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| Arch rolling | `pacman`: `bubblewrap` | Preserve existing host policy; require probe | Not run |
+| Ubuntu 22.04, Debian 12, Enterprise Linux 9, other versions | No automatic package changes | Explicit unsupported result if preparation is needed | Not run |
+
+Package availability references: [Ubuntu Noble bubblewrap](https://packages.ubuntu.com/noble/bubblewrap),
+[Debian Trixie bubblewrap](https://packages.debian.org/trixie/bubblewrap),
+[Fedora bubblewrap](https://packages.fedoraproject.org/pkgs/bubblewrap/bubblewrap/),
+[Rocky 10 repository](https://download.rockylinux.org/pub/rocky/10.2/BaseOS/x86_64/os/Packages/b/),
+and [Arch bubblewrap](https://archlinux.org/packages/extra/x86_64/bubblewrap/).
+Package listings alone do not establish namespace policy or an unprivileged probe pass.
 
 ## Why the probe fails closed
 
-`orbit init` persists the host-appropriate sandbox into the shipped executor artifacts. On
-Linux that value is `linux-bwrap`, which resolves the trusted wrapper at `/usr/bin/bwrap` and
-fails closed if its namespace-and-mount capability probe cannot run. Ubuntu 24.04 (Noble) also
-enables AppArmor restrictions on unprivileged user namespaces; without the distro's narrow
-Bubblewrap profile the probe fails with the UID-map error above.
+Linux executors use `linux-bwrap`, which resolves only `/usr/bin/bwrap` and fails closed
+when its capabilities are unavailable. Ubuntu 24.04 can restrict unprivileged user
+namespaces through AppArmor; the narrow packaged rule can grant Bubblewrap the needed
+namespace access without changing the global restriction. Existing custom profile files
+or loaded profiles that still fail the probe are preserved and reported as conflicts.
+Kernel or enclosing-container denial is reported separately and is not repaired by
+package installation. Do not disable the global user-namespace restriction, use a
+setuid workaround, switch the executor off, or enable fallback to make a failed probe
+look ready.
 
-The Linux boundary enforces writes from the resolved policy. It leaves host filesystem reads
-and host network access available, so it does not provide worktree-only reads or policy-gated
-network egress. The one exception is the well-known credential locations (`~/.ssh`, `~/.aws`,
-`~/.config/gh`, cargo publish tokens): each that exists is masked inside the sandbox, so a worker
-sees an empty directory or an empty file there. Dispatch fails with a message naming the path if
-one of them is also reachable through a second mount, for example a bind mount of `$HOME`;
-remove the alias rather than disabling the sandbox. See [policy-sandbox](../design/policy-sandbox/) for the design.
-
-## Install and verify on Ubuntu 24.04
-
-The package ships `bwrap-userns-restrict` under `/usr/share/apparmor/extra-profiles/`. Copy
-that narrow profile into `/etc/apparmor.d/`, load it, confirm AppArmor knows it, then run the
-same capability shape Orbit probes:
-
-```bash
-sudo apt-get update
-sudo apt-get install --yes bubblewrap apparmor-profiles
-test -x /usr/bin/bwrap
-test -f /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
-sudo install -m 0644 \
-  /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
-  /etc/apparmor.d/bwrap-userns-restrict
-test -f /etc/apparmor.d/bwrap-userns-restrict
-sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-grep -Fq 'bwrap-userns-restrict' /sys/kernel/security/apparmor/profiles
-
-/usr/bin/bwrap \
-  --die-with-parent \
-  --new-session \
-  --unshare-all \
-  --share-net \
-  --ro-bind / / \
-  -- /bin/true
-```
-
-The final command must exit successfully.
+The Linux boundary enforces writes from the resolved policy. It leaves host filesystem
+reads and host network access available, so it does not provide worktree-only reads or
+policy-gated network egress. Well-known credential locations are masked inside the
+sandbox. See [policy-sandbox](../design/policy-sandbox/) for the design.
 
 ## Verify step-failure recovery through Bubblewrap
 
@@ -99,9 +112,12 @@ live-spawn tests) belong on the owning Linux host: replay them there with
 
 ## If the probe still fails
 
-Do not disable `kernel.apparmor_restrict_unprivileged_userns` globally and do not enable
-`allow_fallback`; both weaken or bypass the fail-closed boundary. Re-check the packaged
-profile path and the `apparmor_parser` output, then rerun the probe.
+Read `sandbox_readiness_detail` from `orbit doctor providers --json`. Missing
+privileges, an incompatible `--bind-fd` feature, a custom-profile conflict,
+and kernel/container denial have different remedies. Correct the reported
+cause, then rerun normal `orbit init`. Do not disable
+`kernel.apparmor_restrict_unprivileged_userns` globally or enable
+`allow_fallback`; both weaken or bypass the fail-closed boundary.
 
 Other distributions need the same two conditions: an executable `/usr/bin/bwrap` and
 permission for an unprivileged user to create user namespaces and mounts. Non-Linux hosts

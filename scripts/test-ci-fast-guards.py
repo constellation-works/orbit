@@ -206,12 +206,12 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(f"forbidden dependency 'orbit-common' found in {self.root}/orbit-types.toml", result.stdout)
 
     def test_dev_only_dependency_rejects_production_edge(self):
-        result = self.dependency_result("orbit-core", "orbit-exec")
+        result = self.dependency_result("orbit-cli", "orbit-engine")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must remain dev-only", result.stdout)
 
     def test_dev_only_dependency_accepts_test_edge(self):
-        result = self.dependency_result("orbit-core", "orbit-exec", "dev")
+        result = self.dependency_result("orbit-cli", "orbit-engine", "dev")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_workspace_dependency_must_be_inherited(self):

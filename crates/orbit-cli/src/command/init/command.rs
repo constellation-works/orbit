@@ -26,6 +26,11 @@ pub struct InitCommand {
     #[arg(long)]
     pub force: bool,
 
+    /// Internal installer entry point: prepare the Linux host without creating
+    /// a machine identity or writing Orbit state.
+    #[arg(long, hide = true)]
+    pub host_prerequisites_only: bool,
+
     /// Skip interactive prompts. config.toml is still seeded from detected
     /// agent surfaces, but a CI runner that pipes nothing into stdin will not
     /// hang.
@@ -63,6 +68,24 @@ impl InitCommand {
     }
 
     fn run(self, root_override: Option<&Path>) -> Result<(), OrbitError> {
+        if self.host_prerequisites_only {
+            if root_override.is_some()
+                || self.force
+                || self.machine_name.is_some()
+                || self.task_prefix.is_some()
+            {
+                return Err(OrbitError::InvalidInput(
+                    "--host-prerequisites-only cannot be combined with --root, --force, --machine-name, or --task-prefix"
+                        .to_string(),
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            eprintln!(
+                "Linux sandbox: {}",
+                super::linux_host::prepare(self.non_interactive)?
+            );
+            return Ok(());
+        }
         // Reject a malformed or (non-interactively) missing --machine-name/
         // --task-prefix before anything is written: skills, activities, jobs,
         // executors, and config.toml all seed ahead of the machine identity,
@@ -74,6 +97,16 @@ impl InitCommand {
             self.machine_name.as_deref(),
             self.task_prefix.as_deref(),
         )?;
+        // A custom root is used for isolated fixtures and does not authorize
+        // changes to the machine's package/security policy. Normal init and
+        // the shell installer share this preparation path.
+        #[cfg(target_os = "linux")]
+        if root_override.is_none() {
+            eprintln!(
+                "Linux sandbox: {}",
+                super::linux_host::prepare(self.non_interactive)?
+            );
+        }
         let config_seed =
             collect_config_seed_for_init(root_override, self.force, self.non_interactive)?;
         let result = init_global(
