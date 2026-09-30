@@ -23,8 +23,7 @@ use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 
-use crate::command::{Cli, Execute};
-use crate::tests::env_isolation::EnvGuard;
+use crate::command::Cli;
 
 use super::super::teardown::{
     WorkspaceTeardownArgs, format_deleted_partition, format_teardown_plan,
@@ -118,7 +117,7 @@ fn teardown_rejects_a_selector_that_is_not_registered() {
 
     let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("build runtime");
     let error = teardown("not-registered", true)
-        .execute(&runtime)
+        .execute_from(&runtime, temp.path())
         .expect_err("unregistered selector must fail");
     let message = error.to_string();
     assert!(
@@ -145,16 +144,10 @@ fn teardown_rejects_a_selector_that_is_not_registered() {
 #[test]
 fn teardown_rejects_a_selector_that_does_not_match_the_cwd_checkout() {
     let temp = tempfile::tempdir().expect("tempdir");
-    // `orbit init` registers the checkout as `current_dir()` reports it, which
-    // is the resolved path. Register through the same canonical root here so
-    // the cwd guard compares like with like: on macOS `$TMPDIR` lives under
-    // the `/var` -> `/private/var` symlink, and registering the unresolved
-    // path would let the mismatched selector slip past the refusal.
-    let temp_root = std::fs::canonicalize(temp.path()).expect("canonical tempdir");
-    let global_root = temp_root.join("global");
-    let here = temp_root.join("here");
+    let global_root = temp.path().join("global");
+    let here = temp.path().join("here");
     let here_orbit = here.join(".orbit");
-    let other = temp_root.join("other");
+    let other = temp.path().join("other");
     let other_orbit = other.join(".orbit");
     std::fs::create_dir_all(&global_root).expect("create global root");
     std::fs::create_dir_all(&here_orbit).expect("create here workspace root");
@@ -164,10 +157,9 @@ fn teardown_rejects_a_selector_that_does_not_match_the_cwd_checkout() {
     write_task_bundle(&global_root, "ws_here", "ORB-1");
     write_task_bundle(&global_root, "ws_other", "ORB-2");
 
-    let _env = EnvGuard::acquire().cwd(&here);
     let runtime = OrbitRuntime::from_roots(&global_root, &here_orbit).expect("build runtime");
     let error = teardown("other", true)
-        .execute(&runtime)
+        .execute_from(&runtime, &here)
         .expect_err("selector for a different checkout must fail");
     let message = error.to_string();
     assert!(
@@ -187,6 +179,31 @@ fn teardown_rejects_a_selector_that_does_not_match_the_cwd_checkout() {
             && task_workspaces_dir(&global_root).join("ws_other").exists(),
         "a mismatched selector must not delete either task store"
     );
+}
+
+#[test]
+fn teardown_from_inside_the_selected_checkout_is_allowed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let here = temp.path().join("here");
+    let here_orbit = here.join(".orbit");
+    let nested = here.join("crates").join("deep");
+    let other = temp.path().join("other");
+    let other_orbit = other.join(".orbit");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    std::fs::create_dir_all(&here_orbit).expect("create here workspace root");
+    std::fs::create_dir_all(&nested).expect("create nested cwd");
+    std::fs::create_dir_all(&other_orbit).expect("create other workspace root");
+    register(&global_root, "ws_here", "here", &here, &here_orbit);
+    register(&global_root, "ws_other", "other", &other, &other_orbit);
+
+    let runtime = OrbitRuntime::from_roots(&global_root, &here_orbit).expect("build runtime");
+    teardown("here", true)
+        .execute_from(&runtime, &nested)
+        .expect("a directory inside the selected checkout must not trip the cwd refusal");
+
+    assert!(!here_orbit.exists(), "the selected checkout is torn down");
+    assert!(other_orbit.is_dir(), "the other checkout is untouched");
 }
 
 #[test]
@@ -214,7 +231,7 @@ fn teardown_without_confirm_prints_the_resolved_plan_and_does_not_delete() {
     let partition = task_workspaces_dir(&global_root).join(&bound);
 
     let error = teardown("constellation", false)
-        .execute(&runtime)
+        .execute_from(&runtime, temp.path())
         .expect_err("unconfirmed teardown must refuse");
     let message = error.to_string();
     assert!(
@@ -334,7 +351,7 @@ fn teardown_deletes_the_bound_task_store_partition_and_retires_its_bindings() {
     );
 
     teardown("ws_teardown", true)
-        .execute(&runtime)
+        .execute_from(&runtime, temp.path())
         .expect("teardown");
 
     assert!(
@@ -404,7 +421,7 @@ fn teardown_without_confirm_leaves_the_task_store_and_registration_untouched() {
     write_task_bundle(&global_root, "ws_unconfirmed", "ORB-1");
 
     let runtime = OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("build runtime");
-    let result = teardown("ws_unconfirmed", false).execute(&runtime);
+    let result = teardown("ws_unconfirmed", false).execute_from(&runtime, temp.path());
     assert!(matches!(result, Err(OrbitError::InvalidInput(_))));
 
     assert!(
@@ -518,7 +535,7 @@ fn teardown_removes_only_orbit_owned_skill_links_from_both_discovery_dirs() {
     }
 
     teardown("ws_links", true)
-        .execute(&fixture.runtime)
+        .execute_from(&fixture.runtime, &fixture.root)
         .expect("confirmed teardown");
 
     assert!(
@@ -575,7 +592,7 @@ fn teardown_removes_discovery_dirs_it_empties_but_keeps_unowned_empty_ones() {
     std::fs::create_dir_all(claude.join("skills")).expect("create empty claude skills dir");
 
     teardown("ws_empty", true)
-        .execute(&fixture.runtime)
+        .execute_from(&fixture.runtime, &fixture.root)
         .expect("confirmed teardown");
 
     assert_gone(
@@ -609,7 +626,7 @@ fn teardown_does_not_follow_a_symlinked_discovery_dir_out_of_the_checkout() {
     link(&outside_claude_skills, &repo_claude_skills);
 
     teardown("ws_redirect", true)
-        .execute(&fixture.runtime)
+        .execute_from(&fixture.runtime, &fixture.root)
         .expect("confirmed teardown");
 
     assert!(
