@@ -16,7 +16,7 @@ use crate::runtime::engine::crew::CrewAllowlist;
 
 use super::admission::auto_admission::{AdmissionHolders, select_admissions};
 use super::admission::backlog_exclusion::{
-    BacklogTaskExclusionReason, allowlist_from_input, backlog_snapshot,
+    BacklogTaskExclusion, BacklogTaskExclusionReason, allowlist_from_input, backlog_snapshot,
     sort_tasks_for_automatic_dispatch,
 };
 use super::admission::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
@@ -230,6 +230,11 @@ pub(super) fn classify_workspace_auto_tasks(
         // that looks under-filled can be read as contention rather than as an
         // empty backlog.
         "deferred_conflicts": selection.deferred_json(),
+        // Backlog tasks the drain cannot take at all this pass (lock holder,
+        // crew window, unassessed complexity, ...). `run show` reads the last
+        // pass to say what the drain left waiting.
+        "excluded_backlog": excluded_backlog_json(&snapshot.excluded),
+        "excluded_backlog_total": snapshot.excluded.len(),
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": occupancy.occupied,
@@ -244,6 +249,29 @@ pub(super) fn classify_workspace_auto_tasks(
         "admissions_stop": admissions_stop,
         "host_shutdown": host_shutdown,
     }))
+}
+
+/// How many excluded tasks one classification pass records; the total is
+/// recorded beside it so a truncated list still reads as truncated.
+const EXCLUDED_BACKLOG_RECORDED: usize = 20;
+
+fn excluded_backlog_json(excluded: &[BacklogTaskExclusion]) -> Vec<Value> {
+    excluded
+        .iter()
+        .take(EXCLUDED_BACKLOG_RECORDED)
+        .map(|entry| {
+            let blocked_by = entry
+                .conflicts
+                .iter()
+                .map(|conflict| conflict.locking_task_id.as_str())
+                .collect::<BTreeSet<_>>();
+            json!({
+                "task_id": entry.id,
+                "reason": entry.reason,
+                "blocked_by": blocked_by,
+            })
+        })
+        .collect()
 }
 
 /// Explain the same snapshot that auto-drain uses without performing its

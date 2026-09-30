@@ -153,6 +153,13 @@ order. The parent and child wrapper errors remain in the usual run header and st
 `additional_root_causes`; `step` or `message` is null when a failed leaf has no corresponding
 step detail. The compact child-dispatch lines can still shorten wrapper errors.
 
+An auto drain dispatches its leaves detached and never observes their outcomes, so the drain's
+own `State: success` only means the coordinator ran. `orbit run show <drain-run-id>` adds a
+`Leaves:` line (admitted, succeeded, failed, running, cancelled), a `WARNING:` with each failed
+leaf, its task, error, and the `orbit job resume <leaf-run-id>` that retries it, and a
+`Still waiting:` block naming the backlog tasks the drain's last pass never started and what
+blocked them. `--json` carries the same in `drain_summary` (null for a run that is not a drain).
+
 ## Cancel a conclusively stuck run
 
 After verifying that the owner is gone or that the run should no longer continue:

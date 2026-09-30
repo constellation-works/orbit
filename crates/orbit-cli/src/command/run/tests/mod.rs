@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
 
+mod drain_summary;
 mod format;
 mod job;
 mod readiness;

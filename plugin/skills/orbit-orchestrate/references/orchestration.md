@@ -72,6 +72,12 @@ idempotent when nothing is running. `orbit run show` reports
 already in flight, `orbit run cancel <child-run-id> --confirm` each one —
 do not cancel the coordinator for this.
 
+A drain's own `State: success` says the coordinator ran, not that its leaves
+shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run
+show <drain-run-id>` (JSON: `drain_summary`) for admitted / succeeded / failed
+counts. It lists each failed leaf with its `orbit job resume <leaf-run-id>`, and
+a `Still waiting:` block for backlog tasks the last pass never started.
+
 `--allow-crew` restricts a ship or drain to the crews you name — the lever for
 a provider that is unavailable, rate-limited, or out of budget. For an
 explicit ship it is checked at submission and again before provider dispatch;

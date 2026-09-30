@@ -81,6 +81,16 @@ spec:
         type: array
         items:
           type: object
+      excluded_backlog:
+        description: >-
+          Backlog tasks this pass could not take at all, each with its
+          `reason` and the tasks it is `blocked_by`. Bounded; the full count
+          is `excluded_backlog_total`.
+        type: array
+        items:
+          type: object
+      excluded_backlog_total:
+        type: number
       candidate_pool_size:
         type: number
       candidate_pool_truncated:

@@ -1350,6 +1350,17 @@ fn crew_allowlist_skips_excluded_tasks_and_keeps_draining_the_rest() {
     let classified = classify_with(&runtime, json!({ "allowed_crews": ["opus"] }));
     assert_eq!(classified["loose_task_ids"], json!([permitted]));
     assert_eq!(classified["has_leaves"], json!(true));
+    // The pass records what it could not admit, so `run show` can say what a
+    // finished drain left waiting.
+    assert_eq!(classified["excluded_backlog_total"], json!(1));
+    assert_eq!(
+        classified["excluded_backlog"][0]["task_id"],
+        json!(excluded)
+    );
+    assert_eq!(
+        classified["excluded_backlog"][0]["reason"],
+        json!("crew_not_allowed")
+    );
 
     let readiness = readiness_allowing(&runtime, &[], None, &["opus".to_string()]);
     assert_eq!(readiness_task(&readiness, &permitted)["reason"], "ready");

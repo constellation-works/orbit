@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
+use super::drain_summary::summarize_drain_leaves;
 use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_cause_lines};
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::steps::{
@@ -18,7 +19,7 @@ use super::steps::{
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"pull_claim\":<claim|null>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail. `.pull_claim` (the Claim: line) names the owner task and claim a follower's claimed leaf executes and whether its outcome reached the owner; it is null for every other run. `.drain_summary` is set for an auto drain only (the Leaves: line): admitted/succeeded/failed/running/cancelled leaf counts, `failed_leaves`, and the backlog its last pass left `waiting`; a drain's own `.run.state` says the coordinator ran, not that its leaves shipped.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -81,6 +82,9 @@ pub(crate) fn run_show_payload(
         source: steps_source,
     } = run_display_steps(&run, audit.steps);
     let root_causes = collect_failed_leaf_causes(runtime, &run, state.as_ref(), read)?;
+    let drain_summary = summarize_drain_leaves(&run, state.as_ref(), |child_run_id| {
+        read.show(runtime, child_run_id).ok()
+    });
 
     let run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
@@ -109,6 +113,9 @@ pub(crate) fn run_show_payload(
         // still tell the two apart [ORB-12113].
         "steps": steps.iter().map(run_step_record_to_json).collect::<Vec<_>>(),
         "steps_source": steps_source.as_str(),
+        // What a drain's leaves did; null for any run that is not a drain.
+        // The drain's own `state` only says the coordinator ran.
+        "drain_summary": drain_summary.as_ref().map(|summary| summary.to_json()),
         "root_cause": root_causes.first(),
         "additional_root_causes": root_causes.get(1..).unwrap_or_default(),
         // The same projection the registered/MCP run-show surface emits, so
@@ -157,6 +164,10 @@ pub(crate) fn run_show_payload(
     if !exclusion_lines.is_empty() {
         header.push('\n');
         header.push_str(&exclusion_lines.join("\n"));
+    }
+    if let Some(summary) = &drain_summary {
+        header.push('\n');
+        header.push_str(&summary.lines(run.state).join("\n"));
     }
     if steps_source == StepSource::Audit && !steps.is_empty() {
         header.push_str(&format!(
