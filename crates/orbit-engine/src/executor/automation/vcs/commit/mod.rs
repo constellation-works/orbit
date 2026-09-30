@@ -19,6 +19,7 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::failure::commit_head_matches_failure_handoff;
 use super::git::{git_command_success, git_output, git_output_raw, git_success};
 use super::handoff::reject_failed_delivery;
+use super::pr::meaningful_execution_summary;
 use author::{GitAuthor, append_co_author_trailers, commit_author_for_tasks, reviewer_author};
 use git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, git_commit_paths_with_identity,
@@ -205,6 +206,18 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // files, mutating the index, or committing. Only read-only resolution and
     // validation run ahead of it; the gate itself is unchanged, and an empty or
     // underivable summary still refuses delivery here.
+    if meaningful_execution_summary(&task.execution_summary).is_none() {
+        // Derivation found no uncommitted change to describe, so the agent
+        // finished without leaving one and without saying why. Name that
+        // outcome rather than only the missing field, and what resolves it.
+        return Err(OrbitError::Execution(format!(
+            "task '{}' requires a meaningful persisted execution_summary before delivery; the \
+             implementing agent recorded none and the worktree holds no uncommitted change to \
+             derive one from. A task that needs no change must say so in its summary and \
+             attach no-diff evidence; otherwise re-run it",
+            task.id
+        )));
+    }
     reject_failed_delivery(&task)?;
 
     // ADR-0219: an explicitly side-effect-only task may skip a *clean* commit
