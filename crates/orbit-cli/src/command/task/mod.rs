@@ -2,6 +2,7 @@ mod add;
 mod archive;
 pub(crate) mod artifact;
 pub mod artifacts;
+pub(crate) mod blocked_next_step;
 mod command;
 mod export;
 pub(crate) mod flow;

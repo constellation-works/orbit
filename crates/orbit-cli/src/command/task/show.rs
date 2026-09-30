@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
+use super::blocked_next_step::blocked_next_step;
 use super::output::{
     format_task_fields, is_human_visible_history_event, task_fields_to_json,
     task_to_json_with_sidecars,
@@ -227,6 +228,14 @@ impl Execute for TaskShowArgs {
                             entry.event
                         );
                     }
+                }
+            }
+            // A run failure leaves the task `blocked`, which automation skips:
+            // say what an operator does about it. Additive in JSON.
+            if let Some(next) = blocked_next_step(runtime, &task, &projection.history) {
+                let _ = writeln!(out, "{} {}", bold("Next:"), next.line());
+                if let Some(object) = doc.as_object_mut() {
+                    object.insert("next_step".to_string(), next.to_json());
                 }
             }
             if let Some(ref pr_status) = task.pr_status {
