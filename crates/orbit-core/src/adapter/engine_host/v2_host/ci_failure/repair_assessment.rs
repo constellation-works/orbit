@@ -2,11 +2,11 @@
 //! referenced diagnostics, command results, delivery state and Git must agree.
 //! No command from an artifact or a CI log is executed here.
 
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::cluster::FailureCluster;
 use super::evidence::selected_diagnostic;
@@ -181,7 +181,7 @@ impl<'a> Assessor<'a> {
         Ok(
             json!({"schema_version": 1, "outcome": "covered_by_repair", "task_id": owner.id,
             "failure_key": cluster.failure_key, "cluster_key": cluster.cluster_key,
-            "assessment": {"path": ASSESSMENT_PATH, "sha256": sha256(&bytes)},
+            "assessment": {"path": ASSESSMENT_PATH, "sha256": sha256_hex(&bytes)},
             "delivery_run_id": assessment.delivery_run_id, "delivery_step_index": assessment.delivery_step_index, "landed_revision": assessment.landed_revision,
             "validated_revision": after.revision, "before": assessment.before, "after": assessment.after,
             "validation_origin": after.origin, "coverage_reason": assessment.coverage_reason,
@@ -225,7 +225,7 @@ impl<'a> Assessor<'a> {
         reference: &ArtifactRef,
     ) -> AssessmentResult<T> {
         let bytes = self.artifact(owner, &reference.path)?;
-        if sha256(&bytes) != reference.sha256 {
+        if sha256_hex(&bytes) != reference.sha256 {
             return Err("artifact_digest_mismatch".into());
         }
         decode(&bytes)
@@ -335,10 +335,6 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> AssessmentResult<T> {
     serde_json::from_slice(bytes).map_err(|_| "malformed_evidence".into())
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
-}
-
 fn full_revision(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -362,7 +358,7 @@ fn observations(cluster: &FailureCluster) -> AssessmentResult<Vec<Observation>> 
             run_id: value_string(run, "run_id"),
             job_id: value_string(run, "job_id"),
             checkout: cluster.tested_commit.clone(),
-            diagnostic_sha256: sha256(diagnostic.as_bytes()),
+            diagnostic_sha256: sha256_hex(diagnostic.as_bytes()),
             branch: value_string(run, "head_branch"),
             ref_kind: value_string(run, "ref_kind"),
         });
@@ -495,7 +491,10 @@ pub(super) fn retain(
 ) -> Result<(), orbit_common::OrbitError> {
     let content = serde_json::to_string(evidence)
         .map_err(|error| orbit_common::OrbitError::InvalidInput(error.to_string()))?;
-    let path = format!("ci-repair-observations/{}.json", sha256(content.as_bytes()));
+    let path = format!(
+        "ci-repair-observations/{}.json",
+        sha256_hex(content.as_bytes())
+    );
     if runtime.get_task_artifact(owner, &path)?.is_none() {
         runtime.update_task(
             owner,

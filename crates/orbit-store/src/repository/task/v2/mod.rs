@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_bytes;
+use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
@@ -26,7 +27,6 @@ use orbit_types::task::{
     TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskHistoryEntry, TaskPriority, TaskRelation,
     TaskRelationType, TaskStatus, normalize_task_tags, validate_relative_artifact_path,
 };
-use sha2::{Digest, Sha256};
 
 use crate::contracts::{
     RegisteredTaskResolution, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams,

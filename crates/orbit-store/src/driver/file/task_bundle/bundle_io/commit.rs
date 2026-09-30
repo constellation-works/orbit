@@ -23,13 +23,13 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{StagedTextFile, atomic_write_text, with_exclusive_file_lock};
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     TASK_ACCEPTANCE_FILE_NAME, TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME,
     TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME,
     TASK_PLAN_FILE_NAME, TaskEnvelopeV2,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::{TaskBundleV2, read_bundle_at, read_required_text, scan_jsonl_records};
 use crate::fs::yaml::{serialize_yaml_with, write_yaml_durable_with};
@@ -303,7 +303,7 @@ fn pending_path(bundle_dir: &Path) -> PathBuf {
 fn envelope_sha256(bundle_dir: &Path) -> Result<String, OrbitError> {
     let path = bundle_dir.join(TASK_ENVELOPE_FILE_NAME);
     let bytes = fs::read(&path).map_err(|err| OrbitError::from_write_io(&path, err))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(sha256_hex(&bytes))
 }
 
 fn existing_file_len(path: &Path) -> Result<u64, OrbitError> {

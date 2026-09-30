@@ -1,12 +1,12 @@
 //! Locked, retried, idempotent persistence of one validated task-pilot assessment.
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
 #[cfg(test)]
@@ -294,7 +294,7 @@ pub(super) fn task_operation_id(prepared: &Value, task_id: &str, assessment: &Va
         "assessment": assessment,
     });
     let encoded = serde_json::to_vec(&identity).unwrap_or_default();
-    format!("{:x}", Sha256::digest(encoded))
+    sha256_hex(&encoded)
 }
 
 pub(super) fn record_applied_assessment(

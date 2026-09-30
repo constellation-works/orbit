@@ -7,6 +7,7 @@ use crate::adapter::engine_host::v2_host::ci_failure::grouping::cluster_failures
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
 use crate::application::task::TaskAddParams;
 use chrono::Utc;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::PipelineState;
 use std::path::Path;
 
@@ -139,8 +140,8 @@ impl Fixture {
             "output":"running 1 test\nplain_and_json_forms_match_their_goldens ... ok\ntest result: ok. 1 passed; 0 failed"});
         let assessment = json!({"schema_version":1,"task_id":owner.id,"failure_key":cluster.failure_key,
             "delivery_run_id":run.run_id,"delivery_step_index":12,"landed_revision":landed,"observations":observations(&cluster).expect("observations"),
-            "before":{"path":"before.json","sha256":sha256(&serde_json::to_vec(&before).expect("JSON"))},
-            "after":{"path":"after.json","sha256":sha256(&serde_json::to_vec(&after).expect("JSON"))},
+            "before":{"path":"before.json","sha256":sha256_hex(&serde_json::to_vec(&before).expect("JSON"))},
+            "after":{"path":"after.json","sha256":sha256_hex(&serde_json::to_vec(&after).expect("JSON"))},
             "command":command,"diagnostic_details":[DETAIL],
             "coverage_reason":"The golden changed with the public tool description; the exact targeted assertion fails before and passes on the landed repair."});
         Self {
@@ -161,7 +162,7 @@ impl Fixture {
     fn enrich(&mut self) {
         for (key, value) in [("before", &self.before), ("after", &self.after)] {
             self.assessment[key]["sha256"] =
-                json!(sha256(&serde_json::to_vec(value).expect("JSON")));
+                json!(sha256_hex(&serde_json::to_vec(value).expect("JSON")));
         }
         self.runtime
             .update_task(

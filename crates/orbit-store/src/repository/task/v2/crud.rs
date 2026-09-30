@@ -38,11 +38,8 @@ impl TaskV2Store {
         let id = if let Some(key) = key {
             let bytes =
                 serde_json::to_vec(&params).map_err(|e| OrbitError::Store(e.to_string()))?;
-            self.registry.reserve_task_action(
-                &self.workspace_id,
-                key,
-                &format!("{:x}", Sha256::digest(bytes)),
-            )?
+            self.registry
+                .reserve_task_action(&self.workspace_id, key, &sha256_hex(&bytes))?
         } else {
             self.registry.allocate_task_id(&self.workspace_id)?
         };

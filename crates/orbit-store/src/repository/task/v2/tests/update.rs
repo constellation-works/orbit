@@ -319,7 +319,7 @@ fn artifact_replacement_reads_legacy_path_based_manifest() {
                     origin: None,
                     path: "report.txt".into(),
                     blob: "files/report.txt".into(),
-                    sha256: format!("{:x}", Sha256::digest(b"legacy bytes")),
+                    sha256: sha256_hex(b"legacy bytes"),
                     media_type: "text/plain".into(),
                     size_bytes: 12,
                     created_by: "test".into(),

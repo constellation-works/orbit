@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::{ReviewTiming, handoff::*};
-use sha2::{Digest, Sha256};
 
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, encode, invalid, row};
@@ -63,7 +63,7 @@ impl TaskCommitBoundary {
                 .join(orbit_types::task::TASK_ARTIFACTS_DIR_NAME)
                 .join(&file.blob),
         )?;
-        if format!("{:x}", Sha256::digest(&bytes)) != reference.sha256 {
+        if sha256_hex(&bytes) != reference.sha256 {
             return Err(invalid("validation artifact changed"));
         }
         Ok(bytes)
@@ -270,7 +270,7 @@ impl TaskCommitBoundary {
         }
         self.validate_handoff_evidence(handoff, &observation.required_commands)?;
         let accepted = AcceptedHandoff {
-            handoff_id: format!("handoff-{:x}", Sha256::digest(encode(handoff)?)),
+            handoff_id: format!("handoff-{}", sha256_hex(encode(handoff)?.as_bytes())),
             handoff: handoff.clone(),
             required_commands: observation.required_commands.clone(),
             accepted_at: Utc::now(),

@@ -29,8 +29,8 @@ fn immutable_artifact_blob(path: &str, sha256: &str) -> String {
     // Keep new blobs in the already-durable files directory. The path digest
     // distinguishes equal contents at different logical artifact paths.
     format!(
-        "{TASK_ARTIFACT_FILES_DIR_NAME}/.blob-{:x}-{sha256}",
-        Sha256::digest(path.as_bytes())
+        "{TASK_ARTIFACT_FILES_DIR_NAME}/.blob-{}-{sha256}",
+        sha256_hex(path.as_bytes())
     )
 }
 
@@ -158,7 +158,7 @@ impl TaskV2Store {
         {
             let witness = EvidenceSubmission {
                 action_id: id.into(),
-                evidence_digest: format!("{:x}", Sha256::digest(&artifact.content)),
+                evidence_digest: sha256_hex(&artifact.content),
                 run_id: run_id.clone(),
             };
             artifacts.push(orbit_types::task::TaskArtifact {
@@ -192,7 +192,7 @@ impl TaskV2Store {
             let now = Utc::now();
             for artifact in &artifacts {
                 let path = normalize_v2_artifact_path(&artifact.path)?;
-                let sha256 = format!("{:x}", Sha256::digest(&artifact.content));
+                let sha256 = sha256_hex(&artifact.content);
                 let blob = immutable_artifact_blob(&path, &sha256);
                 let destination = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&blob);
                 match fs::read(&destination) {

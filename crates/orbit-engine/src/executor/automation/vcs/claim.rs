@@ -21,6 +21,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_common::text::floor_char_boundary;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::workflow::ReviewTiming;
@@ -30,7 +31,6 @@ use orbit_types::workflow::handoff::{
     HandoffValidationLog, TaskHandoff,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::input_string_field;
@@ -595,7 +595,7 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         host.attach_claim_validation_log(&path, content.clone())?;
         references.push(HandoffArtifactRef {
             path,
-            sha256: format!("{:x}", Sha256::digest(&content)),
+            sha256: sha256_hex(&content),
         });
     }
 

@@ -4,11 +4,11 @@
 use crate::fs::yaml::parse_yaml_with;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, create_private_dir_all};
+use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACT_MANIFEST_FILE_NAME,
     TASK_ARTIFACTS_DIR_NAME,
 };
-use sha2::{Digest, Sha256};
 use std::fs::{self};
 use std::path::Path;
 
@@ -113,7 +113,7 @@ pub(crate) fn copy_artifact_blobs(
                 source.display()
             )));
         }
-        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let actual_sha256 = sha256_hex(&bytes);
         if actual_sha256 != file.sha256 {
             return Err(OrbitError::Store(format!(
                 "artifact source sha256 mismatch for {}",
@@ -149,7 +149,7 @@ fn validate_artifact_manifest_files(
                 blob_path.display()
             )));
         }
-        let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let actual_sha256 = sha256_hex(&bytes);
         if actual_sha256 != file.sha256 {
             return Err(OrbitError::Store(format!(
                 "artifact manifest sha256 mismatch for {}",

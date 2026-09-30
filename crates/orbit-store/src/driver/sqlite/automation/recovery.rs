@@ -4,10 +4,10 @@
 use super::{decode, encode};
 use crate::Store;
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::automation::recovery::{RecoveryRecord, ReissuedAction};
 use orbit_types::workflow::automation::{AutomationState, BatchAttempt, BatchState};
 use rusqlite::{TransactionBehavior, params};
-use sha2::{Digest, Sha256};
 
 pub(super) fn commit(
     store: &Store,
@@ -18,7 +18,7 @@ pub(super) fn commit(
     validate(previous, next, record)?;
 
     let record_json = encode(record)?;
-    let record_id = format!("{:x}", Sha256::digest(record_json.as_bytes()));
+    let record_id = sha256_hex(record_json.as_bytes());
 
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
@@ -66,7 +66,7 @@ pub(super) fn reset(
     validate_reset(previous, record)?;
 
     let record_json = encode(record)?;
-    let record_id = format!("{:x}", Sha256::digest(record_json.as_bytes()));
+    let record_id = sha256_hex(record_json.as_bytes());
 
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
