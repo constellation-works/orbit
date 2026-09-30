@@ -141,6 +141,32 @@ constraint, and the test either returns early or asserts the fail-safe
 branch, logging `reason` so the choice is attributable from the log. Never
 weaken the assertion taken when the probe *is* available.
 
+### Tests and macOS temp paths
+
+On macOS `TMPDIR` is `/var/folders/...`, and `/var` is a symlink to
+`/private/var`. Orbit resolves symlinks in the roots it is given (discovery
+lists a resolved directory and reports resolved paths, registries record
+resolved checkouts), so a fixture under the default temp directory exercises a
+symlinked ancestor that Linux CI never sees. In practice:
+
+- Production code must treat a symlinked ancestor above the Orbit or workspace
+  root as ordinary. Compare a resolved path with a resolved path (or an
+  unresolved one with an unresolved one), never one of each, and police
+  symlinks only inside the tree Orbit controls. A test that has to hold on every
+  platform builds its own symlink (`std::os::unix::fs::symlink` from a real
+  directory) rather than relying on the platform's temp directory.
+- A fixture that compares paths Orbit reports with paths it spelled roots
+  itself at `tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir())`,
+  or canonicalizes the path it compares against. Do not override `TMPDIR` for
+  the suite: that hides the symlinked-ancestor cases the default exercises.
+- Unix socket fixtures (the plugin broker) also need a short root, because
+  `sun_path` is 104 bytes on macOS; root them under `/tmp` as the broker's own
+  fixtures do.
+
+A test that needs a live process that is no part of the test process uses
+`orbit_common::test_env::spawn_unrelated_process()` instead of pid 1, whose
+start time an unprivileged caller cannot read on macOS.
+
 ### Tests that submit pipeline runs
 
 Submitting a run (ship, resume, auto, job) spawns a detached worker that
