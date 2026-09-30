@@ -1,6 +1,3 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use super::*;
 
 /// Outputs of completed steps keyed by step id (or a fan-in `collect` alias),
@@ -35,7 +32,7 @@ impl ExecCtx<'_> {
     /// refcount under the lock. Drop it before the next `record_pipeline`
     /// on the same context so that write can mutate in place.
     pub(super) fn pipeline_snapshot(&self) -> PipelineSteps {
-        Arc::clone(&self.pipeline.lock().expect("pipeline poisoned"))
+        Arc::clone(&self.pipeline.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// Raw step outputs (`step id → output`) as one JSON object, for the run
@@ -110,7 +107,7 @@ pub(super) struct StepOutcome {
 /// out by `pipeline_snapshot` (a fan-out worker's inherited map, a template
 /// context still in scope) is alive, in which case the map is copied first.
 pub(super) fn record_pipeline(ctx: &ExecCtx<'_>, key: &str, v: Value) {
-    let mut steps = ctx.pipeline.lock().expect("pipeline poisoned");
+    let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
     Arc::make_mut(&mut steps).insert(key.to_string(), wrap_step_output(v));
 }
 

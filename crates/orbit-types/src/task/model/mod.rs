@@ -19,17 +19,12 @@
 //! | Archived     | Soft-deleted. Restorable to any other status. |
 //! | Rejected     | Declined. Can be re-opened. |
 
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

@@ -15,11 +15,8 @@
 //! `loop.did_not_converge`). The retry wrapper emits `step.retry` between
 //! attempts and `step.denied` when a denial bypasses retry.
 
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 

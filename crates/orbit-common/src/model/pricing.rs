@@ -1,4 +1,3 @@
-#![allow(clippy::expect_used)]
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Utc};
@@ -15,6 +14,9 @@ struct PriceTableFile {
     prices: Vec<PriceRow>,
 }
 
+// The table is embedded at build time, so a parse failure is a build defect
+// the pricing tests catch, never a runtime condition.
+#[allow(clippy::expect_used)]
 fn price_table() -> &'static [PriceRow] {
     static TABLE: OnceLock<Vec<PriceRow>> = OnceLock::new();
     &TABLE.get_or_init(|| {

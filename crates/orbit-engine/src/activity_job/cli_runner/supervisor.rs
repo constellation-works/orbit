@@ -1,6 +1,3 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 //! CLI subprocess supervisor.
 //!
 //! # Output drain / truncation contract
@@ -46,7 +43,7 @@ use std::process::{Child, ExitStatus};
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -649,9 +646,7 @@ fn append_output_chunk(
     raw: &[u8],
     line_buf: &mut Vec<u8>,
 ) {
-    buf.lock()
-        .expect("subprocess output buf poisoned")
-        .push(raw);
+    buf.lock().unwrap_or_else(PoisonError::into_inner).push(raw);
     emit_output_chunk(
         &context.provider,
         context.stream,
