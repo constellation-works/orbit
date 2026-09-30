@@ -224,36 +224,26 @@ impl TaskV2Store {
     }
 
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
-        let status = bundle.envelope.status;
-        Ok(Task {
-            job_run_machine: bundle.envelope.job_run_machine,
-            id: bundle.envelope.id,
-            title: bundle.envelope.title,
-            description: bundle.description,
-            acceptance_criteria: parse_acceptance(&bundle.acceptance),
-            tags: normalize_task_tags(bundle.envelope.tags),
-            required_tools: orbit_types::task::normalize_required_tools(
-                bundle.envelope.required_tools,
-            ),
-            plan: bundle.plan,
-            execution_summary: bundle.execution_summary,
-            context_files: bundle.envelope.context_files,
-            created_by: bundle.envelope.created_by,
-            planned_by: bundle.envelope.planned_by,
-            implemented_by: bundle.envelope.implemented_by,
-            status,
-            priority: bundle.envelope.priority,
-            complexity: bundle.envelope.complexity,
-            task_type: bundle.envelope.task_type,
-            pr_status: bundle.envelope.pr_status,
-            external_refs: bundle.envelope.external_refs,
-            relations: bundle.envelope.relations,
-            job_run_id: bundle.envelope.job_run_id,
-            crew: bundle.envelope.crew,
-            orchestrator: bundle.envelope.orchestrator,
-            created_at: bundle.envelope.created_at,
-            updated_at: bundle.envelope.updated_at,
-        })
+        Ok(task_from_parts(
+            bundle.envelope,
+            bundle.description,
+            parse_acceptance(&bundle.acceptance),
+            bundle.plan,
+            bundle.execution_summary,
+        ))
+    }
+
+    /// The task an envelope describes, without its body documents: `description`,
+    /// `plan`, `execution_summary` and `acceptance_criteria` are empty. Selection
+    /// uses it to evaluate metadata-only predicates before paying for a bundle.
+    pub(super) fn metadata_task(envelope: &TaskEnvelopeV2) -> Task {
+        task_from_parts(
+            envelope.clone(),
+            String::new(),
+            Vec::new(),
+            String::new(),
+            String::new(),
+        )
     }
 
     pub(super) fn read_existing_bundle(&self, id: &str) -> Result<TaskBundleV2, OrbitError> {
@@ -285,5 +275,42 @@ impl TaskV2Store {
             }
             self.bundle_store.with_bundle_write_lock(id, op)
         })
+    }
+}
+
+fn task_from_parts(
+    envelope: TaskEnvelopeV2,
+    description: String,
+    acceptance_criteria: Vec<String>,
+    plan: String,
+    execution_summary: String,
+) -> Task {
+    let status = envelope.status;
+    Task {
+        job_run_machine: envelope.job_run_machine,
+        id: envelope.id,
+        title: envelope.title,
+        description,
+        acceptance_criteria,
+        tags: normalize_task_tags(envelope.tags),
+        required_tools: orbit_types::task::normalize_required_tools(envelope.required_tools),
+        plan,
+        execution_summary,
+        context_files: envelope.context_files,
+        created_by: envelope.created_by,
+        planned_by: envelope.planned_by,
+        implemented_by: envelope.implemented_by,
+        status,
+        priority: envelope.priority,
+        complexity: envelope.complexity,
+        task_type: envelope.task_type,
+        pr_status: envelope.pr_status,
+        external_refs: envelope.external_refs,
+        relations: envelope.relations,
+        job_run_id: envelope.job_run_id,
+        crew: envelope.crew,
+        orchestrator: envelope.orchestrator,
+        created_at: envelope.created_at,
+        updated_at: envelope.updated_at,
     }
 }

@@ -1,10 +1,11 @@
 //! Shared bounded task queries for the runtime task-list surface.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskStoreBackend;
-use orbit_types::task::{Task, TaskStatus, task_dependencies_ready};
+use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index};
 
 use crate::OrbitRuntime;
 
@@ -29,14 +30,24 @@ impl Default for TaskListQuery {
     }
 }
 
-/// Readiness and path matching retain their existing application policy. These
-/// residual predicates hydrate metadata matches before applying the limit.
+/// Readiness and path matching retain their existing application policy. Both
+/// are decided from envelope metadata, so the store applies them to every
+/// candidate before the limit and hydrates only the rows that fill the page.
 fn query_task_store(
     store: &dyn TaskStoreBackend,
     query: &TaskListQuery,
 ) -> Result<TaskPage, OrbitError> {
+    // The store hands every call of one query the same status projection, so
+    // the prefix knowledge readiness needs is derived from it once rather than
+    // by a scan of the whole projection for each candidate.
+    let reference_index = OnceCell::new();
     let residual = |task: &Task, statuses: &BTreeMap<String, TaskStatus>| {
-        (!query.ready || task_dependencies_ready(task, statuses))
+        (!query.ready
+            || task_dependencies_ready_with_index(
+                task,
+                statuses,
+                reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
+            ))
             && query.path.as_deref().is_none_or(|path| {
                 crate::application::search::task_selectors_contain_path(&task.context_files, path)
             })
