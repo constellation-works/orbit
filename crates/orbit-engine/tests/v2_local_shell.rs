@@ -131,7 +131,9 @@ fn the_activity_fs_profile_reaches_sandbox_resolution() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
 
-    let yaml = shell_activity_with_profile(json!({ "command": "/bin/true" }), Some("reviewer"));
+    // `true` lives in /usr/bin on every supported host; /bin/true exists only
+    // where /bin is a link to /usr/bin, which macOS is not.
+    let yaml = shell_activity_with_profile(json!({ "command": "/usr/bin/true" }), Some("reviewer"));
     let _outcome = dispatch(&yaml, json!({}), &host).expect("dispatch succeeds");
 
     assert_eq!(
