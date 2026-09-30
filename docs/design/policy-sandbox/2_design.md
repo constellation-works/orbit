@@ -384,7 +384,12 @@ protect a writable alias of the same inode. This deliberately does not support
 local clones whose metadata is hard-linked into another repository.
 
 The compiler pins writable ancestor entries of existing denied paths as mount
-points so they cannot be renamed aside. It replays the ordered policy overlays
+points so they cannot be renamed aside. Beneath the private `/tmp` tmpfs,
+Bubblewrap's automatically created mount parents would also be writable even
+when no profile rule grants them. The compiler binds these ancestors read-only
+before mounting writable children, preserving narrow task/audit grants without
+allowing parent replacement or planted redirects. `/tmp` itself remains private
+and writable for process scratch. It replays the ordered policy overlays
 at both stable workspace and build aliases, including clipping a containing
 deny to an alias root. A build directory redirected into Git metadata therefore
 cannot create a writable metadata mount. These are per-child namespace mounts;
