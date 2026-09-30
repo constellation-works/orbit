@@ -191,6 +191,7 @@ metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
 check(text('meta-text').includes('refreshed') && !text('meta-text').includes('diagnostics/'), 'connection line names the destination, not its route');
+check(document.title !== 'orbit' && document.title.endsWith('orbit'), 'the page title names the current destination');
 const realTimeout = globalThis.setTimeout;
 const realFetch = globalThis.fetch;
 globalThis.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 30000 ? 1 : ms, ...args);
