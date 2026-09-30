@@ -150,9 +150,9 @@ fn parse_field<T: serde::de::DeserializeOwned>(input: &Value, key: &str) -> Resu
     let value = input
         .get(key)
         .cloned()
-        .ok_or_else(|| OrbitError::InvalidInput(format!("invalid_input: `{key}` is required")))?;
+        .ok_or_else(|| OrbitError::InvalidInput(format!("`{key}` is required")))?;
     serde_json::from_value(value)
-        .map_err(|error| OrbitError::InvalidInput(format!("invalid_input: `{key}`: {error}")))
+        .map_err(|error| OrbitError::InvalidInput(format!("`{key}`: {error}")))
 }
 
 /// Deserialize the named fields together as one value, ignoring the routing
@@ -170,7 +170,7 @@ fn parse_fields<T: serde::de::DeserializeOwned>(
         })
         .collect();
     serde_json::from_value(Value::Object(object))
-        .map_err(|error| OrbitError::InvalidInput(format!("invalid_input: {error}")))
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
 
 pub(super) fn claims(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -206,7 +206,5 @@ fn optional_u32(input: &Value, key: &str) -> Result<Option<u32>, OrbitError> {
 }
 
 fn invalid_version_field(key: &str) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "invalid_input: `{key}` must be a non-negative integer version"
-    ))
+    OrbitError::InvalidInput(format!("`{key}` must be a non-negative integer version"))
 }

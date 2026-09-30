@@ -295,8 +295,9 @@ fn probe_reports_the_first_refusal_the_admission_ladder_would_raise() {
     )
     .expect_err("malformed schema refused");
     assert!(
-        malformed.to_string().contains("invalid_input"),
-        "{malformed}"
+        matches!(&malformed, orbit_common::OrbitError::InvalidInput(message)
+            if message.contains("caller_schema") && !message.contains("invalid_input")),
+        "the reason code travels as the error kind, not repeated in its text: {malformed:?}"
     );
 
     // Version is compared before mode and policy: this caller is wrong about

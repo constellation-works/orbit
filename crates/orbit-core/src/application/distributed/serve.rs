@@ -137,9 +137,7 @@ impl crate::OrbitRuntime {
         let claim = self.current_claim(claim_id)?;
         let run_id = run_id.trim();
         if run_id.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "invalid_input: `run_id` is required".into(),
-            ));
+            return Err(OrbitError::InvalidInput("`run_id` is required".into()));
         }
         // The invocation carries no run yet: binding is what creates that
         // association, so asserting one beforehand would fence the very
@@ -307,7 +305,7 @@ impl crate::OrbitRuntime {
     fn session_caller_machine(&self, session: &ToolSessionContext) -> Result<String, OrbitError> {
         session_machine_id(session).ok_or_else(|| {
             OrbitError::InvalidInput(
-                "invalid_input: no trusted caller machine on this session; a follower reaches \
+                "no trusted caller machine on this session; a follower reaches \
                  the owner through federated SSH, which names its machine"
                     .into(),
             )
@@ -328,9 +326,7 @@ impl crate::OrbitRuntime {
     fn current_claim(&self, claim_id: &str) -> Result<ExecutionClaim, OrbitError> {
         let claim_id = claim_id.trim();
         if claim_id.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "invalid_input: `claim_id` is required".into(),
-            ));
+            return Err(OrbitError::InvalidInput("`claim_id` is required".into()));
         }
         self.inspect_execution_claims()?
             .into_iter()
