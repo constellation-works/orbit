@@ -456,8 +456,10 @@ fn plugin_callback_refuses_a_token_bound_to_another_process() {
         &["orbit.task.list".to_string()],
     )
     .expect("mint callback session");
-    // pid 1 is live and is never this process, its parent, or its group.
-    session.bind_pid(1).expect("bind another process");
+    // A live process this one is no part of: never this process, its parent,
+    // or its group.
+    let other = orbit_common::test_env::spawn_unrelated_process();
+    session.bind_pid(other.pid()).expect("bind another process");
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::set_var(
@@ -472,6 +474,7 @@ fn plugin_callback_refuses_a_token_bound_to_another_process() {
     unsafe {
         std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
     }
+    drop(other);
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     assert!(
         error
