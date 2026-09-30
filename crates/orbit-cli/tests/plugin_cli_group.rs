@@ -16,7 +16,7 @@ use orbit_common::test_env;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use serde_json::{Value, json};
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
 
 struct Fixture {
     _temp: TempDir,
@@ -26,7 +26,11 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempdir().expect("tempdir");
+        // Plugin commands report resolved paths (a plugin root, a skill link's
+        // target, the workspace a render names), and the assertions compare
+        // them with these, so root the fixture at a resolved temp directory.
+        // The default macOS one sits behind the `/var` symlink.
+        let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
         std::fs::create_dir_all(&home).expect("create home");

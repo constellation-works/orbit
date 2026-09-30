@@ -32,7 +32,11 @@ struct ExternalRootFixture {
 
 impl ExternalRootFixture {
     fn init() -> Self {
-        let temp = tempdir().expect("tempdir");
+        // `--root` is recorded as given, and the assertions below expect the
+        // resolved spelling, so root the fixture at a resolved temp directory
+        // (the default macOS one sits behind the `/var` symlink).
+        let temp =
+            tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         // Deliberately nested, so a write to the root's parent is visible.
         let orbit_root = temp.path().join("orbit-data").join("root");
@@ -613,7 +617,10 @@ struct SharedRootCheckoutPairFixture {
 
 impl SharedRootCheckoutPairFixture {
     fn init() -> Self {
-        let temp = tempdir().expect("tempdir");
+        // `--root` is recorded as given, and the assertions expect the resolved
+        // spelling, so root the fixture at a resolved temp directory.
+        let temp =
+            tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         let orbit_root = temp.path().join("shared-root");
         let checkout_a = temp.path().join("checkout-a");
