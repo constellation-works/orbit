@@ -43,7 +43,9 @@ fn write_plugin_with_typed_config_roots(root: &Path, name: &str) {
 
 #[test]
 fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_conformance() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    // The loader resolves the plugin root, and the call-time profile leads with
+    // it, so the expected roots below must be spelled from a resolved root.
+    let temp = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
     let plugin_root = temp.path().join("plugin");
     let global_root = temp.path().join("global");
     let workspace_root = temp.path().join("workspace");
