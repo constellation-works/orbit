@@ -268,6 +268,45 @@ pub fn start_identity_probe_blocker() -> Option<String> {
     crate::process::identity::self_start_identity_probe_blocker()
 }
 
+/// A live process that is no part of this one: not this process, its parent,
+/// or its process group. Killed and reaped on drop.
+#[cfg(unix)]
+pub struct UnrelatedProcess(std::process::Child);
+
+#[cfg(unix)]
+impl UnrelatedProcess {
+    /// The process id to bind or present as "some other process".
+    pub fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnrelatedProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Spawn a sleeper in a process group of its own.
+///
+/// Tests that need "another live process" used pid 1, but macOS refuses an
+/// unprivileged read of launchd's start time (and a sandboxed run refuses more
+/// than that), so the binding the test wants to make never happens. A child
+/// this process owns has a readable start time on every platform.
+#[cfg(unix)]
+pub fn spawn_unrelated_process() -> UnrelatedProcess {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = std::process::Command::new("sleep");
+    command.arg("600").process_group(0);
+    let child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn an unrelated process: {error}"));
+    UnrelatedProcess(child)
+}
+
 #[cfg(test)]
 #[path = "tests/test_env.rs"]
 mod tests;

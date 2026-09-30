@@ -229,10 +229,10 @@ fn a_token_bound_to_another_process_is_a_mismatch() {
     let mut ours = mint(root.path(), "b");
     ours.bind_pid(std::process::id())
         .expect("bind this process");
-    // Plugin A: bound to a live process this one is no part of — pid 1 is
-    // never this process, its parent, or its group.
+    // Plugin A: bound to a live process this one is no part of.
+    let other = orbit_common::test_env::spawn_unrelated_process();
     let mut theirs = mint(root.path(), "a");
-    theirs.bind_pid(1).expect("bind pid 1");
+    theirs.bind_pid(other.pid()).expect("bind another process");
     let _env = present_token(theirs.token());
 
     let error =
@@ -250,8 +250,9 @@ fn a_token_bound_to_another_process_is_a_mismatch() {
 #[test]
 fn a_token_whose_record_is_not_ours_is_refused_without_ancestry() {
     let root = tempfile::tempdir().expect("tempdir");
+    let other = orbit_common::test_env::spawn_unrelated_process();
     let mut session = mint(root.path(), "demo");
-    session.bind_pid(1).expect("bind pid 1");
+    session.bind_pid(other.pid()).expect("bind another process");
     let _env = present_token(session.token());
 
     let error =

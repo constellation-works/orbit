@@ -190,8 +190,9 @@ fn the_inherited_descriptor_identifies_the_plugin_with_no_token_and_no_ancestry(
     )
     .expect("mint");
     // Bound to a live process this one is no part of, so ancestry cannot be
-    // what answers: pid 1 is never this process, its parent, or its group.
-    session.bind_pid(1).expect("bind pid 1");
+    // what answers.
+    let other = orbit_common::test_env::spawn_unrelated_process();
+    session.bind_pid(other.pid()).expect("bind another process");
     let (_credential, _env) = present_descriptor(session.path());
 
     let identity = resolve_plugin_callback(root.path(), legacy_off)
