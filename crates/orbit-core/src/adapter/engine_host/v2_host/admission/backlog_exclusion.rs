@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
+use crate::application::task::list_task_metadata_in;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -78,10 +79,13 @@ pub(in crate::adapter::engine_host::v2_host) struct BacklogTaskConflict {
 /// dispatch and its read-only diagnostic.  Keeping the lock filter here
 /// prevents the diagnostic from becoming a second scheduler.
 pub(in crate::adapter::engine_host::v2_host) struct BacklogSnapshot {
-    /// Every task in the workspace, whole: parent-chain walks and the
+    /// Every task in the workspace, at any status (parent-chain walks and the
     /// group-conflict roll-up read tasks at any status, which a status-filtered
-    /// map would silently shorten. This is the one materialized copy; the other
-    /// fields refer into it by ID rather than holding clones.
+    /// map would silently shorten), as envelope metadata: the body documents
+    /// (`description`, `acceptance_criteria`, `plan`, `execution_summary`) are
+    /// empty, and nothing in admission, exclusion or readiness reads them.
+    /// This is the one materialized copy; the other fields refer into it by ID
+    /// rather than holding clones.
     pub(in crate::adapter::engine_host::v2_host) task_lookup: BTreeMap<String, Task>,
     /// The registry-global status projection. Deliberately not derived from
     /// `task_lookup`: task lists are workspace-scoped, dependency readiness
@@ -292,7 +296,7 @@ pub(in crate::adapter::engine_host::v2_host) fn list_backlog_tasks(
             // never who is withheld.
             if has_epic_tag(&task.tags) && task.context_files.is_empty() {
                 if epic_roots.is_none() {
-                    let workspace_tasks = runtime.list_tasks().map_err(|err| {
+                    let workspace_tasks = runtime.list_task_metadata().map_err(|err| {
                         DispatchError::DeterministicActionFailed {
                             action: action.to_string(),
                             message: format!("list tasks: {err}"),
@@ -411,10 +415,7 @@ fn backlog_snapshot_in_mode(
     // The population is materialized once, by moving the listing into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup: BTreeMap<String, Task> = runtime
-        .stores()
-        .tasks()
-        .list_tasks()
+    let task_lookup: BTreeMap<String, Task> = list_task_metadata_in(runtime.stores().tasks())
         .map_err(|err| DispatchError::DeterministicActionFailed {
             action: action.to_string(),
             message: format!("list tasks: {err}"),
