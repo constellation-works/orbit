@@ -953,3 +953,22 @@ fn set_rejects_a_colon_in_a_crew_name_before_mutating_document() {
     assert!(error.contains("workflow.*_complexity_crews"), "{error}");
     assert!(!path.exists(), "a rejected key must not write the config");
 }
+
+#[test]
+fn list_key_rejects_a_bare_comma_separated_string_and_accepts_an_array() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+
+    store
+        .set_value("execution.env.pass", "A,B")
+        .expect("the string is staged, then refused by validation");
+    assert!(store.validate_for_set("execution.env.pass").is_err());
+
+    store
+        .set_value("execution.env.pass", "[\"A\",\"B\"]")
+        .expect("set array literal");
+    store
+        .validate_for_set("execution.env.pass")
+        .expect("an array is the accepted list form");
+}
