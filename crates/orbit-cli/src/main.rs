@@ -37,6 +37,7 @@ mod command;
 mod output;
 mod parse;
 mod plugin_cli;
+mod root_check;
 mod usage_error;
 
 use clap::{Arg, ArgMatches, Command, CommandFactory, FromArgMatches};
@@ -241,6 +242,16 @@ fn is_clock_tick(command: &command::Commands) -> bool {
             if matches!(clock.command, command::clock::ClockSubcommand::Tick(_)))
 }
 
+/// Where an explicitly chosen Orbit root came from, if it was chosen at all.
+fn explicit_root_source(root_override: Option<&std::path::Path>) -> Option<&'static str> {
+    if root_override.is_some() {
+        return Some("--root");
+    }
+    std::env::var("ORBIT_ROOT")
+        .is_ok_and(|value| !value.trim().is_empty())
+        .then_some("ORBIT_ROOT")
+}
+
 /// The Orbit root this invocation will use, read from argv before clap runs.
 ///
 /// The derived CLI cannot answer this yet: the tree it would parse against
@@ -409,6 +420,14 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+        let root_source = explicit_root_source(root_override.as_deref());
+        let root_existed = root.exists();
+        if let Some(source) = root_source
+            && let Err(error) = root_check::validate_explicit_root(&root, source)
+        {
+            print_error(&error, &sink, None);
+            std::process::exit(1);
+        }
         match pin_executable_generation_as(
             &root,
             matches!(
@@ -445,6 +464,12 @@ fn main() {
                 {
                     std::process::exit(1);
                 }
+                let error = match root_source {
+                    Some(source) if !root_existed => {
+                        root_check::missing_root_error(&root, source, &error)
+                    }
+                    _ => error,
+                };
                 print_error(&error, &sink, None);
                 std::process::exit(1);
             }
