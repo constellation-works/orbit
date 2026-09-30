@@ -422,9 +422,13 @@ fn tagged_https_git_source_uses_hardened_argv_and_environment() {
         "{:?}",
         resolved.root
     );
+    // Git is handed the checkout as spelled, while the resolved root is
+    // physical; compare the two by the directory they name.
+    let checkout = std::fs::canonicalize(args.last().expect("the checkout argument"))
+        .expect("the checkout exists after the clone");
     assert_eq!(
-        args.last().map(String::as_str),
-        resolved.root.parent().and_then(std::path::Path::to_str),
+        Some(checkout.as_path()),
+        resolved.root.parent(),
         "the final argument is the checkout, whose .orbit-plugin/ is the plugin root"
     );
 
