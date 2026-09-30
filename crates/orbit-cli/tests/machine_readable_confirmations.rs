@@ -338,3 +338,18 @@ fn routine_init_tool_scaffold_and_workspace_teardown_print_json_documents() {
         "teardown must still delete the data root"
     );
 }
+
+#[test]
+fn root_pointing_at_a_file_is_refused_as_an_unusable_directory() {
+    let fixture = Fixture::new();
+    let file = fixture.work.join("not-a-dir");
+    fs::write(&file, "x").expect("write file");
+
+    fixture
+        .orbit()
+        .args(["--root", file.to_str().expect("utf8 path"), "task", "list"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a usable Orbit root"))
+        .stderr(predicate::str::contains("admission").not());
+}
