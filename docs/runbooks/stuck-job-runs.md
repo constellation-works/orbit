@@ -160,6 +160,11 @@ leaf, its task, error, and the `orbit job resume <leaf-run-id>` that retries it,
 `Still waiting:` block naming the backlog tasks the drain's last pass never started and what
 blocked them. `--json` carries the same in `drain_summary` (null for a run that is not a drain).
 
+A run parked on task locks shows `Waiting on locks: file:src/lib.rs (held by ORB-1)`. The run
+persists only the selectors; `orbit run show` resolves the holder from the live lock projection
+when it renders (`--json`: `waiting_on_lock_holders`), so a holder that has since released drops
+off the line. `orbit run readiness` reports the same holders as `blocked-by=`.
+
 A run that failed, timed out, was cancelled or was interrupted leaves its task `blocked`, which
 automation skips. `orbit task show <task-id>` prints a `Next:` line for such a task: the exact
 `orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`, `interrupted`), and
