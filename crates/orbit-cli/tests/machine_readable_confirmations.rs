@@ -274,3 +274,67 @@ fn audit_prune_reports_a_bad_duration_before_asking_for_confirmation() {
         .failure()
         .stderr(predicate::str::contains("duration"));
 }
+
+#[test]
+fn routine_init_tool_scaffold_and_workspace_teardown_print_json_documents() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+
+    let routine = fixture.json(&["routine", "init", "--format", "json"]);
+    assert_eq!(routine["machine"]["name"], "qa-host");
+    assert_eq!(routine["clock"]["installed"], false);
+
+    let script = fixture.work.join("tools").join("hello");
+    let scaffold = fixture.json(&[
+        "tool",
+        "scaffold",
+        script.to_str().expect("utf8 path"),
+        "--name",
+        "hello",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(scaffold["tool"], "hello");
+    assert!(script.is_file(), "scaffold must still write the executable");
+    assert!(
+        scaffold["executable"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("hello")),
+        "scaffold document: {scaffold}"
+    );
+
+    // Teardown needs the operator capability; the override is per-child here.
+    fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args(["workspace", "teardown", "qa-workspace"])
+        .assert()
+        .failure();
+    let output = fixture
+        .orbit()
+        .env("ORBIT_OPERATOR", "1")
+        .args([
+            "workspace",
+            "teardown",
+            "qa-workspace",
+            "--confirm",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let teardown: Value = serde_json::from_slice(&output.stdout).expect("teardown JSON");
+    assert_eq!(teardown["workspace"], "qa-workspace");
+    assert!(
+        teardown["removed"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "teardown must list what it removed: {teardown}"
+    );
+    assert!(
+        !fixture.work.join(".orbit").exists(),
+        "teardown must still delete the data root"
+    );
+}
