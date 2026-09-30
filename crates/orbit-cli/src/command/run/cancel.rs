@@ -10,8 +10,9 @@ use crate::command::{CommandOut, Execute, Payload, require_confirmation};
 #[command(
     about = "Cancel a job run, or report its existing terminal outcome",
     after_help = "Cancels a job run that has not reached a terminal state: signals the \
-owner process of a running run (TERM then KILL), releases the run's task \
-reservations, and finalizes the run as `cancelled`. The primary remediation \
+owner process of a running run (TERM then KILL), stops the agent processes \
+the run still has open, releases the run's task reservations, and finalizes \
+the run as `cancelled`. The primary remediation \
 for a stuck `pending` run with no live worker (orphan reconciliation also \
 clears those on workspace open). A run that already finished returns a stable \
 `already_terminal` result without replacing its outcome.\n\n\
@@ -54,6 +55,7 @@ impl Execute for RunCancelArgs {
             "final_state": result.final_state,
             "signal_attempted": result.signal_attempted,
             "signal_outcome": result.signal_outcome,
+            "provider_processes_stopped": result.provider_processes_stopped,
             "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
         });
         let mut lines = Vec::new();
@@ -70,6 +72,12 @@ impl Execute for RunCancelArgs {
         }
         if let Some(outcome) = &result.signal_outcome {
             lines.push(format!("owner process signal outcome: {outcome}"));
+        }
+        if result.provider_processes_stopped > 0 {
+            lines.push(format!(
+                "provider processes stopped: {}",
+                result.provider_processes_stopped
+            ));
         }
         lines.extend(super::support::pull_settlement_lines(
             &result.pull_settlements,

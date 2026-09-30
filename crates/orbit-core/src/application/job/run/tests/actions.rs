@@ -502,6 +502,108 @@ fn cancellation_survivor_returns_typed_evidence_without_finalizing_run() {
     );
 }
 
+/// A provider CLI as Orbit spawns it: alone in its own process group, so a
+/// signal aimed at the run owner's group cannot reach it.
+#[cfg(unix)]
+fn spawn_isolated_provider() -> ReapingChild {
+    use std::os::unix::process::CommandExt;
+
+    let mut provider = Command::new("sleep");
+    provider
+        .arg("30")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    ReapingChild(provider.spawn().expect("spawn isolated provider"))
+}
+
+/// Cancelling a run must stop the agent it launched. The agent lives in its
+/// own process group, so before the fix `run cancel` reported `cancelled`,
+/// released the run's reservations, and left the provider editing the
+/// checkout with nothing responsible for it.
+#[cfg(unix)]
+#[test]
+fn cancel_job_run_stops_the_providers_the_run_left_open() {
+    use orbit_common::process::identity::process_start_identity_token;
+
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "qa_cancel_provider");
+    let mut provider = spawn_isolated_provider();
+    let provider_pid = provider.id();
+    let Some(token) = process_start_identity_token(provider_pid) else {
+        // `ps` cannot run here (the macOS agent-executor sandbox), so no
+        // provider identity is derivable and cancellation correctly refuses
+        // to signal one.
+        return;
+    };
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), 999_999)
+        .expect("mark running with a dead owner");
+    super::reconcile_provider::write_provider_spawn(
+        &runtime,
+        &run.run_id,
+        "provider-open",
+        provider_pid,
+        &token,
+    );
+
+    let result = runtime.cancel_job_run(&run.run_id).expect("cancel run");
+
+    assert_eq!(result.provider_processes_stopped, 1);
+    assert!(
+        wait_until(StdDuration::from_secs(3), || !process_is_alive(
+            provider_pid
+        )),
+        "provider {provider_pid} must not outlive the cancelled run"
+    );
+    assert_eq!(
+        runtime.show_job_run(&run.run_id).expect("show run").state,
+        JobRunState::Cancelled
+    );
+    let _ = provider.wait();
+}
+
+/// A recorded pid whose start token no longer matches names some other
+/// process now. Cancellation must never signal it.
+#[cfg(unix)]
+#[test]
+fn cancel_job_run_leaves_a_process_that_only_reuses_the_provider_pid() {
+    use orbit_common::process::identity::process_start_identity_token;
+
+    let (_root, runtime) = test_runtime();
+    let run = insert_pending_run(&runtime, "qa_cancel_provider_reused_pid");
+    let mut bystander = spawn_isolated_provider();
+    let bystander_pid = bystander.id();
+    if process_start_identity_token(bystander_pid).is_none() {
+        return;
+    }
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), 999_999)
+        .expect("mark running with a dead owner");
+    super::reconcile_provider::write_provider_spawn(
+        &runtime,
+        &run.run_id,
+        "provider-recycled",
+        bystander_pid,
+        &format!("{STABLE_TOKEN_PREFIX}the-original-provider-started-earlier"),
+    );
+
+    let result = runtime.cancel_job_run(&run.run_id).expect("cancel run");
+
+    assert_eq!(result.provider_processes_stopped, 0);
+    assert!(
+        process_is_alive(bystander_pid),
+        "a pid the provider record no longer identifies must not be signalled"
+    );
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+}
+
 #[cfg(unix)]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
