@@ -17,7 +17,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
 
 use super::OrbitToolServer;
-use super::name_map::build_name_map;
+use super::name_map::{advertise_tool_names, advertise_tool_names_in_schema, build_name_map};
 use super::schema::{
     SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, host_owns_plugin_selector,
     schema_to_tool,
@@ -373,12 +373,26 @@ impl ServerHandler for OrbitToolServer {
             .as_ref()
             .clone();
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
+        // Prose names other tools by their canonical dotted id; the client can
+        // only call the advertised alias, so say that in what it reads.
+        let mut canonical_names = definitions
+            .iter()
+            .map(|definition| definition.schema.name.clone())
+            .collect::<Vec<_>>();
+        canonical_names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+        let canonical_names = canonical_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         let tools = definitions
             .into_iter()
-            .map(|definition| {
-                let input_schema = self
+            .map(|mut definition| {
+                let mut input_schema = self
                     .input_schema_for(&definition)
                     .map_err(invalid_definitions_mcp_error)?;
+                advertise_tool_names_in_schema(&mut input_schema, &canonical_names);
+                definition.schema.description =
+                    advertise_tool_names(&definition.schema.description, &canonical_names);
                 Ok(schema_to_tool(
                     definition.schema,
                     input_schema,

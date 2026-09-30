@@ -2803,7 +2803,7 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
     for tool_name in ["orbit_task_list", "orbit_task_show", "orbit_crew_list"] {
         let description = tool_workspace_description(&listed, tool_name);
         assert!(
-            description.contains("selector") && description.contains("orbit.workspace.list"),
+            description.contains("selector") && description.contains("orbit_workspace_list"),
             "{tool_name} must instruct copying from the federated list: {description}"
         );
         assert!(
