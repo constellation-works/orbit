@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use orbit_types::tool::{
-    McpToolDefinition, McpToolScope, McpTransport, ToolParam, ToolSchema, ToolSessionContext,
+    McpToolAnnotations, McpToolDefinition, McpToolScope, McpTransport, ToolParam, ToolSchema,
+    ToolSessionContext,
 };
 use rmcp::model::{ClientCapabilities, Implementation, InitializeRequestParams, Meta};
 
@@ -158,8 +159,44 @@ fn bound_server_schema_reads_taxonomy_from_its_workspace_host() {
 fn schema_to_tool_keeps_dotted_orbit_tools_advertised_with_underscores() {
     let schema = tool_schema("orbit.task.add");
     let input_schema = build_input_schema(&schema.name, &schema.parameters);
-    let tool = schema_to_tool(schema, input_schema);
+    let tool = schema_to_tool(schema, input_schema, None);
     assert_eq!(tool.name.as_ref(), "orbit_task_add");
+}
+
+#[test]
+fn schema_to_tool_advertises_only_the_hints_a_definition_declares() {
+    let schema = tool_schema("orbit.task.list");
+    let input_schema = build_input_schema(&schema.name, &schema.parameters);
+    let read_only = schema_to_tool(
+        schema.clone(),
+        input_schema.clone(),
+        Some(McpToolAnnotations::READ_ONLY),
+    );
+    let hints = read_only.annotations.expect("read-only hints advertised");
+    assert_eq!(hints.read_only_hint, Some(true));
+    assert_eq!(hints.open_world_hint, Some(false));
+    assert_eq!(
+        hints.destructive_hint, None,
+        "an undeclared hint must stay unadvertised so the client applies the MCP default"
+    );
+
+    let partial = schema_to_tool(
+        schema.clone(),
+        input_schema.clone(),
+        Some(McpToolAnnotations {
+            read_only: Some(false),
+            ..McpToolAnnotations::default()
+        }),
+    );
+    let hints = partial.annotations.expect("partial hints advertised");
+    assert_eq!(hints.read_only_hint, Some(false));
+    assert_eq!(hints.idempotent_hint, None);
+
+    assert!(
+        schema_to_tool(schema, input_schema, None)
+            .annotations
+            .is_none()
+    );
 }
 
 #[test]

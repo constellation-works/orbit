@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::{OrbitBuiltinAction, Tool, ToolContext};
+use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind};
 
 pub struct OrbitWorkflowShipTool;
 pub struct OrbitWorkflowRunShowTool;
@@ -97,6 +97,10 @@ impl Tool for OrbitWorkflowShipTool {
 }
 
 impl Tool for OrbitWorkflowRunShowTool {
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
+    }
+
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "orbit.workflow.run.show".to_string(),
@@ -112,6 +116,10 @@ impl Tool for OrbitWorkflowRunShowTool {
 }
 
 impl Tool for OrbitWorkflowRunListTool {
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
+    }
+
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "orbit.workflow.run.list".to_string(),

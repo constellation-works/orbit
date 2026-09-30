@@ -1,5 +1,11 @@
 [
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Submit an asynchronous agent invocation for exploration or debugging and return its run ID. The agent runs on the host outside Orbit's filesystem sandbox, as the same OS user as Orbit, so it can reach anything that user can; it is admitted per invocation and requires operator capability — the same test for a session that arrived over SSH as for a local one. Track it with `orbit.workflow.run.show`, read output with `orbit run logs <RUN_ID>`, and stop it with `orbit run cancel <RUN_ID>`. It changes no task, opens no pull request, and dispatches nothing.",
     "inputSchema": {
       "additionalProperties": true,
@@ -52,6 +58,12 @@
     "name": "orbit_agent_invoke"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Create a recurring auto-task definition. The generic scheduler mints a task from its template on each due slot.",
     "inputSchema": {
       "additionalProperties": true,
@@ -111,6 +123,12 @@
     "name": "orbit_auto_task_add"
   },
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Delete an auto-task definition with its scheduler cursor and delivery consumer state. Deleting a shipped default records an opt-out, so reseeding does not re-create it; `orbit auto-task restore` reinstates it.",
     "inputSchema": {
       "additionalProperties": true,
@@ -140,6 +158,10 @@
     "name": "orbit_auto_task_delete"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
     "inputSchema": {
       "additionalProperties": true,
@@ -158,6 +180,12 @@
     "name": "orbit_auto_task_list"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Mint one task now from an auto-task definition. Unconditional: the schedule, dedupe policy, and enabled flag are ignored, and the scheduler's own cursor is left untouched.",
     "inputSchema": {
       "additionalProperties": true,
@@ -179,6 +207,12 @@
     "name": "orbit_auto_task_mint"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Enable or disable an auto-task definition without deleting it.",
     "inputSchema": {
       "additionalProperties": true,
@@ -205,6 +239,12 @@
     "name": "orbit_auto_task_toggle"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Update an existing auto-task definition (present fields only).",
     "inputSchema": {
       "additionalProperties": true,
@@ -276,6 +316,12 @@
     "name": "orbit_auto_task_update"
   },
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status. Requires operator capability and the workspace claim; withheld from managed runs.",
     "inputSchema": {
       "additionalProperties": true,
@@ -326,6 +372,10 @@
     "name": "orbit_command_exec"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List the effective configured crews for a selected workspace on this machine.",
     "inputSchema": {
       "additionalProperties": true,
@@ -340,6 +390,12 @@
     "name": "orbit_crew_list"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
     "inputSchema": {
       "additionalProperties": true,
@@ -381,6 +437,12 @@
     "name": "orbit_drain_claim_bind"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Settle an execution claim on the owner. A typed handoff is accepted only after the owner reads the pull request from the provider and resolves its candidate and base in the owner's own checkout, and only with digest-pinned validation evidence; it moves the task to `review`, which awaits owner approval — it does not merge. A failure records its evidence and blocks the task. Either releases only this claim's reservation. Retries replay the recorded outcome.",
     "inputSchema": {
       "additionalProperties": true,
@@ -421,6 +483,10 @@
     "name": "orbit_drain_claim_settle"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and the review policy. Declaring `caller_version`, `caller_schema`, or `caller_review_policy` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     "inputSchema": {
       "additionalProperties": true,
@@ -447,6 +513,10 @@
     "name": "orbit_drain_probe"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.",
     "inputSchema": {
       "additionalProperties": true,
@@ -476,6 +546,12 @@
     "name": "orbit_drain_receipt_lookup"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Append a friction report",
     "inputSchema": {
       "additionalProperties": true,
@@ -543,6 +619,10 @@
     "name": "orbit_friction_add"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     "inputSchema": {
       "additionalProperties": true,
@@ -603,6 +683,12 @@
     "name": "orbit_friction_list"
   },
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
     "inputSchema": {
       "additionalProperties": true,
@@ -629,6 +715,12 @@
     "name": "orbit_friction_rehome"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Update triage metadata for a friction record",
     "inputSchema": {
       "additionalProperties": true,
@@ -693,6 +785,10 @@
     "name": "orbit_friction_update"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Search tasks and frictions using lexical matching.",
     "inputSchema": {
       "additionalProperties": true,
@@ -798,6 +894,12 @@
     "name": "orbit_search"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Create an Orbit task and return the created task JSON",
     "inputSchema": {
       "additionalProperties": false,
@@ -949,6 +1051,10 @@
     "name": "orbit_task_add"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
     "inputSchema": {
       "additionalProperties": true,
@@ -989,6 +1095,12 @@
     "name": "orbit_task_artifact_get"
   },
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Store a source file under a task's artifacts directory. For automation-coverage.json, use the versioned evidence template in the assigned task: exact batch/input/revisions, complete examined commit and delivery lists, examination_complete, concrete checks and findings. Coverage acceptance requires the assigned executor run context; malformed, stale or unauthorized evidence is rejected during evaluation. Attaching ordinary artifacts never advances coverage.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1029,6 +1141,10 @@
     "name": "orbit_task_artifact_put"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, tag, dependency readiness, path.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1123,6 +1239,12 @@
     "name": "orbit_task_list"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Distributed-drain admission, served by the workspace owner. Selects the first ready, valid, conflict-free backlog task in the owner's order and, in one transaction, reserves its footprint, records an execution claim for the calling machine, moves it to `in-progress` and stores the request receipt. Answers `idle` (a receipt with no claim) when nothing is admissible. The calling machine is the session's, never a field of this input. A claim grants execution of that one attempt only; completion still needs owner approval.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1189,6 +1311,10 @@
     "name": "orbit_task_pull"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1242,6 +1368,12 @@
     "name": "orbit_task_show"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
     "inputSchema": {
       "additionalProperties": false,
@@ -1449,6 +1581,10 @@
     "name": "orbit_task_update"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List durable workflow runs newest-first with optional bounded filters.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1479,6 +1615,12 @@
     "name": "orbit_workflow_run_list"
   },
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Resume a terminal resumable workflow run as a new linked run.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1504,6 +1646,10 @@
     "name": "orbit_workflow_run_resume"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "Fetch one durable workflow run by ID.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1525,6 +1671,12 @@
     "name": "orbit_workflow_run_show"
   },
   {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
     "description": "Adjust how many tasks a running workspace drain keeps in flight, without replacing its run. The run ID, deadline, completion authorization, and already-dispatched children are preserved; a lower ceiling stops new admissions until enough children finish and cancels nothing.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1563,6 +1715,12 @@
     "name": "orbit_workflow_run_workers"
   },
   {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
     "description": "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.",
     "inputSchema": {
       "additionalProperties": true,
@@ -1630,6 +1788,10 @@
     "name": "orbit_workflow_ship"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List active workspaces with a checkout registered on this machine.",
     "inputSchema": {
       "additionalProperties": true,

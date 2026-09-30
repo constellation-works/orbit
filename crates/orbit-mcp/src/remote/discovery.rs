@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::tool::{
-    McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolParam, ToolSchema,
-    validate_mcp_tool_definitions,
+    McpToolAnnotations, McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolParam,
+    ToolSchema, validate_mcp_tool_definitions,
 };
 use orbit_types::workspace::{Workspace, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
@@ -38,6 +38,7 @@ fn workspace_list_definition() -> McpToolDefinition {
         },
         McpToolScope::Global,
     )
+    .with_annotations(Some(McpToolAnnotations::READ_ONLY))
 }
 
 /// Crew discovery resolves one workspace on the accepting machine.
@@ -62,6 +63,7 @@ fn crew_list_definition() -> McpToolDefinition {
         },
         McpToolScope::WorkspaceRequired,
     )
+    .with_annotations(Some(McpToolAnnotations::READ_ONLY))
 }
 
 pub fn execute_discovery_tool(

@@ -247,6 +247,70 @@ pub struct McpToolDefinition {
     /// cannot express `enum`, bounds, `default` or nested shapes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
+    /// Behavior hints MCP advertises as the tool's `annotations`, so a client
+    /// can decide what to auto-approve. `None` advertises none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<McpToolAnnotations>,
+}
+
+/// The MCP tool behavior hints (`readOnlyHint`, `destructiveHint`,
+/// `idempotentHint`, `openWorldHint`).
+///
+/// A field left `None` is not advertised, so the client applies the MCP
+/// default for it (which assumes the worst: destructive and open-world).
+/// These are hints for client UX, never an authorization decision.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpToolAnnotations {
+    /// The tool changes nothing in its environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
+    /// The tool may delete or overwrite existing data rather than only add to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive: Option<bool>,
+    /// Repeating a call with the same arguments has no further effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent: Option<bool>,
+    /// The tool reaches beyond Orbit's own state (processes, networks, agents).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_world: Option<bool>,
+}
+
+impl McpToolAnnotations {
+    /// A tool that only observes Orbit's own state.
+    pub const READ_ONLY: Self = Self {
+        read_only: Some(true),
+        destructive: None,
+        idempotent: None,
+        open_world: Some(false),
+    };
+
+    /// A mutating tool that only adds or updates Orbit's own state.
+    pub const fn additive(idempotent: bool) -> Self {
+        Self {
+            read_only: Some(false),
+            destructive: Some(false),
+            idempotent: Some(idempotent),
+            open_world: Some(false),
+        }
+    }
+
+    /// A mutating tool that can delete or overwrite Orbit's own state.
+    pub const fn destructive(idempotent: bool) -> Self {
+        Self {
+            read_only: Some(false),
+            destructive: Some(true),
+            idempotent: Some(idempotent),
+            open_world: Some(false),
+        }
+    }
+
+    /// A tool that starts work outside Orbit's own state.
+    pub const OPEN_WORLD: Self = Self {
+        read_only: Some(false),
+        destructive: Some(true),
+        idempotent: Some(false),
+        open_world: Some(true),
+    };
 }
 
 impl McpToolDefinition {
@@ -255,7 +319,13 @@ impl McpToolDefinition {
             schema,
             scope,
             input_schema: None,
+            annotations: None,
         }
+    }
+
+    pub fn with_annotations(mut self, annotations: Option<McpToolAnnotations>) -> Self {
+        self.annotations = annotations;
+        self
     }
 
     pub fn with_input_schema(mut self, input_schema: Option<Value>) -> Self {

@@ -8,6 +8,7 @@ use orbit_types::tool::{
 };
 use serde_json::Value;
 
+use crate::mcp_annotations::mcp_annotations;
 use crate::plugin::PluginToolBinding;
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
@@ -259,8 +260,11 @@ impl ToolRegistry {
             .filter(|entry| entry.availability.is_active())
             .filter_map(|entry| {
                 entry.mcp_scope.map(|scope| {
-                    McpToolDefinition::new(entry.tool.schema(), scope)
+                    let schema = entry.tool.schema();
+                    let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
+                    McpToolDefinition::new(schema, scope)
                         .with_input_schema(entry.tool.input_schema())
+                        .with_annotations(Some(annotations))
                 })
             })
             .collect::<Vec<_>>();

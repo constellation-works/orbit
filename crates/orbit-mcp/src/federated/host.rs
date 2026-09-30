@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::tool::{
-    McpToolDefinition, McpToolScope, ToolSchema, ToolSessionContext, mcp_advertised_tool_name,
+    McpToolAnnotations, McpToolDefinition, McpToolScope, ToolSchema, ToolSessionContext,
+    mcp_advertised_tool_name,
 };
 use orbit_types::workspace::WorkspaceStatus;
 use serde_json::{Map, Value, json};
@@ -265,6 +266,7 @@ fn federated_workspace_list_definition() -> McpToolDefinition {
         },
         McpToolScope::Global,
     )
+    .with_annotations(Some(McpToolAnnotations::READ_ONLY))
 }
 
 /// The operator's config pin is the identity of record; a live answer only

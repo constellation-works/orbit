@@ -39,6 +39,7 @@
 pub(crate) mod builtin;
 pub mod external;
 pub mod github_cli;
+mod mcp_annotations;
 pub mod plugin;
 mod registry;
 
