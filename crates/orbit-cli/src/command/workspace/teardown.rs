@@ -25,6 +25,18 @@ pub struct WorkspaceTeardownArgs {
 
 impl Execute for WorkspaceTeardownArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
+        self.execute_from(runtime, &cwd)
+    }
+}
+
+impl WorkspaceTeardownArgs {
+    /// Run teardown as if invoked from `cwd`.
+    ///
+    /// The working directory only feeds the "wrong checkout" refusal, so it is
+    /// an explicit input: the process cwd is global state, and tests must not
+    /// have to mutate (or race on) it to exercise teardown.
+    pub(super) fn execute_from(self, runtime: &OrbitRuntime, cwd: &Path) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
         // Keep target validation, deregistration and local deletion together;
@@ -32,7 +44,7 @@ impl Execute for WorkspaceTeardownArgs {
         workspace_registry::with_registry_lock(&registry_path, || {
             let mut registry = workspace_registry::load_registry_from(&registry_path)?;
             let (workspace, checkout) = resolve_teardown_target(&registry, &self.workspace)?;
-            refuse_if_cwd_belongs_to_another_checkout(&registry, &checkout)?;
+            refuse_if_cwd_belongs_to_another_checkout(&registry, &checkout, cwd)?;
 
             let orbit_dir = checkout.orbit_dir.clone();
             let repo_root = checkout.repo_root.clone();
@@ -180,9 +192,9 @@ fn workspace_id_for_selector(
 fn refuse_if_cwd_belongs_to_another_checkout(
     registry: &WorkspaceRegistry,
     selected: &WorkspaceCheckout,
+    cwd: &Path,
 ) -> Result<(), OrbitError> {
-    let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
-    let Some(cwd_checkout) = workspace_registry::find_checkout_by_path(registry, &cwd) else {
+    let Some(cwd_checkout) = workspace_registry::find_checkout_by_path(registry, cwd) else {
         return Ok(());
     };
     if cwd_checkout.workspace_id == selected.workspace_id {
