@@ -445,6 +445,16 @@
   #tasks-body .row.header { display: none; }
 }
 
+/* No visible row has an action, so the list drops the fixed action column for
+   every row at once (titles stay aligned with each other). The compact layout
+   above places its action on its own line and is left alone. */
+@container tasks-panel (min-width: 621px) {
+  #tasks-body[data-quick-actions="none"] .row {
+    grid-template-columns: 84px minmax(140px, 1fr) 124px 92px;
+  }
+  #tasks-body[data-quick-actions="none"] .row .task-quick-cell { display: none; }
+}
+
 .row.header {
   cursor: default;
   background: transparent;
