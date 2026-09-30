@@ -265,3 +265,73 @@ fn excerpt_collapses_whitespace_and_keeps_short_text() {
     );
     assert_eq!(excerpt_execution_summary(" \n "), None);
 }
+
+#[test]
+fn metadata_only_summary_gets_the_excerpts_full_tasks_would_have() {
+    let temp = tempfile::tempdir().expect("create tempdir");
+    let now = Utc.with_ymd_and_hms(2026, 8, 16, 12, 0, 0).unwrap();
+    let done = |id: &str, priority, summary: &str| {
+        task_at(
+            id,
+            TaskStatus::Done,
+            priority,
+            now - Duration::hours(1),
+            summary,
+            &[],
+        )
+    };
+    let full = vec![
+        done(
+            "ORB-a",
+            TaskPriority::High,
+            "  Outcome:  landed \n cleanly ",
+        ),
+        done("ORB-b", TaskPriority::Low, ""),
+    ];
+    let metadata_only = full
+        .iter()
+        .cloned()
+        .map(|task| Task {
+            execution_summary: String::new(),
+            ..task
+        })
+        .collect::<Vec<_>>();
+    let inputs = ScoreboardInputs {
+        now: Some(now),
+        window: ScoreboardWindow::Day,
+        ..ScoreboardInputs::default()
+    };
+
+    let expected = generate_summary_with_inputs(temp.path(), &full, &inputs).expect("full summary");
+    let mut actual = generate_summary_with_inputs(temp.path(), &metadata_only, &inputs)
+        .expect("metadata summary");
+    assert!(
+        actual
+            .notable_completions
+            .items
+            .iter()
+            .all(|item| item.summary_excerpt.is_none()),
+        "selection and aggregation never needed a body"
+    );
+
+    let mut looked_up = Vec::new();
+    fill_notable_summary_excerpts(&mut actual.notable_completions, |id| {
+        looked_up.push(id.to_string());
+        Ok(full
+            .iter()
+            .find(|task| task.id == id)
+            .expect("selected task exists")
+            .execution_summary
+            .clone())
+    })
+    .expect("fill excerpts");
+
+    assert_eq!(
+        looked_up,
+        ["ORB-a", "ORB-b"],
+        "only selected tasks are read"
+    );
+    assert_eq!(actual.notable_completions, expected.notable_completions);
+    assert_eq!(actual.agents, expected.agents);
+    assert_eq!(actual.recent_7d, expected.recent_7d);
+}

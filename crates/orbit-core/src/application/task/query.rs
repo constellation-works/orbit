@@ -7,6 +7,8 @@ use orbit_types::task::{
 
 use orbit_store::RegisteredTaskResolution;
 
+use super::listing::TaskListFilter;
+
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -124,6 +126,37 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         self.stores().tasks().list_tasks()
+    }
+
+    /// The workspace's tasks as [`Self::list_tasks`] returns them, minus the
+    /// body documents (`description`, `acceptance_criteria`, `plan` and
+    /// `execution_summary` are empty).
+    ///
+    /// Reads envelope metadata only, so the cost is one index probe per task
+    /// instead of a bundle read. Use it for aggregates that read status,
+    /// attribution, tags, priority, type or timestamps; anything that renders
+    /// or forwards a task body still needs [`Self::list_tasks`] or
+    /// [`Self::get_task`]. A worker invocation reads through its owner, which
+    /// only serves whole tasks, so it falls back to the full listing.
+    pub fn list_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.list_tasks();
+        }
+
+        Ok(self
+            .task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .items
+            .into_iter()
+            .map(|envelope| {
+                Task::from_envelope_parts(
+                    envelope,
+                    String::new(),
+                    Vec::new(),
+                    String::new(),
+                    String::new(),
+                )
+            })
+            .collect())
     }
 
     /// Returns the coordination registry's global status projection for
