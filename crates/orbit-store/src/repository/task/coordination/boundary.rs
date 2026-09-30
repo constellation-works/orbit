@@ -88,20 +88,24 @@ impl TaskCommitBoundary {
         Ok(boundary)
     }
 
-    /// Observation-only handle: no directory creation, lock files, or marker writes.
+    /// Observation-only handle: no directory creation, lock files, or marker
+    /// writes. It still refuses a partition bound to a different coordination
+    /// journal, which only reads the marker.
     pub fn for_observation(
         store: Store,
         registry: TaskRegistryStore,
         workspace_id: String,
     ) -> Result<Self, OrbitError> {
         let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
-        Ok(Self {
+        let boundary = Self {
             bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             store,
             registry,
             workspace_id,
             partition_dir,
-        })
+        };
+        boundary.verify_journal_binding()?;
+        Ok(boundary)
     }
 
     pub(super) fn verify_journal_binding(&self) -> Result<(), OrbitError> {

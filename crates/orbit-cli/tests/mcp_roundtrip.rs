@@ -4218,18 +4218,16 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         &workspace_state_root,
     );
     child
-        .args([
-            "mcp",
-            "serve",
-            "--root",
-            canonical_root.to_str().expect("utf8 Orbit root"),
-        ])
+        .args(["mcp", "serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // `mcp serve` takes no root override: `ORBIT_ROOT` locates the canonical
+    // root and the session selects the registered checkout, while the server
+    // itself still runs from the linked worktree like a managed executor.
     let initialize = McpClient::initialize_params(
         "readonly-managed-executor",
-        Some(worktree.to_str().expect("utf8 worktree")),
+        Some(workspace.work.to_str().expect("utf8 checkout")),
     );
     let (mut client, initialized) = McpClient::initialized(
         child.spawn().expect("spawn read-only MCP server"),
@@ -4263,9 +4261,9 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
         )["mode"],
         "lexical"
     );
-    // Same unbound-partition routing as the CLI mutation above: the server was
-    // started with `--root canonical_root` and `orbit_task_update` has no
-    // workspace selector to route it elsewhere.
+    // Unlike the CLI mutation, this one lands in the session's workspace. Its
+    // partition exists, so the runtime opens it observationally and the
+    // storage itself refuses the write.
     let mutation = client.call_tool_err(
         "orbit_task_update",
         json!({
@@ -4277,6 +4275,7 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     assert_readonly_diagnostic(
         "MCP",
         &canonical_root,
+        "ws_mcp-roundtrip",
         mutation["message"].as_str().unwrap_or_default(),
     );
     drop(client);
@@ -4744,27 +4743,34 @@ fn assert_readonly_mutation_failed(
         !output.status.success(),
         "{label} mutation unexpectedly succeeded"
     );
+    // A CLI mutation routes through `--root canonical_root` with no workspace
+    // selector, so it lands in the unbound canonical partition
+    // (`UNBOUND_DATA_DIR_PARTITION_ID` in `orbit-core`'s runtime builder).
     assert_readonly_diagnostic(
         label,
         canonical_root,
+        "ws_unbound-data-dir",
         &String::from_utf8_lossy(&output.stderr),
     );
 }
 
-/// Both CLI and MCP mutations above route through `--root canonical_root`
-/// with no workspace selector, so the denial must name the unbound canonical
-/// partition (`UNBOUND_DATA_DIR_PARTITION_ID` in `orbit-core`'s runtime
-/// builder) that write actually targeted, not a stale pre-layout-v3 lock path.
+/// The denial must name the task partition the write actually targeted, not
+/// a stale pre-layout-v3 lock path.
 #[cfg(target_os = "linux")]
-fn assert_readonly_diagnostic(label: &str, canonical_root: &Path, diagnostic: &str) {
-    let unbound_partition = canonical_root
+fn assert_readonly_diagnostic(
+    label: &str,
+    canonical_root: &Path,
+    partition_id: &str,
+    diagnostic: &str,
+) {
+    let partition = canonical_root
         .join("tasks")
         .join("workspaces")
-        .join("ws_unbound-data-dir");
-    let unbound_partition = unbound_partition.to_str().expect("utf8 partition path");
+        .join(partition_id);
+    let partition = partition.to_str().expect("utf8 partition path");
     assert!(
-        diagnostic.contains(unbound_partition),
-        "{label} diagnostic must attribute the unbound canonical partition {unbound_partition}: {diagnostic}"
+        diagnostic.contains(partition),
+        "{label} diagnostic must attribute the task partition {partition}: {diagnostic}"
     );
     let normalized = diagnostic.to_ascii_lowercase();
     assert!(
