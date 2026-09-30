@@ -60,7 +60,14 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().expect("tempdir");
+        // The broker refuses a socket path longer than `sun_path` rather than
+        // moving it, and the default macOS temp directory is too deep for the
+        // run directory beneath it. Keep the root short, as the broker's own
+        // fixtures do.
+        let root = tempfile::Builder::new()
+            .prefix("obk")
+            .tempdir_in("/tmp")
+            .expect("short broker test root");
         let home = root.path().join("home");
         let global_root = root.path().join("global");
         let worktree = root.path().join("repo");
