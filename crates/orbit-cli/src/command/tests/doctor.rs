@@ -802,3 +802,18 @@ fn fix_orphan_task_stores_without_confirm_fails_with_bundle_loss_message() {
         "expected error message to mention bundle loss, got: {err}"
     );
 }
+
+/// The root help template hand-writes each command's one-line description; it
+/// must say what the command's own `--help` says, or the two pages disagree.
+#[test]
+fn root_help_row_for_doctor_matches_its_own_about() {
+    let about = Cli::command()
+        .find_subcommand("doctor")
+        .and_then(|command| command.get_about().map(ToString::to_string))
+        .expect("doctor declares an about");
+
+    assert!(
+        super::super::ROOT_HELP_TEMPLATE.contains(&about),
+        "root help template must carry the doctor about line: {about}"
+    );
+}
