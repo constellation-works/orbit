@@ -3,8 +3,8 @@ summary: "MCP Session Context — Overview"
 type: design
 title: "MCP Session Context — Overview"
 owner: codex
-last_updated: 2026-09-09
-last_validated: 2026-09-09
+last_updated: 2026-09-30
+last_validated: 2026-09-30
 status: Accepted
 feature: mcp-session-context
 doc_role: overview
@@ -33,7 +33,7 @@ The external workspace value is addressing input, not a trusted workspace identi
 - caller_machine_id is an opaque audit label. It is not an authenticated principal.
 - A direct SSH proxy forwards the caller's persisted machine ID when available and host/local otherwise.
 - caller_ip is best-effort audit data taken from SSH_CONNECTION when an SSH server exposes it.
-- process_machine_id and process_host_id describe the machine accepting and executing the call.
+- process_machine_id and process_machine_name describe the machine accepting and executing the call.
 - transport is local or ssh-mcp.
 
 ## Current boundary
