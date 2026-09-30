@@ -980,7 +980,13 @@ pub fn run_cli_backend(
         ))
     } else if !exit_success {
         let stderr_text = String::from_utf8_lossy(stderr.protocol_bytes());
-        let exit_message = || format!("cli subprocess exited with code {exit_code:?}");
+        let exit_message = || match exit_code {
+            Some(code) => format!("cli subprocess exited with code {code}"),
+            // No exit status means the OS ended the process with a signal.
+            None => {
+                "cli subprocess was terminated by a signal and reported no exit code".to_string()
+            }
+        };
         Some(
             sandbox_write_diagnostic
                 .clone()

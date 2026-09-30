@@ -917,7 +917,7 @@ fn run_cli_backend_surfaces_antigravity_timeout_terminal_error_when_stderr_empty
         "{message}"
     );
     assert!(
-        message.contains("cli subprocess exited with code Some(1)"),
+        message.contains("cli subprocess exited with code 1"),
         "{message}"
     );
     assert!(
