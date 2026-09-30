@@ -562,6 +562,13 @@ fn search_visit_reads_only_admitted_bundles_and_stops_when_asked() {
     );
     reads(&store);
 
+    let search_doc_reads = || {
+        store
+            .bundle_store
+            .search_doc_reads
+            .swap(0, Ordering::Relaxed)
+    };
+    search_doc_reads();
     let mut visited = Vec::new();
     store
         .search_tasks_visit("ZEBRA-needle", &[], &is_open, &mut |task| {
@@ -571,9 +578,11 @@ fn search_visit_reads_only_admitted_bundles_and_stops_when_asked() {
         .unwrap();
     assert_eq!(visited, expected);
     assert_eq!(
-        reads(&store).0,
-        8,
-        "the four done tasks are rejected from their envelopes, unread"
+        (reads(&store).0, search_doc_reads()),
+        (6, 8 - 2),
+        "done tasks are rejected from their envelopes, unread; of the eight \
+         admitted, two match on their title and six are pruned from their \
+         documents; only the six matches are read whole"
     );
 
     let mut first = Vec::new();
@@ -584,10 +593,12 @@ fn search_visit_reads_only_admitted_bundles_and_stops_when_asked() {
         })
         .unwrap();
     assert_eq!(first, expected[..1]);
-    assert!(
-        reads(&store).0 < 8,
+    assert_eq!(
+        reads(&store).0,
+        1,
         "a visitor that stops early leaves the remaining bundles unread"
     );
+    search_doc_reads();
 
     let tagged = store
         .search_tasks_filtered("ZEBRA-needle", &["v2".to_string()])
@@ -602,6 +613,57 @@ fn search_visit_reads_only_admitted_bundles_and_stops_when_asked() {
             .search_tasks_filtered("ZEBRA-needle", &["absent".to_string()])
             .unwrap()
             .is_empty()
+    );
+}
+
+/// Search prunes a task from its envelope and search documents, so a damaged
+/// event log a search never needed goes unnoticed, but a damaged document
+/// cannot be pruned and still fails the search through the strict full read.
+#[test]
+fn search_prunes_from_documents_but_damaged_documents_still_fail_the_search() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    let quiet = store
+        .create_task(create_params("Quiet task", TaskStatus::Backlog))
+        .unwrap();
+    let noisy = store
+        .create_task(create_params("Noisy zebra task", TaskStatus::Backlog))
+        .unwrap();
+
+    fs::write(
+        store
+            .bundle_store
+            .bundle_path(&quiet.id)
+            .unwrap()
+            .join("events.jsonl"),
+        "not json\nstill not json\n",
+    )
+    .unwrap();
+    let found = store.search_tasks("zebra").unwrap();
+    assert_eq!(
+        found
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![noisy.id.as_str()],
+        "a non-matching task's event log is not read"
+    );
+    assert!(
+        store.list_tasks().is_err(),
+        "the damage is real: a whole-bundle read still rejects it"
+    );
+
+    fs::remove_file(
+        store
+            .bundle_store
+            .bundle_path(&quiet.id)
+            .unwrap()
+            .join("description.md"),
+    )
+    .unwrap();
+    assert!(
+        store.search_tasks("zebra").is_err(),
+        "a task whose documents cannot be read is not pruned; the full read reports it"
     );
 }
 

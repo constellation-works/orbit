@@ -7,7 +7,7 @@ use orbit_types::task::{
 };
 use tempfile::TempDir;
 
-use super::super::read_bundle_at;
+use super::super::{PENDING_WRITE_FILE_NAME, read_bundle_at, read_search_docs_at};
 use crate::repository::task::tests::test_support::{bundle_store, sample_bundle};
 
 #[test]
@@ -103,4 +103,42 @@ fn read_bundle_rejects_a_status_event_without_pending_write_evidence() {
             ..
         }) if task_id == "ORB-00000" && reason.contains("event log status")
     ));
+}
+
+#[test]
+fn search_docs_are_the_bundles_documents_and_defer_to_a_pending_write() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = bundle_store(&temp);
+    let bundle = sample_bundle("ORB-00000");
+    let created = store.create_bundle(&bundle).expect("create bundle");
+    let dir = created.binding.canonical_path;
+
+    let docs = read_search_docs_at(&dir)
+        .expect("read search documents")
+        .expect("no pending write");
+    assert_eq!(docs.description, bundle.description);
+    assert_eq!(docs.acceptance, bundle.acceptance);
+    assert_eq!(docs.plan, bundle.plan);
+    assert_eq!(docs.execution_summary, bundle.execution_summary);
+    assert_eq!(docs.comments, bundle.comments);
+    assert_eq!(docs.artifact_manifest, bundle.artifact_manifest);
+
+    fs::write(dir.join("events.jsonl"), "not json\nnot json\n").expect("damage the event log");
+    assert!(
+        read_search_docs_at(&dir)
+            .expect("read search documents")
+            .is_some(),
+        "the event log is not part of the search documents"
+    );
+    assert!(
+        read_bundle_at(&dir).is_err(),
+        "the full read still needs it"
+    );
+
+    fs::write(dir.join(PENDING_WRITE_FILE_NAME), "").expect("record a pending write");
+    assert_eq!(
+        read_search_docs_at(&dir).expect("read search documents"),
+        None,
+        "with a write pending the files are not the visible documents"
+    );
 }

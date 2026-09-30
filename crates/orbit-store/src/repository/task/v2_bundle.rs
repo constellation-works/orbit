@@ -16,10 +16,11 @@ use orbit_types::task::{
 };
 
 use crate::driver::file::task_bundle::bundle_lock_target;
-pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2};
+pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::file::task_bundle::{
     append_jsonl_row, cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
-    read_bundle_at, read_bundle_lightweight_at, read_envelope_at, write_bundle_at,
+    read_bundle_at, read_bundle_lightweight_at, read_envelope_at, read_search_docs_at,
+    write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
@@ -46,6 +47,8 @@ pub(crate) struct TaskBundleStoreV2 {
     pub(crate) bundle_reads: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     pub(crate) envelope_reads: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(crate) search_doc_reads: std::sync::atomic::AtomicUsize,
     pub(crate) registry: TaskRegistryStore,
     pub(crate) workspace_id: String,
 }
@@ -57,6 +60,8 @@ impl TaskBundleStoreV2 {
             bundle_reads: Default::default(),
             #[cfg(test)]
             envelope_reads: Default::default(),
+            #[cfg(test)]
+            search_doc_reads: Default::default(),
             registry,
             workspace_id,
         }
@@ -302,6 +307,28 @@ impl TaskBundleStoreV2 {
         self.bundle_reads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         read_bundle_tolerating_in_flight(&self.bundle_path(task_id)?)
+    }
+
+    /// The documents task search matches on, read under this bundle's shared
+    /// lock without its envelope or event log (see [`read_search_docs_at`]).
+    ///
+    /// A pruning read: `None` means the files cannot decide (a pending write,
+    /// a bundle in flight, any read failure), and the caller falls back to
+    /// [`Self::read_bundle_if_settled`], which decides authoritatively and
+    /// reports the failure itself.
+    pub(crate) fn read_search_docs(&self, task_id: &str) -> Option<TaskSearchDocs> {
+        #[cfg(test)]
+        self.search_doc_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bundle_dir = self.bundle_path(task_id).ok()?;
+        if !bundle_dir.try_exists().ok()? {
+            return None;
+        }
+        with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+            read_search_docs_at(&bundle_dir)
+        })
+        .ok()
+        .flatten()
     }
 
     /// Read one registered bundle's envelope, skipping it when a concurrent
