@@ -239,7 +239,9 @@ fn a_profile_denies_the_state_tree_and_re_allows_only_its_own_namespace() {
 /// host so Linux CI keeps the macOS half honest.
 #[test]
 fn the_macos_profile_denies_the_state_tree_and_re_allows_the_own_namespace_after_it() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    // The compiled profile names physical paths, so the expected rules must be
+    // spelled from a resolved root.
+    let temp = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global");
     let spec = state_plugin(
         &global_root,

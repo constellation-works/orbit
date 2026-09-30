@@ -915,7 +915,9 @@ fn the_landlock_ruleset_hides_the_plugin_secret_store() {
 /// platforms cannot drift.
 #[test]
 fn the_macos_profile_denies_callback_sessions_and_re_allows_the_childs_own_record() {
-    let temp = tempfile::tempdir().expect("tempdir");
+    // The compiled profile names physical paths, so the expected rules must be
+    // spelled from a resolved root.
+    let temp = tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
     let global_root = temp.path().join("global");
     let plugin_root = temp.path().join("plugin");
     std::fs::create_dir_all(&plugin_root).expect("plugin root");
