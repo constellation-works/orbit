@@ -22,6 +22,7 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::log_best_effort;
 
 use super::owner::signal_run_owner_process;
 use super::types::JobRunCancelResult;
@@ -162,12 +163,16 @@ impl OrbitRuntime {
                     Some(outcome)
                 }
                 Err(error) => {
-                    let _ = self.record_cancellation_completion(
-                        &run,
-                        &request_id,
-                        "failed",
-                        None,
-                        Some(&error.to_string()),
+                    log_best_effort(
+                        "record cancellation failure",
+                        &run.run_id,
+                        self.record_cancellation_completion(
+                            &run,
+                            &request_id,
+                            "failed",
+                            None,
+                            Some(&error.to_string()),
+                        ),
                     );
                     return Err(error);
                 }

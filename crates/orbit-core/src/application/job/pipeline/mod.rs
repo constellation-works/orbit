@@ -16,6 +16,7 @@ use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+use crate::application::job::log_best_effort;
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::observability::audit_id::audit_execution_id;

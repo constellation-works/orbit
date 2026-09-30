@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use super::log_best_effort;
+
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::load_job_asset;
 use orbit_engine::{
@@ -393,15 +395,23 @@ impl OrbitRuntime {
                 self.persist_v2_run_state(run, input, result, JobRunState::Failed, options)?;
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
-                let _ = self.record_pipeline_failure_step(run, started_at, finished_at, message);
+                log_best_effort(
+                    "record failure step",
+                    &run.run_id,
+                    self.record_pipeline_failure_step(run, started_at, finished_at, message),
+                );
                 JobRunState::Failed
             }
             Err(error) => {
-                let _ = self.record_pipeline_failure_step(
-                    run,
-                    started_at,
-                    finished_at,
-                    &error.to_string(),
+                log_best_effort(
+                    "record failure step",
+                    &run.run_id,
+                    self.record_pipeline_failure_step(
+                        run,
+                        started_at,
+                        finished_at,
+                        &error.to_string(),
+                    ),
                 );
                 JobRunState::Failed
             }

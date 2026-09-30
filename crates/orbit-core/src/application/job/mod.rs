@@ -12,6 +12,26 @@ mod run;
 #[cfg(test)]
 mod tests;
 
+/// Report a failed follow-up (diagnostic step, audit row, cancellation) that
+/// must not replace the outcome the caller is already returning. Discarding
+/// the result would leave the run without the record and without a trace of
+/// why.
+pub(crate) fn log_best_effort<T>(
+    operation: &'static str,
+    run_id: &str,
+    result: Result<T, orbit_common::OrbitError>,
+) {
+    if let Err(error) = result {
+        tracing::warn!(
+            target: "orbit.core.job_run",
+            run_id,
+            operation,
+            error = %error,
+            "best-effort run bookkeeping failed",
+        );
+    }
+}
+
 pub use agent_invoke::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
     DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,

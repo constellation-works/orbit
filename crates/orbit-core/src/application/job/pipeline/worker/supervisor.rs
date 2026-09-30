@@ -247,20 +247,24 @@ impl PipelineWorkerSupervisor {
                 scope = WorkerScopeCgroup::of_process(child_pid);
             }
             if run.pid == Some(child_pid) && !claimed {
-                let _ = self.record_audit(
-                    "pipeline.worker.claimed",
-                    Some(run_id),
-                    actor,
-                    AuditEventStatus::Success,
-                    json!({
-                        "run_id": run_id,
-                        "worker_pid": child_pid,
-                        "owner_pid": child_pid,
-                        "workspace": workspace,
-                        "worker_log": worker_log,
-                        "state": run.state.to_string(),
-                    }),
-                    None,
+                log_best_effort(
+                    "audit worker claim",
+                    run_id,
+                    self.record_audit(
+                        "pipeline.worker.claimed",
+                        Some(run_id),
+                        actor,
+                        AuditEventStatus::Success,
+                        json!({
+                            "run_id": run_id,
+                            "worker_pid": child_pid,
+                            "owner_pid": child_pid,
+                            "workspace": workspace,
+                            "worker_log": worker_log,
+                            "state": run.state.to_string(),
+                        }),
+                        None,
+                    ),
                 );
                 claimed = true;
             }
@@ -312,21 +316,25 @@ impl PipelineWorkerSupervisor {
                         exit_status = %status,
                         "duplicate pipeline worker exited without owning the persisted run",
                     );
-                    let _ = self.record_audit(
-                        "pipeline.worker.duplicate",
-                        Some(run_id),
-                        actor,
-                        AuditEventStatus::Success,
-                        json!({
-                            "run_id": run_id,
-                            "worker_pid": child_pid,
-                            "owner_pid": owner_pid,
-                            "workspace": workspace,
-                            "worker_log": worker_log,
-                            "state": run.state.to_string(),
-                            "exit_status": status.to_string(),
-                        }),
-                        None,
+                    log_best_effort(
+                        "audit duplicate worker",
+                        run_id,
+                        self.record_audit(
+                            "pipeline.worker.duplicate",
+                            Some(run_id),
+                            actor,
+                            AuditEventStatus::Success,
+                            json!({
+                                "run_id": run_id,
+                                "worker_pid": child_pid,
+                                "owner_pid": owner_pid,
+                                "workspace": workspace,
+                                "worker_log": worker_log,
+                                "state": run.state.to_string(),
+                                "exit_status": status.to_string(),
+                            }),
+                            None,
+                        ),
                     );
                     return Ok(());
                 }
