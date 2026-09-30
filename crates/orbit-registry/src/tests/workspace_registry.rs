@@ -447,6 +447,46 @@ fn identity_lookup_is_path_independent_and_path_lookup_is_checkout_only() {
     assert!(find_workspace_by_path(&registry, Path::new("/remote/ws_remote")).is_none());
 }
 
+/// A checkout is recorded at its resolved path. Once its directory is deleted
+/// the path can no longer be canonicalized whole, so a spelling through a
+/// symlinked ancestor has to be resolved up to the first directory that still
+/// exists, or `workspace remove <path>` cannot name the checkout it recorded.
+#[cfg(unix)]
+#[test]
+fn a_deleted_checkout_is_found_by_a_path_spelled_through_a_symlinked_ancestor() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let real = temp.path().join("real");
+    std::fs::create_dir_all(real.join("repo")).expect("checkout directory");
+    let linked = temp.path().join("linked");
+    std::os::unix::fs::symlink(&real, &linked).expect("link the checkout parent");
+    let recorded = linked
+        .join("repo")
+        .canonicalize()
+        .expect("resolve the checkout");
+    let registry = WorkspaceRegistry {
+        workspaces: vec![logical_workspace("ws_gone", None)],
+        checkouts: vec![WorkspaceCheckout::owner(
+            "ws_gone".to_string(),
+            recorded.clone(),
+            recorded.join(".orbit"),
+        )],
+        ..Default::default()
+    };
+    std::fs::remove_dir_all(real.join("repo")).expect("delete the checkout");
+
+    for spelled in [linked.join("repo"), linked.join("repo/src")] {
+        assert_eq!(
+            find_checkout_by_path(&registry, &spelled)
+                .map(|checkout| checkout.workspace_id.as_str()),
+            Some("ws_gone"),
+            "{} names the deleted checkout recorded at {}",
+            spelled.display(),
+            recorded.display()
+        );
+    }
+    assert!(find_checkout_by_path(&registry, &linked.join("elsewhere")).is_none());
+}
+
 #[test]
 fn checkout_registration_allows_distinct_repos_to_share_an_orbit_root() {
     let shared_root = PathBuf::from("/srv/orbit");
