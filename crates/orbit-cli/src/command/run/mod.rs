@@ -3,6 +3,7 @@ pub mod auto;
 mod cancel;
 mod command;
 mod concurrency;
+mod drain_summary;
 mod events;
 mod format;
 mod history;
