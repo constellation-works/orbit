@@ -3,7 +3,9 @@ use std::fs::File;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use super::{Cache, ImageKey, MAX_ENTRIES, digest_with_cache, key_of, load, store};
+use super::super::image_digest::{
+    Cache, ImageKey, MAX_ENTRIES, digest_with_cache, key_of, load, store,
+};
 use crate::OrbitError;
 
 const CACHED: &str = "1111111111111111111111111111111111111111111111111111111111111111";

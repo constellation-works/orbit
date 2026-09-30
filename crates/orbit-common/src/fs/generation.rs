@@ -75,6 +75,9 @@ mod identity;
 mod image_digest;
 mod registry;
 
+#[cfg(test)]
+mod tests;
+
 pub use handoff::{
     RESUME_CAPABILITIES, RESUME_DRAIN_ADOPT, RESUME_MCP_STDIO, candidate_supports, handover_target,
     reexec, replaced_installation,
