@@ -19,7 +19,7 @@ Options:
           Friction taxonomy tag; repeat or comma-separate for multiple tags
 
       --during-task <DURING_TASK>
-          Optional task ID being worked on when friction occurred
+          Optional task ID being worked on when friction occurred; an ID that names no task is refused
 
       --model <MODEL>
           Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)

@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_core::OrbitRuntime;
+use orbit_core::application::task::TaskAddParams;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -242,6 +243,13 @@ async fn create_empty_body_is_rejected_with_error_text() {
 #[tokio::test]
 async fn create_round_trips_tags_and_during_task() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Task the friction happened during".to_string(),
+            description: "Fixture.".to_string(),
+            ..Default::default()
+        })
+        .expect("create task");
 
     let response = request(
         runtime.clone(),
@@ -251,7 +259,7 @@ async fn create_round_trips_tags_and_during_task() {
         Some(json!({
             "body": "# Blocked\nCould not run the tool.",
             "tags": ["tooling", "docs"],
-            "during_task": "ORB-10260",
+            "during_task": task.id,
             "model": TEST_CODEX_MODEL,
         })),
     )
@@ -264,12 +272,47 @@ async fn create_round_trips_tags_and_during_task() {
         .expect("created friction id")
         .to_string();
     assert_eq!(created["tags"], json!(["docs", "tooling"]));
-    assert_eq!(created["during_task"], json!("ORB-10260"));
+    assert_eq!(created["during_task"], json!(task.id));
 
     let response = request(runtime, Method::GET, format!("/frictions/{id}"), None, None).await;
     let fetched = body_json(response).await;
     assert_eq!(fetched["tags"], json!(["docs", "tooling"]));
-    assert_eq!(fetched["during_task"], json!("ORB-10260"));
+    assert_eq!(fetched["during_task"], json!(task.id));
+}
+
+#[tokio::test]
+async fn create_refuses_a_during_task_that_names_no_task() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Real task".to_string(),
+            description: "Fixture.".to_string(),
+            ..Default::default()
+        })
+        .expect("create task");
+
+    let response = request(
+        runtime.clone(),
+        Method::POST,
+        "/frictions".to_string(),
+        Some("http://localhost:7878"),
+        Some(json!({
+            "body": "# Blocked\nCould not run the tool.",
+            "during_task": format!("{}9", task.id),
+            "model": TEST_CODEX_MODEL,
+        })),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let listed = runtime
+        .run_tool("orbit.friction.list", json!({}))
+        .expect("list frictions");
+    assert_eq!(
+        listed.as_array().map(Vec::len),
+        Some(0),
+        "a refused create must record nothing: {listed}"
+    );
 }
 
 #[tokio::test]

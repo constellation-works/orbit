@@ -12,10 +12,13 @@ use orbit_common::governance::friction::FRICTION_TITLE_MAX_CHARS;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_store::contracts::StoredFrictionRecord;
 use orbit_types::record::{FrictionRecord, FrictionStatus};
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 use super::super::friction_tools::record_to_json;
-use super::super::test_support::{invalid_input_message, run_tool_as_operator, test_runtime};
+use super::super::test_support::{
+    create_task, invalid_input_message, run_tool_as_operator, test_runtime,
+};
 use crate::OrbitRuntime;
 use crate::runtime::workspace::catalog::{
     FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
@@ -103,6 +106,86 @@ fn add_refuses_a_non_string_task_id() {
     })));
 
     assert!(message.contains("`task_id`"), "{message}");
+}
+
+#[test]
+fn add_records_friction_against_an_existing_task() {
+    let (_temp, runtime, repo) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo,
+        "Task the friction happened during",
+        "seed",
+        TaskStatus::Backlog,
+        &[],
+    );
+
+    let record = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.add",
+        json!({
+            "body": SECTIONED_BODY,
+            "during_task": task.id,
+            "model": TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("friction during an existing task");
+
+    assert_eq!(record["during_task"], json!(task.id));
+}
+
+#[test]
+fn add_refuses_a_during_task_that_names_no_task() {
+    let (_temp, runtime, repo) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo,
+        "Real task",
+        "seed",
+        TaskStatus::Backlog,
+        &[],
+    );
+    // Same prefix as a real task, so this registry knows the namespace and can
+    // say the id was never issued.
+    let missing = format!("{}9", task.id);
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.add",
+        json!({
+            "body": SECTIONED_BODY,
+            "during_task": missing,
+            "model": TEST_CODEX_MODEL,
+        }),
+    )
+    .expect_err("an unknown task must be refused");
+    assert!(
+        matches!(&error, OrbitError::NotFound { .. }),
+        "an id in a known namespace that names no task is not found: {error:?}"
+    );
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.add",
+        json!({
+            "body": SECTIONED_BODY,
+            "task_id": "not-a-task-id",
+            "model": TEST_CODEX_MODEL,
+        }),
+    )
+    .expect_err("a malformed task id must be refused");
+    assert!(
+        matches!(&error, OrbitError::InvalidInput(_)),
+        "a malformed id is invalid input: {error:?}"
+    );
+
+    let listed = run_tool_as_operator(&runtime, "orbit.friction.list", json!({}))
+        .expect("list after refusals");
+    assert_eq!(
+        listed.as_array().map(Vec::len),
+        Some(0),
+        "a refused add must record nothing: {listed}"
+    );
 }
 
 #[test]
