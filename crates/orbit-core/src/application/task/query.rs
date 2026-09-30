@@ -337,6 +337,37 @@ impl OrbitRuntime {
         self.stores().tasks().search_tasks(query)
     }
 
+    /// Stream tasks matching `query` to `visit` in listing order until it
+    /// returns `false`, as [`Self::search_tasks_filtered`] followed by `admit`
+    /// would yield them.
+    ///
+    /// `admit` judges a task from its envelope alone, so the store skips the
+    /// body read for every task it rejects, and stopping early skips the rest.
+    /// A worker invocation reads through its owner, which answers whole
+    /// searches only, so it filters that answer instead.
+    pub(crate) fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            for task in self.search_tasks_filtered(query, tags)? {
+                if admit(&task) && !visit(task) {
+                    break;
+                }
+            }
+            return Ok(());
+        }
+        if !self.coordination_task_reads_visible() {
+            return Ok(());
+        }
+        self.stores()
+            .tasks()
+            .search_tasks_visit(query, tags, admit, visit)
+    }
+
     pub fn search_tasks_filtered(
         &self,
         query: &str,

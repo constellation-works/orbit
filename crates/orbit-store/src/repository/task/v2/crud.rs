@@ -1,4 +1,5 @@
 use super::*;
+use crate::contracts::TaskListFilter;
 use crate::fs::path_safety::normalize_path;
 
 impl TaskV2Store {
@@ -330,37 +331,62 @@ impl TaskV2Store {
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
+        let mut matches = Vec::new();
+        self.search_tasks_visit(query, tags, &|_| true, &mut |task| {
+            matches.push(task);
+            true
+        })?;
+        Ok(matches)
+    }
+
+    /// Stream the tasks matching `query` in listing order (newest first) to
+    /// `visit` until it returns `false`.
+    ///
+    /// `admit` sees each candidate's envelope-only task before its bundle is
+    /// read, so tasks the caller would discard anyway (a status, tag or path
+    /// filter) cost no bundle read, and stopping early costs none for the
+    /// tasks that were never reached. Each admitted task is read once on the
+    /// lightweight listing path; artifact payloads stay unopened and only the
+    /// manifest paths participate in matching. A match is admitted again as
+    /// hydrated, so an update that raced the envelope read is judged on the
+    /// task actually returned.
+    ///
+    /// Integrity is judged for the bundles this reads: a damaged bundle the
+    /// caller does not admit, or that lies past the point where `visit`
+    /// stopped, no longer fails the search.
+    pub(crate) fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
         self.ensure_recovered()?;
         // Candidate materialization is lightweight; artifact content search
         // below may still open matching text blobs on demand.
         let lowered = query.to_lowercase();
-        let bundles = self.candidate_bundles_by_tags(tags)?;
-        self.search_bundles(bundles, &lowered)
-    }
-
-    /// The bundles `list_tasks_by_tags` would materialize, in the same order,
-    /// handed over whole so a caller that also needs the sidecars does not
-    /// read each bundle again.
-    fn candidate_bundles_by_tags(&self, tags: &[String]) -> Result<Vec<TaskBundleV2>, OrbitError> {
-        let required_tags = normalize_task_tags(tags.to_vec());
-        if let Some(bundles) = self.indexed_bundles(TaskIndexFilter {
-            tags: required_tags.clone(),
-            ..Default::default()
-        })? {
-            return Ok(bundles);
+        let candidates = self.task_candidates(
+            &TaskListFilter {
+                tags: tags.to_vec(),
+                ..Default::default()
+            },
+            usize::MAX,
+        )?;
+        for envelope in candidates.items {
+            if !admit(&Self::metadata_task(&envelope)) {
+                continue;
+            }
+            let Some(bundle) = self.bundle_store.read_bundle_if_settled(&envelope.id)? else {
+                continue;
+            };
+            let Some(task) = self.matching_task(bundle, &lowered)? else {
+                continue;
+            };
+            if admit(&task) && !visit(task) {
+                break;
+            }
         }
-        let mut bundles = self.bundle_store.list_bundles()?;
-        bundles.retain(|bundle| {
-            required_tags
-                .iter()
-                .all(|required| bundle.envelope.tags.iter().any(|tag| tag == required))
-        });
-        sort_by_created_desc_id_asc(
-            &mut bundles,
-            |bundle| &bundle.envelope.created_at,
-            |bundle| &bundle.envelope.id,
-        );
-        Ok(bundles)
+        Ok(())
     }
 
     pub(crate) fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {

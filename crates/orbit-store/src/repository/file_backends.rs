@@ -166,6 +166,16 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| self.search_tasks_filtered(query, tags))
     }
 
+    fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
+        self.in_boundary(|| self.search_tasks_visit(query, tags, admit, visit))
+    }
+
     fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
         self.delete_task(id)
     }
