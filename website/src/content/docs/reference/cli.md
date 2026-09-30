@@ -148,7 +148,7 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 |---|---|
 | `orbit mcp init` / `orbit mcp remove` | Register or unregister MCP client integration. Clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`, `vscode`, `windsurf`, or `--all`. `--scope workspace` (default, repo-local) or `home` (user-level). `--federated` manages the mux entry separately. |
 | `orbit mcp serve` | Serve the MCP tool surface over stdio, or act as a client with `--mode remote <SSH_HOST>` / `--mode federated`. `--operator` serves operator authority, and on a client mode it is also the operator statement for every SSH destination opened; `--orchestrator <crew>` sets the orchestrator attribution recorded on tasks the session creates, and grants nothing. |
-| `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless `--allow-non-loopback` is passed. |
+| `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless `--allow-non-loopback` is passed. `--workspace <selector>` binds each accepted session to that workspace by default. |
 | `orbit web serve` | Serve the Orbit dashboard. Serves the registry under the resolved root, so `orbit --root <ROOT> web serve` exposes only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one of them. `--operator` grants Operations controls without a TTY or `ORBIT_OPERATOR`. |
 | `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; it takes no `--root`. Spawns the remote server with `--operator` by default; `--no-operator` restores read-only Operations. |
 

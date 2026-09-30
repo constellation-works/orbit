@@ -228,6 +228,23 @@ impl McpWorkspace {
         client
     }
 
+    /// Spawn `orbit mcp listen --workspace <selector>` on `addr` and connect
+    /// without announcing any workspace at initialize, so the only binding the
+    /// session can have is the one the listener was launched with.
+    fn listen_bound_to(&self, addr: SocketAddr, selector: &str) -> McpClient {
+        let child = Self::orbit_command(&self.work, &self.home)
+            .args(["mcp", "listen", "--workspace", selector, &addr.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn orbit mcp listen --workspace");
+        let mut client = McpClient::over_tcp(child, connect_when_listening(addr));
+        let response = client.initialize(McpClient::initialize_params("listen-bound", None));
+        assert_eq!(response["result"]["serverInfo"]["name"], "orbit-mcp");
+        client
+    }
+
     /// The MCP initialize handshake, announcing this workspace via
     /// `_meta.orbit.workspace`.
     fn initialize(&self, client: &mut McpClient) {
@@ -2033,6 +2050,43 @@ fn mcp_listen_round_trips_over_a_loopback_socket_and_audits_the_peer_ip() {
             .4
             .as_deref()
             .is_some_and(|id| id.starts_with("trace-"))
+    );
+}
+
+/// `orbit mcp listen --workspace <selector>` binds the sessions it accepts the
+/// way `orbit mcp serve --workspace` does, instead of accepting the flag and
+/// leaving every session unbound.
+#[test]
+fn mcp_listen_workspace_flag_binds_the_sessions_it_accepts() {
+    let workspace = McpWorkspace::init();
+    let addr = free_loopback_addr();
+    let mut client = workspace.listen_bound_to(addr, "ws_mcp-roundtrip");
+
+    let listed = client.request("tools/list", Value::Null);
+    let description = tool_workspace_description(&listed, "orbit_task_list");
+    assert!(
+        description.contains("Optional in this session"),
+        "a bound listener must advertise the selector as optional: {description}"
+    );
+
+    let created = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Bound listener task",
+            "description": "Created with no per-call workspace",
+            "complexity": "low",
+            "model": "codex",
+        }),
+    );
+    assert_eq!(created["title"], "Bound listener task");
+    let tasks = client.call_tool_ok("orbit_task_list", json!({ "limit": 5 }));
+    assert!(
+        tasks["tasks"]
+            .as_array()
+            .expect("tasks array")
+            .iter()
+            .any(|task| task["title"] == "Bound listener task"),
+        "a call with no selector must land in the launch workspace: {tasks}"
     );
 }
 

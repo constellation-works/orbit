@@ -31,14 +31,22 @@ pub struct ListenArgs {
 }
 
 impl ListenArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
         if root_override.is_some() {
             return Err(OrbitError::InvalidInput(
                 "orbit mcp listen does not accept a workspace root override; select a workspace per initialize or tool call"
                     .to_string(),
             ));
         }
-        super::server::serve_mcp_listener(self.addr, self.exposure())?;
+        super::server::serve_mcp_listener(
+            self.addr,
+            self.exposure(),
+            workspace_selector.map(ToOwned::to_owned),
+        )?;
         Ok(CommandOutput::Silent)
     }
 
