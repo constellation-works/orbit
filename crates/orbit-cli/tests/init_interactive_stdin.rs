@@ -240,3 +240,41 @@ fn piped_machine_name_and_task_prefix_still_complete_interactive_init() {
     assert!(config.contains("name = \"pipe-host\""), "{config}");
     assert!(config.contains("task_prefix = \"ZZ\""), "{config}");
 }
+
+/// Test fixtures initialize under an isolated HOME on machines whose sandbox
+/// state they must not change. The opt-out completes init without the
+/// privileged preparation path, and the installer entry point honors it too.
+#[cfg(target_os = "linux")]
+#[test]
+fn skipped_host_prerequisites_complete_init_without_preparing_the_host() {
+    let fixture = IsolatedHome::new();
+    let output = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
+        .args([
+            "--non-interactive",
+            "--machine-name",
+            "skip-host",
+            "--task-prefix",
+            "SKP",
+        ])
+        .env("ORBIT_SKIP_HOST_PREREQUISITES", "1")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run orbit init");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "init must complete: {stderr}");
+    assert!(stderr.contains("host preparation skipped"), "{stderr}");
+    assert!(
+        fixture.home.join(".orbit").join("config.toml").is_file(),
+        "init must still seed the global root"
+    );
+
+    let output = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
+        .args(["--host-prerequisites-only", "--skip-host-prerequisites"])
+        .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run installer entry point");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("host preparation skipped"), "{stderr}");
+}

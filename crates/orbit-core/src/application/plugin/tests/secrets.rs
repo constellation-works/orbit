@@ -299,10 +299,17 @@ fn a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them() {
 
     let runtime = fixture.reopen();
     let output = fixture.call(&runtime, "demo.hello").expect("demo call");
+    // The backend echoes its envelope, and the caller sees delivered values
+    // masked. `demo-key-3e1` is the only value this call delivered, so a
+    // value that masks to exactly one marker is that value.
     assert_eq!(
         output["envelope"]["context"]["secrets"],
-        json!({ "api_key": { "value": "demo-key-3e1", "version": version } }),
+        json!({ "api_key": { "value": "[secret]", "version": version } }),
         "{output}"
+    );
+    assert!(
+        !output.to_string().contains("demo-key-3e1"),
+        "a delivered value reached the caller: {output}"
     );
     let other = fixture.call(&runtime, "other.hello").expect("other call");
     assert_eq!(

@@ -112,8 +112,8 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         ("CARGO_HOME", None),
     ]);
     let script = format!(
-        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' 2>&1; \
-         ls -A '{home}/.ssh'; echo written > '{ws}/out.txt'",
+        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' 2>/dev/null; \
+         echo \"ssh-listing:$(ls -A '{home}/.ssh')\"; echo written > '{ws}/out.txt'",
         home = home.display(),
         ws = workspace.display()
     );
@@ -142,8 +142,10 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         !stdout.contains("PRIVATE-KEY") && !stdout.contains("PUBLISH-TOKEN"),
         "credential contents must not reach a confined child: {stdout}"
     );
+    // `cat` names the path it could not open, so the listing is framed rather
+    // than searched for the key's file name.
     assert!(
-        !stdout.contains("id_ed25519"),
+        stdout.lines().any(|line| line == "ssh-listing:"),
         "the masked ~/.ssh must list as empty: {stdout}"
     );
     assert_eq!(

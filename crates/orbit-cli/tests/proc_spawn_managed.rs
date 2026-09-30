@@ -12,8 +12,12 @@ use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+/// A managed CLI worker already runs inside its OS sandbox, and its
+/// `proc.spawn` children inherit that view: the activity `fsProfile` neither
+/// refuses a path argument nor is required at all. What the managed context
+/// still decides is the program policy it hands the nested `orbit`.
 #[test]
-fn managed_cli_proc_spawn_applies_registered_workspace_policy() {
+fn managed_cli_proc_spawn_enforces_program_policy_and_inherits_parent_reads() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let workspace = temp.path().join("workspace");
@@ -44,72 +48,44 @@ spec:
     )
     .expect("write restricted policy");
 
-    let allowed = run_managed_proc_spawn(
+    for (path, profile, expected) in [
+        ("allowed/visible.txt", Some("restricted"), "visible"),
+        // No enclosing OS mask covers this path here, so the child reads
+        // exactly what its parent can.
+        ("denied/private.txt", Some("restricted"), "private"),
+        ("allowed/visible.txt", None, "visible"),
+    ] {
+        let output = run_managed_proc_spawn(
+            &workspace,
+            &home,
+            json!({ "program": "/bin/cat", "args": [path], "timeout_ms": 5_000 }),
+            profile,
+        );
+        assert!(
+            output.status.success(),
+            "managed proc.spawn of {path} (profile {profile:?}) failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).expect("JSON output");
+        assert_eq!(value["stdout"].as_str(), Some(expected), "{value}");
+    }
+
+    let refused = run_managed_proc_spawn(
         &workspace,
         &home,
-        json!({
-            "program": "/bin/cat",
-            "args": ["allowed/visible.txt"],
-            "timeout_ms": 5_000
-        }),
+        json!({ "program": "/bin/ls", "args": ["allowed"], "timeout_ms": 5_000 }),
         Some("restricted"),
     );
     assert!(
-        allowed.status.success(),
-        "allowed managed proc.spawn failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&allowed.stdout),
-        String::from_utf8_lossy(&allowed.stderr)
-    );
-    let value: Value = serde_json::from_slice(&allowed.stdout).expect("allowed JSON output");
-    assert_eq!(value["stdout"].as_str(), Some("visible"));
-
-    let denied = run_managed_proc_spawn(
-        &workspace,
-        &home,
-        json!({
-            "program": "/bin/cat",
-            "args": ["denied/private.txt"],
-            "timeout_ms": 5_000
-        }),
-        Some("restricted"),
+        !refused.status.success(),
+        "a program outside ORBIT_PROC_ALLOWED_PROGRAMS ran\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
     );
     assert!(
-        !denied.status.success(),
-        "denied path unexpectedly executed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&denied.stdout),
-        String::from_utf8_lossy(&denied.stderr)
-    );
-    let diagnostic = format!(
-        "{}{}",
-        String::from_utf8_lossy(&denied.stdout),
-        String::from_utf8_lossy(&denied.stderr)
-    );
-    assert!(
-        diagnostic.contains("proc.spawn path")
-            && diagnostic.contains("fsProfile 'restricted'")
-            && !diagnostic.contains("missing its resolved filesystem policy"),
-        "expected the resolved profile to deny the path: {diagnostic}"
-    );
-
-    let missing_profile = run_managed_proc_spawn(
-        &workspace,
-        &home,
-        json!({
-            "program": "/bin/cat",
-            "args": ["allowed/visible.txt"],
-            "timeout_ms": 5_000
-        }),
-        None,
-    );
-    assert!(!missing_profile.status.success());
-    let diagnostic = format!(
-        "{}{}",
-        String::from_utf8_lossy(&missing_profile.stdout),
-        String::from_utf8_lossy(&missing_profile.stderr)
-    );
-    assert!(
-        diagnostic.contains("missing its resolved filesystem policy"),
-        "missing managed profile did not fail closed: {diagnostic}"
+        !String::from_utf8_lossy(&refused.stdout).contains("visible.txt"),
+        "the refused program's output reached the caller"
     );
 }
 

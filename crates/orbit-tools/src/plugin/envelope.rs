@@ -73,7 +73,7 @@ pub(crate) fn call_context(
         if let Some(tool_name) = tool_name {
             fields.insert("tool".to_string(), Value::String(tool_name.to_string()));
         }
-        if let Some(secrets) = &secrets.0 {
+        if let Some(secrets) = secrets.delivered() {
             let delivered = secrets
                 .iter()
                 .map(|(name, secret)| {
@@ -89,15 +89,72 @@ pub(crate) fn call_context(
     context
 }
 
-/// The declared secrets one call carries, read once for that call.
-#[derive(Debug, Default)]
-pub(crate) struct CallSecrets(Option<BTreeMap<String, DeliveredPluginSecret>>);
+/// The declared secrets one call carries, read once for that call, plus the
+/// values its backend reported in `secret_updates`.
+///
+/// `Debug` never prints a value.
+#[derive(Default)]
+pub(crate) struct CallSecrets {
+    delivered: Option<BTreeMap<String, DeliveredPluginSecret>>,
+    /// Values the backend returned in `secret_updates` for declared secrets
+    /// during this call, applied or refused.
+    reported: RefCell<Vec<String>>,
+}
+
+impl std::fmt::Debug for CallSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallSecrets")
+            .field("delivered", &self.delivered)
+            .field("reported", &self.reported.borrow().len())
+            .finish()
+    }
+}
 
 impl CallSecrets {
     /// Read the plugin's declared secrets for one call. A read that fails
     /// fails the call before anything is spawned or sent.
     pub(crate) fn resolve(spec: &PluginBackendSpec) -> Result<Self, OrbitError> {
-        spec.secrets.resolve().map(Self)
+        spec.secrets.resolve().map(|delivered| Self {
+            delivered,
+            reported: RefCell::default(),
+        })
+    }
+
+    fn delivered(&self) -> Option<&BTreeMap<String, DeliveredPluginSecret>> {
+        self.delivered.as_ref()
+    }
+
+    /// Mask `value` in everything this call relays from now on.
+    fn also_mask(&self, value: &str) {
+        if !value.is_empty() {
+            self.reported.borrow_mut().push(value.to_string());
+        }
+    }
+
+    /// Every spelling of every secret value the caller-facing text may carry:
+    /// the value itself, its JSON-escaped form (validators and transport
+    /// errors quote JSON strings), and its JSON Pointer form (schema errors
+    /// name an offending object key as `/a~1b` for `a/b`).
+    fn patterns(&self) -> Vec<String> {
+        let reported = self.reported.borrow();
+        let values = self
+            .delivered
+            .iter()
+            .flat_map(BTreeMap::values)
+            .map(|secret| secret.value.as_str())
+            .chain(reported.iter().map(String::as_str))
+            .filter(|value| !value.is_empty());
+        let mut patterns = Vec::new();
+        for value in values {
+            if let Ok(quoted) = serde_json::to_string(value) {
+                patterns.push(quoted[1..quoted.len() - 1].to_string());
+            }
+            patterns.push(value.replace('~', "~0").replace('/', "~1"));
+            patterns.push(value.to_string());
+        }
+        patterns.sort_unstable();
+        patterns.dedup();
+        patterns
     }
 
     /// `text` with every secret value this call carried replaced by a marker.
@@ -106,65 +163,16 @@ impl CallSecrets {
     /// failed process. The backend was handed the values and can print them;
     /// the caller it reports to must not be able to read them there.
     pub(crate) fn mask_delivered(&self, text: &str) -> String {
-        // Longest first, so a secret that contains another is masked whole
-        // rather than leaving the rest of it readable.
-        let mut values: Vec<&str> = self
-            .0
-            .iter()
-            .flat_map(BTreeMap::values)
-            .map(|secret| secret.value.as_str())
-            .filter(|value| !value.is_empty())
-            .collect();
-        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
-        let mut masked = text.to_string();
-        for value in values {
-            masked = masked.replace(value, "[secret]");
-            // Validators and transport errors may quote JSON strings. Match
-            // that representation too, without changing the JSON structure.
-            if let Ok(quoted) = serde_json::to_string(value) {
-                let escaped = &quoted[1..quoted.len() - 1];
-                if escaped != value {
-                    masked = masked.replace(escaped, "[secret]");
-                }
-            }
-        }
-        masked
+        mask_patterns(text, &self.patterns())
     }
 
     /// Mask decoded JSON strings and object keys, retaining other value types.
     pub(crate) fn mask_json(&self, value: Value) -> Value {
-        match value {
-            Value::String(text) => Value::String(self.mask_delivered(&text)),
-            Value::Array(items) => {
-                Value::Array(items.into_iter().map(|item| self.mask_json(item)).collect())
-            }
-            Value::Object(fields) => {
-                let mut masked = serde_json::Map::new();
-                let mut renamed = Vec::new();
-                for (key, value) in fields {
-                    let public_key = self.mask_delivered(&key);
-                    let value = self.mask_json(value);
-                    if public_key == key {
-                        masked.insert(key, value);
-                    } else {
-                        renamed.push((public_key, value));
-                    }
-                }
-                // Preserve ordinary fields even when a secret key masks to
-                // an existing key, and retain every renamed field's value.
-                for (key, value) in renamed {
-                    let mut public_key = key.clone();
-                    let mut suffix = 2;
-                    while masked.contains_key(&public_key) {
-                        public_key = format!("{key} ({suffix})");
-                        suffix += 1;
-                    }
-                    masked.insert(public_key, value);
-                }
-                Value::Object(masked)
-            }
-            other => other,
+        let patterns = self.patterns();
+        if patterns.is_empty() {
+            return value;
         }
+        mask_json_with(value, &patterns)
     }
 
     /// Backend responses and schema/transport diagnostics leave through these
@@ -190,8 +198,7 @@ impl CallSecrets {
     /// is built and immediately before it is sent.
     pub(crate) fn record_delivery(&self) {
         let names = self
-            .0
-            .as_ref()
+            .delivered()
             .map(|secrets| {
                 secrets
                     .keys()
@@ -200,6 +207,81 @@ impl CallSecrets {
             })
             .unwrap_or_default();
         DELIVERED_SECRET_NAMES.with(|cell| *cell.borrow_mut() = names);
+    }
+}
+
+/// Replace every occurrence of any pattern with one marker. Matches are found
+/// against the original text and merged first, so secrets that overlap one
+/// another are masked as one span rather than leaving a readable remainder.
+fn mask_patterns(text: &str, patterns: &[String]) -> String {
+    let mut spans: Vec<(usize, usize)> = patterns
+        .iter()
+        .flat_map(|pattern| {
+            text.match_indices(pattern.as_str())
+                .map(|(start, found)| (start, start + found.len()))
+        })
+        .collect();
+    if spans.is_empty() {
+        return text.to_string();
+    }
+    spans.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        if let Some(last) = merged.last_mut()
+            && start <= last.1
+        {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    let mut masked = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (start, end) in merged {
+        masked.push_str(&text[copied..start]);
+        masked.push_str("[secret]");
+        copied = end;
+    }
+    masked.push_str(&text[copied..]);
+    masked
+}
+
+fn mask_json_with(value: Value, patterns: &[String]) -> Value {
+    match value {
+        Value::String(text) => Value::String(mask_patterns(&text, patterns)),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| mask_json_with(item, patterns))
+                .collect(),
+        ),
+        Value::Object(fields) => {
+            let mut masked = serde_json::Map::new();
+            let mut renamed = Vec::new();
+            for (key, value) in fields {
+                let public_key = mask_patterns(&key, patterns);
+                let value = mask_json_with(value, patterns);
+
+                if public_key == key {
+                    masked.insert(key, value);
+                } else {
+                    renamed.push((public_key, value));
+                }
+            }
+            // Preserve ordinary fields even when a secret key masks to
+            // an existing key, and retain every renamed field's value.
+            for (key, value) in renamed {
+                let mut public_key = key.clone();
+                let mut suffix = 2;
+                while masked.contains_key(&public_key) {
+                    public_key = format!("{key} ({suffix})");
+                    suffix += 1;
+                }
+                masked.insert(public_key, value);
+            }
+            Value::Object(masked)
+        }
+        other => other,
     }
 }
 
@@ -328,6 +410,17 @@ pub(crate) fn apply_secret_updates(
             }
         };
         outcomes.insert(public_name, status);
+    }
+    // A value reported for one of this plugin's declared secrets, applied or
+    // refused, is a credential: an applied rotation usually invalidates the
+    // delivered value, so the new one is the live secret. Mask it in whatever
+    // this call relays next.
+    for (name, entry) in entries {
+        if let Some(value) = entry.get("value").and_then(Value::as_str)
+            && spec.secrets.declares(name)
+        {
+            secrets.also_mask(value);
+        }
     }
     SECRET_UPDATES.with(|cell| *cell.borrow_mut() = outcomes.clone());
     outcomes

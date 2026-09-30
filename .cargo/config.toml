@@ -3,3 +3,9 @@
 # Do not point workers at a shared CARGO_TARGET_DIR.
 [build]
 rustc-wrapper = "./scripts/rustc-compiler-cache.sh"
+
+# Test fixtures run `orbit init` under an isolated HOME, never --root. They
+# must not install packages, load AppArmor profiles, or ask for sudo on the
+# machine running the tests; `orbit init` honors this opt-out.
+[env]
+ORBIT_SKIP_HOST_PREREQUISITES = "1"

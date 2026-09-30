@@ -530,6 +530,17 @@ impl RuntimeHost for RecoveryExecutionHost<'_> {
         self.runtime.resolve_activity_tools(ids, baseline)
     }
 
+    fn resolve_activity_tool_denials(
+        &self,
+        ids: &[String],
+        activity: &str,
+        disallow_list: &[String],
+    ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
+        assert_eq!(ids, &[self.task_id.to_string()]);
+        self.runtime
+            .resolve_activity_tool_denials(ids, activity, disallow_list)
+    }
+
     fn task_context_for_agent_input(&self, input: &Value) -> Result<Option<Value>, DispatchError> {
         assert_eq!(input["failed_step_id"], self.failed_step_id);
         assert_eq!(
