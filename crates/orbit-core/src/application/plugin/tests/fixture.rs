@@ -134,6 +134,20 @@ pub(super) struct PluginFixture {
 
 impl PluginFixture {
     pub(super) fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// The same fixture with every Orbit root, the repository, and the plugin
+    /// sources spelled through a symlink to their parent, as a workspace under
+    /// macOS `/tmp` or a symlinked `~/workspace` is. A default temp directory
+    /// is symlinked only on macOS, so a regression test that must hold on
+    /// every platform asks for this explicitly.
+    #[cfg(unix)]
+    pub(super) fn new_behind_symlink() -> Self {
+        Self::build(true)
+    }
+
+    fn build(behind_symlink: bool) -> Self {
         assert!(
             std::env::var_os(ISOLATED_CHILD_ENV).is_some(),
             "mutable plugin fixtures must run through enter_isolated_child"
@@ -146,10 +160,20 @@ impl PluginFixture {
             ("HOME", Some(home_str)),
             ("USERPROFILE", Some(home_str)),
         ]);
-        let global_root = root.path().join("global");
-        let repo_root = root.path().join("repo");
+        let base = if behind_symlink {
+            let real = root.path().join("real");
+            std::fs::create_dir_all(&real).expect("create real fixture root");
+            let linked = root.path().join("linked");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&real, &linked).expect("link the fixture root");
+            linked
+        } else {
+            root.path().to_path_buf()
+        };
+        let global_root = base.join("global");
+        let repo_root = base.join("repo");
         let workspace_root = repo_root.join(".orbit");
-        let sources = root.path().join("sources");
+        let sources = base.join("sources");
         for dir in [&global_root, &workspace_root, &sources] {
             std::fs::create_dir_all(dir).expect("create fixture dir");
         }
