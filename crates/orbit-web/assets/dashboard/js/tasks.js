@@ -2607,6 +2607,17 @@ function summaryExecutionLocation(machine) {
 // The one decision a row is waiting on, one click from the list: Approve a
 // proposed task, Ship a backlog one, open the run of one in progress. They hit
 // the same endpoints as the detail's actions; the detail keeps the full set.
+// True when buildQuickAction renders something for the task. The list drops the
+// action column only when no visible row would fill it, so this must agree with
+// buildQuickAction; a test compares the two.
+function hasQuickAction(task) {
+  if (task.status === "in-progress" && task.job_run_id) {
+    if (task.job_run_navigable !== false) return true;
+    if (summaryExecutionLocation(task.job_run_machine).known) return true;
+  }
+  return task.status === "proposed" || SHIP_STATUSES.has(task.status);
+}
+
 function buildQuickAction(task, context) {
   const cell = el("span", { class: "task-quick-cell" });
   stopRowInteraction(cell);
@@ -2751,6 +2762,10 @@ export function renderTasks(tasks, context) {
   }
 
   const filtered = filterTasks(tasks, context);
+  // Rows keep a fixed-width action column so titles and selects line up between
+  // groups; when no visible row has an action (a Done-only view) the whole
+  // column is dead space, so the list gives it back as one.
+  body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
   // ORB-10972: the rail shows the same filtered count the panel header does,
