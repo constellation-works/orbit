@@ -5,7 +5,9 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
 use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
-use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit};
+use orbit_types::workflow::{
+    DrainAdmissionPass, DrainAdmissionsStop, DrainWaitingTask, DrainWorkerLimit,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -218,6 +220,26 @@ pub(super) fn classify_workspace_auto_tasks(
         poll_sleep_seconds
     };
 
+    record_last_pass(
+        runtime,
+        input,
+        DrainAdmissionPass {
+            recorded_at: Utc::now(),
+            queued: (pending.len() - admitted.len()) as u64,
+            deferred: selection
+                .deferred
+                .iter()
+                .map(|deferred| DrainWaitingTask {
+                    task_id: deferred.task_id.clone(),
+                    reason: None,
+                    blocked_by: deferred.blocking_task_ids(),
+                })
+                .collect(),
+            excluded: waiting_excluded(&snapshot.excluded),
+            excluded_total: snapshot.excluded.len() as u64,
+        },
+    );
+
     Ok(json!({
         "loose_task_ids": admitted,
         "loose_task_dispatches": loose_task_dispatches,
@@ -230,11 +252,6 @@ pub(super) fn classify_workspace_auto_tasks(
         // that looks under-filled can be read as contention rather than as an
         // empty backlog.
         "deferred_conflicts": selection.deferred_json(),
-        // Backlog tasks the drain cannot take at all this pass (lock holder,
-        // crew window, unassessed complexity, ...). `run show` reads the last
-        // pass to say what the drain left waiting.
-        "excluded_backlog": excluded_backlog_json(&snapshot.excluded),
-        "excluded_backlog_total": snapshot.excluded.len(),
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
         "active_leaf_runs": occupancy.occupied,
@@ -251,27 +268,58 @@ pub(super) fn classify_workspace_auto_tasks(
     }))
 }
 
-/// How many excluded tasks one classification pass records; the total is
-/// recorded beside it so a truncated list still reads as truncated.
+/// How many excluded tasks one pass records; the total is recorded beside the
+/// list so a truncated one still reads as truncated.
 const EXCLUDED_BACKLOG_RECORDED: usize = 20;
 
-fn excluded_backlog_json(excluded: &[BacklogTaskExclusion]) -> Vec<Value> {
+fn waiting_excluded(excluded: &[BacklogTaskExclusion]) -> Vec<DrainWaitingTask> {
     excluded
         .iter()
         .take(EXCLUDED_BACKLOG_RECORDED)
-        .map(|entry| {
-            let blocked_by = entry
+        .map(|entry| DrainWaitingTask {
+            task_id: entry.id.clone(),
+            reason: serde_json::to_value(entry.reason)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string)),
+            blocked_by: entry
                 .conflicts
                 .iter()
-                .map(|conflict| conflict.locking_task_id.as_str())
-                .collect::<BTreeSet<_>>();
-            json!({
-                "task_id": entry.id,
-                "reason": entry.reason,
-                "blocked_by": blocked_by,
-            })
+                .map(|conflict| conflict.locking_task_id.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
         })
         .collect()
+}
+
+/// Persist what this pass left waiting on the drain's own run state, so
+/// `orbit run show` can report it after the drain ends. Best effort: a run
+/// that cannot record it must still admit work.
+fn record_last_pass(runtime: &OrbitRuntime, input: &Value, pass: DrainAdmissionPass) {
+    let Some(run_id) = input
+        .get("run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let mut pass = Some(pass);
+    if let Err(error) = runtime
+        .stores()
+        .jobs()
+        .update_run_state(run_id, &mut |_, state| {
+            state.drain_last_pass = pass.take();
+            Ok(())
+        })
+    {
+        tracing::warn!(
+            target: "orbit.core.job_run",
+            run_id,
+            %error,
+            "drain could not record its admission pass; run show will not list what it left waiting"
+        );
+    }
 }
 
 /// Explain the same snapshot that auto-drain uses without performing its

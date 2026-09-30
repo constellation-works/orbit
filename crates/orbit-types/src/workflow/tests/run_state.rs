@@ -306,8 +306,36 @@ fn state_written_before_the_control_existed_still_loads() {
     let decoded: PipelineState = serde_json::from_value(legacy).expect("deserialize legacy state");
     assert!(decoded.drain_worker_limit.is_none());
     assert!(decoded.drain_admissions_stop.is_none());
+    assert!(decoded.drain_last_pass.is_none());
     assert!(!decoded.admissions_stopped());
     assert_eq!(decoded.effective_max_active_leaf_runs(5), 5);
+}
+
+#[test]
+fn the_last_admission_pass_round_trips_and_is_omitted_when_absent() {
+    let encoded = serde_json::to_value(state()).expect("encode");
+    assert!(
+        !encoded
+            .as_object()
+            .expect("object")
+            .contains_key("drain_last_pass")
+    );
+
+    let mut state = state();
+    state.drain_last_pass = Some(crate::workflow::DrainAdmissionPass {
+        recorded_at: Utc::now(),
+        queued: 2,
+        deferred: Vec::new(),
+        excluded: vec![crate::workflow::DrainWaitingTask {
+            task_id: "ORB-1".to_string(),
+            reason: Some("context_lock_conflict".to_string()),
+            blocked_by: vec!["ORB-2".to_string()],
+        }],
+        excluded_total: 1,
+    });
+    let encoded = serde_json::to_string(&state).expect("serialize state");
+    let decoded: PipelineState = serde_json::from_str(&encoded).expect("deserialize state");
+    assert_eq!(decoded.drain_last_pass, state.drain_last_pass);
 }
 
 // [ORB-11283] Stop new admissions without cancelling the coordinator.

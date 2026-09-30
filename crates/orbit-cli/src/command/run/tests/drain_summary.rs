@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
-use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    ChildDispatch, DrainAdmissionPass, DrainWaitingTask, JobRun, JobRunState, PipelineState,
+};
 use serde_json::{Value, json};
 
 use super::super::drain_summary::{DRAIN_JOB, summarize_drain_leaves};
@@ -30,7 +32,7 @@ fn run(run_id: &str, job_id: &str, state: JobRunState, input: Option<Value>) -> 
     }
 }
 
-fn drain_state(children: &[&str], last_pass: Option<Value>) -> PipelineState {
+fn drain_state(children: &[&str], last_pass: Option<DrainAdmissionPass>) -> PipelineState {
     let mut state = PipelineState::new("jrun-drain".to_string(), DRAIN_JOB.to_string(), json!({}));
     for child in children {
         state.record_child_dispatch(ChildDispatch::submitted(
@@ -42,9 +44,7 @@ fn drain_state(children: &[&str], last_pass: Option<Value>) -> PipelineState {
             Utc::now(),
         ));
     }
-    if let Some(pass) = last_pass {
-        state.step_outputs.insert(3, pass);
-    }
+    state.drain_last_pass = last_pass;
     state
 }
 
@@ -61,17 +61,21 @@ fn a_successful_drain_still_reports_its_failed_leaf_and_the_task_left_waiting() 
     let drain = run("jrun-drain", DRAIN_JOB, JobRunState::Success, None);
     let state = drain_state(
         &["jrun-ok", "jrun-bad", "jrun-live"],
-        Some(json!({
-            "loose_task_ids": [],
-            "pending_backlog": 1,
-            "deferred_conflicts": [
-                { "task_id": "ORB-9", "blocking_task_ids": ["ORB-2"], "conflicts": [] }
-            ],
-            "excluded_backlog": [
-                { "task_id": "ORB-7", "reason": "context_lock_conflict", "blocked_by": ["ORB-2"] }
-            ],
-            "excluded_backlog_total": 3,
-        })),
+        Some(DrainAdmissionPass {
+            recorded_at: Utc::now(),
+            queued: 1,
+            deferred: vec![DrainWaitingTask {
+                task_id: "ORB-9".to_string(),
+                reason: None,
+                blocked_by: vec!["ORB-2".to_string()],
+            }],
+            excluded: vec![DrainWaitingTask {
+                task_id: "ORB-7".to_string(),
+                reason: Some("context_lock_conflict".to_string()),
+                blocked_by: vec!["ORB-2".to_string()],
+            }],
+            excluded_total: 3,
+        }),
     );
     let summary = summarize_drain_leaves(
         &drain,
@@ -124,13 +128,23 @@ fn a_successful_drain_still_reports_its_failed_leaf_and_the_task_left_waiting() 
     assert_eq!(json["has_failed_leaves"], true);
     assert_eq!(json["waiting"]["excluded"][0]["task_id"], "ORB-7");
 
+    let mut summary = summary;
+    // The caller reads the run tree and names the run that actually retries the
+    // failed work; a leaf whose failure came from a child resumes that child.
+    assert_eq!(summary.failed_leaves[0].resume_run_id, None);
+    summary.failed_leaves[0].resume_run_id = Some("jrun-bad-c3".to_string());
+    assert_eq!(
+        summary.to_json()["failed_leaves"][0]["resume_run_id"],
+        "jrun-bad-c3"
+    );
+
     let text = summary.lines(JobRunState::Success).join("\n");
     assert!(
         text.contains("WARNING:"),
         "failed leaves are flagged: {text}"
     );
     assert!(
-        text.contains("orbit job resume jrun-bad"),
+        text.contains("orbit job resume jrun-bad-c3"),
         "the failed leaf's retry command is named: {text}"
     );
     assert!(
@@ -144,13 +158,13 @@ fn a_clean_drain_reports_counts_without_warnings() {
     let drain = run("jrun-drain", DRAIN_JOB, JobRunState::Success, None);
     let state = drain_state(
         &["jrun-ok"],
-        Some(json!({
-            "loose_task_ids": ["ORB-4"],
-            "pending_backlog": 1,
-            "deferred_conflicts": [],
-            "excluded_backlog": [],
-            "excluded_backlog_total": 0,
-        })),
+        Some(DrainAdmissionPass {
+            recorded_at: Utc::now(),
+            queued: 0,
+            deferred: Vec::new(),
+            excluded: Vec::new(),
+            excluded_total: 0,
+        }),
     );
     let summary = summarize_drain_leaves(
         &drain,
@@ -164,7 +178,6 @@ fn a_clean_drain_reports_counts_without_warnings() {
     )
     .expect("summary");
 
-    // The one pending task was admitted in that same pass, so nothing waits.
     assert_eq!(summary.waiting.queued, Some(0));
     assert!(!summary.has_failed_leaves());
     assert!(!summary.has_starved_tasks());

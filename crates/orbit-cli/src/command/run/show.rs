@@ -87,9 +87,14 @@ pub(crate) fn run_show_payload(
     // Who holds the locks a waiting run is blocked on, read live: the run
     // only persists the selectors.
     let lock_holders = waiting_lock_holders(runtime, &run, state.as_ref());
-    let drain_summary = summarize_drain_leaves(&run, state.as_ref(), |child_run_id| {
+    let mut drain_summary = summarize_drain_leaves(&run, state.as_ref(), |child_run_id| {
         read.show(runtime, child_run_id).ok()
     });
+    if let Some(summary) = drain_summary.as_mut() {
+        for leaf in &mut summary.failed_leaves {
+            leaf.resume_run_id = leaf_resume_target(runtime, &leaf.run_id, read);
+        }
+    }
 
     let run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
@@ -219,6 +224,23 @@ fn resume_hint(
         leaf.run_id,
         leaf.run_id,
     ))
+}
+
+/// The run to resume for a failed leaf: the same choice [`resume_hint`] makes
+/// for a run of its own, so the drain's advice and the leaf's agree.
+fn leaf_resume_target(runtime: &OrbitRuntime, leaf_run_id: &str, read: RunRead) -> Option<String> {
+    let leaf = read.show(runtime, leaf_run_id).ok()?;
+    let state = runtime.read_run_state(&leaf.run_id).ok().flatten();
+    let causes = collect_failed_leaf_causes(runtime, &leaf, state.as_ref(), read).ok()?;
+    if let Some(cause) = causes.iter().find(|cause| {
+        cause.run_id != leaf.run_id
+            && read
+                .show(runtime, &cause.run_id)
+                .is_ok_and(|run| is_resumable_state(run.state))
+    }) {
+        return Some(cause.run_id.clone());
+    }
+    is_resumable_state(leaf.state).then(|| leaf.run_id.clone())
 }
 
 fn is_resumable_state(state: JobRunState) -> bool {

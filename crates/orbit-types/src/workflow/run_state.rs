@@ -50,6 +50,41 @@ pub struct DrainWorkerLimit {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A backlog task a drain's admission pass left unstarted, and why.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainWaitingTask {
+    pub task_id: String,
+    /// Why the drain could not admit it (`context_lock_conflict`,
+    /// `crew_not_allowed`, ...); absent for a plain lock deferral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The tasks holding what it needs, when known.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by: Vec<String>,
+}
+
+/// What a drain's most recent admission pass left waiting.
+///
+/// The classifier's own output lives only inside the running loop, so this is
+/// the one durable record of the backlog a finished drain never started. It is
+/// overwritten every pass: the last one is the drain's final view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DrainAdmissionPass {
+    pub recorded_at: DateTime<Utc>,
+    /// Admissible tasks the pass did not admit: no free slot, or a lock
+    /// conflict.
+    pub queued: u64,
+    /// The subset of `queued` a lock conflict kept out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred: Vec<DrainWaitingTask>,
+    /// Backlog tasks the drain could not admit at all (bounded list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<DrainWaitingTask>,
+    /// The full count behind `excluded`.
+    #[serde(default)]
+    pub excluded_total: u64,
+}
+
 /// Durable result of a job-level terminal failure activity.
 ///
 /// A failure activity is not a successful workflow step, so its output cannot
@@ -134,6 +169,11 @@ pub struct PipelineState {
     /// finished coordinator is distinguished from cancellation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_admissions_stop: Option<DrainAdmissionsStop>,
+    /// What this drain's last admission pass left waiting. Survives
+    /// terminalization: it is how `run show` reports the backlog a finished
+    /// drain never started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_last_pass: Option<DrainAdmissionPass>,
     /// Successful terminal failure activity output, when one ran.
     ///
     /// This remains distinct from the successful-step maps: the original step
@@ -179,6 +219,7 @@ impl PipelineState {
             child_dispatches: Vec::new(),
             drain_worker_limit: None,
             drain_admissions_stop: None,
+            drain_last_pass: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
             trigger: None,
