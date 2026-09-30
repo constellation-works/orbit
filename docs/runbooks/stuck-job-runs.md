@@ -160,6 +160,13 @@ leaf, its task, error, and the `orbit job resume <leaf-run-id>` that retries it,
 `Still waiting:` block naming the backlog tasks the drain's last pass never started and what
 blocked them. `--json` carries the same in `drain_summary` (null for a run that is not a drain).
 
+A run that failed, timed out, was cancelled or was interrupted leaves its task `blocked`, which
+automation skips. `orbit task show <task-id>` prints a `Next:` line for such a task: the exact
+`orbit job resume <run-id>` when that run is resumable (`failed`, `timeout`, `interrupted`), and
+the `orbit task update <task-id> --status backlog` that re-queues it for a fresh run (the only
+option for a cancelled run). `--json` carries the same in `next_step`; it is absent for a task
+that is not blocked by a run.
+
 ## Cancel a conclusively stuck run
 
 After verifying that the owner is gone or that the run should no longer continue:
