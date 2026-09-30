@@ -76,9 +76,34 @@ impl Execute for FrictionCommand {
                 Value::String(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES.to_string()),
             );
         }
+        if spec.verb == FrictionVerb::Update {
+            require_update_field(&input)?;
+        }
         let value = runtime.run_tool(spec.tool_name, input)?;
         render(&value, spec.cli_render)
     }
+}
+
+/// Input keys `friction update` accepts, in the order its flags are named.
+const UPDATE_FIELD_KEYS: [&str; 6] = ["status", "tags", "tag", "body", "title", "rehome_to"];
+
+/// Refuse a `friction update` that changes nothing, naming the CLI's flags.
+///
+/// The tool's own refusal names its input fields, which is right for MCP and
+/// wrong for a person at a prompt.
+pub(crate) fn require_update_field(input: &Value) -> Result<(), orbit_core::OrbitError> {
+    let any = input.as_object().is_some_and(|object| {
+        UPDATE_FIELD_KEYS
+            .iter()
+            .any(|key| object.contains_key(*key))
+    });
+    if any {
+        return Ok(());
+    }
+    Err(orbit_core::OrbitError::InvalidInput(
+        "nothing to update; pass at least one of `--status`, `--tag`, `--body`, `--title`, or `--rehome-to`"
+            .to_string(),
+    ))
 }
 
 /// Build a friction response's payload, per the spec's declared rendering.
