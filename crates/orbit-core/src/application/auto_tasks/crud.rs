@@ -350,12 +350,30 @@ impl OrbitRuntime {
             .into_iter()
             .find(|loaded| loaded.definition.name == name)
             .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
-        if loaded.path != definition_path(&self.paths().local_dir, name) {
+        if !self.is_canonical_definition_path(&loaded.path, name) {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task '{name}' must be stored at its canonical .yaml path before editing"
             )));
         }
         Ok(loaded.definition)
+    }
+
+    /// Whether `loaded` is exactly `<local_dir>/auto_tasks/<name>.yaml`.
+    ///
+    /// Discovery resolves symlinks in the Orbit directory before listing, so a
+    /// loaded path is symlink-free while `local_dir` may reach the same
+    /// directory through a symlinked ancestor (macOS `/tmp` and `/var`, or a
+    /// symlinked home). The definition's directory is resolved the same way and
+    /// its file name is appended unresolved, so a differently named file, or a
+    /// definition file that is itself a link, still does not match.
+    fn is_canonical_definition_path(&self, loaded: &Path, name: &str) -> bool {
+        let expected = definition_path(&self.paths().local_dir, name);
+        let (Some(parent), Some(file_name)) = (expected.parent(), expected.file_name()) else {
+            return false;
+        };
+        let resolved_parent =
+            std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+        loaded == resolved_parent.join(file_name)
     }
 
     pub(super) fn validated_auto_tasks(
