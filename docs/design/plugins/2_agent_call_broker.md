@@ -416,7 +416,7 @@ surface) and `state/plugin-callbacks/`.
   one file, `.orbit-brokered`. The Bubblewrap plan then adds `--ro-bind <sentinel> <tree>` for
   each tree. It does this after every policy mount, so no earlier grant can expose the real
   directory. The trees are masked for the agent and every descendant, including
-  `proc.spawn` children under Landlock. Mounts that Bubblewrap creates cannot be undone by a
+  `proc.spawn` children. Mounts that Bubblewrap creates cannot be undone by a
   process that has no capabilities, and a nested user namespace receives them locked.
 - **macOS (`sandbox-exec`).** The agent profile gets `(deny file-read* file-write*
   (subpath <tree>))` for both trees, compiled from their physical paths (the same

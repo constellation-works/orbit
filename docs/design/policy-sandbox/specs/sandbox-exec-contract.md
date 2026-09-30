@@ -9,6 +9,8 @@ last_validated: 2026-09-21
 
 `orbit-exec::run_process` is the common validated-spawn primitive. Platform sandbox wrappers can instead create a child and pass it to `supervise_child`, which shares the supervision implementation. This spec names the invariants and failure modes those paths must preserve.
 
+The ORB-11514 / ORB-11546 Linux read-boundary investigation below is historical. ORB-13689 removed the extra activity-scoped `proc.spawn` Landlock and argument-level read checks; that child now inherits its enclosing CLI worker sandbox. The investigation remains evidence about the retained Landlock primitive and possible future read boundaries, not the current `proc.spawn` contract.
+
 ## Why This Exists
 
 Process supervision is full of subtle deadlocks (full pipe buffers, orphan grandchildren, signal races). Without a prescriptive contract, callers may build tools that bypass the supervision layer or assume invariants that the layer does not actually provide.
@@ -42,8 +44,7 @@ Every strategy reaches the child through the same `Sandbox::spawn` seam, so supe
 
 | Strategy | Used by | What it confines |
 |---|---|---|
-| `NoSandbox` | direct `run_process` callers, registered v1 external tools | Nothing beyond what already confines the parent. |
-| `ActivityFsSandbox` (`orbit-tools`) | activity-scoped `proc.spawn` | Request-time path arguments against the activity's `fsProfile`, plus a Landlock read ruleset applied to the child. |
+| `NoSandbox` | direct `run_process` callers, activity-scoped `proc.spawn`, registered v1 external tools | Nothing beyond what already confines the parent. A managed CLI child inherits Bubblewrap on Linux or `sandbox-exec` on macOS. |
 | `PluginSandboxProfile` (`orbit-tools`) | plugin `exec` and `mcp` backends | The granted plugin profile: read roots, write roots, and `network: none`, via Landlock on Linux and `sandbox-exec` on macOS. A host that can enforce neither refuses the spawn; `backend.sandbox: none` with the `unsandboxed` grant is the only opt-out. See [plugins §4.3](../../plugins/1_scope.md#43-sandboxing). [ORB-12736] |
 
 A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` from `validate` alone never establishes a boundary (see Migration Rules).
@@ -88,9 +89,9 @@ Sandbox-strategy table added with the plugin backend boundary on 2026-09-21 [ORB
 ## Live read enforcement investigation (2026-09-07)
 
 **Design and isolated prototype only. No production read boundary was added.**
-The activity-scoped `proc.spawn` implementation still checks apparent path
-arguments before ordinary spawn. An admitted git shell alias can read outside
-that argument check. The preserved candidate `2c40c430` is not a complete repair
+At the time of this investigation, activity-scoped `proc.spawn` checked apparent path
+arguments before ordinary spawn. An admitted git shell alias could read outside
+that argument check. ORB-13689 later removed the argument check. The preserved candidate `2c40c430` is not a complete repair
 and must not be landed as one. The authoritative original task evidence remains
 in ORB-11514's `read-boundary-probe.py`, `read-boundary-probe.json`, and its
 `enforcement_design_blocked` execution summary. This investigation's command
@@ -279,7 +280,8 @@ Concrete follow-on targets, **not modified here**:
 
 ### Acceptance mapping and operator handoff
 
-Each original ORB-11514 criterion remains required for the production repair.
+These were the original ORB-11514 criteria for a production repair. ORB-13689
+superseded that mandate for `proc.spawn`; the table remains historical evidence.
 
 | Original criterion | Enforcement point and present evidence / unresolved gate |
 | --- | --- |

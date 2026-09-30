@@ -49,14 +49,9 @@ impl Tool for ExternalTool {
         let environment_mode =
             EnvironmentMode::ClearAndSet(runtime_environment(ctx, &self.name, &cwd));
 
-        // External tools stay unconfined at the process boundary. Landlock is a
-        // `proc.spawn` rule (`ActivityFsSandbox::spawn`): it fails closed off
-        // Linux and compiles grants from the workspace read profile plus a host
-        // table curated for `proc.spawn`. An external tool is already gated by
-        // the program allowlist above; it runs with `current_dir = ctx.cwd`,
-        // which need not equal `workspace_root`. Inheriting that override would
-        // either refuse the child outright (macOS / Linux below Landlock ABI 2)
-        // or confine it to a ruleset it was not designed for.
+        // External tools and proc.spawn both inherit an enclosing worker's OS
+        // sandbox. This call adds no second filesystem boundary; its program
+        // policy and cleared child environment are handled above.
         let output = run_process(
             &ExecRequest {
                 program: self.path.clone(),
