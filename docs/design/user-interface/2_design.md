@@ -23,7 +23,7 @@ The selected window also includes a compact Notable completions list built only 
 
 ## 2. Layered Palette
 
-The UI uses layered dark surfaces instead of flat black: base canvas, elevated panels, sunken wells, and accent washes. Status color should stay muted and distinct; exact token values live in `./specs/theme.md` and the dashboard CSS.
+The UI uses layered dark surfaces instead of flat black: base canvas, elevated panels, sunken wells, and accent washes. Status color should stay muted and distinct; exact token values live in `./specs/theme.md` and the dashboard CSS. The page declares `color-scheme: dark` (stylesheet and meta tag) so native scrollbars, select popups, and form controls match the palette, and each view sets the document title (`<view> · orbit`) so browser tabs and history entries are distinguishable.
 
 ## 3. Typography
 

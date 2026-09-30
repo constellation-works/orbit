@@ -291,7 +291,11 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     : null;
   const railKey = top === "run-detail" || diagSub === "runs" ? "runs" : top;
   const crumb = $("topbar-crumb");
-  if (crumb) crumb.textContent = destinationLabel(top, diagSub);
+  const destination = destinationLabel(top, diagSub);
+  if (crumb) crumb.textContent = destination;
+  // Browser tabs and history entries read as this page's title, so name the
+  // destination there too instead of every entry saying "orbit".
+  document.title = `${destination} · orbit`;
   document.body.classList.toggle("operations-active", top === "operations" || top === "config");
   // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
   // so the remembered-subtab highlight must be muted while another destination

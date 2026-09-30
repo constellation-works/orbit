@@ -18,6 +18,9 @@
 }
 
 :root {
+  /* Dark-only UI: native scrollbars, select popups and form controls follow. */
+  color-scheme: dark;
+
   --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   --font-display: var(--font-sans);
