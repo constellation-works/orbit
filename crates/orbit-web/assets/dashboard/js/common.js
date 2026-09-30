@@ -4,7 +4,20 @@ const params = new URLSearchParams(window.location.search);
 // (a workspace id, or null for the aggregate "all" view) is transparently
 // appended as `?workspace=<id>` to every API request below, so individual view
 // modules stay workspace-agnostic. Initialized from the URL for shareable links.
-let currentWorkspace = params.get("workspace") || null;
+//
+// The aggregate choice has no workspace id, so it is written as the reserved
+// `workspace=all` token; without one a reload or shared link would read the
+// missing parameter as "pick the default workspace" and silently change scope.
+export const ALL_WORKSPACES_TOKEN = "all";
+const linkedWorkspace = params.get("workspace") || null;
+let aggregateLinked = linkedWorkspace === ALL_WORKSPACES_TOKEN;
+let currentWorkspace = aggregateLinked ? null : linkedWorkspace;
+
+/// True when the address asked for the aggregate view and no concrete
+/// workspace has been chosen since.
+export function isAggregateLinked() {
+  return aggregateLinked && !currentWorkspace;
+}
 
 export function getWorkspace() {
   return currentWorkspace;
@@ -24,6 +37,7 @@ export function onWorkspaceChange(listener) {
 
 export function setWorkspace(id) {
   const next = id || null;
+  if (next) aggregateLinked = false;
   if (next === currentWorkspace) return;
   currentWorkspace = next;
   workspaceRevision += 1;
@@ -102,6 +116,7 @@ export function notifyScopeChange() {
 export function persistScopeToUrl() {
   const url = new URL(window.location.href);
   if (currentWorkspace) url.searchParams.set("workspace", currentWorkspace);
+  else if (isAggregateView() || isAggregateLinked()) url.searchParams.set("workspace", ALL_WORKSPACES_TOKEN);
   else url.searchParams.delete("workspace");
   if (currentWindow) url.searchParams.set("window", currentWindow);
   else url.searchParams.delete("window");

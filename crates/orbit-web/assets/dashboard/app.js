@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
+import { requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { renderScoreboard } from './js/scoreboard.js';
@@ -1192,7 +1192,12 @@ async function initWorkspaceSelector() {
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
     const only = dashboardWorkspaces.find((workspace) => workspace.status === "active");
-    if (only) setWorkspace(only.id);
+    if (only) {
+      const linkedAll = isAggregateLinked();
+      setWorkspace(only.id);
+      // A link asking for "all" has nothing to aggregate here; repair the address.
+      if (linkedAll) persistScopeToUrl();
+    }
     return; // single mode: selected implicitly, no selector needed
   }
 
@@ -1202,8 +1207,9 @@ async function initWorkspaceSelector() {
   // A link can also name a workspace that is gone or unavailable; the selector
   // has no option for it, so keeping it would fail every panel with no way to
   // recover from the selector. Treat it like no workspace and repair the URL.
+  // An explicit aggregate link (`workspace=all`) is a choice, not a missing one.
   const linked = getWorkspace();
-  const linkedIsServable = dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  const linkedIsServable = isAggregateLinked() || dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
   if (!linkedIsServable) {
     const def = dashboardWorkspaces.find((w) => w.is_default);
     const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
