@@ -154,6 +154,12 @@ pub struct TaskPage {
     pub status_by_id: std::collections::BTreeMap<String, TaskStatus>,
 }
 
-/// Residual application predicate; requires full hydration before limiting.
+/// Residual application predicate, applied before limiting.
+///
+/// It must be decidable from envelope metadata: id, title, status, tags,
+/// relations, context files and the other envelope fields. The store first
+/// evaluates it on a task whose body documents (`description`, `plan`,
+/// `execution_summary`, `acceptance_criteria`) are empty, to avoid reading
+/// the bundles of candidates it rejects, then again on each hydrated task.
 pub type TaskResidualFilter<'a> =
     Option<&'a dyn Fn(&Task, &std::collections::BTreeMap<String, TaskStatus>) -> bool>;

@@ -216,7 +216,38 @@ fn residual_filter_runs_before_limit_and_does_not_lose_older_matches() {
         .unwrap();
     assert_eq!(page.total, 1);
     assert_eq!(page.items[0].task.title, "Task 0");
-    assert_eq!(reads(&store), (60, 60));
+    // Every envelope is parsed once for selection, but only the one the
+    // residual accepts is hydrated.
+    assert_eq!(reads(&store), (1, 60));
+    assert!(!page.items[0].task.description.is_empty());
+}
+
+#[test]
+fn residual_hydrates_only_the_page_but_counts_every_match() {
+    let temp = TempDir::new().unwrap();
+    let store = corpus(&temp, 60);
+    let page = store
+        .query_task_rows(
+            &TaskListFilter::default(),
+            5,
+            Some(&|task, _| task.tags.contains(&"selective".to_string())),
+        )
+        .unwrap();
+    // Six of sixty fixtures carry the tag; all six are counted, and only the
+    // ones the page keeps are read.
+    assert_eq!((page.total, page.items.len()), (6, 5));
+    assert_eq!(reads(&store), (5, 60));
+}
+
+#[test]
+fn residual_that_rejects_everything_reads_no_bundles() {
+    let temp = TempDir::new().unwrap();
+    let store = corpus(&temp, 30);
+    let page = store
+        .query_task_rows(&TaskListFilter::default(), 10, Some(&|_, _| false))
+        .unwrap();
+    assert_eq!((page.total, page.items.len()), (0, 0));
+    assert_eq!(reads(&store), (0, 30));
 }
 
 #[test]
@@ -265,6 +296,11 @@ fn an_update_between_selection_and_hydration_rechecks_filters_once() {
         .unwrap();
     let updated = std::sync::atomic::AtomicBool::new(false);
     let residual = |task: &Task, _: &BTreeMap<String, TaskStatus>| {
+        // The selection pass sees body-less metadata; the race under test is
+        // an update landing while candidates are being hydrated.
+        if task.description.is_empty() {
+            return true;
+        }
         if !updated.swap(true, Ordering::Relaxed) {
             store
                 .update_task_document(

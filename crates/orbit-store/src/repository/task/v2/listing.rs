@@ -111,8 +111,21 @@ impl TaskV2Store {
             },
         )?;
         let status_by_id = self.listing_status_index(&candidates.items)?;
-        let mut items = Vec::with_capacity(candidates.items.len());
-        for candidate in candidates.items {
+        let mut selected = candidates.items;
+        if let Some(matches) = residual {
+            // The residual is decidable from envelope metadata (see
+            // [`TaskResidualFilter`]), so selection applies it to every
+            // candidate here and only the survivors that fit the page pay for
+            // a bundle: a lock, seven file reads and their parses. Each
+            // hydrated task is checked again below, which is the authority.
+            selected.retain(|candidate| matches(&Self::metadata_task(candidate), &status_by_id));
+        }
+        let selected_total = selected.len();
+        let mut items = Vec::with_capacity(selected_total.min(limit));
+        for candidate in selected {
+            if items.len() >= limit {
+                break;
+            }
             let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
                 continue;
             };
@@ -127,7 +140,7 @@ impl TaskV2Store {
             }
         }
         let total = if residual.is_some() {
-            items.len()
+            selected_total
         } else {
             candidates.total
         };
