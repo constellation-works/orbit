@@ -356,7 +356,10 @@ impl ExternalRef {
     }
 
     pub fn is_valid_system(system: &str) -> bool {
-        external_ref_system_regex().is_match(system.trim())
+        // ^[a-z][a-z0-9-]*$
+        let mut chars = system.trim().chars();
+        chars.next().is_some_and(|first| first.is_ascii_lowercase())
+            && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
     }
 
     pub fn validate_system(system: &str) -> Result<String, TaskError> {
@@ -413,11 +416,4 @@ impl<'de> Deserialize<'de> for ExternalRef {
         let raw = RawExternalRef::deserialize(deserializer)?;
         ExternalRef::try_new(raw.system, raw.id, raw.url).map_err(serde::de::Error::custom)
     }
-}
-
-fn external_ref_system_regex() -> &'static Regex {
-    static SYSTEM_REGEX: OnceLock<Regex> = OnceLock::new();
-    SYSTEM_REGEX.get_or_init(|| {
-        Regex::new(r"^[a-z][a-z0-9-]*$").expect("external ref system regex is valid")
-    })
 }

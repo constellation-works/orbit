@@ -1,6 +1,3 @@
-// Existing expect calls in this module document local invariants; keep the allow scoped while the workspace lint is ratcheted.
-#![allow(clippy::expect_used)]
-
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -183,18 +180,18 @@ impl<'de> Deserialize<'de> for JobV2Step {
 
         let body = match (has_parallel, has_fan_out, has_loop, has_target, has_spec) {
             (true, false, false, false, false) => {
-                let block = obj
-                    .remove("parallel")
-                    .expect("parallel key was checked before step body dispatch");
+                let block = obj.remove("parallel").ok_or_else(|| {
+                    D::Error::custom("step body key `parallel` disappeared during dispatch")
+                })?;
                 JobV2StepBody::Parallel {
                     parallel: serde_json::from_value(block)
                         .map_err(|e| D::Error::custom(format!("parallel: {e}")))?,
                 }
             }
             (false, true, false, false, false) => {
-                let fan_out_block = obj
-                    .remove("fan_out")
-                    .expect("fan_out key was checked before step body dispatch");
+                let fan_out_block = obj.remove("fan_out").ok_or_else(|| {
+                    D::Error::custom("step body key `fan_out` disappeared during dispatch")
+                })?;
                 let fan_in_block = obj
                     .remove("fan_in")
                     .ok_or_else(|| D::Error::custom("fan_out step missing matching `fan_in`"))?;
@@ -206,9 +203,9 @@ impl<'de> Deserialize<'de> for JobV2Step {
                 }
             }
             (false, false, true, false, false) => {
-                let block = obj
-                    .remove("loop")
-                    .expect("loop key was checked before step body dispatch");
+                let block = obj.remove("loop").ok_or_else(|| {
+                    D::Error::custom("step body key `loop` disappeared during dispatch")
+                })?;
                 JobV2StepBody::Loop {
                     loop_: serde_json::from_value(block)
                         .map_err(|e| D::Error::custom(format!("loop: {e}")))?,
@@ -222,7 +219,11 @@ impl<'de> Deserialize<'de> for JobV2Step {
                 serde_json::from_value(Value::Object(std::mem::take(obj)))
                     .map_err(|e| D::Error::custom(format!("target step: {e}")))?,
             ),
-            _ => unreachable!("body shape count already validated"),
+            _ => {
+                return Err(D::Error::custom(
+                    "step must set exactly one body shape: `target`, `spec`, `parallel`, `fan_out`, or `loop`",
+                ));
+            }
         };
 
         Ok(JobV2Step {
