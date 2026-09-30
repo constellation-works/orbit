@@ -16,9 +16,10 @@
 //! reads the scope's `memory.events` / `pids.events` counters to tell a
 //! resource-limit failure apart from any other one.
 //!
-//! By default, disabled or unavailable containment (macOS, containers,
-//! sandboxes without a user bus) launches workers uncontained with one warning
-//! per process. `machine.worker_containment_strict=true` or the CLI's
+//! By default, disabled or unavailable containment (containers, sandboxes
+//! without a user bus) launches workers uncontained with one warning per
+//! process. Platforms without systemd (macOS) launch uncontained silently:
+//! there is nothing to warn about. `machine.worker_containment_strict=true` or the CLI's
 //! `--strict-worker-containment` refuses an unavailable scope before spawning
 //! the worker. Strict mode requires `machine.worker_containment=true`.
 
@@ -118,7 +119,17 @@ pub(crate) fn contain_worker_command(
 ) -> Result<Command, orbit_common::OrbitError> {
     static WARNED: Once = Once::new();
     let availability = limits.map(|_| user_scope_availability());
-    contain_worker_command_with_availability(base, run_id, limits, strict, availability, &WARNED)
+    contain_worker_command_with_availability(
+        base,
+        run_id,
+        limits,
+        strict,
+        availability,
+        // Only Linux can ever have a systemd user manager. Elsewhere an
+        // uncontained worker is the only possible outcome, not a degradation.
+        cfg!(target_os = "linux"),
+        &WARNED,
+    )
 }
 
 pub(crate) fn contain_worker_command_with_availability(
@@ -127,6 +138,7 @@ pub(crate) fn contain_worker_command_with_availability(
     limits: Option<&WorkerLimits>,
     strict: bool,
     availability: Option<Result<(), String>>,
+    systemd_expected: bool,
     warned: &Once,
 ) -> Result<Command, orbit_common::OrbitError> {
     let Some(limits) = limits else {
@@ -135,7 +147,9 @@ pub(crate) fn contain_worker_command_with_availability(
                 reason: "machine.worker_containment=false".into(),
             });
         }
-        warn_uncontained("machine.worker_containment is false", warned);
+        if systemd_expected {
+            warn_uncontained("machine.worker_containment is false", warned);
+        }
         return Ok(base);
     };
     match availability.unwrap_or_else(user_scope_availability) {
@@ -148,7 +162,9 @@ pub(crate) fn contain_worker_command_with_availability(
             if strict {
                 return Err(orbit_common::OrbitError::WorkerContainmentUnavailable { reason });
             }
-            warn_uncontained(&reason, warned);
+            if systemd_expected {
+                warn_uncontained(&reason, warned);
+            }
             Ok(base)
         }
     }

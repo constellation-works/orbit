@@ -37,8 +37,9 @@ impl<S: tracing::Subscriber> Layer<S> for WarningCounter {
     }
 }
 
-#[test]
-fn unavailable_manager_defaults_to_uncontained_worker_and_warns_once() {
+/// Launch two runs through the default (non-strict) policy and return how many
+/// warnings were emitted.
+fn uncontained_launch_warnings(systemd_expected: bool) -> usize {
     let warnings = Arc::new(AtomicUsize::new(0));
     let warned = Once::new();
     let subscriber = tracing_subscriber::registry().with(WarningCounter(Arc::clone(&warnings)));
@@ -51,6 +52,7 @@ fn unavailable_manager_defaults_to_uncontained_worker_and_warns_once() {
                 Some(&limits()),
                 false,
                 Some(Err("no user manager".into())),
+                systemd_expected,
                 &warned,
             )
             .expect("default policy launches uncontained");
@@ -63,7 +65,17 @@ fn unavailable_manager_defaults_to_uncontained_worker_and_warns_once() {
             );
         }
     });
-    assert_eq!(warnings.load(Ordering::SeqCst), 1);
+    warnings.load(Ordering::SeqCst)
+}
+
+#[test]
+fn unavailable_manager_defaults_to_uncontained_worker_and_warns_once() {
+    assert_eq!(uncontained_launch_warnings(true), 1);
+}
+
+#[test]
+fn platform_without_systemd_launches_uncontained_without_warning() {
+    assert_eq!(uncontained_launch_warnings(false), 0);
 }
 
 #[test]
@@ -74,6 +86,7 @@ fn unavailable_manager_in_strict_mode_returns_typed_actionable_error() {
         Some(&limits()),
         true,
         Some(Err("systemd-run missing".into())),
+        true,
         &Once::new(),
     )
     .expect_err("strict policy refuses the worker before spawn");
