@@ -290,6 +290,20 @@ install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 log "Installed Orbit to ${INSTALL_DIR}/${BINARY_NAME}"
 "${INSTALL_DIR}/${BINARY_NAME}" --version
 
+# The signed binary owns distro detection and the exact Bubblewrap probe, so
+# shell installation and later `orbit init` follow one preparation path. A
+# piped/nonterminal install must never wait for a sudo password.
+case "$TARGET" in
+  *-unknown-linux-gnu)
+    log "Preparing Linux sandbox prerequisites..."
+    if [ -t 2 ]; then
+      "${INSTALL_DIR}/${BINARY_NAME}" init --host-prerequisites-only
+    else
+      "${INSTALL_DIR}/${BINARY_NAME}" init --host-prerequisites-only --non-interactive
+    fi
+    ;;
+esac
+
 # The installed sweep clock unit names an orbit binary by absolute path, so an
 # install at a different location than the one the unit was written for leaves
 # launchd/systemd invoking a binary that may no longer exist — and it fails

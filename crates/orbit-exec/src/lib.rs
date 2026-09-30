@@ -62,13 +62,15 @@ pub use linux_landlock::{
     linux_landlock_boundary_grants, linux_landlock_read_boundary, probe_landlock,
     spawn_under_linux_landlock, spawn_under_linux_landlock_boundary,
 };
+#[cfg(target_os = "linux")]
+pub use linux_sandbox::probe_bwrap_fresh_for_user;
 pub use linux_sandbox::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask,
     LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest,
     UnsatisfiedWriteGrant, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
     compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority, existing_glob_matches,
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
-    probe_bwrap, spawn_under_linux_bwrap,
+    probe_bwrap, probe_bwrap_fresh, spawn_under_linux_bwrap,
 };
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,

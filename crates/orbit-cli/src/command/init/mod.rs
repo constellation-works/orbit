@@ -10,6 +10,8 @@
 pub mod agent_detect;
 pub mod agent_prompt;
 mod command;
+#[cfg(target_os = "linux")]
+mod linux_host;
 mod prompt_stdin;
 mod seed;
 

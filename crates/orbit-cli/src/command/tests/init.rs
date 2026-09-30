@@ -53,6 +53,7 @@ fn non_interactive_init_against_non_global_root_leaves_home_skill_links_untouche
     let outcome = env.with_home(validation_home.path(), || {
         InitCommand {
             force: false,
+            host_prerequisites_only: false,
             non_interactive: true,
             machine_name: Some("validation-host".to_string()),
             task_prefix: Some("VA".to_string()),
@@ -184,6 +185,7 @@ fn forced_non_interactive_init_does_not_regenerate_legacy_qa_crew() {
 
     InitCommand {
         force: true,
+        host_prerequisites_only: false,
         non_interactive: true,
         machine_name: Some("force-host".to_string()),
         task_prefix: Some("FC".to_string()),
@@ -202,6 +204,7 @@ fn init_host(
 ) -> Result<(), orbit_core::OrbitError> {
     InitCommand {
         force: false,
+        host_prerequisites_only: false,
         non_interactive: true,
         machine_name: machine_name.map(str::to_string),
         task_prefix: task_prefix.map(str::to_string),
@@ -369,6 +372,7 @@ fn non_interactive_init_preserves_explicit_sandbox_off_without_force() {
 
     InitCommand {
         force: true,
+        host_prerequisites_only: false,
         non_interactive: true,
         machine_name: Some("sandbox-off".to_string()),
         task_prefix: Some("SO".to_string()),

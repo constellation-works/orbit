@@ -239,6 +239,14 @@ pub fn stdin_is_terminal() -> bool {
     std::io::stdin().is_terminal()
 }
 
+/// Whether stderr has a terminal for an explicit administrator authentication
+/// prompt. A shell installer may arrive via a stdin pipe while stderr still
+/// points at the user's terminal.
+#[cfg(target_os = "linux")]
+pub fn stderr_is_terminal() -> bool {
+    std::io::stderr().is_terminal()
+}
+
 /// `COLUMNS` first, then what the terminal reported, then 0.
 ///
 /// A non-TTY sink is 0 regardless of either, so `COLUMNS=200 orbit … > file`

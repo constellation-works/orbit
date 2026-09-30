@@ -30,7 +30,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Set Up and Recover a Single-Owner Distributed Drain](./runbooks/distributed-drain.md) | Set up, migrate, run, and recover a single-owner distributed drain — follower pull with owner-only landing, no follower merges. |
 | [Onboard an Executor](./runbooks/executor-onboarding.md) | Add and validate a CLI-agent or deterministic local-shell executor without changing existing users' routing or state. |
 | [Check Orbit Health](./runbooks/health-checks.md) | Check Orbit workspace, database, dashboard, log-sink, job-run, and routine-clock health. |
-| [Prepare a Linux Host for Sandboxed Dispatch](./runbooks/linux-sandbox.md) | Install and verify the Bubblewrap host prerequisite that Orbit's Linux sandbox fails closed without. |
+| [Linux sandbox onboarding and diagnostics](./runbooks/linux-sandbox.md) | Explain automatic Linux Bubblewrap onboarding, distro eligibility, readiness, and native validation status. |
 | [Inspect and Retain Logs](./runbooks/logging.md) | Locate, filter, rotate, and retain Orbit process and routine-sweep logs. |
 | [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
 | [Post-v0.24.0 release survey](./runbooks/release-survey-v0.24.0.md) | Post-v0.24.0 release survey and breaking-change handoff. |
