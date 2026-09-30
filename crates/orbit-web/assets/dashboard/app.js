@@ -1445,7 +1445,14 @@ function fetchAndRenderRunDetail() {
     renderRunSteps();
   }).catch((e) => {
     if (!runDetailFetchCurrent("detail", token)) return;
-    renderRunDetailEmpty(`Run not found: ${runId}`);
+    // Only a 404 means the run does not exist; a 500 or a dropped connection is
+    // a failed read, and telling the operator the run is missing sends them
+    // hunting for a run that is fine.
+    renderRunDetailEmpty(
+      e.status === 404
+        ? `Run not found: ${runId}`
+        : `Unable to load run ${runId}: ${e.message}. Use Refresh to retry.`,
+    );
     throw e;
   });
 }

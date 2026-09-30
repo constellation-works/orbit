@@ -309,4 +309,23 @@ assertView("run-b", "home-view", "one");
 assertAbsent("stale-same-id");
 await assertCancel("run-b", "one", "home-view");
 
+// A failed read is not a missing run: only a 404 says the run does not exist.
+async function failDetail(runId, status, message) {
+  take(runId, "detail", "one").gate.resolve({ __reject: true, status, message });
+  take(runId, "events", "one").gate.resolve(events("unused"));
+  take(runId, "logs", "one").gate.resolve(logs("unused"));
+  await flush();
+}
+location.hash = "#runs/run-broken";
+await failDetail("run-broken", 500, "database unavailable");
+const brokenView = get("run-detail-meta").textContent;
+if (brokenView.includes("Run not found") || !brokenView.includes("database unavailable")) {
+  throw new Error(`a failed read must state the failure, not a missing run: ${brokenView}`);
+}
+location.hash = "#runs/run-gone";
+await failDetail("run-gone", 404, "run not found: run-gone");
+if (!get("run-detail-meta").textContent.includes("Run not found: run-gone")) {
+  throw new Error(`a 404 still says the run is missing: ${get("run-detail-meta").textContent}`);
+}
+
 if (pending.length) throw new Error(`fetches still deferred: ${describePending()}`);
