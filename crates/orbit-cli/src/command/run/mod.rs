@@ -9,6 +9,7 @@ mod format;
 mod history;
 pub mod job;
 pub mod legacy_logs;
+mod lock_holders;
 mod logs;
 mod readiness;
 pub mod ship;

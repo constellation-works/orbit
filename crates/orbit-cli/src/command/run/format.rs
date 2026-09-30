@@ -78,9 +78,21 @@ pub(crate) fn format_duration(value: Option<u64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+/// The tasks holding each selector a run is waiting on, keyed by selector.
+pub(crate) type LockHolders = std::collections::BTreeMap<String, Vec<String>>;
+
 pub(crate) fn format_waiting_line(
     run_state: JobRunState,
     state: Option<&PipelineState>,
+) -> Option<String> {
+    format_waiting_line_with_holders(run_state, state, &LockHolders::new())
+}
+
+/// [`format_waiting_line`], naming the task that holds each lock when known.
+pub(crate) fn format_waiting_line_with_holders(
+    run_state: JobRunState,
+    state: Option<&PipelineState>,
+    holders: &LockHolders,
 ) -> Option<String> {
     if run_state.is_terminal() {
         return None;
@@ -101,6 +113,12 @@ pub(crate) fn format_waiting_line(
         .iter()
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
+        .map(|selector| match holders.get(selector) {
+            Some(tasks) if !tasks.is_empty() => {
+                format!("{selector} (held by {})", tasks.join(","))
+            }
+            _ => selector.to_string(),
+        })
         .collect::<Vec<_>>();
 
     let mut parts = Vec::new();

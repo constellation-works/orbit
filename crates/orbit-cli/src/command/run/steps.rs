@@ -8,9 +8,9 @@ use crate::command::{CommandOut, Payload};
 use crate::output::color::Domain;
 
 use super::format::{
-    format_admissions_stop_line, format_child_dispatch_lines, format_crew_selection_line,
-    format_duration, format_run_role, format_timestamp, format_waiting_line,
-    format_worker_limit_line, summarize_error_message,
+    LockHolders, format_admissions_stop_line, format_child_dispatch_lines,
+    format_crew_selection_line, format_duration, format_run_role, format_timestamp,
+    format_waiting_line_with_holders, format_worker_limit_line, summarize_error_message,
 };
 
 /// Whether a run read may reconcile stale runs before reporting them.
@@ -204,6 +204,14 @@ pub(crate) fn run_header_text(run: &JobRun) -> String {
 }
 
 pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineState>) -> String {
+    run_header_text_with_lock_holders(run, state, &LockHolders::new())
+}
+
+pub(crate) fn run_header_text_with_lock_holders(
+    run: &JobRun,
+    state: Option<&PipelineState>,
+    holders: &LockHolders,
+) -> String {
     use crate::output::color::{Domain, bold, dimmed, text};
     let mut lines = vec![
         format!(
@@ -249,7 +257,7 @@ pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineSt
             run.crew_model.as_deref().unwrap_or("model unavailable"),
         ));
     }
-    if let Some(line) = format_waiting_line(run.state, state) {
+    if let Some(line) = format_waiting_line_with_holders(run.state, state, holders) {
         lines.push(line);
     }
     if let Some(line) = format_worker_limit_line(state) {

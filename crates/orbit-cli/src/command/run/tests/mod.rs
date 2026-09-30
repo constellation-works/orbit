@@ -3,6 +3,7 @@
 mod drain_summary;
 mod format;
 mod job;
+mod lock_holders;
 mod readiness;
 mod ship;
 mod support;

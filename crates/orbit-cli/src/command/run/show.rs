@@ -11,10 +11,12 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 use super::drain_summary::summarize_drain_leaves;
 use super::format::{RunRootCause, format_backlog_exclusion_lines, format_root_cause_lines};
 use super::job::cli_job_run_to_json_with_activity_provenance;
+use super::lock_holders::waiting_lock_holders;
 use super::steps::{
     RunDisplaySteps, RunRead, RunStepRecord, StepSource, activity_provenance_lines, filtered_steps,
     legacy_step_to_json, resolve_run, resolve_run_step, run_display_steps, run_header_text,
-    run_header_text_with_state, run_step_record_to_json, step_record_payload, step_summary_table,
+    run_header_text_with_lock_holders, run_step_record_to_json, step_record_payload,
+    step_summary_table,
 };
 
 #[derive(Args)]
@@ -82,6 +84,9 @@ pub(crate) fn run_show_payload(
         source: steps_source,
     } = run_display_steps(&run, audit.steps);
     let root_causes = collect_failed_leaf_causes(runtime, &run, state.as_ref(), read)?;
+    // Who holds the locks a waiting run is blocked on, read live: the run
+    // only persists the selectors.
+    let lock_holders = waiting_lock_holders(runtime, &run, state.as_ref());
     let drain_summary = summarize_drain_leaves(&run, state.as_ref(), |child_run_id| {
         read.show(runtime, child_run_id).ok()
     });
@@ -116,6 +121,7 @@ pub(crate) fn run_show_payload(
         // What a drain's leaves did; null for any run that is not a drain.
         // The drain's own `state` only says the coordinator ran.
         "drain_summary": drain_summary.as_ref().map(|summary| summary.to_json()),
+        "waiting_on_lock_holders": lock_holders,
         "root_cause": root_causes.first(),
         "additional_root_causes": root_causes.get(1..).unwrap_or_default(),
         // The same projection the registered/MCP run-show surface emits, so
@@ -126,7 +132,7 @@ pub(crate) fn run_show_payload(
             .collect::<Vec<_>>(),
     });
 
-    let mut header = run_header_text_with_state(&run, state.as_ref());
+    let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
     let cause_lines = format_root_cause_lines(&root_causes);
     if !cause_lines.is_empty() {
         header.push('\n');
