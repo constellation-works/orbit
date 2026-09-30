@@ -14,6 +14,10 @@ on:
   pull_request:
     paths:
       - "crates/orbit-exec/**"
+      # [ORB-13689] Activity-scoped proc.spawn must run on macOS without the
+      # former Linux-only Landlock child boundary.
+      - "crates/orbit-tools/src/builtin/proc/**"
+      - "crates/orbit-tools/tests/proc_spawn_lockdown.rs"
       # [ORB-11055] Child-runtime write-root inventory lives in orbit-core and
       # is compiled into the SBPL profile the macOS sandbox job enforces.
       - "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs"
@@ -98,6 +102,11 @@ jobs:
       # apply-time tests rather than failing — never worse than the Linux gate.
       - name: Run orbit-exec sandbox tests (real sandbox-exec)
         run: cargo test --no-fail-fast -p orbit-exec --locked
+
+      - name: Run macOS proc.spawn regressions
+        run: |
+          /usr/bin/sandbox-exec -p '(version 1)(allow default)' cargo test --locked -p orbit-tools scoped_proc_spawn_inherits_parent_read_view_for_direct_and_indirect_reads -- --nocapture
+          cargo test --locked -p orbit-tools --test proc_spawn_lockdown
 
       # [ORB-13237] A plugin backend the host spawns on an agent's behalf must
       # stay inside the agent's profile, widened only by its own plugin state.

@@ -31,8 +31,8 @@
 //! - [`ExecutionResult`] — captured stdout/stderr, exit code, and duration
 //! - [`Sandbox`] / [`NoSandbox`] — sandbox strategy trait and strategy that
 //!   adds no additional Orbit sandbox
-//! - [`spawn_under_linux_landlock`] — Linux read confinement applied to the
-//!   child itself, used by activity-scoped `proc.spawn`
+//! - [`spawn_under_linux_landlock`] — retained Linux read-confinement primitive;
+//!   activity-scoped `proc.spawn` now inherits its enclosing worker sandbox
 //! - [`spawn_under_linux_landlock_boundary`] — Linux read + write + TCP
 //!   confinement to explicit granted roots, used by plugin backends
 //! - [`InheritedFd`] — an open descriptor handed to the child at a fixed

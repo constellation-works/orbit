@@ -3,7 +3,7 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-09-24
+last_updated: 2026-09-30
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
@@ -432,6 +432,24 @@ One platform-neutral list in `orbit-exec` is the single source of truth. The SBP
 - Cost: a host that aliases a credential directory (for example a second bind mount of `$HOME`) fails dispatch with a named path until the alias is removed or the executor sandbox is explicitly turned off.
 - Reads outside this list stay delegated; general read-allowlist parity on Linux is still undecided.
 
+## Let `proc.spawn` inherit the enclosing CLI sandbox on Linux and macOS
+
+**Recorded:** 2026-09-30 · [ORB-13689]
+**Paths:** `crates/orbit-tools/src/builtin/proc/spawn.rs`, `docs/design/policy-sandbox/2_design.md`
+
+### Context
+The extra activity-scoped Linux Landlock read ruleset blocked Cargo from reading a benign parent-checkout `.cargo/config.toml` during ORB-13672. The same Linux-only spawn path refused activity-scoped calls on macOS. The CLI worker already runs under Bubblewrap or `sandbox-exec` unless the operator explicitly selects an unwrapped executor.
+
+### Decision
+Use `NoSandbox` for `proc.spawn` so its child inherits the worker's operating-system read and write view. Remove the coupled argument-level `fsProfile` read check; keeping it would still reject reads the parent may make. Preserve the activity program policy, cleared child environment, closed stdin, timeout, and supervision. Plugin backends keep their separate Landlock or `sandbox-exec` boundary.
+
+This deliberately retires the narrower child read guarantee from ORB-11514. Current Polaris STD-04 §R4 is non-binding guidance because Orbit has not vendored Constellation standards; its instruction to preserve previous negative read cases conflicts with this explicit policy decision. The tests now prove the new read scope and keep negative program and environment cases. STD-05 §R10 still shapes the cleared child environment.
+
+### Consequences
+- On Linux and macOS, a child can read any file its enclosing worker can read, including benign paths outside a linked worktree. Linux's unbounded `denyRead` globs are not a child kernel boundary.
+- The outer worker's credential masks and write grants still apply to descendants. On macOS, a provider-specific login-keychain carve-out also reaches the child; on an explicitly unwrapped executor, the child has that parent's ambient host access.
+- Activity-scoped `proc.spawn` no longer depends on a Linux Landlock ABI or a Linux-only path when run on macOS. This change does not repair Bubblewrap writable-ancestor mount planning or checkout-drift failures.
+
 ## Task References
 
 - [T20260328-221810] — subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
@@ -449,5 +467,6 @@ One platform-neutral list in `orbit-exec` is the single source of truth. The SBP
 - [ORB-10607] — enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution.
 - [ORB-10833] — retire the remaining unregistered `fs.*` builtins and their private policy helpers.
 - [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
+- [ORB-13689] — remove the extra `proc.spawn` read sandbox on Linux and macOS and inherit the enclosing worker boundary.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

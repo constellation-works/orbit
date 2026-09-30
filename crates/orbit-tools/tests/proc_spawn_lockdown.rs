@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
-// ORB-00262: integration coverage for the activity-scoped `proc.spawn`
-// allowlist. Fixture setup uses unwrap/expect for readability.
+// Integration coverage for activity-scoped `proc.spawn` program policy and
+// inherited parent read access. Fixture setup uses unwrap/expect for readability.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::HashMap;
@@ -73,20 +73,20 @@ fn empty_allowlist_denies_every_program_when_scoped() {
 }
 
 #[test]
-fn missing_filesystem_policy_denies_an_allowed_scoped_program() {
+fn missing_filesystem_policy_does_not_add_a_child_read_boundary() {
     let ctx = ToolContext {
         proc_allowed_programs: vec!["/bin/echo".to_string()],
         proc_spawn_activity_scoped: true,
         ..Default::default()
     };
-    let err = registry()
+    let value = registry()
         .execute(
             "proc.spawn",
             &ctx,
             json!({ "program": "/bin/echo", "args": ["must-not-run"] }),
         )
-        .expect_err("missing activity fsProfile must fail closed");
-    assert!(matches!(err, OrbitError::PolicyDenied(_)));
+        .expect("proc.spawn does not need an inner filesystem profile");
+    assert_eq!(value["stdout"], json!("must-not-run\n"));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn legacy_unrestricted_path_preserved_when_not_scoped() {
 }
 
 #[test]
-fn restrictive_fs_profile_not_bypassed_via_proc_spawn() {
+fn restrictive_fs_profile_does_not_narrow_the_parent_read_view() {
     let workspace = tempdir().expect("workspace tempdir");
     let workspace_root: PathBuf = workspace
         .path()
@@ -196,14 +196,14 @@ fn restrictive_fs_profile_not_bypassed_via_proc_spawn() {
     let denied = workspace_root.join("denied.txt");
     fs::write(&denied, "must stay private").expect("write denied fixture");
 
-    let err = registry()
+    let value = registry()
         .execute(
             "proc.spawn",
             &ctx,
             json!({ "program": "/bin/cat", "args": [denied], "timeout_ms": 5000 }),
         )
-        .expect_err("allowed program must not read a denied path");
-    assert!(matches!(err, OrbitError::PolicyDenied(_)));
+        .expect("child inherits its parent's read view");
+    assert_eq!(value["stdout"], json!("must stay private"));
 }
 
 #[test]
@@ -331,12 +331,11 @@ fn policy_with_profile(name: &str, read: Vec<String>) -> PolicyDef {
     }
 }
 
-/// The reviewed bypass, reproduced through the tool itself. `git` is on every
-/// shipped activity allowlist and will run a `!`-prefixed alias as a shell
-/// command, so no argument the request can inspect ever names the sentinel's
-/// path. [ORB-11514]
+/// `git` is on shipped activity program lists and runs a `!` alias through a
+/// shell. That child sees exactly the parent's read view. The outer OS sandbox
+/// supplies any masks; this fixture runs without one. [ORB-13689]
 #[test]
-fn a_git_shell_alias_cannot_read_a_host_sentinel() {
+fn a_git_shell_alias_can_read_a_benign_host_file_visible_to_its_parent() {
     if !on_path("git") {
         return;
     }
@@ -368,17 +367,18 @@ fn a_git_shell_alias_cannot_read_a_host_sentinel() {
                 "timeout_ms": 10000,
             }),
         )
-        .expect("the alias may run; it must not return the sentinel");
+        .expect("the alias may run");
 
     assert!(
-        !stdout_of(&value).contains("HOST_SENTINEL_ORB11514"),
-        "the host sentinel reached the caller: {value:?}"
+        stdout_of(&value).contains("HOST_SENTINEL_ORB11514"),
+        "the host file should be readable to the child: {value:?}"
     );
 }
 
-/// The same trampoline aimed at a `denyRead` match inside the workspace.
+/// Without an enclosing OS read mask, the activity's `denyRead` no longer
+/// governs a subprocess. Other filesystem tools still use that profile.
 #[test]
-fn a_git_shell_alias_cannot_read_a_deny_read_file() {
+fn a_git_shell_alias_inherits_parent_access_to_a_deny_read_file() {
     if !on_path("git") {
         return;
     }
@@ -409,48 +409,43 @@ fn a_git_shell_alias_cannot_read_a_deny_read_file() {
             .expect("the alias may run")
     };
 
-    // The trampoline itself still works, so the denial below is the read
-    // boundary rather than a broken fixture.
+    // The trampoline itself works for ordinary files and for paths denied by
+    // the separate activity read profile when no outer mask covers them.
     assert!(
         stdout_of(&alias("notes.txt")).contains("ALLOWED_CONTENT"),
         "the alias mechanism should still reach an allowed file"
     );
     assert!(
-        !stdout_of(&alias(".env")).contains("DENY_READ_SECRET"),
-        "a denyRead file reached the caller"
+        stdout_of(&alias(".env")).contains("DENY_READ_SECRET"),
+        "the child did not inherit the parent's read access"
     );
 }
 
-/// The request-time check still refuses an explicit outside-workspace path
-/// before the child exists, and still explains which rule refused it.
+/// A direct path argument is no longer filtered by an activity read profile.
 #[test]
-fn an_explicit_path_outside_the_workspace_is_still_refused_before_spawn() {
+fn an_explicit_benign_path_outside_the_workspace_is_readable() {
     let workspace = tempdir().expect("workspace tempdir");
     let workspace_root = workspace
         .path()
         .canonicalize()
         .expect("canonical workspace");
-    let ctx = workspace_activity_context(&workspace_root, &["git"]);
+    let host = tempdir().expect("host tempdir");
+    let outside = host.path().join("config.toml");
+    fs::write(&outside, "benign host config").expect("write host fixture");
+    let ctx = workspace_activity_context(&workspace_root, &["/bin/cat"]);
 
-    let error = registry()
+    let value = registry()
         .execute(
             "proc.spawn",
             &ctx,
             json!({
-                "program": "git",
-                "args": ["-C", "/etc", "rev-parse", "--show-toplevel"],
+                "program": "/bin/cat",
+                "args": [outside],
                 "timeout_ms": 5000,
             }),
         )
-        .expect_err("an explicit /etc path must be denied");
-
-    match error {
-        OrbitError::PolicyDenied(message) => {
-            assert!(message.contains("/etc"), "{message}");
-            assert!(message.contains("outside workspace"), "{message}");
-        }
-        other => panic!("expected a policy denial, got {other:?}"),
-    }
+        .expect("the outer OS sandbox decides access");
+    assert_eq!(value["stdout"], json!("benign host config"));
 }
 
 /// Confinement is only useful if the allowlisted tools still work.
