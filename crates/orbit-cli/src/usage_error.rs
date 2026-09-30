@@ -74,3 +74,27 @@ fn message(error: &clap::Error) -> String {
         .unwrap_or(rendered)
         .to_string()
 }
+
+/// Point `orbit help` and `orbit <command> help` at `--help`.
+///
+/// The `help` subcommand is disabled on purpose, so clap reports it like any
+/// unknown word and offers no way forward. `help` is the one word people try
+/// first, so the rejection says what to type instead.
+pub(crate) fn suggest_help_flag(mut error: clap::Error) -> clap::Error {
+    use clap::error::{ContextKind, ContextValue};
+
+    let word = match error.kind() {
+        ErrorKind::InvalidSubcommand => error.get(ContextKind::InvalidSubcommand),
+        ErrorKind::UnknownArgument => error.get(ContextKind::InvalidArg),
+        _ => None,
+    };
+    if matches!(word, Some(ContextValue::String(word)) if word == "help") {
+        error.insert(
+            ContextKind::Suggested,
+            ContextValue::StyledStrs(vec![clap::builder::StyledStr::from(
+                "there is no `help` subcommand; use `--help` (e.g. `orbit <command> --help`)",
+            )]),
+        );
+    }
+    error
+}

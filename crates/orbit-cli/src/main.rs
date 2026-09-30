@@ -330,7 +330,11 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
         .try_get_matches_from(&args)
         .unwrap_or_else(|err| {
             let (requested, legacy) = usage_error::pre_parse_format(&args);
-            usage_error::exit(repair_crew_flag_suggestion(err), requested, legacy)
+            usage_error::exit(
+                usage_error::suggest_help_flag(repair_crew_flag_suggestion(err)),
+                requested,
+                legacy,
+            )
         });
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);

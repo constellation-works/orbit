@@ -54,3 +54,22 @@ fn legacy_json_flags_are_seen_and_nothing_after_a_bare_separator_counts() {
         (None, false)
     );
 }
+
+#[test]
+fn help_word_gets_a_suggestion_and_other_unknown_words_do_not() {
+    use clap::CommandFactory;
+    use clap::error::{ContextKind, ContextValue};
+
+    let rejected = |argv: &[&str]| {
+        crate::usage_error::suggest_help_flag(
+            crate::install_format_arg(crate::command::Cli::command())
+                .try_get_matches_from(argv)
+                .expect_err("argv should be rejected"),
+        )
+    };
+    let tips = |error: &clap::Error| matches!(error.get(ContextKind::Suggested), Some(ContextValue::StyledStrs(tips)) if tips.iter().any(|tip| tip.to_string().contains("--help")));
+
+    assert!(tips(&rejected(&["orbit", "help"])));
+    assert!(tips(&rejected(&["orbit", "task", "help"])));
+    assert!(!tips(&rejected(&["orbit", "task", "bogus"])));
+}
