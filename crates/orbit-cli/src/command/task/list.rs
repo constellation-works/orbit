@@ -176,4 +176,3 @@ impl Execute for TaskListArgs {
 fn validate_external_ref_system(system: &str) -> Result<String, OrbitError> {
     ExternalRef::validate_system(system).map_err(Into::into)
 }
-

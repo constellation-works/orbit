@@ -132,6 +132,52 @@ fn web_serve_without_an_explicit_root_still_serves_the_global_registry() {
     assert_eq!(served, vec!["global-only".to_string()]);
 }
 
+#[test]
+fn web_serve_port_zero_announces_the_address_it_actually_bound() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(&repo).expect("create repo");
+    init_git_repo(&repo);
+    orbit(
+        &repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "web-port-host",
+            "--task-prefix",
+            "WP",
+        ],
+    );
+
+    let mut server = base_command(temp.path(), &home)
+        .args(["web", "serve", "--port", "0", "--no-open"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn orbit web serve");
+    let mut announcement = String::new();
+    let stdout = server.stdout.take().expect("piped stdout");
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(stdout), &mut announcement)
+        .expect("read announcement");
+    let port: u16 = announcement
+        .trim()
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse().ok())
+        .unwrap_or_else(|| panic!("announcement must end in a port: {announcement:?}"));
+    let reachable = port != 0 && TcpStream::connect(("127.0.0.1", port)).is_ok();
+    stop(&mut server);
+
+    assert!(
+        reachable,
+        "`--port 0` must announce the OS-assigned port, got: {announcement:?}"
+    );
+}
+
 // ── fixture helpers ───────────────────────────────────────────────────────
 
 fn base_command(cwd: &Path, home: &Path) -> Command {

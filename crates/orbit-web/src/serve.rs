@@ -270,7 +270,6 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     check_bindable_host(args.host, args.port)?;
 
     let addr = SocketAddr::new(args.host, args.port);
-    let url = format!("http://{addr}");
     // A dashboard that took over from a replaced image already has its tab.
     let no_open = args.no_open || std::env::var_os(HANDOVER_ENV).is_some();
     let handover = Arc::new(std::sync::Mutex::new(None::<std::path::PathBuf>));
@@ -286,6 +285,10 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| OrbitError::Io(format!("bind {addr}: {e}")))?;
+        // `--port 0` asks the OS for a free port, so report the address that
+        // was actually bound rather than the one requested.
+        let bound = listener.local_addr().unwrap_or(addr);
+        let url = format!("http://{bound}");
 
         #[allow(clippy::print_stdout)]
         {
