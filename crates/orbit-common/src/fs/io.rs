@@ -758,11 +758,21 @@ fn apply_read_only_no_follow(_options: &mut OpenOptions) {}
 #[cfg(not(unix))]
 fn apply_no_follow_final_component(_options: &mut OpenOptions) {}
 
+/// Restrict an already-open file to owner-only access.
+///
+/// A descriptor whose file is already at the private mode is left alone: the
+/// `fchmod` would be a no-op for permissions, but it still counts as a metadata
+/// change, and on macOS the next `close` of a descriptor that issued one costs
+/// milliseconds. Lock files are opened once per task bundle on every listing
+/// and search, so re-asserting the mode on each open dominated those commands.
 pub(crate) fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
+        if has_private_file_mode(&file.metadata()?) {
+            return Ok(());
+        }
         file.set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
     }
     #[cfg(not(unix))]
@@ -881,7 +891,7 @@ fn ensure_regular_private_file(path: &Path, metadata: &fs::Metadata) -> io::Resu
     Ok(())
 }
 
-#[cfg(all(unix, feature = "sqlite"))]
+#[cfg(unix)]
 fn has_private_file_mode(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
