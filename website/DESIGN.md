@@ -31,27 +31,32 @@ The Orbit website is a **documentation site**, not a marketing site. It exists t
 4. **Static and fast.** Content is rendered at build time. Small browser scripts
    support search, the theme toggle, and the homepage's narrow-viewport Menu;
    they should not delay the page's readable state.
-5. **Light-default, dark-available.** The theme toggle persists explicit choices; neither mode is an afterthought.
+5. **Dark-default, light-available.** First-time visitors see dark whatever their OS prefers; the theme toggle persists an explicit choice, and a stored light choice wins. Neither mode is an afterthought.
 
 ---
 
 ## 3. Visual System
 
-### 3.1 Palette (light, default)
+### 3.1 Palette (dark, default)
 
 | Role              | Value       | Notes                                      |
 |-------------------|-------------|--------------------------------------------|
-| Background        | `#FFFFFF`   | Reading surface                            |
-| Surface           | `#F4F5F8`   | Cards, code blocks, sidebar hover          |
-| Border            | `#D8DBE2`   | Structural only; never decorative          |
-| Body text         | `#17171A`   | High contrast on the reading surface       |
-| Muted text        | `#5F606B`   | Metadata, captions, inactive nav           |
-| Accent            | `#2F67D8`   | Links, active nav, focus                   |
-| Accent (hover)    | `#173B84`   | Deeper blue for hover and focus            |
+| Background        | `#0A0A0A`   | Reading surface; avoids pure-black eye strain |
+| Surface           | `#17171A`   | Cards, code blocks, sidebar hover          |
+| Border            | `#26262B`   | Structural only; never decorative          |
+| Body text         | `#EDEDF0`   | High contrast on the reading surface       |
+| Muted text        | `#9B9BA3`   | Metadata, captions, inactive nav           |
+| Accent            | `#6E9FFF`   | Links, active nav, focus                   |
+| Accent (hover)    | `#8AB3FF`   | One step brighter                          |
 
-Dark mode keeps the same roles on a near-black `#0A0A0A` background with
-`#EDEDF0` body text and a lighter `#6E9FFF` accent. A plain page load does not
-save a theme preference; the toggle saves an explicit light or dark choice.
+Light mode keeps the same roles on a `#FFFFFF` background with `#17171A` body
+text and a darker `#2F67D8` accent for AA contrast. `:root` in `custom.css`
+carries the dark tokens, so a page renders dark even without JavaScript;
+`:root[data-theme='light']` overrides them. The inline script in
+`ThemeProvider.astro` sets `data-theme` before first paint: light only when the
+visitor's stored choice (`orbit-theme-choice`) is `light`, dark otherwise,
+regardless of `prefers-color-scheme`. A plain page load does not save a theme
+preference; the toggle saves an explicit light or dark choice.
 
 ### 3.2 Typography
 
@@ -141,7 +146,7 @@ output must say that it is illustrative. The page advertises no unlanded feature
 and publishes no live metric.
 
 The homepage's extra script handles the Menu's Escape / breakpoint close. The
-shared theme script applies the light default before styles load. The Quickstart
+shared theme script applies the dark default (or a stored light choice) before styles load. The Quickstart
 section below the hero retains the install and setup commands.
 
 Other pages keep Starlight's default chrome (auto title, sidebar, TOC) unchanged.

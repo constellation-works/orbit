@@ -2,11 +2,13 @@
 import { Icon } from '@astrojs/starlight/components';
 ---
 
-{/* Inlined to avoid a dark-mode flash before the light default applies. */}
+{/* Inlined so the chosen theme applies before first paint: no flash of the wrong theme. */}
 <script is:inline>
 	window.StarlightThemeProvider = (() => {
 		// The old starlight-theme value was also written on plain page loads, so it
 		// cannot identify an explicit choice. Only the new key is authoritative.
+		// Dark is the default whatever the OS prefers; only a stored light choice
+		// overrides it.
 		const storageKey = 'orbit-theme-choice';
 		// Merely touching localStorage throws when a browser blocks site data, so
 		// the read is guarded or the whole provider (and every picker) would die.
@@ -14,10 +16,10 @@ import { Icon } from '@astrojs/starlight/components';
 		try {
 			storedTheme = localStorage.getItem(storageKey);
 		} catch {}
-		const theme = storedTheme === 'dark' ? 'dark' : 'light';
+		const theme = storedTheme === 'light' ? 'light' : 'dark';
 		document.documentElement.dataset.theme = theme;
 		return {
-			updatePickers(theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light') {
+			updatePickers(theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark') {
 				// The site ignores the OS scheme until a visitor picks one, so the
 				// browser chrome follows the chosen theme, not a media query.
 				const themeColor = document.querySelector('meta[name="theme-color"]');
