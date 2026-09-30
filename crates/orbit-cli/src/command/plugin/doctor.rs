@@ -94,8 +94,11 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
                  switched off here)."
             )
         };
+        // The blank line separates the summary from the table; with no rows
+        // there is nothing above it to separate from.
+        let separator = if results.is_empty() { "" } else { "\n" };
         blocks.push(Block::text(format!(
-            "\n{}",
+            "{separator}{}",
             crate::output::color::text(&summary, Role::Ok)
         )));
     } else {

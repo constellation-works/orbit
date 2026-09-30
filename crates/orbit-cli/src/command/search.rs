@@ -154,11 +154,13 @@ fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
     if federated {
         columns.push(Column::new("WORKSPACE").fixed());
     }
-    columns.extend([
-        Column::new("ID/PATH").path(),
-        Column::new("TITLE/SUMMARY"),
-        Column::new("MATCH").fixed(),
-    ]);
+    // Lexical hits carry no match detail; an always-empty last column would
+    // only leave a dangling tab on every row of the plain form.
+    let has_match = results.iter().any(|hit| !match_text(hit).is_empty());
+    columns.extend([Column::new("ID/PATH").path(), Column::new("TITLE/SUMMARY")]);
+    if has_match {
+        columns.push(Column::new("MATCH").fixed());
+    }
     let mut table = Table::new(columns).empty_message("no results matching the query");
     for hit in results {
         let mut row = vec![hit.kind.clone(), hit.source.clone()];
@@ -176,8 +178,10 @@ fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
                 .clone()
                 .or(hit.summary.clone())
                 .unwrap_or_default(),
-            match_text(hit),
         ]);
+        if has_match {
+            row.push(match_text(hit));
+        }
         table.add_row(row);
     }
     table
