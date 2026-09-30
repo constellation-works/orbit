@@ -38,6 +38,20 @@ fn bounded_reader_stops_after_the_first_excess_byte() {
     assert_eq!(reader.0, 33);
 }
 
+/// Read an HTTP request through its blank line. Closing a socket with request
+/// bytes still unread makes the kernel send RST instead of FIN (macOS does this
+/// reliably), and the client can then see "connection reset" before the
+/// response the test server wrote.
+fn read_request_head(stream: &mut impl Read) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).expect("HTTP request head");
+        head.push(byte[0]);
+    }
+    head
+}
+
 #[test]
 fn http_rejects_declared_and_streamed_oversized_bodies() {
     let source = HttpReleaseSource::new("unused/repo".to_string());
@@ -46,9 +60,7 @@ fn http_rejects_declared_and_streamed_oversized_bodies() {
         let address = listener.local_addr().expect("server address");
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("HTTP request");
-            let mut method = [0_u8; 3];
-            stream.read_exact(&mut method).expect("request method");
-            assert_eq!(&method, b"GET");
+            assert!(read_request_head(&mut stream).starts_with(b"GET "));
             if declared {
                 write!(
                     stream,
@@ -86,9 +98,7 @@ fn http_accepts_normal_metadata_body() {
     let address = listener.local_addr().expect("server address");
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("HTTP request");
-        let mut method = [0_u8; 3];
-        stream.read_exact(&mut method).expect("request method");
-        assert_eq!(&method, b"GET");
+        assert!(read_request_head(&mut stream).starts_with(b"GET "));
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 22\r\n\r\n{\"tag_name\":\"v0.19.0\"}")
             .expect("metadata response");
