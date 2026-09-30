@@ -291,8 +291,10 @@ html:not([data-has-sidebar]) header.header {
 /* ------------------------------------------------------------------------
    Hero
    ------------------------------------------------------------------------ */
+/* Center the session panel against the taller copy column so the slack splits
+   above and below it instead of pooling under it. */
 .orbit-hero {
-  align-items: start;
+  align-items: center;
   display: grid;
   gap: 3.5rem;
   grid-template-columns: minmax(0, 30rem) minmax(0, 1fr);
