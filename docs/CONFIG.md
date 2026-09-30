@@ -68,6 +68,7 @@ task_prefix = "ORB"
 | `machine.worker_tasks_max` | `4096` | Yes | Scope `TasksMax=` (processes plus threads), at least 1. |
 
 - `orbit config set` refuses `machine.id` and `machine.task_prefix`: changing either would orphan or renumber records minted under it.
+- `orbit init` refuses to create an identity while the task store has already minted ids under another prefix (tasks created before `orbit init` mint under the historical `ORB` default). It fails before writing anything, so the machine keeps working; run `orbit init` before creating tasks.
 - Hand edits fail closed. A `[machine]` table missing any identity key is an error. A `task_prefix` that contradicts the local task allocator, or an `id` that contradicts a workspace record naming this machine as owner, is refused. Nothing falls back to the hostname.
 - A legacy `~/.orbit/host.toml` is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths. Delete the stale one.
 - A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).

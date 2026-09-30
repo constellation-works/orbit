@@ -1,5 +1,5 @@
 use clap::Args;
-use orbit_core::bootstrap::init::{InitOptions, init_global};
+use orbit_core::bootstrap::init::{InitOptions, allocated_task_prefix, init_global};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry::global_orbit_dir;
 use orbit_registry::{
@@ -237,7 +237,53 @@ fn reject_invalid_fresh_identity_inputs(
     ) {
         return Ok(());
     }
-    validate_fresh_identity_flags(non_interactive, machine_name, task_prefix)
+    validate_fresh_identity_flags(non_interactive, machine_name, task_prefix)?;
+    reject_prefix_contradicting_minted_ids(&global_root, task_prefix)
+}
+
+/// Refuse to create an identity whose task prefix contradicts ids this machine
+/// already minted. `orbit workspace init` (or any task command) on a machine
+/// with no identity allocates under the historical `ORB` prefix; an identity
+/// naming another prefix would then be written and every later command would
+/// fail at the allocator. Checked before anything is written.
+fn reject_prefix_contradicting_minted_ids(
+    global_root: &Path,
+    requested_prefix: Option<&str>,
+) -> Result<(), OrbitError> {
+    match minted_prefix_conflict(allocated_task_prefix(global_root)?, requested_prefix) {
+        Some(message) => Err(OrbitError::InvalidInput(message)),
+        None => Ok(()),
+    }
+}
+
+/// The refusal for a requested prefix that cannot bind to the ids already
+/// minted, or `None` when it can. Adopting exactly the prefix in use is fine.
+pub(super) fn minted_prefix_conflict(
+    allocated: Option<(String, u32)>,
+    requested_prefix: Option<&str>,
+) -> Option<String> {
+    let (minted_prefix, minted) = allocated?;
+    if requested_prefix == Some(minted_prefix.as_str()) {
+        return None;
+    }
+    let wanted = requested_prefix
+        .map(|prefix| format!(" '{prefix}'"))
+        .unwrap_or_default();
+    let how = if validate_new_task_prefix(&minted_prefix).is_ok() {
+        format!("pass --task-prefix {minted_prefix} to adopt it")
+    } else {
+        format!(
+            "'{minted_prefix}' is the historical default and cannot be chosen for a new \
+             identity, so this store cannot be given one"
+        )
+    };
+    Some(format!(
+        "task prefix{wanted} cannot be chosen: this machine already minted {minted} task id(s) \
+         under '{minted_prefix}' before `orbit init` ran (tasks created without a machine \
+         identity mint under the historical default, e.g. after `orbit workspace init` alone). A task \
+         prefix is fixed once ids exist, and {how}. Nothing was written. To pick a prefix, run \
+         `orbit init` before creating tasks on a machine whose task store is still empty."
+    ))
 }
 
 /// Create this machine's identity in the global `config.toml`. Machine name
@@ -253,6 +299,7 @@ fn ensure_machine_identity_for_init(
     let global_root = resolve_global_root(root_override)?;
     let requested_name = machine_name.clone();
     let requested_prefix = task_prefix.clone();
+    let closure_root = global_root.clone();
     let outcome = ensure_machine_identity(&global_root, move || {
         validate_fresh_identity_flags(
             non_interactive,
@@ -267,6 +314,9 @@ fn ensure_machine_identity_for_init(
             Some(prefix) => prefix,
             None => prompt_task_prefix()?,
         };
+        // Also under the identity lock, after any prompt: the answer may name
+        // a prefix the pre-write check could not see.
+        reject_prefix_contradicting_minted_ids(&closure_root, Some(&task_prefix))?;
         Ok(NewMachineIdentity {
             name: machine_name,
             task_prefix,

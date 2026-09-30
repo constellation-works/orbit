@@ -198,6 +198,9 @@ initial setup succeeded:
 - Check the installed release and effective resource catalog when commands
   differ from these examples; do not rebuild Orbit just to access a task.
 - Don't pick a task prefix casually on a second machine. It cannot be changed.
+- Run `orbit init` before creating any task. Tasks created first (for example after
+  `orbit workspace init` alone) mint `ORB-` ids, which fixes the prefix: a later
+  `orbit init --task-prefix <PREFIX>` is refused before it writes anything.
 - Don't enable every seeded routine at once. Enable worktree GC before, not
   after, scheduling ship traffic.
 - Task search uses the local SQLite index; no model download is needed.

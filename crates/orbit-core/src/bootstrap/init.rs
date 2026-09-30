@@ -745,6 +745,24 @@ pub struct UnlinkResult {
     pub cleaned_dirs: Vec<PathBuf>,
 }
 
+/// The task prefix a global root's task store has already minted ids under,
+/// with how many, or `None` when nothing has been minted (or there is no task
+/// store yet). Read-only: it never creates or migrates the store.
+///
+/// `orbit init` consults it before creating a machine identity. A machine with
+/// no identity mints under the historical `ORB` prefix, and an identity whose
+/// prefix contradicts ids already minted makes every later command fail at the
+/// allocator, so init must refuse before it writes one.
+pub fn allocated_task_prefix(global_root: &Path) -> Result<Option<(String, u32)>, OrbitError> {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    let path = task_registry_path(global_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    TaskRegistryStore::open_read_only(&path)?.allocated_task_prefix()
+}
+
 /// Re-create skill symlinks beside the selected global root.
 pub fn link_skills(global_root: &Path) -> Result<LinkResult, OrbitError> {
     let init_target = resolve_init_target_from_root(global_root);
