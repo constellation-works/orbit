@@ -9,8 +9,9 @@ host with workspace routing already established. A checkout path alone does
 not establish authority. See [tool-surface.md](../../orbit/references/tool-surface.md).
 
 Read workspace goals, existing tasks, recent runs, and the relevant repository
-or runtime evidence. Use `orbit_task_list` with its advertised filters and
-`orbit_task_show` with field projections. For run diagnostics:
+or runtime evidence. Use `orbit_task_list` with its advertised filters and a
+`fields` projection (full records are large), and `orbit_task_show` with field
+projections. For run diagnostics:
 
 ```bash
 orbit run readiness --json
