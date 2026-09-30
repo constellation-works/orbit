@@ -53,8 +53,8 @@ pub struct TaskUpdateArgs {
     /// Explicit implementation attribution label (empty string clears)
     #[arg(long)]
     pub implemented_by: Option<String>,
-    /// PR review status (approve, request-changes)
-    #[arg(long)]
+    /// PR review status: `approve` or `request-changes` (empty string clears)
+    #[arg(long, value_parser = parse_pr_status)]
     pub pr_status: Option<String>,
     /// Job run ID to associate with the task (empty string clears)
     #[arg(long)]
@@ -218,6 +218,32 @@ impl Execute for TaskUpdateArgs {
         if !allow_missing_context && let Some(candidates) = context_files.as_deref() {
             runtime.ensure_context_selectors_exist(candidates)?;
         }
+        let changes_nothing = title.is_none()
+            && description.is_none()
+            && acceptance_criteria.is_none()
+            && dependencies.is_none()
+            && tags.is_none()
+            && plan.is_none()
+            && execution_summary.is_none()
+            && comment.is_none()
+            && status.is_none()
+            && task_type.is_none()
+            && priority.is_none()
+            && complexity.is_none()
+            && planned_by.is_none()
+            && implemented_by.is_none()
+            && pr_status.is_none()
+            && job_run_id.is_none()
+            && crew.is_none()
+            && orchestrator.is_none()
+            && context_files.is_none()
+            && upsert_artifacts.is_empty();
+        if changes_nothing {
+            return Err(OrbitError::InvalidInput(
+                "nothing to update: pass at least one field flag, e.g. `--status` or `--title` (see `orbit task update --help`)"
+                    .to_string(),
+            ));
+        }
         let (agent, model) = super::mutation_identity(model);
 
         let params = TaskUpdateParams {
@@ -254,6 +280,20 @@ impl Execute for TaskUpdateArgs {
             format!("Updated task '{}'", task.id),
         )
         .into())
+    }
+}
+
+/// Validate `--pr-status` at the parser: the value is stored verbatim and read
+/// back as a merge gate, so a typo must be refused here rather than persisted
+/// as a status no reader recognizes. An empty value is kept: it clears the field.
+pub(super) fn parse_pr_status(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "approve" | "approved" | "request-changes" | "request_changes"
+        | "changes-requested" | "changes_requested" => Ok(value.to_string()),
+        _ => Err(format!(
+            "unknown PR status '{value}': expected `approve` or `request-changes` (empty string clears)"
+        )),
     }
 }
 
