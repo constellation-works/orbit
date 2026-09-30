@@ -464,15 +464,22 @@ pub fn local_workspaces(
 
 /// Finds the local checkout for a path using longest-prefix matching across
 /// its repository root and explicit path overrides.
+///
+/// The path matches as given and as the filesystem resolves it, with a tail
+/// that no longer exists kept. A checkout is recorded at its resolved path, so
+/// a spelling through a symlinked ancestor (macOS `/tmp` and `/var`, a
+/// symlinked `~/workspace`) must still name a checkout whose directory has
+/// since been deleted, where it can no longer be canonicalized whole.
 pub fn find_checkout_by_path<'a>(
     registry: &'a WorkspaceRegistry,
     cwd: &Path,
 ) -> Option<&'a WorkspaceCheckout> {
+    let resolved = resolve_with_missing_tail(cwd);
     let mut best_match: Option<(&WorkspaceCheckout, usize)> = None;
 
     for checkout in &registry.checkouts {
         for candidate in std::iter::once(&checkout.repo_root).chain(&checkout.path_overrides) {
-            if !cwd.starts_with(candidate) {
+            if !cwd.starts_with(candidate) && !resolved.starts_with(candidate) {
                 continue;
             }
             let candidate_len = candidate.as_os_str().len();
@@ -483,6 +490,29 @@ pub fn find_checkout_by_path<'a>(
     }
 
     best_match.map(|(checkout, _)| checkout)
+}
+
+/// `path` with its deepest existing ancestor resolved by the filesystem and
+/// the names below it kept as spelled. A path with no resolvable ancestor is
+/// returned unchanged.
+fn resolve_with_missing_tail(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(resolved) = current.canonicalize() {
+            return missing
+                .iter()
+                .rev()
+                .fold(resolved, |resolved, name| resolved.join(name));
+        }
+        match (current.file_name(), current.parent()) {
+            (Some(name), Some(parent)) => {
+                missing.push(name);
+                current = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Finds the logical workspace for a path, but only through a machine-local
