@@ -214,8 +214,9 @@ fn an_exec_backend_receives_its_secret_on_stdin_and_not_in_env_or_argv() {
         &format!(
             "#!/bin/sh\ninput=$(cat)\nenv_hits=$(env | grep -c '{EXEC_SECRET}' || true)\n\
              argv_hits=$(printf '%s\\n' \"$0\" \"$@\" | grep -c '{EXEC_SECRET}' || true)\n\
-             printf '{{\"ok\":true,\"output\":{{\"env_hits\":%s,\"argv_hits\":%s,\"envelope\":%s}}}}\\n' \
-             \"$env_hits\" \"$argv_hits\" \"$input\"\n"
+             stdin_hits=$(printf '%s' \"$input\" | grep -c '{EXEC_SECRET}' || true)\n\
+             printf '{{\"ok\":true,\"output\":{{\"stdin_hits\":%s,\"env_hits\":%s,\"argv_hits\":%s,\"envelope\":%s}}}}\\n' \
+             \"$stdin_hits\" \"$env_hits\" \"$argv_hits\" \"$input\"\n"
         ),
     );
     let mut backend = (*spec(command, temp.path(), PluginPermissions::default(), &[])).clone();
@@ -230,8 +231,12 @@ fn an_exec_backend_receives_its_secret_on_stdin_and_not_in_env_or_argv() {
 
     assert_eq!(
         output["envelope"]["context"]["secrets"],
-        json!({ "api_token": { "value": EXEC_SECRET, "version": "v7" } }),
-        "the declared, set secret rides stdin with its version; the unset one is omitted"
+        json!({ "api_token": { "value": "[secret]", "version": "v7" } }),
+        "the echoed value is masked; the version remains and the unset secret is omitted"
+    );
+    assert_eq!(
+        output["stdin_hits"], 1,
+        "the backend received the real value"
     );
     assert_eq!(output["env_hits"], 0, "the value is not in the environment");
     assert_eq!(output["argv_hits"], 0, "the value is not in argv");
@@ -269,6 +274,128 @@ fn a_failing_exec_backend_cannot_return_its_secret_through_stderr() {
         !error.contains(EXEC_SECRET),
         "a delivered secret value reached the tool error: {error}"
     );
+}
+
+/// This backend echoes the value it reads from stdin, without embedding a
+/// canary or cooperating with the host's masking policy. Both replies exit 0.
+const SECRET_ECHO_BACKEND: &str = r##"#!/bin/sh
+input=$(cat)
+token=$(printf '%s' "$input" | sed -n 's/.*"api_token":{"value":"\([^"]*\)".*/\1/p')
+case "$input" in
+  *'"mode":"error"'*) printf '{"ok":false,"error":{"code":"auth_%s","message":"rejected %s","retryable":true,"detail":{"%s":["%s",7,false,null],"reason":"expired"}},"secret_updates":{"%s":{"value":"unused","expected_version":null}}}\n' "$token" "$token" "$token" "$token" "$token" ;;
+  *'"mode":"fallback"'*) printf '{"ok":false,"error":{"code":"auth_%s","message":"rejected %s","retryable":"invalid"}}\n' "$token" "$token" ;;
+  *) printf '{"ok":true,"output":{"message":"echo %s","nested":[{"%s":"%s"}],"count":7,"retryable":false,"empty":null}}\n' "$token" "$token" "$token" ;;
+esac
+"##;
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn exec_json_responses_mask_delivered_values_before_the_caller_or_audit() {
+    use super::super::envelope::{take_delivered_plugin_secret_names, take_plugin_secret_updates};
+    use super::support::capture_logs;
+    use orbit_common::OrbitError;
+
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let canary = "opaque-review-canary-8d44d9";
+    let source = CasSource::holding(&[("api_token", canary, "v1")]);
+    let command = stub_backend(temp.path(), SECRET_ECHO_BACKEND);
+    let mut backend = (*spec(command, temp.path(), PluginPermissions::default(), &[])).clone();
+    backend.secrets = PluginSecretDelivery::new(
+        vec!["api_token".into()],
+        Arc::clone(&source) as Arc<dyn PluginSecretSource>,
+    );
+    let backend = Arc::new(backend);
+    let ctx = context(temp.path());
+    // This constraint proves validation uses the original answer: a masked
+    // string does not satisfy the backend's valid enum value.
+    let schema = json!({"type":"object", "required":["message"], "properties":{
+        "message":{"enum":[format!("echo {canary}")]}, "count":{"type":"integer"}
+    }});
+    let output = tool(Arc::clone(&backend), Some(schema))
+        .execute(&ctx, json!({}))
+        .expect("valid raw output");
+    assert_eq!(
+        output,
+        json!({
+            "message":"echo [secret]", "nested":[{"[secret]":"[secret]"}],
+            "count":7, "retryable":false, "empty":null
+        })
+    );
+    assert!(!output.to_string().contains(canary));
+
+    let echo = tool(Arc::clone(&backend), None);
+    let (error, logs) = capture_logs(|| {
+        echo.execute(&ctx, json!({"mode":"error"}))
+            .expect_err("zero-exit failure")
+    });
+    for rendered in [
+        error.to_string(),
+        serde_json::to_string(&error).expect("caller error"),
+        format!("{error:?}"),
+        logs,
+    ] {
+        assert!(
+            !rendered.contains(canary),
+            "delivered value reached a response or diagnostic: {rendered}"
+        );
+    }
+    match error {
+        OrbitError::RemoteTool {
+            code,
+            message,
+            payload,
+        } => {
+            assert_eq!(code, "auth_[secret]");
+            assert!(message.contains("rejected [secret]"));
+            assert_eq!(
+                payload,
+                json!({"code":"auth_[secret]","message":"rejected [secret]","retryable":true,
+                "detail":{"[secret]":["[secret]",7,false,null],"reason":"expired"}})
+            );
+        }
+        other => panic!("structured error lost its meaning: {other}"),
+    }
+    assert_eq!(take_delivered_plugin_secret_names(), vec!["api_token"]);
+    assert_eq!(
+        take_plugin_secret_updates(),
+        BTreeMap::from([("[secret]".into(), PluginSecretUpdateStatus::Refused)])
+    );
+    let fallback = echo
+        .execute(&ctx, json!({"mode":"fallback"}))
+        .expect_err("malformed structured error");
+    assert!(
+        matches!(&fallback, OrbitError::Execution(message) if message.contains("auth_[secret]") && message.contains("rejected [secret]"))
+    );
+    assert!(
+        !serde_json::to_string(&fallback)
+            .expect("error JSON")
+            .contains(canary)
+    );
+
+    let invalid = tool(
+        Arc::clone(&backend),
+        Some(json!({"type":"object","properties":{"message":{"type":"integer"}}})),
+    )
+    .execute(&ctx, json!({}))
+    .expect_err("invalid raw output");
+    assert!(invalid.to_string().contains("violates its output_schema"));
+    assert!(!invalid.to_string().contains(canary));
+
+    let next = "another-opaque-4cdd7";
+    source.values.lock().expect("store").insert(
+        "api_token".into(),
+        DeliveredPluginSecret {
+            value: next.into(),
+            version: "v2".into(),
+        },
+    );
+    let output = echo
+        .execute(&ctx, json!({}))
+        .expect("value changed between calls");
+    assert_eq!(output["message"], "echo [secret]");
+    assert!(!output.to_string().contains(next));
 }
 
 struct FixedSource;

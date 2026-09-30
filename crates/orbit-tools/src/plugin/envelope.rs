@@ -119,8 +119,70 @@ impl CallSecrets {
         let mut masked = text.to_string();
         for value in values {
             masked = masked.replace(value, "[secret]");
+            // Validators and transport errors may quote JSON strings. Match
+            // that representation too, without changing the JSON structure.
+            if let Ok(quoted) = serde_json::to_string(value) {
+                let escaped = &quoted[1..quoted.len() - 1];
+                if escaped != value {
+                    masked = masked.replace(escaped, "[secret]");
+                }
+            }
         }
         masked
+    }
+
+    /// Mask decoded JSON strings and object keys, retaining other value types.
+    pub(crate) fn mask_json(&self, value: Value) -> Value {
+        match value {
+            Value::String(text) => Value::String(self.mask_delivered(&text)),
+            Value::Array(items) => {
+                Value::Array(items.into_iter().map(|item| self.mask_json(item)).collect())
+            }
+            Value::Object(fields) => {
+                let mut masked = serde_json::Map::new();
+                let mut renamed = Vec::new();
+                for (key, value) in fields {
+                    let public_key = self.mask_delivered(&key);
+                    let value = self.mask_json(value);
+                    if public_key == key {
+                        masked.insert(key, value);
+                    } else {
+                        renamed.push((public_key, value));
+                    }
+                }
+                // Preserve ordinary fields even when a secret key masks to
+                // an existing key, and retain every renamed field's value.
+                for (key, value) in renamed {
+                    let mut public_key = key.clone();
+                    let mut suffix = 2;
+                    while masked.contains_key(&public_key) {
+                        public_key = format!("{key} ({suffix})");
+                        suffix += 1;
+                    }
+                    masked.insert(public_key, value);
+                }
+                Value::Object(masked)
+            }
+            other => other,
+        }
+    }
+
+    /// Backend responses and schema/transport diagnostics leave through these
+    /// variants. Other errors originate in host setup, before a reply is read.
+    pub(crate) fn mask_error(&self, error: OrbitError) -> OrbitError {
+        match error {
+            OrbitError::Execution(message) => OrbitError::Execution(self.mask_delivered(&message)),
+            OrbitError::RemoteTool {
+                code,
+                message,
+                payload,
+            } => OrbitError::RemoteTool {
+                code: self.mask_delivered(&code),
+                message: self.mask_delivered(&message),
+                payload: self.mask_json(payload),
+            },
+            other => other,
+        }
     }
 
     /// Record that this call's request is about to carry these secrets, so
@@ -130,7 +192,12 @@ impl CallSecrets {
         let names = self
             .0
             .as_ref()
-            .map(|secrets| secrets.keys().cloned().collect())
+            .map(|secrets| {
+                secrets
+                    .keys()
+                    .map(|name| self.mask_delivered(name))
+                    .collect()
+            })
             .unwrap_or_default();
         DELIVERED_SECRET_NAMES.with(|cell| *cell.borrow_mut() = names);
     }
@@ -202,6 +269,7 @@ impl SecretUpdateRefusal {
 pub(crate) fn apply_secret_updates(
     spec: &PluginBackendSpec,
     tool_name: &str,
+    secrets: &CallSecrets,
     updates: Option<&Value>,
 ) -> BTreeMap<String, PluginSecretUpdateStatus> {
     let mut outcomes = BTreeMap::new();
@@ -233,14 +301,15 @@ pub(crate) fn apply_secret_updates(
             );
             continue;
         }
+        let public_name = secrets.mask_delivered(name);
         let status = match apply_secret_update(spec, name, entry) {
             Ok(version) => {
                 tracing::info!(
                     target: "orbit.tools.plugin",
                     plugin = %spec.provenance.name,
                     tool = %tool_name,
-                    secret = %name,
-                    version = %version,
+                    secret = %public_name,
+                    version = %secrets.mask_delivered(&version),
                     "applied the backend's update to a rotatable secret",
                 );
                 PluginSecretUpdateStatus::Applied
@@ -250,15 +319,15 @@ pub(crate) fn apply_secret_updates(
                     target: "orbit.tools.plugin",
                     plugin = %spec.provenance.name,
                     tool = %tool_name,
-                    secret = %name,
-                    "refused the backend's update to secret '{name}': {}; the call's result is \
+                    secret = %public_name,
+                    "refused the backend's update to secret '{public_name}': {}; the call's result is \
                      returned unchanged",
-                    refusal.reason(),
+                    secrets.mask_delivered(&refusal.reason()),
                 );
                 PluginSecretUpdateStatus::Refused
             }
         };
-        outcomes.insert(name.clone(), status);
+        outcomes.insert(public_name, status);
     }
     SECRET_UPDATES.with(|cell| *cell.borrow_mut() = outcomes.clone());
     outcomes
