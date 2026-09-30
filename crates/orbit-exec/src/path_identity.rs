@@ -23,41 +23,58 @@ use orbit_common::OrbitError;
 
 /// The path as the kernel resolves it, for a path that need not exist.
 ///
-/// The longest existing prefix is canonicalized — symlinks and `..` followed
-/// — and the remaining names are appended to that resolved prefix. A path
-/// that exists in full is therefore its canonical path, and one whose tail is
-/// missing still lands under the directory its existing ancestors physically
-/// live in, rather than under the names they are spelled with.
+/// Components are resolved left to right. Every component that exists is
+/// canonicalized — symlinks followed — and the names that do not exist yet are
+/// appended to that resolved prefix. A path that exists in full is therefore
+/// its canonical path, and one whose tail is missing still lands under the
+/// directory its existing ancestors physically live in, rather than under the
+/// names they are spelled with.
 ///
-/// A `..` that cannot be resolved physically (because the directory it would
-/// leave does not exist) falls back to the lexical reading of the whole path:
-/// `Path::file_name` yields nothing for such a component, so no `..` is ever
-/// appended to a resolved prefix and a containment check never sees a path it
-/// would have to interpret twice.
+/// A `..` is applied where the kernel would apply it: to the resolved prefix
+/// when nothing is missing (so it follows a symlink before it climbs), and to
+/// the last missing name otherwise (a directory that does not exist cannot be
+/// a link, so the two cancel). No `..` is ever appended to a resolved prefix,
+/// and a path whose `..` leaves the tail is still read under the physical
+/// ancestor, never under its spelling. That matters wherever a spelling and a
+/// physical path differ (macOS `/var` and `/tmp`, a symlinked home): a
+/// containment check compares this answer against protected roots resolved the
+/// same way, so a whole-path lexical fallback would let a traversal through a
+/// missing directory slip past a root spelled through a symlink.
 pub fn physical_with_missing_tail(path: &Path) -> PathBuf {
-    let mut missing: Vec<OsString> = Vec::new();
-    let mut current = path.to_path_buf();
-    loop {
-        if let Ok(canonical) = current.canonicalize() {
-            let mut resolved = canonical;
-            for name in missing.iter().rev() {
-                resolved.push(name);
-            }
-            return resolved;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => return lexical_normalize(path),
         }
-        let (Some(name), Some(parent)) = (
-            current.file_name().map(OsStr::to_os_string),
-            current.parent().map(Path::to_path_buf),
-        ) else {
-            return lexical_normalize(path);
-        };
-        missing.push(name);
-        current = if parent.as_os_str().is_empty() {
-            PathBuf::from(".")
-        } else {
-            parent
-        };
+    };
+    let mut resolved = PathBuf::new();
+    let mut missing: Vec<OsString> = Vec::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => resolved.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if missing.pop().is_none() {
+                    resolved.pop();
+                }
+            }
+            Component::Normal(name) => {
+                if missing.is_empty()
+                    && let Ok(canonical) = resolved.join(name).canonicalize()
+                {
+                    resolved = canonical;
+                } else {
+                    missing.push(name.to_os_string());
+                }
+            }
+        }
     }
+    for name in missing {
+        resolved.push(name);
+    }
+    resolved
 }
 
 /// Collapse `.` and `..` by name alone, without asking the filesystem.
