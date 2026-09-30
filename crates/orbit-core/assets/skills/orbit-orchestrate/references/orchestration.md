@@ -35,6 +35,10 @@ orbit run ship-sweep --dry-run      # what every registered workspace would ship
 `ship` with no IDs discovers ready backlog work itself. `--mode` defaults to the
 workspace's registered ship mode (`pr` unless set otherwise), and `--base`
 defaults to the registered workspace base branch, else `workflow.base_branch`.
+An explicit task ID must be in `backlog` or `in-progress`: shipping a `blocked`,
+`proposed`, `review` or `done` task is refused at submission, naming its status,
+so return a blocked task to the backlog (`orbit task update <id> --status backlog`)
+before shipping it again.
 
 `run auto` drains backlog leaf tasks for a bounded window. The window bounds
 only the *start* of new work — a task already shipping when it expires still

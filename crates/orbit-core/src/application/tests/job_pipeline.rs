@@ -28,7 +28,7 @@ use crate::application::job::pipeline::{
     pipeline_worker_root_override, resolve_pipeline_worker_executable,
     run_definition_snapshot_path, worker_command_override, worker_observer_read_counter,
 };
-use crate::application::task::TaskAddParams;
+use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use crate::application::workflow::{CompletionPolicy, ShipMode};
 
 fn test_runtime() -> (TempDir, OrbitRuntime) {
@@ -388,6 +388,7 @@ fn add_backlog_task(runtime: &OrbitRuntime) -> String {
         .add_task(TaskAddParams {
             title: "Ship submission fixture".to_string(),
             description: "A task selected by a ship-submission test.".to_string(),
+            status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
         .expect("create backlog task")
@@ -2056,6 +2057,73 @@ fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
     );
 }
 
+/// A task the pipeline cannot start from used to be accepted as `submitted`
+/// and only fail (blocked, proposed) or silently no-op (review, done) once
+/// the gate ran. The submission itself must refuse it, name the status, and
+/// leave no run behind.
+#[test]
+fn ship_submission_refuses_a_task_that_cannot_enter_the_pipeline() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &ship_submission_refuses_a_task_that_cannot_enter_the_pipeline,
+    )) {
+        return;
+    }
+    let (_root, runtime) = test_runtime();
+
+    for status in [
+        TaskStatus::Proposed,
+        TaskStatus::Blocked,
+        TaskStatus::Review,
+        TaskStatus::Done,
+    ] {
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: format!("Not shippable from {status}"),
+                description: "Status fixture".to_string(),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .expect("create task");
+        runtime
+            .update_task(
+                &task.id,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("move {} to {status}: {error}", task.id));
+
+        let error = runtime
+            .submit_ship_run(
+                ShipMode::Local,
+                Some("main"),
+                std::slice::from_ref(&task.id),
+                CompletionPolicy::Review,
+                &[],
+                Some("test"),
+                None,
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )
+            .expect_err("a task outside the admissible statuses must be refused up front");
+
+        let OrbitError::InvalidInput(message) = &error else {
+            panic!("{status}: expected an invalid-input refusal, got {error:?}");
+        };
+        assert!(
+            message.contains(&task.id) && message.contains(&format!("'{status}'")),
+            "{status}: the refusal must name the task and its status: {message}"
+        );
+    }
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("list job runs")
+            .is_empty(),
+        "a refused submission must not persist a run or spawn a worker"
+    );
+}
+
 /// [ORB-12491] An `epic`-tagged root is shippable like any other task: the tag
 /// is a size hint, and there is no supervisor pipeline to route it to.
 #[test]
@@ -2071,6 +2139,7 @@ fn ship_submission_admits_a_tagged_root_and_its_child_alike() {
             title: "Tagged root".to_string(),
             description: "Large-task fixture".to_string(),
             tags: vec!["epic".to_string()],
+            status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
         .expect("create tagged root");
@@ -2079,6 +2148,7 @@ fn ship_submission_admits_a_tagged_root_and_its_child_alike() {
             parent_id: Some(tagged_root.id.clone()),
             title: "Child".to_string(),
             description: "Leaf fixture".to_string(),
+            status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
         .expect("create child");
