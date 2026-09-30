@@ -222,6 +222,13 @@ continues after the CLI exits. Use `orbit run show <new_run_id>` to inspect it,
 or add `--wait` to block until it finishes and receive a nonzero exit status
 if the run does not succeed.
 
+Resume the run that did the failed work, not the wrapper around it. A ship or drain
+coordinator fails only because a child run failed; resuming it re-checks that same failed
+child result and fails again. `orbit run show <coordinator>` prints a `Resume:` line naming
+the failed leaf whenever one can be resumed (`orbit job resume <leaf>`); the leaf carries
+the worktree and checkpoints, and on success it hands the task to `review` like the
+original run would have.
+
 A **claimed** leaf (distributed-drain execution bound to an immutable claim/run
 pair) cannot use this path. Resume would mint a different run and cannot inherit
 the binding; the command refuses and names deliberate recovery. Inspect the

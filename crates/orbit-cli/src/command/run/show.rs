@@ -125,6 +125,10 @@ pub(crate) fn run_show_payload(
         header.push('\n');
         header.push_str(&cause_lines.join("\n"));
     }
+    if let Some(hint) = resume_hint(runtime, &run, &root_causes, read) {
+        header.push('\n');
+        header.push_str(&hint);
+    }
     if let Some(state) = &state {
         header.push_str(&format!(
             "\n{} iteration={} step_outputs={} updated_at={}",
@@ -170,6 +174,41 @@ pub(crate) fn run_show_payload(
         ],
     )
     .into())
+}
+
+/// Where to resume a failed pipeline run whose failure came from a child run.
+///
+/// A coordinating run (a ship or drain wrapper) fails only because its child
+/// did. Resuming the wrapper re-checks that same failed child result and fails
+/// the same way, so the operator needs the run that did the work.
+fn resume_hint(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+    causes: &[RunRootCause],
+    read: RunRead,
+) -> Option<String> {
+    if !is_resumable_state(run.state) {
+        return None;
+    }
+    let leaf = causes.iter().find(|cause| {
+        cause.run_id != run.run_id
+            && read
+                .show(runtime, &cause.run_id)
+                .is_ok_and(|leaf| is_resumable_state(leaf.state))
+    })?;
+    Some(format!(
+        "{} the failed work ran in {}; `orbit job resume {}` retries it, while resuming this run only re-checks that child's failure",
+        crate::output::color::bold("Resume:"),
+        leaf.run_id,
+        leaf.run_id,
+    ))
+}
+
+fn is_resumable_state(state: JobRunState) -> bool {
+    matches!(
+        state,
+        JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
+    )
 }
 
 /// Follow persisted child dispatches depth first. Only failed terminal leaves

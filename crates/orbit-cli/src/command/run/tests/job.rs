@@ -186,6 +186,10 @@ fn run_show_reports_all_failed_leaves_depth_first_with_complete_errors() {
     assert!(header.contains(&format!(
         "Root cause: run=jrun-local step=worktree_setup error={long_error}"
     )));
+    assert!(
+        header.contains("`orbit job resume jrun-local` retries it"),
+        "a failed wrapper must point at the first resumable failed leaf: {header}"
+    );
     let second = header
         .find("Additional root cause: run=jrun-local-second step=validate error=second leaf failed")
         .expect("second leaf line");
