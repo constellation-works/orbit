@@ -1,4 +1,5 @@
 use super::*;
+use crate::task::TaskEnvelopeV2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Task {
@@ -71,6 +72,48 @@ impl Display for Task {
 }
 
 impl Task {
+    /// The task an envelope and its body documents describe.
+    ///
+    /// Passing empty bodies yields the metadata-only view: `description`,
+    /// `acceptance_criteria`, `plan` and `execution_summary` are empty while
+    /// every envelope field is populated exactly as a full read populates it.
+    pub fn from_envelope_parts(
+        envelope: TaskEnvelopeV2,
+        description: String,
+        acceptance_criteria: Vec<String>,
+        plan: String,
+        execution_summary: String,
+    ) -> Self {
+        let status = envelope.status;
+        Self {
+            job_run_machine: envelope.job_run_machine,
+            id: envelope.id,
+            title: envelope.title,
+            description,
+            acceptance_criteria,
+            tags: normalize_task_tags(envelope.tags),
+            required_tools: normalize_required_tools(envelope.required_tools),
+            plan,
+            execution_summary,
+            context_files: envelope.context_files,
+            created_by: envelope.created_by,
+            planned_by: envelope.planned_by,
+            implemented_by: envelope.implemented_by,
+            status,
+            priority: envelope.priority,
+            complexity: envelope.complexity,
+            task_type: envelope.task_type,
+            pr_status: envelope.pr_status,
+            external_refs: envelope.external_refs,
+            relations: envelope.relations,
+            job_run_id: envelope.job_run_id,
+            crew: envelope.crew,
+            orchestrator: envelope.orchestrator,
+            created_at: envelope.created_at,
+            updated_at: envelope.updated_at,
+        }
+    }
+
     pub fn github_pr_number(&self) -> Option<&str> {
         self.external_refs
             .iter()

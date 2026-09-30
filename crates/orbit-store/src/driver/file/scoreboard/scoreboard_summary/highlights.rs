@@ -4,6 +4,7 @@
 //! not an impact rank, quality score, or model-inferred summary.
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskPriority, TaskStatus};
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +138,24 @@ pub fn snapshot_coverage(windowed: bool) -> ScoreboardCoverage {
             },
         }
     }
+}
+
+/// Fill each selected completion's `summary_excerpt` from `execution_summary`,
+/// which receives a task id and returns that task's full execution summary.
+///
+/// For summaries generated from metadata-only tasks (empty execution
+/// summaries): selection needs no body, so only the at most
+/// [`NOTABLE_COMPLETIONS_LIMIT`] selected tasks pay for a bundle read. The
+/// result equals what generating from full tasks would have selected and
+/// excerpted.
+pub fn fill_notable_summary_excerpts(
+    notable: &mut NotableCompletions,
+    mut execution_summary: impl FnMut(&str) -> Result<String, OrbitError>,
+) -> Result<(), OrbitError> {
+    for item in &mut notable.items {
+        item.summary_excerpt = excerpt_execution_summary(&execution_summary(&item.task_id)?);
+    }
+    Ok(())
 }
 
 pub fn excerpt_execution_summary(raw: &str) -> Option<String> {

@@ -224,7 +224,7 @@ impl TaskV2Store {
     }
 
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
-        Ok(task_from_parts(
+        Ok(Task::from_envelope_parts(
             bundle.envelope,
             bundle.description,
             parse_acceptance(&bundle.acceptance),
@@ -237,7 +237,7 @@ impl TaskV2Store {
     /// `plan`, `execution_summary` and `acceptance_criteria` are empty. Selection
     /// uses it to evaluate metadata-only predicates before paying for a bundle.
     pub(super) fn metadata_task(envelope: &TaskEnvelopeV2) -> Task {
-        task_from_parts(
+        Task::from_envelope_parts(
             envelope.clone(),
             String::new(),
             Vec::new(),
@@ -275,42 +275,5 @@ impl TaskV2Store {
             }
             self.bundle_store.with_bundle_write_lock(id, op)
         })
-    }
-}
-
-fn task_from_parts(
-    envelope: TaskEnvelopeV2,
-    description: String,
-    acceptance_criteria: Vec<String>,
-    plan: String,
-    execution_summary: String,
-) -> Task {
-    let status = envelope.status;
-    Task {
-        job_run_machine: envelope.job_run_machine,
-        id: envelope.id,
-        title: envelope.title,
-        description,
-        acceptance_criteria,
-        tags: normalize_task_tags(envelope.tags),
-        required_tools: orbit_types::task::normalize_required_tools(envelope.required_tools),
-        plan,
-        execution_summary,
-        context_files: envelope.context_files,
-        created_by: envelope.created_by,
-        planned_by: envelope.planned_by,
-        implemented_by: envelope.implemented_by,
-        status,
-        priority: envelope.priority,
-        complexity: envelope.complexity,
-        task_type: envelope.task_type,
-        pr_status: envelope.pr_status,
-        external_refs: envelope.external_refs,
-        relations: envelope.relations,
-        job_run_id: envelope.job_run_id,
-        crew: envelope.crew,
-        orchestrator: envelope.orchestrator,
-        created_at: envelope.created_at,
-        updated_at: envelope.updated_at,
     }
 }

@@ -180,7 +180,8 @@ fn show_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, Orbi
 }
 
 fn stats(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
-    let tasks = runtime.list_tasks()?;
+    // Rates read only status and attribution, so envelope metadata suffices.
+    let tasks = runtime.list_task_metadata()?;
     crate::runtime::friction::store_for(runtime)?.stats(&tasks)
 }
 

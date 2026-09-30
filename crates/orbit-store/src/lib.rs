@@ -84,8 +84,8 @@ pub mod scoreboard_summary {
     pub use crate::driver::file::scoreboard::scoreboard_summary::{
         NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION, OrchestrationBucketKind,
         OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary,
-        ScoreboardInputs, ScoreboardSummary, ScoreboardWindow, generate_summary_with_inputs,
-        write_summary,
+        ScoreboardInputs, ScoreboardSummary, ScoreboardWindow, fill_notable_summary_excerpts,
+        generate_summary_with_inputs, write_summary,
     };
 }
 

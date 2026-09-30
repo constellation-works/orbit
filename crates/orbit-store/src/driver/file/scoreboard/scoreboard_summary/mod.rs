@@ -17,7 +17,8 @@ pub use generate::generate_summary_with_inputs;
 #[cfg(test)]
 pub use generate::{generate_summary, generate_summary_with_audit_tool_calls};
 pub use highlights::{
-    NotableCompletions, ScoreboardCoverage, select_notable_completions, snapshot_coverage,
+    NotableCompletions, ScoreboardCoverage, fill_notable_summary_excerpts,
+    select_notable_completions, snapshot_coverage,
 };
 pub use types::{
     AgentSummary, NormalizedTokenSummary, ORCHESTRATION_SCHEMA_VERSION, OrchestrationBucketKind,
