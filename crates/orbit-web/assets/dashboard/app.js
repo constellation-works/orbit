@@ -1199,11 +1199,17 @@ async function initWorkspaceSelector() {
   // Default to the workspace flagged by the server (the cwd workspace, if the
   // server was launched inside one) so every tab works out of the box; else the
   // first active workspace. "All workspaces" (aggregate) is an explicit choice.
-  if (!getWorkspace()) {
+  // A link can also name a workspace that is gone or unavailable; the selector
+  // has no option for it, so keeping it would fail every panel with no way to
+  // recover from the selector. Treat it like no workspace and repair the URL.
+  const linked = getWorkspace();
+  const linkedIsServable = dashboardWorkspaces.some((w) => w.id === linked && w.status === "active");
+  if (!linkedIsServable) {
     const def = dashboardWorkspaces.find((w) => w.is_default);
     const firstActive = dashboardWorkspaces.find((w) => w.status === "active");
     const initial = (def || firstActive || dashboardWorkspaces[0]).id;
     setWorkspace(initial);
+    if (linked) persistScopeToUrl();
   }
   buildWorkspaceSelector();
 }

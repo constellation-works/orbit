@@ -3397,6 +3397,17 @@ fn dashboard_rows_are_keyboard_operable_without_changing_click_behaviour() {
     ));
 }
 
+// A link naming a workspace the server does not serve must not strand the
+// dashboard on a scope its selector cannot show.
+#[test]
+fn dashboard_replaces_an_unknown_linked_workspace_with_the_default() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_workspace_scope.mjs")
+    ));
+}
+
 // Click-to-copy ids and commands confirm a copy only when the browser made
 // one, and say so when it could not (no async clipboard on plain HTTP).
 #[test]
