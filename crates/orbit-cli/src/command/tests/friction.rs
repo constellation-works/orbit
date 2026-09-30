@@ -431,3 +431,31 @@ fn list_projects_every_declared_filter() {
         ]
     );
 }
+
+#[test]
+fn friction_update_without_fields_is_refused_by_the_cli_and_with_one_is_not() {
+    use super::super::friction::require_update_field;
+
+    let bare = invocation(&["orbit", "friction", "update", "F2026-01-001"]);
+    assert!(require_update_field(&bare.input).is_err());
+
+    let with_status = invocation(&[
+        "orbit",
+        "friction",
+        "update",
+        "F2026-01-001",
+        "--status",
+        "triaged",
+    ]);
+    assert!(require_update_field(&with_status.input).is_ok());
+
+    let with_tag = invocation(&[
+        "orbit",
+        "friction",
+        "update",
+        "F2026-01-001",
+        "--tag",
+        "a,b",
+    ]);
+    assert!(require_update_field(&with_tag.input).is_ok());
+}
