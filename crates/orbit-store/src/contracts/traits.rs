@@ -190,6 +190,26 @@ pub trait TaskStoreBackend: Send + Sync {
         }
         Ok(tasks)
     }
+    /// Stream the tasks matching `query` (all of `tags`) in listing order to
+    /// `visit` until it returns `false`.
+    ///
+    /// `admit` judges each candidate from its envelope alone, before its body
+    /// is read; a backend that can avoid the read for a rejected task does.
+    /// The result equals [`Self::search_tasks_filtered`] followed by `admit`.
+    fn search_tasks_visit(
+        &self,
+        query: &str,
+        tags: &[String],
+        admit: &dyn Fn(&Task) -> bool,
+        visit: &mut dyn FnMut(Task) -> bool,
+    ) -> Result<(), OrbitError> {
+        for task in self.search_tasks_filtered(query, tags)? {
+            if admit(&task) && !visit(task) {
+                break;
+            }
+        }
+        Ok(())
+    }
     fn delete_task(&self, id: &str) -> Result<bool, OrbitError>;
 
     /// Run `op` while holding this task's write lock.

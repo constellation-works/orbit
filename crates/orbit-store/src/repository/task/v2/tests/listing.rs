@@ -510,6 +510,101 @@ fn listing_and_search_defer_artifact_payload_verification() {
     assert_eq!(take_artifact_payload_reads(), 0);
 }
 
+/// Search streams matches in listing order, judges `admit` from the envelope
+/// before any bundle read, and stops reading when the visitor stops.
+#[test]
+fn search_visit_reads_only_admitted_bundles_and_stops_when_asked() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    for index in 0..12 {
+        let status = if index % 3 == 0 {
+            TaskStatus::Done
+        } else {
+            TaskStatus::Backlog
+        };
+        let mut params = create_params(&format!("Task {index}"), status);
+        match index % 4 {
+            0 => params.description = "the zebra-needle sits in the body".to_string(),
+            1 => params.title = format!("Zebra-Needle {index}"),
+            2 => params.plan = "a zebra-needle plan".to_string(),
+            _ => {}
+        }
+        store.create_task(params).unwrap();
+    }
+    reads(&store);
+
+    let is_open = |task: &Task| task.status != TaskStatus::Done;
+    // What a full search followed by the same filter returns, and in what order.
+    let expected = store
+        .search_tasks_filtered("ZEBRA-needle", &[])
+        .unwrap()
+        .into_iter()
+        .filter(is_open)
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    let by_hand = store
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .filter(|task| {
+            is_open(task)
+                && [&task.title, &task.description, &task.plan]
+                    .iter()
+                    .any(|field| field.to_lowercase().contains("zebra-needle"))
+        })
+        .map(|task| task.id)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, by_hand);
+    assert_eq!(
+        expected.len(),
+        6,
+        "indexes 1, 2, 4, 5, 8 and 10 are open matches"
+    );
+    reads(&store);
+
+    let mut visited = Vec::new();
+    store
+        .search_tasks_visit("ZEBRA-needle", &[], &is_open, &mut |task| {
+            visited.push(task.id);
+            true
+        })
+        .unwrap();
+    assert_eq!(visited, expected);
+    assert_eq!(
+        reads(&store).0,
+        8,
+        "the four done tasks are rejected from their envelopes, unread"
+    );
+
+    let mut first = Vec::new();
+    store
+        .search_tasks_visit("ZEBRA-needle", &[], &is_open, &mut |task| {
+            first.push(task.id);
+            false
+        })
+        .unwrap();
+    assert_eq!(first, expected[..1]);
+    assert!(
+        reads(&store).0 < 8,
+        "a visitor that stops early leaves the remaining bundles unread"
+    );
+
+    let tagged = store
+        .search_tasks_filtered("ZEBRA-needle", &["v2".to_string()])
+        .unwrap();
+    assert_eq!(
+        tagged.len(),
+        9,
+        "every task has the tag, so done matches are included"
+    );
+    assert!(
+        store
+            .search_tasks_filtered("ZEBRA-needle", &["absent".to_string()])
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[test]
 #[allow(clippy::print_stdout)]
 fn lightweight_listing_skips_artifact_payload_io() {

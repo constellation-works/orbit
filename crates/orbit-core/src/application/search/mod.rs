@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use orbit_common::OrbitError;
@@ -5,6 +6,7 @@ use orbit_search::{SOURCE_KIND_TASK, bm25_page};
 use orbit_store::friction_store::FrictionListFilter;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskListFilter;
 
 mod convert;
 mod federated;
@@ -162,18 +164,9 @@ impl OrbitRuntime {
         let candidates = if let Some(query) = query {
             self.lexical_task_candidates(query, limit, accepts)?
         } else {
-            // No query → enumerate tasks (used by `--path` and `--tag`). Tags
-            // narrow through the task index so only matching bundles hydrate;
-            // `accepts` still applies every predicate to what comes back.
-            let tasks = if tag_filter.is_empty() {
-                self.list_tasks()?
-            } else {
-                self.list_tasks_by_tags(tag_filter)?
-            };
-            tasks
+            // No query → enumerate tasks (used by `--path` and `--tag`).
+            self.accepted_task_page(tag_filter, limit, &accepts)?
                 .into_iter()
-                .filter(|task| accepts(task))
-                .take(limit)
                 .map(|task| (lexical_task_hit(&task), task))
                 .collect()
         };
@@ -185,6 +178,43 @@ impl OrbitRuntime {
         }
         out.truncate(limit);
         Ok(out)
+    }
+
+    /// The first `limit` tasks (newest first) carrying every tag in `tags`
+    /// that `accepts` admits. `accepts` reads envelope fields only, so the
+    /// store judges every candidate from its envelope and hydrates just the
+    /// page, instead of reading every task's bundle to discard most of them.
+    fn accepted_task_page(
+        &self,
+        tags: &[String],
+        limit: usize,
+        accepts: &dyn Fn(&orbit_types::task::Task) -> bool,
+    ) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            // The owner answers whole listings only.
+            let tasks = if tags.is_empty() {
+                self.list_tasks()?
+            } else {
+                self.list_tasks_by_tags(tags)?
+            };
+            return Ok(tasks
+                .into_iter()
+                .filter(|task| accepts(task))
+                .take(limit)
+                .collect());
+        }
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        let page = self.stores().tasks().query_task_rows(
+            &TaskListFilter {
+                tags: tags.to_vec(),
+                ..TaskListFilter::default()
+            },
+            limit,
+            Some(&|task, _| accepts(task)),
+        )?;
+        Ok(page.items.into_iter().map(|row| row.task).collect())
     }
 
     fn friction_branch(
@@ -305,14 +335,23 @@ impl OrbitRuntime {
             }
         }
 
-        for task in self.search_tasks_filtered(query, &[])? {
-            if candidates.len() == candidate_limit {
-                break;
-            }
-            if !seen.insert(task.id.clone()) || !accepts(&task) {
-                continue;
-            }
-            candidates.push((lexical_task_hit(&task), task));
+        // The bundle matcher supplements the BM25 hits, in index order, until
+        // the budget fills. `accepts` and the tasks BM25 already returned are
+        // judged from envelopes, so neither costs a bundle read, and the scan
+        // stops as soon as the budget is full.
+        if candidates.len() < candidate_limit {
+            let seen = RefCell::new(seen);
+            self.search_tasks_visit(
+                query,
+                &[],
+                &|task| accepts(task) && !seen.borrow().contains(&task.id),
+                &mut |task| {
+                    if seen.borrow_mut().insert(task.id.clone()) {
+                        candidates.push((lexical_task_hit(&task), task));
+                    }
+                    candidates.len() < candidate_limit
+                },
+            )?;
         }
         Ok(candidates)
     }

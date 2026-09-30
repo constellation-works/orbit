@@ -3,27 +3,21 @@ use orbit_common::text::contains_lowercased;
 use super::*;
 
 impl TaskV2Store {
-    /// Search over the bundles the candidate listing already read, so a query
-    /// costs one lightweight bundle read per task. Interactive task search
-    /// never opens artifact payloads; only the manifest paths participate.
-    pub(super) fn search_bundles(
+    /// The task `bundle` describes when it matches `lowered`, else `None`.
+    /// Matching is over the lightweight bundle read: it never opens artifact
+    /// payloads, and only the manifest paths participate.
+    pub(super) fn matching_task(
         &self,
-        bundles: Vec<TaskBundleV2>,
+        bundle: TaskBundleV2,
         lowered: &str,
-    ) -> Result<Vec<Task>, OrbitError> {
-        let mut matches = Vec::new();
-        for bundle in bundles {
-            let sidecars_match = bundle
-                .comments
-                .iter()
-                .any(|comment| contains_lowercased(&comment.body, lowered))
-                || artifact_manifest_path_matches_query(bundle.artifact_manifest.as_ref(), lowered);
-            let task = self.task_from_bundle(bundle)?;
-            if task_in_memory_fields_match_query(&task, lowered) || sidecars_match {
-                matches.push(task);
-            }
-        }
-        Ok(matches)
+    ) -> Result<Option<Task>, OrbitError> {
+        let sidecars_match = bundle
+            .comments
+            .iter()
+            .any(|comment| contains_lowercased(&comment.body, lowered))
+            || artifact_manifest_path_matches_query(bundle.artifact_manifest.as_ref(), lowered);
+        let task = self.task_from_bundle(bundle)?;
+        Ok((task_in_memory_fields_match_query(&task, lowered) || sidecars_match).then_some(task))
     }
 }
 

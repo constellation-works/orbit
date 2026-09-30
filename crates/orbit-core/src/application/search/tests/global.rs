@@ -374,6 +374,151 @@ fn filtered_out_top_matches_do_not_starve_the_task_page() {
     assert_eq!(ids, [Some(open.as_str())]);
 }
 
+/// Comments are invisible to FTS, so these matches come from the bundle
+/// matcher that supplements the index. The scan must hand back exactly what a
+/// full scan followed by the status and path filters would: newest first,
+/// filtered from envelopes, and cut at the page.
+#[test]
+fn bundle_matcher_supplement_keeps_order_filters_and_page_size() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    // One indexed task so the lexical branch consults FTS before the matcher.
+    add_task(&runtime, "anchor", "ordinary body", TaskStatus::Backlog);
+    let mut open_matches = Vec::new();
+    let mut all_matches = Vec::new();
+    let mut hot_matches = Vec::new();
+    for index in 0..10 {
+        let done = index % 2 == 0;
+        let id = add_commented_task(
+            &runtime,
+            &format!("commented {index}"),
+            "note the sidecar-only-marker here",
+            if done {
+                TaskStatus::Done
+            } else {
+                TaskStatus::Backlog
+            },
+            &[if index % 3 == 0 {
+                "file:src/hot.rs"
+            } else {
+                "file:src/cold.rs"
+            }],
+        );
+        if !done {
+            open_matches.push(id.clone());
+        }
+        if index % 3 == 0 {
+            hot_matches.push(id.clone());
+        }
+        all_matches.push(id);
+    }
+    // Listing order is newest first.
+    open_matches.reverse();
+    all_matches.reverse();
+    hot_matches.reverse();
+
+    let search = |params: GlobalSearchParams| -> Vec<String> {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some("sidecar-only-marker".to_string()),
+                kind: GlobalSearchKind::Task,
+                ..params
+            })
+            .expect("search tasks")
+            .results
+            .into_iter()
+            .filter_map(|hit| hit.id)
+            .collect()
+    };
+
+    assert_eq!(
+        search(GlobalSearchParams {
+            limit: 3,
+            ..Default::default()
+        }),
+        open_matches[..3],
+        "default statuses hide done tasks, and the page keeps the newest"
+    );
+    assert_eq!(
+        search(GlobalSearchParams {
+            limit: 10,
+            ..Default::default()
+        }),
+        open_matches
+    );
+    assert_eq!(
+        search(GlobalSearchParams {
+            limit: 4,
+            all: true,
+            ..Default::default()
+        }),
+        all_matches[..4]
+    );
+    assert_eq!(
+        search(GlobalSearchParams {
+            limit: 10,
+            all: true,
+            path: Some("src/hot.rs".to_string()),
+            ..Default::default()
+        }),
+        hot_matches
+    );
+}
+
+/// `--path` and `--tag` without a query judge every task from its envelope and
+/// hydrate only the page.
+#[test]
+fn queryless_path_search_returns_the_newest_matching_page() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let mut expected = Vec::new();
+    for index in 0..9 {
+        let hot = index % 2 == 0;
+        let id = add_commented_task(
+            &runtime,
+            &format!("routed {index}"),
+            "note",
+            TaskStatus::Backlog,
+            &[if hot {
+                "file:src/hot.rs"
+            } else {
+                "file:src/cold.rs"
+            }],
+        );
+        if hot {
+            expected.push(id);
+        }
+    }
+    expected.reverse();
+
+    let hits = |limit: usize| -> Vec<(String, Option<String>)> {
+        runtime
+            .global_search(GlobalSearchParams {
+                path: Some("src/hot.rs".to_string()),
+                kind: GlobalSearchKind::Task,
+                limit,
+                ..Default::default()
+            })
+            .expect("search by path")
+            .results
+            .into_iter()
+            .map(|hit| (hit.id.expect("task id"), hit.title))
+            .collect()
+    };
+
+    let page = hits(3);
+    assert_eq!(
+        page.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        expected[..3]
+    );
+    assert!(
+        page.iter().all(|(_, title)| title.is_some()),
+        "hits are built from hydrated tasks"
+    );
+    assert_eq!(
+        hits(50).into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        expected
+    );
+}
+
 /// Twelve tasks whose title and description both repeat the query terms
 /// outrank the one task that holds them apart, so the whole first BM25 page
 /// belongs to tasks `rejected` shapes out of the filter.
