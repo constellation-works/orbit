@@ -67,7 +67,7 @@
   scrollbar-color: var(--border) transparent;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .col-log { min-height: 320px; }
 }
 .dock-splitter {
@@ -86,7 +86,7 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .dock-splitter {
     display: none !important;
   }

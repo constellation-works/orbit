@@ -406,14 +406,26 @@
 #tasks-panel { container: tasks-panel / inline-size; }
 @container tasks-panel (max-width: 620px) {
   .row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    /* The action column has the same fixed width as in the one-line row, so the
+       columns line up between groups whose quick actions differ in width. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 84px;
     grid-template-areas:
       "id title title"
       "status crew quick";
     padding-block: 8px;
   }
   .row .id { grid-area: id; }
-  .row .title { grid-area: title; }
+  /* The title is the only description of the task on this row, so let it use
+     two lines before it is cut. */
+  .row .title {
+    grid-area: title;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
   .row .status-cell { grid-area: status; }
   .row .crew-cell { grid-area: crew; }
   .row .task-quick-cell { grid-area: quick; }
@@ -471,12 +483,12 @@ main.tasks-layout {
   }
 }
 
-/* ORB-10874: below ~760px the two-column task/log layout has no room
+/* ORB-10874: below ~900px the two-column task/log layout has no room
    left for either column, so stack them — the task list keeps its own
    independently-scrolling, min-height-guaranteed body (below) and the
    log panel follows underneath rather than both being squeezed into
    slivers side by side. */
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   main.tasks-layout {
     grid-template-columns: 1fr !important;
   }
@@ -496,7 +508,7 @@ main.tasks-layout {
    an explicit row: CSS Grid places definite row+column items first, so
    a splitter-only grid-row occupies the dock's cell and auto-places
    #side-dock onto row 2. */
-@media (min-width: 761px) {
+@media (min-width: 901px) {
   main.tasks-layout > .col-tasks {
     grid-column: 1;
     grid-row: 1;

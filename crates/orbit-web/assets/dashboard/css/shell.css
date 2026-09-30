@@ -228,6 +228,22 @@
 .kpi-spark path { fill: none; stroke: var(--accent); stroke-width: 1.2px; }
 .kpi-spark .baseline { stroke: var(--hair); stroke-width: 1px; }
 
+/* The bar needs about 1000px of window to hold the crumb, four metrics, the
+   window label and Refresh on one row. Narrower than that they overlapped, so
+   the decorative sparkline goes first and then the bar wraps. */
+@media (max-width: 1100px) {
+  .kpi-spark { display: none; }
+}
+@media (max-width: 1000px) {
+  .topbar {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 8px 12px;
+  }
+}
+
 .refresh-btn {
   height: 32px;
   padding: 0 12px;
@@ -311,14 +327,6 @@
     flex: 0 0 auto;
   }
   .rail-foot { display: none; }
-  .topbar {
-    height: auto;
-    min-height: 52px;
-    flex-wrap: wrap;
-    row-gap: 8px;
-    padding: 8px 12px;
-  }
-  .kpi-spark { display: none; }
   .kpi-window { display: none; }
   .tab-pane[data-tab="operations"] .subtabs,
   #operations-subtabs {
