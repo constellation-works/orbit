@@ -13,6 +13,7 @@ use crate::driver::file::task_bundle::{
 use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 
 use super::inspect::{ValidatedPublicationBundle, load_validated_publication};
+use super::log_rollback_failure;
 use super::{OmittedAttachment, PublicationInspectRequest};
 
 const RESTORE_LABEL: &str = "publication restore";
@@ -368,20 +369,26 @@ impl<'a> RestoreGuard<'a> {
 
     fn rollback(&mut self) {
         for task_id in self.registered_ids.iter().rev() {
-            let _ = self
-                .registry
-                .unregister_task_bundle(task_id, &self.workspace_id);
+            log_rollback_failure(
+                "unregister restored task",
+                self.registry
+                    .unregister_task_bundle(task_id, &self.workspace_id),
+            );
         }
-        let _ = self
-            .registry
-            .replace_workspace_task_indexes(&self.workspace_id, &self.previous_envelopes);
+        log_rollback_failure(
+            "restore workspace task indexes",
+            self.registry
+                .replace_workspace_task_indexes(&self.workspace_id, &self.previous_envelopes),
+        );
         for dir in self.published_dirs.iter().rev() {
-            let _ = fs::remove_dir_all(dir);
+            log_rollback_failure("remove restored bundle", fs::remove_dir_all(dir));
         }
         if let Some(current) = self.advanced_allocator {
-            let _ = self
-                .registry
-                .restore_allocator_after_failed_restore(current, self.previous_allocator);
+            log_rollback_failure(
+                "restore task id allocator",
+                self.registry
+                    .restore_allocator_after_failed_restore(current, self.previous_allocator),
+            );
         }
         self.armed = false;
     }

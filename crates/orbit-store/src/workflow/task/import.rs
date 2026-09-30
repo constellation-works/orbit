@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::archive;
+use super::log_rollback_failure;
 use super::manifest::{TaskMigrationManifest, read_manifest, validate_manifest};
 
 /// How to resolve an imported task id that already exists locally (with
@@ -611,19 +612,24 @@ impl<'a> WriteGuard<'a> {
     /// `orbit task reindex`) rebuilds them.
     fn rollback(&mut self) {
         if let Some(workspace_id) = self.registered_workspace.take() {
-            let _ = self.registry.unbind_workspace(&workspace_id);
+            log_rollback_failure(
+                "unbind workspace",
+                self.registry.unbind_workspace(&workspace_id),
+            );
         }
         for id in self.registered_ids.drain(..) {
             // The partition id is not needed to look up the (global) binding,
             // but the API takes it; recover it from the binding.
             if let Ok(Some(binding)) = self.registry.find_task_binding(&id) {
-                let _ = self
-                    .registry
-                    .unregister_task_bundle(&id, &binding.partition_id);
+                log_rollback_failure(
+                    "unregister imported task",
+                    self.registry
+                        .unregister_task_bundle(&id, &binding.partition_id),
+                );
             }
         }
         for dir in self.written_dirs.drain(..) {
-            let _ = std::fs::remove_dir_all(&dir);
+            log_rollback_failure("remove imported bundle", std::fs::remove_dir_all(&dir));
         }
         self.armed = false;
     }
