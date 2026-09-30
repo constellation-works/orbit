@@ -186,18 +186,15 @@ pub struct CoordinatedWorkspaceBackends {
     pub commit_boundary: Arc<TaskCommitBoundary>,
 }
 
-/// Compose one workspace's task and reservation persistence over a shared
-/// durable commit boundary (ORB-12528).
+/// Compose one workspace's task and reservation persistence over an
+/// observation-only commit boundary.
 ///
-/// The difference from legacy uncoordinated task composition is serialization and recovery, not
-/// storage layout: bundles, registry rows, and reservation rows are unchanged,
-/// and every existing API behaves as before. What is added is that ordinary
-/// task and reservation mutations run inside the boundary, reads settle an
-/// interrupted commit before exposing state, and an admission decision can
-/// read readiness and publish its transition plus reservation as one durable
-/// outcome.
-///
-/// `store` must be the database that holds this host's reservations.
+/// Reads the same partition state as [`workspace_coordinated_backends`] and
+/// settles an interrupted commit the same way, but opening it initializes
+/// nothing: no partition directory, lock file, or journal marker. Used by a
+/// read-only join of a foreign generation, a read-only command whose partition
+/// does not exist yet, and any open of an existing partition on storage the
+/// process cannot write.
 pub fn workspace_observational_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
@@ -208,7 +205,14 @@ pub fn workspace_observational_backends(
         registry.clone(),
         workspace_id.clone(),
     )?);
-    let task_store = Arc::new(TaskV2Store::new(registry, workspace_id));
+    // The task store joins the same observation handle: a partition that has
+    // activated coordination refuses the legacy uncoordinated store, and every
+    // partition written since the boundary shipped has.
+    let task_store = Arc::new(TaskV2Store::with_commit_boundary(
+        registry,
+        workspace_id,
+        Arc::clone(&commit_boundary),
+    ));
     Ok(CoordinatedWorkspaceBackends {
         task: WorkspaceTaskBackends {
             task: task_store.clone(),
@@ -224,6 +228,18 @@ pub fn workspace_observational_backends(
     })
 }
 
+/// Compose one workspace's task and reservation persistence over a shared
+/// durable commit boundary (ORB-12528).
+///
+/// The difference from legacy uncoordinated task composition is serialization and recovery, not
+/// storage layout: bundles, registry rows, and reservation rows are unchanged,
+/// and every existing API behaves as before. What is added is that ordinary
+/// task and reservation mutations run inside the boundary, reads settle an
+/// interrupted commit before exposing state, and an admission decision can
+/// read readiness and publish its transition plus reservation as one durable
+/// outcome.
+///
+/// `store` must be the database that holds this host's reservations.
 pub fn workspace_coordinated_backends(
     registry: TaskRegistryStore,
     workspace_id: String,

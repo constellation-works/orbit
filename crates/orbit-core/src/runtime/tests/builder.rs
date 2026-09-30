@@ -514,6 +514,144 @@ fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
     }
 }
 
+/// A read-only open reads an absent task partition as empty instead of
+/// initializing it: opening the commit boundary would create the partition
+/// directory, lock and journal marker, which fails on a read-only mount and
+/// otherwise mints a partition only to read it.
+#[test]
+fn read_only_runtime_does_not_mint_an_absent_task_partition() {
+    let root = tempdir().expect("tempdir");
+    let data_dir = root.path().join("data");
+    std::fs::create_dir_all(&data_dir).expect("create data dir");
+    let partition = data_dir
+        .join("tasks")
+        .join("workspaces")
+        .join(crate::runtime::UNBOUND_DATA_DIR_PARTITION_ID);
+    let roots = || crate::runtime::OrbitRuntimeRoots {
+        global_root: data_dir.clone(),
+        shared_root: data_dir.clone(),
+        local_root: data_dir.clone(),
+    };
+
+    let runtime = OrbitRuntime::initialize_from_resolved_roots_read_only(roots(), None)
+        .expect("read-only open over an absent partition");
+    assert!(
+        runtime.list_tasks().expect("list tasks").is_empty(),
+        "an absent partition reads as empty"
+    );
+    drop(runtime);
+    assert!(
+        !partition.exists(),
+        "a read-only open must not create the task partition"
+    );
+
+    drop(OrbitRuntime::initialize_from_resolved_roots(roots(), None).expect("writable open"));
+    assert!(
+        partition.join(".task-commit-required").exists(),
+        "a writable open still initializes the partition's commit boundary"
+    );
+}
+
+/// An existing, coordinated task partition on storage this process cannot
+/// write still opens and reads; only a write fails, attributed to the
+/// partition. Before the fallback, the boundary's setup writes (lock and
+/// journal marker) refused the whole runtime, so even `task show` failed.
+#[cfg(unix)]
+#[test]
+fn coordinated_partition_on_unwritable_storage_stays_readable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_root, global_root, workspace_root, runtime) = v2_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Readable behind a denied partition".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("create task on writable storage");
+    let partition = global_root
+        .join("tasks")
+        .join("workspaces")
+        .join(runtime.workspace_id().expect("partition id"));
+    drop(runtime);
+    assert!(
+        partition.join(".task-commit-required").exists(),
+        "the fixture partition must have activated coordination"
+    );
+
+    // Deny writes across the whole partition tree, the way a read-only mount
+    // does: the boundary's lock and marker, and every bundle beneath it.
+    let modes = deny_writes(&partition);
+    let restore = || {
+        for (path, mode) in modes.iter().rev() {
+            std::fs::set_permissions(path, mode.clone()).expect("restore partition modes");
+        }
+    };
+    if std::fs::File::create(partition.join("probe")).is_ok() {
+        // A user that ignores the mode bits (typically root) cannot reproduce
+        // the denial this fixture is about.
+        restore();
+        return;
+    }
+
+    let observed = observe(&global_root, &workspace_root, &task.id);
+    restore();
+    let (title, listed, denied) =
+        observed.expect("open a coordinated partition that refuses writes");
+    assert_eq!(title, "Readable behind a denied partition");
+    assert_eq!(listed, vec![task.id.clone()]);
+    let denied = denied.expect_err("a write to the denied partition must fail");
+    assert!(
+        denied.is_readonly_or_access_failure()
+            && denied
+                .to_string()
+                .contains(partition.to_str().expect("utf8 partition")),
+        "the write failure must name the partition and the denial: {denied}"
+    );
+
+    /// Make `root` and everything beneath it read-only, returning the original
+    /// modes parents-first.
+    fn deny_writes(root: &std::path::Path) -> Vec<(PathBuf, std::fs::Permissions)> {
+        let metadata = std::fs::symlink_metadata(root).expect("partition entry metadata");
+        let mut modes = vec![(root.to_path_buf(), metadata.permissions())];
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(root).expect("read partition directory") {
+                modes.extend(deny_writes(&entry.expect("partition entry").path()));
+            }
+        }
+        let denied = if metadata.is_dir() { 0o500 } else { 0o400 };
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(denied))
+            .expect("deny writes to a partition entry");
+        modes
+    }
+
+    /// Collect everything the assertions need while the partition refuses
+    /// writes, so the fixture restores its modes before any of them unwind.
+    fn observe(
+        global_root: &std::path::Path,
+        workspace_root: &std::path::Path,
+        task_id: &str,
+    ) -> Result<(String, Vec<String>, Result<(), OrbitError>), OrbitError> {
+        let runtime = OrbitRuntime::from_roots(global_root, workspace_root)?;
+        let title = runtime.get_task(task_id)?.title;
+        let listed = runtime
+            .list_tasks()?
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        let denied = runtime
+            .update_task(
+                task_id,
+                TaskUpdateParams {
+                    execution_summary: Some("must not persist".to_string()),
+                    ..Default::default()
+                },
+            )
+            .map(|_| ());
+        Ok((title, listed, denied))
+    }
+}
+
 #[test]
 fn runtime_task_and_reservation_backends_share_admission_serialization() {
     use orbit_store::contracts::{TaskDocumentUpdateParams, TaskReservationReserveParams};

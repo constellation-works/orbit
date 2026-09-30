@@ -42,6 +42,19 @@ use crate::skill_catalog::SkillCatalog;
 /// [ORB-12119].
 pub const UNBOUND_DATA_DIR_PARTITION_ID: &str = "ws_unbound-data-dir";
 
+/// How much state a runtime may write while it is being composed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StateAccess {
+    /// An ordinary command: initializes whatever state it needs.
+    Write,
+    /// An observation-only command admitted to its own generation. Incidental
+    /// persistence is best-effort, and it never initializes a task partition
+    /// only to read it.
+    ReadOnly,
+    /// A read-only join of a foreign generation: writes nothing at all.
+    WriteFree,
+}
+
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
 /// state. Local root is carried for per-worktree artifact phases.
@@ -52,8 +65,9 @@ pub(crate) fn build_context_from_roots(
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
     _host_lifetime: HostLifetime,
-    write_free: bool,
+    access: StateAccess,
 ) -> Result<OrbitContext, OrbitError> {
+    let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
 
     let store = if write_free {
@@ -76,8 +90,7 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let coordinated =
-        build_v2_task_backends(global_root, &paths, binding, store.clone(), write_free)?;
+    let coordinated = build_v2_task_backends(global_root, &paths, binding, store.clone(), access)?;
     let task_backends = coordinated.task;
     let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
@@ -321,8 +334,9 @@ fn build_v2_task_backends(
     paths: &WorkspacePaths,
     runtime_binding: Option<&WorkspaceRuntimeBinding>,
     store: Store,
-    write_free: bool,
+    access: StateAccess,
 ) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
+    let write_free = access == StateAccess::WriteFree;
     let registry = if write_free {
         TaskRegistryStore::open_read_only(&task_registry_path(global_root))?
     } else {
@@ -345,7 +359,7 @@ fn build_v2_task_backends(
             registry,
             binding.logical_workspace_id.clone(),
             store,
-            write_free,
+            access,
         );
     }
     let partition_id_hint = runtime_binding.map(|binding| binding.task_partition_id.as_str());
@@ -358,7 +372,7 @@ fn build_v2_task_backends(
             .as_ref()
             .map(|config| config.workspace_id.clone())
             .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
-        return compose_task_backends(registry, partition_id, store, write_free);
+        return compose_task_backends(registry, partition_id, store, access);
     }
     let configured_partition_id = config.as_ref().map(|config| config.workspace_id.as_str());
     if let (Some(hint), Some(configured)) = (partition_id_hint, configured_partition_id)
@@ -398,7 +412,7 @@ fn build_v2_task_backends(
                 "read-only generation join needs an existing task-registry binding".to_string(),
             )
         })?;
-        return compose_task_backends(registry, partition_id, store, write_free);
+        return compose_task_backends(registry, partition_id, store, access);
     }
     let binding = registry.bind_workspace(BindWorkspaceParams {
         partition_id,
@@ -434,19 +448,44 @@ fn build_v2_task_backends(
         }
     }
 
-    compose_task_backends(registry, binding.partition_id, store, write_free)
+    compose_task_backends(registry, binding.partition_id, store, access)
 }
 
 fn compose_task_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
     store: Store,
-    write_free: bool,
+    access: StateAccess,
 ) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
-    if write_free {
-        workspace_observational_backends(registry, workspace_id, store)
-    } else {
-        workspace_coordinated_backends(registry, workspace_id, store)
+    if access == StateAccess::WriteFree {
+        return workspace_observational_backends(registry, workspace_id, store);
+    }
+    // Opening the commit boundary initializes the partition: its directory,
+    // lock file and journal marker. A read must not mint a partition, and an
+    // absent one has no bundles and no pending commit to settle, so the
+    // observation handle reads exactly the same (empty) state.
+    let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
+    let partition_exists = partition_dir.try_exists()?;
+    if access == StateAccess::ReadOnly && !partition_exists {
+        return workspace_observational_backends(registry, workspace_id, store);
+    }
+    match workspace_coordinated_backends(registry.clone(), workspace_id.clone(), store.clone()) {
+        Ok(backends) => Ok(backends),
+        // An existing partition on storage this process cannot write: the
+        // setup writes are incidental, and the storage itself refuses any
+        // real write, naming its path. Reads stay available, as they were
+        // before the boundary existed. An absent partition still fails a
+        // writer here, since there is nothing to read and every write needs it.
+        Err(error) if partition_exists && error.is_readonly_or_access_failure() => {
+            tracing::warn!(
+                target: "orbit.core.bootstrap",
+                partition_dir = %partition_dir.display(),
+                error = %error,
+                "skipped incidental task-partition coordination setup; opening it observationally"
+            );
+            workspace_observational_backends(registry, workspace_id, store)
+        }
+        Err(error) => Err(error),
     }
 }
 

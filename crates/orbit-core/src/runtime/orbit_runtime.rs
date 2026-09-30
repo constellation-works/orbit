@@ -120,7 +120,13 @@ impl OrbitRuntime {
         runtime_config: &orbit_config::ResolvedConfig,
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
+        read_only: bool,
     ) -> Result<Self, OrbitError> {
+        let access = if read_only {
+            builder::StateAccess::ReadOnly
+        } else {
+            builder::StateAccess::Write
+        };
         Self::finish_from_context(
             builder::build_context_from_roots(
                 global_root,
@@ -129,7 +135,7 @@ impl OrbitRuntime {
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
-                false,
+                access,
             )?,
             binding,
             global_root,
@@ -154,7 +160,7 @@ impl OrbitRuntime {
                 binding.as_ref(),
                 runtime_config,
                 host_lifetime,
-                true,
+                builder::StateAccess::WriteFree,
             )?,
             binding,
             global_root,
@@ -212,7 +218,7 @@ impl OrbitRuntime {
             Some(&binding),
             runtime_config,
             HostLifetime::ShortLived,
-            false,
+            builder::StateAccess::Write,
         )?;
         Ok(Self {
             context,

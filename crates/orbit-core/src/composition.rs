@@ -235,6 +235,7 @@ impl OrbitRuntime {
             &resolved,
             orbit_store::workflow::layout::LayoutUpgradeReport::default(),
             HostLifetime::ShortLived,
+            false,
         )
     }
 
@@ -324,6 +325,7 @@ fn build_runtime(
             &runtime_config,
             layout_report,
             host_lifetime,
+            read_only,
         )?
     };
     let _generation = generation;
