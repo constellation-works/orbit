@@ -283,7 +283,7 @@ impl OrbitRuntime {
             .and_then(|state| state.trigger)
             .unwrap_or_else(JobRunTrigger::cli)
             .audit_job_name(&asset.name);
-        let _ = writer.emit(V2AuditEventKind::RunStarted {
+        writer.emit_lossy(V2AuditEventKind::RunStarted {
             job_name: audit_job_name,
             retry_source_run_id,
         });
@@ -297,7 +297,7 @@ impl OrbitRuntime {
             Ok(o) => ("failed", o.message.clone()),
             Err(err) => ("error", Some(err.to_string())),
         };
-        let _ = writer.emit(V2AuditEventKind::RunFinished {
+        writer.emit_lossy(V2AuditEventKind::RunFinished {
             outcome: outcome_str.to_string(),
             error_message,
         });
