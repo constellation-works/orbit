@@ -353,3 +353,63 @@ fn root_pointing_at_a_file_is_refused_as_an_unusable_directory() {
         .stderr(predicate::str::contains("not a usable Orbit root"))
         .stderr(predicate::str::contains("admission").not());
 }
+
+#[test]
+fn task_dependencies_warn_when_unreadable_like_parent_but_are_still_recorded() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+    let known = String::from_utf8(
+        fixture
+            .orbit()
+            .args(["task", "add", "--title", "dep", "--complexity", "low"])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("warning").not())
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .expect("utf8 task id")
+    .trim()
+    .to_string();
+
+    fixture
+        .orbit()
+        .args([
+            "task",
+            "add",
+            "--title",
+            "with known dependency",
+            "--complexity",
+            "low",
+            "--dependencies",
+            &known,
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning").not());
+
+    let output = fixture
+        .orbit()
+        .args([
+            "task",
+            "add",
+            "--title",
+            "with typo dependency",
+            "--complexity",
+            "low",
+            "--dependencies",
+            "NOPE-1",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("NOPE-1"))
+        .get_output()
+        .clone();
+    let id = String::from_utf8(output.stdout)
+        .expect("utf8 task id")
+        .trim()
+        .to_string();
+    let shown = fixture.json(&["task", "show", &id, "--format", "json"]);
+    assert_eq!(shown["dependencies"], serde_json::json!(["NOPE-1"]));
+}

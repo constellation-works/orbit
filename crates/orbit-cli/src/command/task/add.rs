@@ -93,6 +93,8 @@ impl Execute for TaskAddArgs {
             eprintln!("warning: parent task '{parent_id}' was not found; creating subtask anyway");
         }
 
+        super::warn_unreadable_dependencies(runtime, &self.dependencies);
+
         let task = runtime.add_task_with_identity(
             TaskAddParams {
                 parent_id: self.parent_id,

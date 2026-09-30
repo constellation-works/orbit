@@ -244,6 +244,9 @@ impl Execute for TaskUpdateArgs {
                     .to_string(),
             ));
         }
+        if let Some(dependencies) = dependencies.as_deref() {
+            super::warn_unreadable_dependencies(runtime, dependencies);
+        }
         let (agent, model) = super::mutation_identity(model);
 
         let params = TaskUpdateParams {
