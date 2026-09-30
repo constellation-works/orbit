@@ -159,6 +159,24 @@
   outline: 2px solid var(--accent-hover);
   outline-offset: -2px;
 }
+/* Click-to-copy identifiers are real buttons (keyboard-operable) that must
+   still read as the plain mono text of the row that hosts them. The row's own
+   rules (.row .id, .runs-row .run-id) supply font, colour and truncation. */
+.copy-id {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  text-align: left;
+  line-height: inherit;
+  cursor: copy;
+}
+.copy-id:focus-visible {
+  outline: 2px solid var(--accent-hover);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
 .action.preview {
   border: 1px solid var(--border);
   color: var(--fg-dim);

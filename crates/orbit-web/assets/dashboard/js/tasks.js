@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, copyText, copyWithFeedback } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -2808,11 +2808,7 @@ export function renderTasks(tasks, context) {
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
-        const idSpan = el("span", { class: "id mono", text: t.id, title: "Click to copy ID" });
-        idSpan.addEventListener("click", (e) => {
-          e.stopPropagation();
-          copyWithFeedback(idSpan, t.id);
-        });
+        const idSpan = makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" });
         const titleCell = aggregate && t.workspace_name
           ? el("span", { class: "title" }, [
               el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` }),

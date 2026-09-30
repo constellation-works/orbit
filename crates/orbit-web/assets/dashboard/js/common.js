@@ -466,6 +466,22 @@ export async function copyWithFeedback(node, text) {
   }, COPY_FEEDBACK_MS);
 }
 
+/// A "click to copy" identifier as a real <button>: it takes a tab stop, Enter
+/// and Space activate it natively, and the copied!/copy failed text that
+/// `copyWithFeedback` writes into it is announced through its polite live
+/// region. The click is kept from reaching a row that toggles on click, and a
+/// key press already stays with the button (see `makeToggleRow`).
+export function makeCopyButton(value, { class: className = "", text = value, title = "Copy to clipboard" } = {}) {
+  const button = el("button", { class: `copy-id ${className}`.trim(), text, title });
+  button.type = "button";
+  button.setAttribute("aria-live", "polite");
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    copyWithFeedback(button, value);
+  });
+  return button;
+}
+
 export async function fetchJson(path) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
