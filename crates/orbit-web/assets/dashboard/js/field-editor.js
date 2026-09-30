@@ -58,6 +58,7 @@ export function buildInlineFieldEditor({
     } else {
       wrap.replaceChildren(renderView(), editButton);
     }
+    return editButton;
   };
 
   const showEditor = () => {
@@ -110,11 +111,25 @@ export function buildInlineFieldEditor({
         error.textContent = failure.message || String(failure);
       }
     });
+    // Cancelling removes the editor, so focus goes back to the button that
+    // opened it rather than falling to the top of the page.
+    const cancel = () => {
+      onEditingChange(false);
+      showView().focus();
+    };
     cancelButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      onEditingChange(false);
-      showView();
+      cancel();
     });
+    // Escape backs out of an edit, as Cancel does; a save in flight owns the widget.
+    const cancelOnEscape = (event) => {
+      if (event.key !== "Escape" || saveButton.disabled) return;
+      event.stopPropagation();
+      cancel();
+    };
+    for (const control of [input, toggleInput, saveButton, cancelButton]) {
+      if (control) control.addEventListener("keydown", cancelOnEscape);
+    }
 
     const children = [input];
     if (hint) children.push(el("div", { class: "field-editor-hint", text: hint }));
