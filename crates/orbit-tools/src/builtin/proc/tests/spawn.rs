@@ -90,10 +90,19 @@ fn stdin_reading_program_returns_without_waiting_for_the_deadline() {
 #[cfg(unix)]
 #[test]
 fn scoped_proc_spawn_inherits_parent_read_view_for_direct_and_indirect_reads() {
-    let workspace = tempfile::tempdir().expect("workspace");
     let host = tempfile::tempdir().expect("benign host fixture");
+    let workspace = host.path().join("worktrees/task");
+    std::fs::create_dir_all(&workspace).expect("nested worktree");
     let outside_file = host.path().join("config.toml");
     std::fs::write(&outside_file, b"parent-config\n").expect("host fixture");
+    let cargo_config = host.path().join(".cargo/config.toml");
+    std::fs::create_dir_all(cargo_config.parent().expect("config directory"))
+        .expect("parent Cargo config directory");
+    std::fs::write(
+        &cargo_config,
+        b"[alias]\norbit-parent-config-probe = 'version'\n",
+    )
+    .expect("parent Cargo config");
 
     let policy = PolicyEngine::from_def(&PolicyDef {
         name: "test".to_string(),
@@ -112,13 +121,16 @@ fn scoped_proc_spawn_inherits_parent_read_view_for_direct_and_indirect_reads() {
     })
     .expect("valid policy");
     let ctx = ToolContext {
-        workspace_root: Some(workspace.path().to_path_buf()),
+        workspace_root: Some(workspace),
         policy_engine: Some(Arc::new(policy)),
         fs_profile: Some("implementer".to_string()),
         proc_spawn_activity_scoped: true,
         proc_disallowed_programs: Some(vec![]),
         proc_spawn_environment: Some(vec![
-            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            (
+                "PATH".to_string(),
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string()),
+            ),
             (
                 "HOST_READ_TARGET".to_string(),
                 outside_file.display().to_string(),
@@ -137,6 +149,24 @@ fn scoped_proc_spawn_inherits_parent_read_view_for_direct_and_indirect_reads() {
         assert_eq!(result["success"], json!(true), "{result}");
         assert_eq!(result["stdout"], json!("parent-config\n"));
     }
+
+    // Cargo discovers aliases through ancestor .cargo/config.toml files.
+    // The original nested-worktree failure denied this parent read before
+    // Cargo could resolve the command.
+    let result = ProcSpawnTool
+        .execute(
+            &ctx,
+            json!({ "program": "cargo", "args": ["orbit-parent-config-probe"] }),
+        )
+        .expect("nested-worktree Cargo alias runs");
+    assert_eq!(result["success"], json!(true), "{result}");
+    assert!(
+        result["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("cargo "),
+        "Cargo did not load its parent config: {result}"
+    );
 }
 
 #[test]
