@@ -367,6 +367,10 @@ fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorde
     let task_id = created["id"].as_str().expect("task id").to_string();
 
     let deleted_path_str = deleted_repo.to_str().expect("utf8");
+    // Orbit records the checkout at its resolved path, which is what an
+    // inactive-workspace error reports; the selector below is spelled as given.
+    let recorded_path = deleted_repo.canonicalize().expect("resolve checkout");
+    let recorded_path_str = recorded_path.to_str().expect("utf8");
 
     // Delete checkout directory without teardown
     fs::remove_dir_all(&deleted_repo).expect("delete checkout directory");
@@ -396,7 +400,7 @@ fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorde
                 cmd
             );
             assert!(
-                stderr.contains(deleted_path_str),
+                stderr.contains(recorded_path_str),
                 "command {:?} with {label} selector must report recorded checkout path: {stderr}",
                 cmd
             );
@@ -435,6 +439,11 @@ fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
     fs::create_dir_all(&home).expect("home");
     init_git_repo(&alpha_repo);
     init_git_repo(&beta_repo);
+    // Orbit reports each checkout at its resolved path and the assertions
+    // below compare with these, so spell them that way. The default macOS temp
+    // directory sits behind `/var`, a symlink.
+    let alpha_repo = alpha_repo.canonicalize().expect("resolve alpha checkout");
+    let beta_repo = beta_repo.canonicalize().expect("resolve beta checkout");
 
     run_orbit(
         &alpha_repo,

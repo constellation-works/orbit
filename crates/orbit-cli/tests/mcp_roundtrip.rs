@@ -98,6 +98,10 @@ impl McpWorkspace {
         let work = temp.path().join("work");
         std::fs::create_dir_all(&home).expect("create home");
         std::fs::create_dir_all(&work).expect("create work");
+        // Orbit registers and reports the checkout at its resolved path, and
+        // tests compare what it reports with `work`, so spell it that way.
+        // The default macOS temp directory sits behind `/var`, a symlink.
+        let work = work.canonicalize().expect("resolve work");
 
         // `orbit init` freezes crew seeding to the agent CLIs it finds on
         // `PATH` (ADR-0193), so the fixture plants a stub `codex` before it
