@@ -31,6 +31,17 @@ pub struct InitCommand {
     #[arg(long, hide = true)]
     pub host_prerequisites_only: bool,
 
+    /// On Linux, leave Bubblewrap packages and AppArmor profiles to the host's
+    /// administrator. Orbit still seeds `linux-bwrap` executors, and dispatch
+    /// stays fail-closed until `orbit doctor providers` reports the sandbox
+    /// ready
+    #[arg(
+        long,
+        env = "ORBIT_SKIP_HOST_PREREQUISITES",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    pub skip_host_prerequisites: bool,
+
     /// Skip interactive prompts. config.toml is still seeded from detected
     /// agent surfaces, but a CI runner that pipes nothing into stdin will not
     /// hang.
@@ -60,6 +71,18 @@ impl Execute for InitCommand {
 }
 
 impl InitCommand {
+    /// Prepare the Linux sandbox prerequisites unless the operator opted out.
+    #[cfg(target_os = "linux")]
+    fn prepare_linux_host(&self) -> Result<(), OrbitError> {
+        let readiness = if self.skip_host_prerequisites {
+            "host preparation skipped; `orbit doctor providers` reports readiness".to_string()
+        } else {
+            super::linux_host::prepare(self.non_interactive)?
+        };
+        eprintln!("Linux sandbox: {readiness}");
+        Ok(())
+    }
+
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         {
             self.run(root_override)?;
@@ -80,10 +103,7 @@ impl InitCommand {
                 ));
             }
             #[cfg(target_os = "linux")]
-            eprintln!(
-                "Linux sandbox: {}",
-                super::linux_host::prepare(self.non_interactive)?
-            );
+            self.prepare_linux_host()?;
             return Ok(());
         }
         // Reject a malformed or (non-interactively) missing --machine-name/
@@ -102,10 +122,14 @@ impl InitCommand {
         // the shell installer share this preparation path.
         #[cfg(target_os = "linux")]
         if root_override.is_none() {
-            eprintln!(
-                "Linux sandbox: {}",
-                super::linux_host::prepare(self.non_interactive)?
-            );
+            self.prepare_linux_host().map_err(|error| match error {
+                OrbitError::Execution(message) => OrbitError::Execution(format!(
+                    "{message}; to initialize Orbit without changing this host, rerun with \
+                     --skip-host-prerequisites (dispatch stays fail-closed until the sandbox \
+                     is ready)"
+                )),
+                other => other,
+            })?;
         }
         let config_seed =
             collect_config_seed_for_init(root_override, self.force, self.non_interactive)?;

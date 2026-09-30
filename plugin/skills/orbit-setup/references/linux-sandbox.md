@@ -14,6 +14,11 @@ Bubblewrap. On Ubuntu 24.04, it loads only the packaged
 profile. Interactive onboarding uses the normal administrator authentication
 prompt. `orbit init --non-interactive` requires root or already-authorized
 passwordless sudo and never waits for a password.
+A failed preparation stops `orbit init` before it writes anything. When an
+administrator or image build owns the host's packages, `orbit init
+--skip-host-prerequisites` (or `ORBIT_SKIP_HOST_PREREQUISITES=1`) seeds Orbit
+without touching the host; `linux-bwrap` dispatch stays fail-closed until
+`orbit doctor providers` reports the sandbox ready.
 
 Automatic preparation code paths: Ubuntu 24.04, Debian 13, Fedora 43–45,
 Enterprise Linux 10 (`rhel`, `rocky`, `almalinux`, `centos`) and Arch. Older or

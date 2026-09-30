@@ -742,3 +742,73 @@ fn a_source_without_a_store_refuses_updates() {
         PluginSecretUpdateStatus::Refused
     );
 }
+
+/// Two secrets that overlap in relayed text are masked as one span; masking
+/// them one after the other left the tail of the second readable.
+#[test]
+fn overlapping_secrets_leave_no_readable_remainder() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = RecordingSource::holding(&[
+        ("api_token", "abcdef", "v1"),
+        ("refresh_token", "defxyz", "v1"),
+    ]);
+    let secrets = CallSecrets::resolve(&secret_spec(temp.path(), source)).expect("resolve");
+
+    assert_eq!(
+        secrets.mask_delivered("token abcdefxyz rejected"),
+        "token [secret] rejected"
+    );
+}
+
+/// Output-schema errors name an offending object key as a JSON Pointer, which
+/// spells `/` as `~1` and `~` as `~0`; base64 tokens routinely contain `/`.
+#[test]
+fn a_secret_in_json_pointer_form_is_masked() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let source = RecordingSource::holding(&[("api_token", "ab/cd+e~f==", "v1")]);
+    let secrets = CallSecrets::resolve(&secret_spec(temp.path(), source)).expect("resolve");
+
+    let error = secrets.mask_error(OrbitError::Execution(
+        "output invalid at /ab~1cd+e~0f==: 1 is not of type \"string\"".to_string(),
+    ));
+
+    assert!(
+        matches!(&error, OrbitError::Execution(message)
+            if message == "output invalid at /[secret]: 1 is not of type \"string\""),
+        "{error:?}"
+    );
+}
+
+/// A rotation's new value is the live credential once the backend reports it
+/// for a declared secret, applied or refused: anything relayed from the same
+/// reply must mask it. A value under an undeclared name is not this plugin's
+/// credential and is left alone.
+#[test]
+fn values_reported_in_secret_updates_are_masked_in_the_same_call() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let spec = secret_spec(
+        temp.path(),
+        RecordingSource::holding(&[("refresh_token", "old-refresh", "v1")]),
+    );
+    let secrets = CallSecrets::resolve(&spec).expect("resolve");
+
+    apply_secret_updates(
+        &spec,
+        "demo.hello",
+        &secrets,
+        Some(&json!({
+            "refresh_token": {"value": "new-refresh-7f1e", "expected_version": "v1"},
+            "api_token": {"value": "refused-live-9a2c", "expected_version": "v0"},
+            "undeclared_token": {"value": "not-a-secret-3b8", "expected_version": null},
+        })),
+    );
+    let _ = take_plugin_secret_updates();
+
+    let relayed = secrets.mask_json(json!({
+        "token_response": "old-refresh new-refresh-7f1e refused-live-9a2c not-a-secret-3b8",
+    }));
+    assert_eq!(
+        relayed,
+        json!({"token_response": "[secret] [secret] [secret] not-a-secret-3b8"})
+    );
+}

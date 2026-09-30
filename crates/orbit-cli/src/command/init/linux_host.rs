@@ -273,6 +273,16 @@ fn require_command(host: &impl Host, path: &str) -> Result<(), OrbitError> {
     }
 }
 
+/// Bubblewrap's diagnostics when the kernel or an enclosing namespace refuses
+/// a new user namespace outright: `EPERM` for unprivileged namespaces turned
+/// off, and any other `unshare` failure (`EINVAL` without kernel support,
+/// `ENOSPC` when a container caps `max_user_namespaces`). Ubuntu's AppArmor
+/// restriction instead lets the namespace exist and fails at the UID map.
+fn namespace_creation_denied(detail: &str) -> bool {
+    detail.contains("No permissions to create new namespace")
+        || detail.contains("Creating new namespace failed")
+}
+
 fn profile_is_loaded(profiles: &str) -> bool {
     profiles.lines().any(|line| line.starts_with("bwrap ("))
 }
@@ -282,13 +292,8 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
     if initial.available {
         return Ok("ready for the current unprivileged user; no host changes needed".to_string());
     }
-    // This diagnostic is emitted by Bubblewrap when an enclosing namespace or
-    // kernel policy refuses nested user namespaces; a package/profile install
-    // cannot grant the missing outer authority.
-    if initial
-        .detail
-        .contains("No permissions to create new namespace")
-    {
+    // A package/profile install cannot grant the missing outer authority.
+    if namespace_creation_denied(&initial.detail) {
         return Err(OrbitError::Execution(format!(
             "Linux sandbox namespace creation is denied by the kernel or enclosing container: {}; \
              prepare a native host with unprivileged user namespaces enabled",
@@ -311,10 +316,7 @@ fn prepare_with(host: &mut impl Host, non_interactive: bool) -> Result<String, O
             distro.id, distro.version
         ));
     }
-    if current
-        .detail
-        .contains("No permissions to create new namespace")
-    {
+    if namespace_creation_denied(&current.detail) {
         return Err(OrbitError::Execution(format!(
             "Linux sandbox namespace creation remains denied by the kernel or enclosing container after package installation: {}",
             current.detail

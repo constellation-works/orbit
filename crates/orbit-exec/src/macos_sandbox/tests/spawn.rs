@@ -33,6 +33,11 @@ fn sandbox_exec_path_from_rejects_relative_candidates() {
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
+    // Every spawn inserts into the process-wide profile cache that the
+    // LRU tests below measure.
+    let _lock = TEST_PROFILE_CACHE_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     if !sandbox_exec_can_apply() {
         return;
     }
@@ -93,6 +98,11 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
+    // Every spawn inserts into the process-wide profile cache that the
+    // LRU tests below measure.
+    let _lock = TEST_PROFILE_CACHE_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     if !sandbox_exec_can_apply() {
         return;
     }
@@ -143,6 +153,11 @@ fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
 #[cfg(target_os = "macos")]
 #[test]
 fn spawn_under_macos_sandbox_runs_program_in_provided_cwd() {
+    // Every spawn inserts into the process-wide profile cache that the
+    // LRU tests below measure.
+    let _lock = TEST_PROFILE_CACHE_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     if !sandbox_exec_can_apply() {
         return;
     }
@@ -217,6 +232,11 @@ fn pty_probe_process() {
 #[cfg(target_os = "macos")]
 #[test]
 fn pty_allocation_is_allowed_under_compiled_profile() {
+    // Every spawn inserts into the process-wide profile cache that the
+    // LRU tests below measure.
+    let _lock = TEST_PROFILE_CACHE_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     if !sandbox_exec_can_apply() {
         return;
     }

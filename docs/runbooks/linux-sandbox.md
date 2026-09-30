@@ -29,6 +29,14 @@ requires root or existing/passwordless `sudo` authority and never waits for a pa
 Package/profile failures are retryable by rerunning `orbit init` after correcting the
 reported cause. Dispatch itself never elevates, installs, reloads a profile, or falls back.
 
+A failed preparation stops `orbit init` before it writes anything. Where an administrator
+or an image build owns the host's packages and security policy, pass
+`--skip-host-prerequisites` (or set `ORBIT_SKIP_HOST_PREREQUISITES=1`): init then seeds
+Orbit without touching the host, and `linux-bwrap` dispatch stays fail-closed until
+`orbit doctor providers` reports the sandbox ready. The repository's `.cargo/config.toml`
+sets that variable so test fixtures, which run `orbit init` under an isolated `HOME`, never
+ask for `sudo` or change the machine running the tests.
+
 `orbit doctor providers --json` reports each executor's configured `sandbox` separately
 from `sandbox_ready` and `sandbox_readiness_detail` for `linux-bwrap`. Readiness is a fresh
 capability check for the invoking user, not an inference from the executor setting.

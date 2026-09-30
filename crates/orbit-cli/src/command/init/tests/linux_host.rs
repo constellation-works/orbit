@@ -205,6 +205,24 @@ fn kernel_denial_and_old_package_refuse_without_profile_workaround() {
     );
     assert!(nested.calls.is_empty());
 
+    // A container that caps user namespaces fails `unshare` with ENOSPC; no
+    // package or profile can lift that either.
+    let mut capped = FixtureHost::new(
+        "ubuntu",
+        "24.04",
+        &[
+            "Bubblewrap capability probe failed: bwrap: Creating new namespace failed: \
+           nesting depth or /proc/sys/user/max_*_namespaces exceeded (ENOSPC)",
+        ],
+    );
+    assert!(
+        prepare_with(&mut capped, true)
+            .unwrap_err()
+            .to_string()
+            .contains("kernel or enclosing container")
+    );
+    assert!(capped.calls.is_empty());
+
     let mut other_denial = FixtureHost::new(
         "ubuntu",
         "24.04",

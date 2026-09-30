@@ -188,6 +188,7 @@ fn task_id_start_adopts_custom_prefix_before_a_runtime_opens() {
     InitCommand {
         force: false,
         host_prerequisites_only: false,
+        skip_host_prerequisites: false,
         non_interactive: true,
         machine_name: Some("prefix-host".to_string()),
         task_prefix: Some("QASW".to_string()),
@@ -237,6 +238,7 @@ fn custom_prefix_without_task_id_start_still_mints_tasks() {
     InitCommand {
         force: false,
         host_prerequisites_only: false,
+        skip_host_prerequisites: false,
         non_interactive: true,
         machine_name: Some("unseeded-prefix-host".to_string()),
         task_prefix: Some("QASB".to_string()),
