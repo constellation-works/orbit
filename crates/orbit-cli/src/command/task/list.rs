@@ -33,7 +33,7 @@ pub struct TaskListArgs {
     /// Maximum number of tasks to return (default 50). Must be at least 1.
     /// Under the default status-aware rule, non-terminal tasks are listed first
     /// (newest first), followed by terminal tasks (newest first).
-    #[arg(long, default_value_t = DEFAULT_TASK_LIST_LIMIT, value_parser = parse_task_list_limit)]
+    #[arg(long, default_value_t = DEFAULT_TASK_LIST_LIMIT, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
     /// Filter by priority level
     #[arg(long, value_enum)]
@@ -177,14 +177,3 @@ fn validate_external_ref_system(system: &str) -> Result<String, OrbitError> {
     ExternalRef::validate_system(system).map_err(Into::into)
 }
 
-/// Parse the `--limit` value, rejecting a zero limit (which would return no
-/// tasks) with a clear input error (ORB-10310).
-fn parse_task_list_limit(raw: &str) -> Result<usize, String> {
-    let value: usize = raw
-        .parse()
-        .map_err(|_| format!("`{raw}` is not a valid limit (expected a positive integer)"))?;
-    if value == 0 {
-        return Err("limit must be at least 1".to_string());
-    }
-    Ok(value)
-}

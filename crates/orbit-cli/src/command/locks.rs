@@ -117,8 +117,7 @@ impl Execute for LocksContentionArgs {
             Column::new("SELECTOR").fixed(),
             Column::new("TASKS").number(),
         ])
-        .keep_all_columns()
-        .empty_message("no selector is claimed by more than one pending task");
+        .keep_all_columns();
         for hotspot in report.hotspots.iter().take(self.limit) {
             table.add_row(vec![hotspot.selector.clone(), hotspot.tasks().to_string()]);
         }
@@ -143,14 +142,14 @@ impl Execute for LocksContentionArgs {
             "parallel_floor": report.parallel_floor(),
         });
 
-        Ok(Payload::blocks(
-            doc,
-            vec![
-                Block::table(table),
-                Block::text(contention_summary(&report, self.limit)),
-            ],
-        )
-        .into())
+        // With no hotspots the summary line already says why, so an empty grid
+        // (and its own "nothing found" message) would only contradict it.
+        let mut blocks = Vec::new();
+        if !report.hotspots.is_empty() {
+            blocks.push(Block::table(table));
+        }
+        blocks.push(Block::text(contention_summary(&report, self.limit)));
+        Ok(Payload::blocks(doc, blocks).into())
     }
 }
 

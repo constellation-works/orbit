@@ -24,7 +24,7 @@ pub struct RunHistoryArgs {
     pub job_id: Option<String>,
 
     /// Maximum number of runs to show
-    #[arg(long, default_value_t = DEFAULT_HISTORY_LIMIT)]
+    #[arg(long, default_value_t = DEFAULT_HISTORY_LIMIT, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
 
     /// Output as JSON

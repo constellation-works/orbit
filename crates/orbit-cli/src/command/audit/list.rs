@@ -58,7 +58,7 @@ pub struct AuditListArgs {
     #[arg(long)]
     pub lease: Option<String>,
     /// Maximum number of events to return
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 100, value_parser = crate::parse::positive_limit)]
     pub limit: usize,
     /// Output as JSON
     #[arg(long)]
