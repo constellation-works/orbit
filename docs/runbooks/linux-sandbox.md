@@ -18,7 +18,10 @@ For npm and direct-binary installs, normal `orbit init` performs the same prepar
 npm postinstall does not run `sudo` or prompt. Run installation and `orbit init` as the
 unprivileged account that will execute Orbit. An installer invoked through `sudo` uses
 `SUDO_UID`/`SUDO_GID` to probe that account; a root invocation without an identifiable
-unprivileged account stops before changing the host.
+unprivileged account stops before changing the host. The installer then exits non-zero
+with the binary already installed and names both ways forward: run `orbit init` from the
+intended account, or reinstall with `ORBIT_SKIP_HOST_PREREQUISITES=1` (below) in an
+image build or container that runs as root.
 
 Preparation first runs Orbit's exact `/usr/bin/bwrap` namespace-and-mount probe as that
 account and checks `--bind-fd`. A ready host causes no package or profile writes. When

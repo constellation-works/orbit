@@ -297,10 +297,15 @@ case "$TARGET" in
   *-unknown-linux-gnu)
     log "Preparing Linux sandbox prerequisites..."
     if [ -t 2 ]; then
-      "${INSTALL_DIR}/${BINARY_NAME}" init --host-prerequisites-only
+      prepare_flags=""
     else
-      "${INSTALL_DIR}/${BINARY_NAME}" init --host-prerequisites-only --non-interactive
+      prepare_flags="--non-interactive"
     fi
+    # A failed preparation still fails the install, but the binary is already
+    # in place, so say how to finish instead of leaving only the raw error.
+    # shellcheck disable=SC2086
+    "${INSTALL_DIR}/${BINARY_NAME}" init --host-prerequisites-only $prepare_flags \
+      || fail "Orbit is installed at ${INSTALL_DIR}/${BINARY_NAME}, but Linux sandbox preparation failed (see above). Fix the reported cause and run 'orbit init', or rerun with ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the sandbox packages"
     ;;
 esac
 
