@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-agent"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -1768,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-automation"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1786,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-cli"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-cmd"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-common"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "fs2",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-config"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "jsonschema",
  "orbit-common",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "base64",
  "blake3",
@@ -1927,7 +1927,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-engine"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-exec"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "libc",
  "orbit-common",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-mcp"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "base64",
  "chrono",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-policy"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-registry"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "hostname",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-search"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "orbit-common",
  "orbit-types",
@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-store"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "blake3",
  "chrono",
@@ -2051,7 +2051,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-tools"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "flate2",
@@ -2078,7 +2078,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-types"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "chrono",
  "clap",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-web"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "axum",
  "base64",

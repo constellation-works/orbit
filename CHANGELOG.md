@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.1
+
+### Highlights
+
+- **Cancel stops the agent**: `orbit run cancel` now stops the provider CLIs a run spawned, not just its owner, and `orbit run ship` refuses a task the pipeline cannot start from instead of reporting it submitted.
+- **Symlinked homes and checkouts**: an Orbit home or workspace reached through a symlink (macOS `/tmp` and `/var`, a symlinked `~/workspace`) no longer breaks auto-task edits, plugin enablement, routine disables or `workspace remove`, and the plugin write-root containment check resolves `..` as the kernel does.
+- **Tighter sandboxing and secret masking**: CLI workers inherit the sandbox on Linux and macOS, onboarding prepares the Linux sandbox prerequisites, and delivered plugin secrets and credential-bearing dotenv files are masked. ([ORB-13689])
+- **MCP annotations and field projection**: `tools/list` advertises read-only, destructive and open-world hints so clients can auto-approve read-only tools, and `orbit_task_list` accepts `fields` to return only the fields you need.
+- **Faster listings, search and dashboard**: filtered `task list`, search, the dashboard scoreboard and auto-drain readiness read task metadata instead of whole task bundles, cutting them from hundreds of milliseconds to tens at about 1,500 tasks.
+- **Clearer runs and drains**: `orbit run show` summarizes a drain's leaf outcomes and names the holder of a waited-on lock, blocked tasks name their next step, and every confirmation command honours `--format json`.
+
 ## 0.25.0
 
 ### Breaking Changes
