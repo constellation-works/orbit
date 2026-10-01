@@ -51,7 +51,7 @@ $ orbit task update ORB-1042 --approve       # after you merge: review → done
 
 ## Quick start
 
-**You need:** at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests. On Linux, the shell installer or `orbit init` prepares the sandbox prerequisite automatically; see [readiness and distro coverage](docs/runbooks/linux-sandbox.md).
+**You need:** macOS or Linux (x64 or arm64; there is no Windows build), at least one authenticated agent CLI, plus `gh` authenticated if you want pull requests. On Linux, the shell installer or `orbit init` prepares the sandbox prerequisite automatically; see [readiness and distro coverage](docs/runbooks/linux-sandbox.md).
 
 ```bash
 # 1. Install (pick one)
