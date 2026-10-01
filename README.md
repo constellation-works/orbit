@@ -69,6 +69,9 @@ cd <repo> && orbit workspace init --mcp         # add --ship-mode local to skip 
 
 # 4. Check workspace state, routed agent CLIs, and MCP client registration
 orbit doctor
+
+# 5. Open up dashboard to monitor tasks and runs
+orbit web serve
 ```
 
 Now open your agent in the repo and ask for something. It files the task, asks for approval, ships it, and reports the PR.
