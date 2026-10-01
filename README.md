@@ -28,6 +28,7 @@ Orbit is a local-first runtime for coding agents. You keep using Claude Code, Co
 ```text
 $ orbit init                                 # one-time, per machine
 $ cd my-repo && orbit workspace init --mcp   # per repo; wires Orbit into your agent CLIs
+$ orbit web serve                            # open the Orbit dashboard in your browser
 
 You:    The fsProfile lookup is undocumented. Get that fixed.
 Agent:  orbit.task.add       → ORB-1042 · proposed
