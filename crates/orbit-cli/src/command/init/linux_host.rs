@@ -92,7 +92,7 @@ impl RealHost {
             match (uid, gid) {
                 (Some(uid), Some(gid)) if uid != 0 => Some((uid, gid)),
                 _ => return Err(OrbitError::Execution(
-                    "root installation cannot identify the intended unprivileged Orbit user; run the installer from that account (sudo will authenticate only for package/profile changes)"
+                    "root installation cannot identify the intended unprivileged Orbit user; run the installer from that account (sudo will authenticate only for package/profile changes), or set ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the host's sandbox packages"
                         .to_string(),
                 )),
             }

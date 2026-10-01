@@ -140,6 +140,18 @@ sudo apt-get install --yes bubblewrap apparmor-profiles
 test -x /usr/bin/bwrap
 ```
 
+When you install as root in a container or image build, where no unprivileged
+Orbit user exists yet, leave the sandbox packages to the image and skip this
+step:
+
+```bash
+curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh \
+  | ORBIT_SKIP_HOST_PREREQUISITES=1 sh
+```
+
+Sandboxed dispatch stays fail-closed until `orbit doctor providers` reports the
+sandbox ready.
+
 A run failing with `bwrap: setting up uid map: Permission denied` is this
 prerequisite, not your task. The full procedure, including loading the
 `bwrap-userns-restrict` AppArmor profile, is in the

@@ -329,6 +329,10 @@ jobs:
         shell: bash
         env:
           INSTALL_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/install.sh
+          # The container runs the installer as root with no unprivileged Orbit
+          # user, which is the image-build case: the image owns the sandbox
+          # packages, so the installer leaves them alone.
+          ORBIT_SKIP_HOST_PREREQUISITES: "1"
         run: |
           set -euo pipefail
           INSTALL_DIR="/tmp/orbit/bin"
