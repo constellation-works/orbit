@@ -135,7 +135,8 @@ Below the hero, in order:
    where it stops, and what `--complete` does. Each links to its guide.
 5. **Go further** — a list of five guides beside the section head, with the
    CLI reference linked from the head.
-6. **Quickstart** — a closing panel with the three setup commands and CTAs.
+6. **Quickstart** — a closing panel with the three setup commands, then
+   `orbit web serve` to open the dashboard, and CTAs.
 
 Sections open on a two-column head — mono eyebrow and a one-sentence heading
 on the left, a short lede on the right. The footer, not the page, carries the

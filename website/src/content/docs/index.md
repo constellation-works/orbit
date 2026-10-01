@@ -229,7 +229,7 @@ next: false
 <section class="orbit-quickstart" aria-labelledby="orbit-quickstart-title">
   <div class="orbit-quickstart-copy">
     <h2 id="orbit-quickstart-title">Ship your first task.</h2>
-    <p>Three commands install Orbit, set up this machine, and connect your agent to a repository. Then ask it for a change.</p>
+    <p>Three commands install Orbit, set up this machine, and connect your agent to a repository. The fourth opens the dashboard, where you approve, ship, and review what your agent files.</p>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/">Read the guide</a>
       <a class="orbit-button" href="https://github.com/constellation-works/orbit">View on GitHub</a>
@@ -239,6 +239,7 @@ next: false
     <li><code>npm install -g @orbit-tools/cli</code><span>install</span></li>
     <li><code>orbit init</code><span>once per machine</span></li>
     <li><code>orbit workspace init --mcp</code><span>in your repository</span></li>
+    <li><code>orbit web serve</code><span>open the dashboard</span></li>
   </ol>
 </section>
 
