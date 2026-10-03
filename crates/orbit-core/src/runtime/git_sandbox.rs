@@ -1,6 +1,8 @@
 //! Host-owned Git write boundaries for Linux provider namespaces.
 
+use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -115,22 +117,127 @@ fn protect_metadata_path(
 }
 
 fn validate_linux_git_tree(root: &Path) -> Result<(), OrbitError> {
-    for entry in fs::read_dir(root).map_err(|error| metadata_error(root, error))? {
-        let entry = entry.map_err(|error| metadata_error(root, error))?;
+    // Git removes transient locks while host-side preparation is scanning.
+    // Restart the entire tree rather than skip a missing entry: its replacement
+    // and previously inspected siblings must still pass the same validation.
+    // Keep directory identities across attempts so a retry cannot bless a
+    // redirected root or a replaced directory encountered on the first pass.
+    const MAX_ATTEMPTS: usize = 3;
+    let mut directories = HashMap::new();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        validate_git_tree_ancestors(root, &mut directories)?;
+        let result = scan_linux_git_tree(root, &mut directories);
+        validate_git_tree_ancestors(root, &mut directories)?;
+        match result {
+            Ok(()) => return Ok(()),
+            Err(GitTreeScanError::Denied(error)) => return Err(error),
+            Err(GitTreeScanError::Disappeared { path, error }) => {
+                if attempts == MAX_ATTEMPTS {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "protected Git metadata remained unstable after {MAX_ATTEMPTS} scans: {}",
+                        metadata_error(&path, error)
+                    )));
+                }
+            }
+        }
+    }
+}
+
+type DirectoryIdentities = HashMap<PathBuf, (u64, u64)>;
+
+fn validate_git_tree_ancestors(
+    root: &Path,
+    directories: &mut DirectoryIdentities,
+) -> Result<(), OrbitError> {
+    // The root and its ancestors must remain present, unaliased directories.
+    // Only disappearing descendants are eligible for revalidation.
+    for ancestor in root.ancestors() {
+        let metadata =
+            fs::symlink_metadata(ancestor).map_err(|error| metadata_error(ancestor, error))?;
+        validate_git_directory(ancestor, &metadata, directories)?;
+    }
+    Ok(())
+}
+
+fn validate_git_directory(
+    path: &Path,
+    metadata: &fs::Metadata,
+    directories: &mut DirectoryIdentities,
+) -> Result<(), OrbitError> {
+    if !metadata.is_dir() {
+        return Err(OrbitError::PolicyDenied(format!(
+            "Linux Git protection refuses non-directory metadata traversal `{}`",
+            path.display()
+        )));
+    }
+    let identity = (metadata.dev(), metadata.ino());
+    if let Some(previous) = directories.insert(path.to_path_buf(), identity)
+        && previous != identity
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "Linux Git protection refuses replaced metadata directory `{}`",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+enum GitTreeScanError {
+    Disappeared { path: PathBuf, error: io::Error },
+    Denied(OrbitError),
+}
+
+impl From<OrbitError> for GitTreeScanError {
+    fn from(error: OrbitError) -> Self {
+        Self::Denied(error)
+    }
+}
+
+fn scan_error(path: &Path, error: io::Error) -> GitTreeScanError {
+    if error.kind() == io::ErrorKind::NotFound {
+        GitTreeScanError::Disappeared {
+            path: path.to_path_buf(),
+            error,
+        }
+    } else {
+        GitTreeScanError::Denied(metadata_error(path, error))
+    }
+}
+
+fn scan_linux_git_tree(
+    root: &Path,
+    directories: &mut DirectoryIdentities,
+) -> Result<(), GitTreeScanError> {
+    #[cfg(test)]
+    run_scan_hook(GitScanStage::ReadDirectory, root).map_err(|error| scan_error(root, error))?;
+    let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
+    validate_git_directory(root, &metadata, directories)?;
+    for entry in fs::read_dir(root).map_err(|error| scan_error(root, error))? {
+        let entry = entry.map_err(|error| scan_error(root, error))?;
         let path = entry.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|error| metadata_error(&path, error))?;
+        #[cfg(test)]
+        run_scan_hook(GitScanStage::InspectEntry, &path)
+            .map_err(|error| scan_error(&path, error))?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| scan_error(&path, error))?;
         if (!metadata.is_file() && !metadata.is_dir())
             || (metadata.is_file() && metadata.nlink() > 1)
         {
             return Err(OrbitError::PolicyDenied(format!(
                 "Linux Git protection refuses symlink, special-file or hard-linked metadata entry `{}`",
                 path.display()
-            )));
+            )).into());
         }
         if metadata.is_dir() {
-            validate_linux_git_tree(&path)?;
+            validate_git_directory(&path, &metadata, directories)?;
+            scan_linux_git_tree(&path, directories)?;
         }
     }
+    // read_dir may have opened an older directory after a concurrent rename.
+    // Never accept its contents as validation of the replacement at this path.
+    let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
+    validate_git_directory(root, &metadata, directories)?;
     Ok(())
 }
 
@@ -142,5 +249,44 @@ fn metadata_error(path: &Path, error: std::io::Error) -> OrbitError {
 }
 
 #[cfg(test)]
-#[path = "tests/git_sandbox.rs"]
-mod tests;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitScanStage {
+    ReadDirectory,
+    InspectEntry,
+}
+
+#[cfg(test)]
+type GitScanHook = Box<dyn FnMut(GitScanStage, &Path) -> io::Result<()>>;
+
+#[cfg(test)]
+thread_local! {
+    static SCAN_HOOK: std::cell::RefCell<Option<GitScanHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Per-thread interleaving seam; production always uses the real filesystem.
+#[cfg(test)]
+pub(crate) struct GitScanHookGuard(Option<GitScanHook>);
+
+#[cfg(test)]
+impl GitScanHookGuard {
+    pub(crate) fn install(
+        hook: impl FnMut(GitScanStage, &Path) -> io::Result<()> + 'static,
+    ) -> Self {
+        Self(SCAN_HOOK.with(|slot| slot.replace(Some(Box::new(hook)))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for GitScanHookGuard {
+    fn drop(&mut self) {
+        SCAN_HOOK.with(|slot| slot.replace(self.0.take()));
+    }
+}
+
+#[cfg(test)]
+fn run_scan_hook(stage: GitScanStage, path: &Path) -> io::Result<()> {
+    SCAN_HOOK.with(|slot| match slot.borrow_mut().as_mut() {
+        Some(hook) => hook(stage, path),
+        None => Ok(()),
+    })
+}
