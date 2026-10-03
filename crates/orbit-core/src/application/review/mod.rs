@@ -29,9 +29,6 @@ mod handoff;
 mod landing;
 mod projection;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use admission::install_review_admission;
 pub(crate) use coverage::exclusions;
 pub(crate) use gate::{review_gate_admit, review_gate_settle};

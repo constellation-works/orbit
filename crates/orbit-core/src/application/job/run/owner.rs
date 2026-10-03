@@ -20,11 +20,6 @@ use std::thread;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
-#[cfg(all(test, unix))]
-use std::cell::RefCell;
-#[cfg(all(test, unix))]
-use std::rc::Rc;
-
 #[cfg(unix)]
 pub(super) const RUN_OWNER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 #[cfg(unix)]
@@ -467,8 +462,6 @@ pub(super) enum OwnerIdentity {
 
 #[cfg(unix)]
 pub(super) fn classify_run_owner(run: &JobRun) -> OwnerIdentity {
-    #[cfg(test)]
-    record_classify_owner_snapshot(run);
     classify_run_owner_with_probes(
         run.pid,
         run.pid_start_time.as_deref(),
@@ -492,20 +485,9 @@ pub(crate) fn running_run_has_verified_owner(_run: &JobRun) -> bool {
     false
 }
 
-#[cfg(all(not(test), unix))]
+#[cfg(unix)]
 fn start_identity_probe(pid: u32) -> ProbeOutcome {
     probe_process_start_identity(pid)
-}
-
-/// Under test the start-identity probe defers to a per-thread override
-/// (see [`override_start_identity_probe`]) before asking `ps`, so a fixture
-/// can present a verified owner on a host whose sandbox denies `ps`.
-#[cfg(all(test, unix))]
-fn start_identity_probe(pid: u32) -> ProbeOutcome {
-    START_IDENTITY_PROBE_OVERRIDE.with(|slot| match slot.borrow().as_ref() {
-        Some(probe) => probe(pid),
-        None => probe_process_start_identity(pid),
-    })
 }
 
 /// Inner, testable form of [`classify_run_owner`] with the probes injected.
@@ -669,78 +651,4 @@ pub(super) fn stale_job_run_message(run: &JobRun, _reason: Option<()>) -> String
             .unwrap_or_else(|| "-".to_string()),
         run.pid_start_time.as_deref().unwrap_or("-")
     )
-}
-
-/// One `classify_run_owner` observation, used by list/history counting fixtures
-/// to prove a single list/history call classifies an unchanged owner snapshot
-/// at most once. Stale finalization may classify again after rereading.
-#[cfg(all(test, unix))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ClassifyOwnerSnapshot {
-    pub run_id: String,
-    pub state: JobRunState,
-    pub pid: Option<u32>,
-    pub pid_start_time: Option<String>,
-}
-
-#[cfg(all(test, unix))]
-thread_local! {
-    static CLASSIFY_OWNER_SNAPSHOTS: RefCell<Vec<ClassifyOwnerSnapshot>> =
-        const { RefCell::new(Vec::new()) };
-}
-
-#[cfg(all(test, unix))]
-fn record_classify_owner_snapshot(run: &JobRun) {
-    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| {
-        snapshots.borrow_mut().push(ClassifyOwnerSnapshot {
-            run_id: run.run_id.clone(),
-            state: run.state,
-            pid: run.pid,
-            pid_start_time: run.pid_start_time.clone(),
-        });
-    });
-}
-
-/// A test-installed stand-in for the `ps`-backed start-identity probe.
-#[cfg(all(test, unix))]
-type StartIdentityProbe = Rc<dyn Fn(u32) -> ProbeOutcome>;
-
-#[cfg(all(test, unix))]
-thread_local! {
-    static START_IDENTITY_PROBE_OVERRIDE: RefCell<Option<StartIdentityProbe>> =
-        const { RefCell::new(None) };
-}
-
-/// Answers start-identity probes on the current thread from `probe` instead
-/// of `ps` until dropped. Owner *verification* against a real `ps` token is
-/// covered by the identity and TZ fixtures; process-group cancellation
-/// fixtures only need a verified owner so the signalling path they assert on
-/// is reached, and the macOS agent-executor sandbox denies `ps` outright.
-#[cfg(all(test, unix))]
-pub(crate) fn override_start_identity_probe(
-    probe: impl Fn(u32) -> ProbeOutcome + 'static,
-) -> StartIdentityProbeOverride {
-    START_IDENTITY_PROBE_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(Rc::new(probe)));
-    StartIdentityProbeOverride
-}
-
-/// Guard returned by [`override_start_identity_probe`]; restores the real probe.
-#[cfg(all(test, unix))]
-pub(crate) struct StartIdentityProbeOverride;
-
-#[cfg(all(test, unix))]
-impl Drop for StartIdentityProbeOverride {
-    fn drop(&mut self) {
-        START_IDENTITY_PROBE_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
-    }
-}
-
-#[cfg(all(test, unix))]
-pub(super) fn reset_classify_owner_snapshots() {
-    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| snapshots.borrow_mut().clear());
-}
-
-#[cfg(all(test, unix))]
-pub(super) fn classify_owner_snapshots() -> Vec<ClassifyOwnerSnapshot> {
-    CLASSIFY_OWNER_SNAPSHOTS.with(|snapshots| snapshots.borrow().clone())
 }

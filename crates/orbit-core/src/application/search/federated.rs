@@ -52,29 +52,8 @@ pub(super) const MAX_FEDERATED_CONCURRENCY: usize = 8;
 
 const NO_MATCHING_WORKSPACE_NOTE: &str = "no registered workspace matched the requested scope";
 
-#[cfg(test)]
-thread_local! {
-    /// Test seam for the managed-run guard. The suite itself may run inside an
-    /// Orbit-managed job, whose environment would otherwise make every
-    /// fan-out test observe the refusal.
-    static MANAGED_RUN_OVERRIDE: std::cell::Cell<Option<bool>> =
-        const { std::cell::Cell::new(None) };
-}
-
 fn in_managed_run() -> bool {
-    #[cfg(test)]
-    if let Some(value) = MANAGED_RUN_OVERRIDE.with(std::cell::Cell::get) {
-        return value;
-    }
     crate::runtime::run_input::managed_run_context_from_env()
-}
-
-#[cfg(test)]
-pub(super) fn with_managed_run_override<T>(value: bool, f: impl FnOnce() -> T) -> T {
-    MANAGED_RUN_OVERRIDE.with(|cell| cell.set(Some(value)));
-    let out = f();
-    MANAGED_RUN_OVERRIDE.with(|cell| cell.set(None));
-    out
 }
 
 impl OrbitRuntime {

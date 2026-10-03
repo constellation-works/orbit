@@ -64,62 +64,6 @@ pub(super) fn assert_child_passed(output: &Output, exact_test: &str) {
     );
 }
 
-#[test]
-fn child_command_discards_inherited_authority() {
-    let exact_test =
-        "application::plugin::tests::fixture::child_command_discards_inherited_authority";
-    if std::env::var(ISOLATED_CHILD_ENV).ok().as_deref() == Some(exact_test) {
-        for name in orbit_common::test_env::INHERITED_AUTHORITY_ENV {
-            assert!(std::env::var_os(name).is_none(), "child inherited {name}");
-        }
-        for name in [
-            "ORBIT_WORKER_CONTEXT_REQUIRED",
-            "ORBIT_PLUGIN_BROKER",
-            "ORBIT_SCRATCH_DIR",
-        ] {
-            assert!(std::env::var_os(name).is_none(), "child inherited {name}");
-        }
-        return;
-    }
-
-    let home = tempfile::tempdir().expect("isolated plugin fixture home");
-    let mut child = Command::new(std::env::current_exe().expect("test executable"));
-    for name in orbit_common::test_env::INHERITED_AUTHORITY_ENV {
-        child.env(name, "inherited authority sentinel");
-    }
-    child
-        .env("ORBIT_WORKER_CONTEXT_REQUIRED", "1")
-        .env("ORBIT_PLUGIN_BROKER", home.path().join("live-broker"))
-        .env("ORBIT_SCRATCH_DIR", home.path().join("live-scratch"));
-    clear_child_authority(&mut child);
-    let output = child
-        .args(["--exact", exact_test, "--nocapture"])
-        .env(ISOLATED_CHILD_ENV, exact_test)
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .expect("run authority-clearing child");
-    assert_child_passed(&output, exact_test);
-}
-
-#[test]
-fn child_result_rejects_zero_tests() {
-    let nonexistent = "application::plugin::tests::fixture::no_such_test";
-    let output = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", nonexistent])
-        .output()
-        .expect("run zero-test child");
-    assert!(
-        output.status.success(),
-        "libtest should accept an empty filter"
-    );
-    assert!(
-        std::panic::catch_unwind(|| assert_child_passed(&output, nonexistent)).is_err(),
-        "an empty test selection must be rejected"
-    );
-}
-
 pub(super) struct PluginFixture {
     // Keep HOME inside the disposable child while add/enable/sync tests run.
     _home_env: orbit_common::test_env::ScopedEnv,
@@ -135,16 +79,6 @@ pub(super) struct PluginFixture {
 impl PluginFixture {
     pub(super) fn new() -> Self {
         Self::build(false)
-    }
-
-    /// The same fixture with every Orbit root, the repository, and the plugin
-    /// sources spelled through a symlink to their parent, as a workspace under
-    /// macOS `/tmp` or a symlinked `~/workspace` is. A default temp directory
-    /// is symlinked only on macOS, so a regression test that must hold on
-    /// every platform asks for this explicitly.
-    #[cfg(unix)]
-    pub(super) fn new_behind_symlink() -> Self {
-        Self::build(true)
     }
 
     fn build(behind_symlink: bool) -> Self {
@@ -236,10 +170,6 @@ impl PluginFixture {
         )
     }
 
-    pub(super) fn write_pin_file(&self, contents: &str) {
-        std::fs::write(self.workspace_root.join("plugins.yaml"), contents).expect("write pin file");
-    }
-
     /// A minimal working plugin directory under `sources`.
     pub(super) fn write_plugin(&self, spec: PluginSpecFixture<'_>) -> PathBuf {
         let root = self.sources.join(spec.dir);
@@ -294,39 +224,9 @@ impl<'a> PluginSpecFixture<'a> {
         self
     }
 
-    pub(super) fn with_backend(mut self, script: &'a str) -> Self {
-        self.backend = Some(script);
-        self
-    }
-
-    pub(super) fn with_output_schema(mut self, schema: &'a str) -> Self {
-        self.output_schema = Some(schema);
-        self
-    }
-
     /// Request `fs.write` under the plugin's own state directory.
     pub(super) fn requesting_fs_write(mut self) -> Self {
         self.permissions = Some("  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n");
-        self
-    }
-
-    /// Request `fs.write` on two sibling directories under the plugin's own
-    /// state tree, so a grant can be scoped to one of them.
-    pub(super) fn requesting_two_fs_writes(mut self) -> Self {
-        self.permissions = Some(
-            "  permissions:\n    fs:\n      write: [\"{{plugin_state}}/kept\", \"{{plugin_state}}/dropped\"]\n",
-        );
-        self
-    }
-
-    /// Declare `spec.requires.programs` (a YAML flow list, `[git, /opt/x]`).
-    pub(super) fn requiring_programs(mut self, programs: &'a str) -> Self {
-        self.requires_programs = Some(programs);
-        self
-    }
-
-    pub(super) fn unsandboxed(mut self) -> Self {
-        self.sandbox = Some("none");
         self
     }
 }

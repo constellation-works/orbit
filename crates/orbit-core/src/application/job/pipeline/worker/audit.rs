@@ -112,20 +112,6 @@ impl OrbitRuntime {
         Ok(Some(PipelineWorkerLogSnapshot { path, content }))
     }
 
-    /// Runtime-shaped entry point for the cancellation-race test; the
-    /// observer itself records this through the supervisor.
-    #[cfg(all(test, unix))]
-    pub(crate) fn record_pipeline_worker_cancellation_exit(
-        &self,
-        run: &JobRun,
-        signal: i32,
-        exit_status: &str,
-        actor: Option<&str>,
-    ) -> Result<bool, OrbitError> {
-        self.pipeline_worker_supervisor(false)
-            .record_cancellation_exit(run, signal, exit_status, actor)
-    }
-
     pub(crate) fn record_pipeline_audit(
         &self,
         tool_name: &str,

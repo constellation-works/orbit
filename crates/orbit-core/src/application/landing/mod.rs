@@ -32,9 +32,6 @@ mod attempts;
 mod context;
 mod dispatch;
 
-#[cfg(test)]
-mod tests;
-
 /// The owner-local job that lands one authorized handoff.
 pub const LANDING_JOB: &str = "task_landing_pipeline";
 

@@ -31,10 +31,6 @@ pub(crate) const WORKER_TERMINATED_ERROR_CODE: &str = "worker_terminated";
 #[cfg(test)]
 mod tests;
 
-/// The request audit a supervisor test seeds before asserting the worker-exit
-/// record that answers it.
-#[cfg(all(test, unix))]
-pub(crate) use actions::CANCELLATION_REQUEST_AUDIT;
 #[cfg(unix)]
 pub(crate) use actions::{CANCELLATION_WORKER_EXIT_AUDIT, active_cancellation_request};
 pub use admissions_stop::{
@@ -43,8 +39,6 @@ pub use admissions_stop::{
 };
 #[cfg(test)]
 pub(crate) use conflict::TERMINAL_OUTCOME_CONFLICT_CODE;
-#[cfg(all(test, unix))]
-pub(crate) use owner::override_start_identity_probe;
 pub(crate) use owner::running_run_has_verified_owner;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
@@ -53,7 +47,5 @@ pub use projection::{
 };
 #[cfg(test)]
 pub(crate) use query::job_run_get_counter;
-#[cfg(test)]
-pub(crate) use reconcile::reconcile_pass_counter;
 pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

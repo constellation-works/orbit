@@ -484,9 +484,7 @@ fn lint_sweep_keeps_declared_context_when_its_target_disappears() {
 
 /// [ORB-12490] A task that declares nothing is reported for operator repair
 /// and never handed a guessed scope — not even by `--restore-pruned`, which
-/// restores only what task history recorded. (Restoration from recorded
-/// evidence is covered at its owning boundary in
-/// `orbit-core::application::task::tests::context_repair`.)
+/// restores only what task history recorded.
 #[test]
 fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
     let workspace = TestWorkspace::new();

@@ -404,19 +404,6 @@ impl OrbitRuntime {
         self.coordination_write_owner.as_deref()
     }
 
-    /// Test seam: restate the registered workspace owner that registry
-    /// composition supplies in production, so ownership resolution can be
-    /// exercised on an in-memory runtime.
-    #[cfg(test)]
-    pub(crate) fn with_workspace_owner_machine_id(mut self, owner: Option<&str>) -> Self {
-        if let Some(binding) = self.workspace_binding.as_ref() {
-            let mut rebound = (**binding).clone();
-            rebound.owner_machine_id = owner.map(ToOwned::to_owned);
-            self.workspace_binding = Some(Arc::new(rebound));
-        }
-        self
-    }
-
     /// Returns in-process events recorded during this session only. Not persisted across process
     /// boundaries — the log is empty at startup and discarded on exit. For the persistent CLI
     /// audit log written on every invocation, see [`OrbitRuntime::list_audit_events`].

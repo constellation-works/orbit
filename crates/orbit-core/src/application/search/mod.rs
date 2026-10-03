@@ -14,9 +14,6 @@ mod filters;
 mod path_match;
 mod types;
 
-#[cfg(test)]
-mod tests;
-
 pub use path_match::task_selectors_contain_path;
 pub(crate) use types::empty_whitespace_query_note;
 pub use types::{

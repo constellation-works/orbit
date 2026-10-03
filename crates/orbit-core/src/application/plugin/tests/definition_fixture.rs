@@ -2,10 +2,6 @@
 //! agent-loop activity, one deterministic activity driving the plugin's own
 //! tool through `plugin.tool_call`, one job wiring them, one routine, one
 //! auto-task, one skill and a `[plugins.<ns>]` schema.
-//!
-//! Written as files rather than a constant blob so a test can bend exactly one
-//! rule (a cross-plugin routine target, an `enabled: true` schedule, a config
-//! value the schema rejects) and assert on the refusal.
 
 use std::path::{Path, PathBuf};
 
@@ -55,36 +51,6 @@ impl<'a> DefinitionPlugin<'a> {
             panel: false,
             program: None,
         }
-    }
-
-    pub(super) fn with_program(mut self, program: &'a str) -> Self {
-        self.program = Some(program);
-        self
-    }
-
-    pub(super) fn with_panel(mut self) -> Self {
-        self.panel = true;
-        self
-    }
-
-    pub(super) fn with_version(mut self, version: &'a str) -> Self {
-        self.version = version;
-        self
-    }
-
-    pub(super) fn targeting(mut self, target: &'a str) -> Self {
-        self.routine_target = Some(target);
-        self
-    }
-
-    pub(super) fn with_enabled_routine(mut self) -> Self {
-        self.routine_enabled = true;
-        self
-    }
-
-    pub(super) fn with_enabled_auto_task(mut self) -> Self {
-        self.auto_task_enabled = true;
-        self
     }
 
     /// Write the plugin source under `fixture.sources` and return its plugin

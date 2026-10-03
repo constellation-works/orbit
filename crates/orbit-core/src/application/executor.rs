@@ -90,14 +90,6 @@ fn select_shipped_sandbox(
     }
 }
 
-#[cfg(test)]
-pub(super) fn migrated_default_executor(
-    existing: &ExecutorDef,
-    seeded: &ExecutorDef,
-) -> Option<ExecutorDef> {
-    migrated_default_executor_for_platform(existing, seeded, std::env::consts::OS)
-}
-
 pub(super) fn migrated_default_executor_for_platform(
     existing: &ExecutorDef,
     seeded: &ExecutorDef,
@@ -149,11 +141,6 @@ pub(super) fn migrated_default_executor_for_platform(
     }
 
     if changed { Some(migrated) } else { None }
-}
-
-#[cfg(test)]
-pub(super) fn parse_default_executor(name: &str, yaml: &str) -> Result<ExecutorDef, OrbitError> {
-    parse_default_executor_for_platform(name, yaml, std::env::consts::OS)
 }
 
 pub(super) fn parse_default_executor_for_platform(

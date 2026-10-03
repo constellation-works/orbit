@@ -17,16 +17,6 @@ use orbit_types::workflow::automation::members::{
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The landing-branch head commit the material fingerprint is bound to.
-/// Tests bind an expected fingerprint to the same revision the evaluator saw.
-#[cfg(test)]
-pub(crate) fn head_revision(runtime: &OrbitRuntime, branch: &str) -> Result<String, OrbitError> {
-    Source::new(&runtime.paths().repo_root)
-        .head(branch)
-        .map(|(_, revision)| revision.commit)
-        .map_err(orbit_automation::automation_error_to_orbit)
-}
-
 /// Repository instructions captured from one immutable source revision.
 ///
 /// The serialized form deliberately remains the fingerprint input used before

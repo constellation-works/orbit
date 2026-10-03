@@ -9,7 +9,7 @@ use crate::runtime::plugin::grants::forget_authorized_grants;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir};
 use crate::runtime::plugin::sandbox_mask::{not_visible, plugin_trees_masked};
 
-use super::super::install::{NamespaceStep, lock_plugin_namespace, namespace_step};
+use super::super::install::lock_plugin_namespace;
 use super::super::secrets::delete_plugin_secrets;
 use super::disable::unlink_namespace_skills;
 use super::record::{installed_plugin, set_enabled, verified_install_path};
@@ -139,8 +139,6 @@ pub fn remove_plugin(
             },
         ))
     })?;
-
-    namespace_step(NamespaceStep::RemoveRowDeleted);
 
     // The authority goes with the install: a later reinstall of this namespace
     // starts from no authorized grants rather than inheriting these.

@@ -14,21 +14,6 @@ use crate::application::managed_assets::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 
-#[cfg(test)]
-thread_local! {
-    static V2_JOB_CATALOG_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_v2_job_catalog_loads() {
-    V2_JOB_CATALOG_LOADS.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-pub(crate) fn v2_job_catalog_loads() -> usize {
-    V2_JOB_CATALOG_LOADS.with(std::cell::Cell::get)
-}
-
 /// Shippable default workflow assets. The list lives beside the shipped
 /// activities in `runtime::assets` so the runtime kernel can answer "is this a
 /// job Orbit ships" — a plugin routine may target one — without reaching up
@@ -287,11 +272,7 @@ impl OrbitRuntime {
     /// tell "came from the workspace copy" apart from "came from the shared
     /// global directory". Skip the exclusion entirely when the two paths
     /// coincide, rather than filtering out every default job name.
-    #[cfg(test)]
-    pub(crate) fn load_v2_job_execution_names(&self) -> Result<BTreeSet<String>, OrbitError> {
-        Ok(self.load_v2_job_execution_membership().names)
-    }
-
+    ///
     /// Build the execution-name index once while retaining errors from any
     /// layer that could not be loaded. The named execution path remains strict
     /// and will re-read its eligible directories before dispatch.
@@ -328,8 +309,6 @@ impl OrbitRuntime {
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<(V2JobCatalog, Vec<V2JobCatalogDiagnostic>), OrbitError> {
-        #[cfg(test)]
-        V2_JOB_CATALOG_LOADS.with(|count| count.set(count.get() + 1));
         let mut catalog = V2JobCatalog::new();
         let mut diagnostics = Vec::new();
         for (directory_index, dir) in dirs.into_iter().enumerate() {
@@ -379,8 +358,6 @@ impl OrbitRuntime {
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> (V2JobCatalog, Vec<OrbitError>) {
-        #[cfg(test)]
-        V2_JOB_CATALOG_LOADS.with(|count| count.set(count.get() + 1));
         let mut catalog = V2JobCatalog::new();
         let mut errors = Vec::new();
         for dir in dirs {

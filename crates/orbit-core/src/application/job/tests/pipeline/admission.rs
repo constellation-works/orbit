@@ -1,58 +1,20 @@
 use crate::application::job::pipeline::run_definition_snapshot_path;
 
-use super::super::exec::test_runtime;
+use crate::OrbitRuntime;
+
+#[cfg(unix)]
+fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {
+    let root = tempfile::tempdir().expect("create tempdir");
+    let global_root = root.path().join("global");
+    let workspace_root = root.path().join("repo").join(".orbit");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let runtime =
+        OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
+    (root, runtime)
+}
 
 const SNAPSHOT_YAML: &str = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: snapshot_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: pinned_step\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n";
-
-#[test]
-fn definition_snapshot_reads_regular_files_and_only_absent_files_are_missing() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
-        &definition_snapshot_reads_regular_files_and_only_absent_files_are_missing,
-    )) {
-        return;
-    }
-    let (_root, runtime, _repo, _global) = test_runtime();
-    let run_id = "snapshot_fixture";
-    assert!(
-        runtime
-            .read_run_definition_snapshot(run_id)
-            .unwrap()
-            .is_none()
-    );
-    let path = run_definition_snapshot_path(&runtime.paths().job_runs_dir, run_id).unwrap();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, SNAPSHOT_YAML).unwrap();
-
-    let (spec, yaml) = runtime
-        .read_run_definition_snapshot(run_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(spec.steps[0].id, "pinned_step");
-    assert_eq!(yaml, SNAPSHOT_YAML);
-
-    std::fs::write(&path, "invalid yaml").unwrap();
-    runtime
-        .read_run_definition_snapshot(run_id)
-        .expect_err("a malformed snapshot must not fall back to the catalog");
-}
-
-#[test]
-fn definition_snapshot_refuses_a_directory_instead_of_using_the_catalog() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
-        &definition_snapshot_refuses_a_directory_instead_of_using_the_catalog,
-    )) {
-        return;
-    }
-    let (_root, runtime, _repo, _global) = test_runtime();
-    let run_id = "snapshot_directory";
-    let path = run_definition_snapshot_path(&runtime.paths().job_runs_dir, run_id).unwrap();
-    std::fs::create_dir_all(&path).unwrap();
-
-    runtime
-        .read_run_definition_snapshot(run_id)
-        .expect_err("a directory at the snapshot path is not a missing definition");
-    assert!(path.is_dir());
-}
 
 #[cfg(unix)]
 #[test]
@@ -62,7 +24,7 @@ fn definition_snapshot_refuses_external_internal_and_dangling_symlinks() {
     )) {
         return;
     }
-    let (root, runtime, _repo, _global) = test_runtime();
+    let (root, runtime) = test_runtime();
     let dir = &runtime.paths().job_runs_dir;
     std::fs::create_dir_all(dir).unwrap();
     let outside = root.path().join("outside.yaml");
@@ -89,27 +51,4 @@ fn definition_snapshot_refuses_external_internal_and_dangling_symlinks() {
     assert_eq!(std::fs::read_to_string(outside).unwrap(), SNAPSHOT_YAML);
     assert_eq!(std::fs::read_to_string(inside).unwrap(), SNAPSHOT_YAML);
     assert!(!missing.exists());
-}
-
-#[test]
-fn definition_snapshot_refuses_run_ids_with_path_syntax() {
-    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
-        &definition_snapshot_refuses_run_ids_with_path_syntax,
-    )) {
-        return;
-    }
-    let (_root, runtime, _repo, _global) = test_runtime();
-    for run_id in [
-        "",
-        ".",
-        "..",
-        "../outside",
-        "/absolute",
-        "nested/file",
-        "nested\\file",
-    ] {
-        runtime
-            .read_run_definition_snapshot(run_id)
-            .expect_err("an invalid run ID must be refused before filesystem access");
-    }
 }

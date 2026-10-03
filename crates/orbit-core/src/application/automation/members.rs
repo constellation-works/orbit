@@ -21,21 +21,6 @@ use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
-thread_local! {
-    static HEAD_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_head_invocations() {
-    HEAD_INVOCATIONS.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-pub(crate) fn head_invocations() -> usize {
-    HEAD_INVOCATIONS.with(std::cell::Cell::get)
-}
-
 pub(crate) fn evaluate(
     runtime: &OrbitRuntime,
     definition: &RoutineDefinition,
@@ -187,17 +172,10 @@ impl<'a> Host<'a> {
         )
         .map(Some)
     }
-
-    #[cfg(test)]
-    pub(crate) fn incident_work_stats(&self) -> super::incidents::IncidentWorkStats {
-        self.incidents.borrow().stats()
-    }
 }
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
-        #[cfg(test)]
-        HEAD_INVOCATIONS.with(|count| count.set(count.get() + 1));
         Source::new(&self.runtime.paths().repo_root).head(branch)
     }
 
