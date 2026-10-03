@@ -164,9 +164,11 @@ fn update_patches_present_fields() {
                 }),
                 dedupe: Some(DedupePolicy::Always),
                 template: Some(replacement),
+                enabled: Some(false),
             },
         )
         .expect("update");
+    assert!(!updated.enabled, "`enabled` is an ordinary update field");
     assert_eq!(updated.description, "new body");
     assert_eq!(updated.dedupe, DedupePolicy::Always);
     assert_eq!(updated.template.title, "Renamed chore");

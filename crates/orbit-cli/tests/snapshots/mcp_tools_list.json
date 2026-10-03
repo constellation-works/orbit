@@ -123,41 +123,6 @@
     }
   },
   {
-    "name": "orbit_auto_task_delete",
-    "description": "Delete an auto-task definition with its scheduler cursor and delivery consumer state. Deleting a shipped default records an opt-out, so reseeding does not re-create it; `orbit auto-task restore` reinstates it.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Definition name. Required."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Why the definition is deleted, kept in the audit record."
-        },
-        "force": {
-          "type": "boolean",
-          "description": "Delete even while a task minted from the definition is open or a delivery action is executing. Defaults to false."
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
-        }
-      },
-      "required": [
-        "name"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": false
-    }
-  },
-  {
     "name": "orbit_auto_task_list",
     "description": "List auto-task definitions in this workspace. Definitions seeded by a plugin that is switched off here are omitted unless include_inactive_plugins is true.",
     "inputSchema": {
@@ -223,44 +188,8 @@
     }
   },
   {
-    "name": "orbit_auto_task_toggle",
-    "description": "Enable or disable an auto-task definition without deleting it.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Definition name. Required."
-        },
-        "enabled": {
-          "type": "boolean",
-          "description": "Whether to enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete. Required."
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Explicit workspace for checked toggle"
-        },
-        "expected_enabled": {
-          "type": "boolean",
-          "description": "Observed enabled state checked atomically; requires operator authority"
-        }
-      },
-      "required": [
-        "name",
-        "enabled"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": false,
-      "idempotentHint": true,
-      "openWorldHint": false
-    }
-  },
-  {
     "name": "orbit_auto_task_update",
-    "description": "Update an existing auto-task definition (present fields only).",
+    "description": "Update an existing auto-task definition (present fields only), including enabling or disabling it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -318,9 +247,17 @@
           "type": "string",
           "description": "New dedupe policy: `skip_if_open` or `always`."
         },
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete."
+        },
+        "expected_enabled": {
+          "type": "boolean",
+          "description": "Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches. Requires operator authority and `workspace`, and accepts no other edits."
+        },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+          "description": "Explicit workspace, required with `expected_enabled`"
         }
       },
       "required": [
@@ -389,24 +326,6 @@
       "destructiveHint": true,
       "idempotentHint": false,
       "openWorldHint": true
-    }
-  },
-  {
-    "name": "orbit_crew_list",
-    "description": "List the effective configured crews for a selected workspace on this machine.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "workspace": {
-          "type": "string",
-          "description": "Registered workspace name, logical workspace ID (`ws_*`), or absolute path registered on the accepting server. Defaults to the MCP session workspace and is never inferred from process cwd."
-        }
-      },
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "openWorldHint": false
     }
   },
   {
@@ -483,104 +402,8 @@
     }
   },
   {
-    "name": "orbit_friction_list",
-    "description": "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "type": "string",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "description": "Optional model filter"
-        },
-        "status": {
-          "type": "string",
-          "description": "Optional status filter: open, triaged, or resolved"
-        },
-        "tag": {
-          "type": "string",
-          "description": "Optional tag filter"
-        },
-        "month": {
-          "type": "string",
-          "description": "Optional YYYY-MM month filter for reported records"
-        },
-        "q": {
-          "type": "string",
-          "description": "Optional case-insensitive query over id, model, tags, status, task, and body"
-        },
-        "from": {
-          "type": "string",
-          "description": "Optional RFC3339 lower bound for created_at"
-        },
-        "to": {
-          "type": "string",
-          "description": "Optional RFC3339 upper bound for created_at"
-        },
-        "limit": {
-          "type": "integer",
-          "description": "Optional maximum number of records to return"
-        },
-        "offset": {
-          "type": "integer",
-          "description": "Optional number of records to skip"
-        },
-        "response_mode": {
-          "type": "string",
-          "description": "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array"
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
-        }
-      },
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "orbit_friction_rehome",
-    "description": "Move an unresolved friction record into the registered workspace that owns it. The owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID; this record is resolved with a pointer to it",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Friction record ID, e.g. FYYYY-MM-NNN"
-        },
-        "to_workspace": {
-          "type": "string",
-          "description": "Registered name or ID of the workspace that owns this friction"
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
-        }
-      },
-      "required": [
-        "id",
-        "to_workspace"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": false
-    }
-  },
-  {
     "name": "orbit_friction_update",
-    "description": "Update triage metadata for a friction record",
+    "description": "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -624,7 +447,11 @@
         },
         "rehome_to": {
           "type": "string",
-          "description": "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it"
+          "description": "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition"
+        },
+        "move": {
+          "type": "boolean",
+          "description": "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true"
         },
         "title": {
           "type": "string",
@@ -643,8 +470,8 @@
     },
     "annotations": {
       "readOnlyHint": false,
-      "destructiveHint": false,
-      "idempotentHint": true,
+      "destructiveHint": true,
+      "idempotentHint": false,
       "openWorldHint": false
     }
   },
@@ -807,13 +634,13 @@
   },
   {
     "name": "orbit_search",
-    "description": "Search tasks and frictions using lexical matching.",
+    "description": "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "query": {
           "type": "string",
-          "description": "Free-text lexical query. Multiple words need not be adjacent.",
+          "description": "Free-text lexical query. Multiple words need not be adjacent. Optional with `kind: friction`, where omitting it lists frictions.",
           "minLength": 1
         },
         "kind": {
@@ -822,7 +649,7 @@
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of results. Default: 10."
+          "description": "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing."
         },
         "tag": {
           "anyOf": [
@@ -904,6 +731,16 @@
               "required": [
                 "tag"
               ]
+            },
+            {
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "friction"
+                }
+              }
             }
           ]
         }
@@ -1329,7 +1166,7 @@
   },
   {
     "name": "orbit_task_show",
-    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
+    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit_workflow_run_show`.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1367,11 +1204,15 @@
               "type": "string"
             }
           ],
-          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution."
+          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields."
         },
         "field": {
           "type": "string",
           "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`."
+        },
+        "run_id": {
+          "type": "string",
+          "description": "With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used."
         },
         "workspace": {
           "type": "string",
@@ -1899,13 +1740,13 @@
   },
   {
     "name": "orbit_workflow_auto",
-    "description": "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
+    "description": "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers, or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "action": {
           "type": "string",
-          "description": "status, start or stop"
+          "description": "status, start, stop or resize"
         },
         "for_seconds": {
           "type": "integer",
@@ -1913,7 +1754,19 @@
         },
         "concurrency": {
           "type": "integer",
-          "description": "Optional start worker limit, positive u32; omitted uses runtime default"
+          "description": "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize, from 1 to the ship job's own active-run limit"
+        },
+        "id": {
+          "type": "string",
+          "description": "Resize only: auto-drain run ID. Omitted targets the workspace's one live auto drain; refused when none or several are live"
+        },
+        "if_revision": {
+          "type": "integer",
+          "description": "Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Resize only: note recorded with the change"
         },
         "complete": {
           "type": "boolean",
@@ -1949,36 +1802,6 @@
       "destructiveHint": true,
       "idempotentHint": false,
       "openWorldHint": true
-    }
-  },
-  {
-    "name": "orbit_workflow_run_delivery",
-    "description": "Report what one task delivery run committed and landed for one task of this workspace, from the host's own commit and merge step records. Returns typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only; missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `run.show`.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "run_id": {
-          "type": "string",
-          "description": "Job run ID that delivered the task."
-        },
-        "task_id": {
-          "type": "string",
-          "description": "Task the run was submitted with, in this workspace."
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
-        }
-      },
-      "required": [
-        "run_id",
-        "task_id"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "openWorldHint": false
     }
   },
   {
@@ -2100,50 +1923,6 @@
     }
   },
   {
-    "name": "orbit_workflow_run_workers",
-    "description": "Adjust how many tasks a running workspace drain keeps in flight, without replacing its run. The run ID, deadline, completion authorization, and already-dispatched children are preserved; a lower ceiling stops new admissions until enough children finish and cancels nothing.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Job run ID."
-        },
-        "concurrency": {
-          "type": "integer",
-          "description": "New ceiling on tasks in flight, from 1 to the ship job's own active-run limit."
-        },
-        "reason": {
-          "type": "string",
-          "description": "Optional note recorded with the change."
-        },
-        "if_revision": {
-          "type": "integer",
-          "description": "Apply only if the run's ceiling is still at this revision, so a concurrent adjustment is reported rather than overwritten."
-        },
-        "claim_token": {
-          "type": "string",
-          "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
-        },
-        "workspace": {
-          "type": "string",
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
-        }
-      },
-      "required": [
-        "id",
-        "concurrency"
-      ],
-      "additionalProperties": true
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": false,
-      "idempotentHint": true,
-      "openWorldHint": false
-    }
-  },
-  {
     "name": "orbit_workflow_ship",
     "description": "Submit explicit tasks to the review-only ship workflow and return its durable run ID. This MCP tool does not accept completion authorization; an authorized operator on the owning host can use `orbit run ship <task-id> --complete`.",
     "inputSchema": {
@@ -2218,10 +1997,25 @@
   },
   {
     "name": "orbit_workspace_list",
-    "description": "List active workspaces with a checkout registered on this machine.",
+    "description": "List active workspaces with a checkout registered on this machine, optionally with each one's configured crews.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "include": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Optional extra detail per workspace row. `crews` adds the workspace's effective configured crews and default crew as `crews`, read on the machine that holds the checkout, or `crews_error` when its configuration cannot be read."
+        }
+      },
       "additionalProperties": true
     },
     "annotations": {

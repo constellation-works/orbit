@@ -59,15 +59,11 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
         [
             "orbit.agent.invoke",
             "orbit.auto_task.add",
-            "orbit.auto_task.delete",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
-            "orbit.auto_task.toggle",
             "orbit.auto_task.update",
             "orbit.command.exec",
             "orbit.friction.add",
-            "orbit.friction.list",
-            "orbit.friction.rehome",
             "orbit.friction.update",
             "orbit.pipeline.invoke",
             "orbit.routine.control",
@@ -79,11 +75,9 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.show",
             "orbit.task.update",
             "orbit.workflow.auto",
-            "orbit.workflow.run.delivery",
             "orbit.workflow.run.list",
             "orbit.workflow.run.resume",
             "orbit.workflow.run.show",
-            "orbit.workflow.run.workers",
             "orbit.workflow.ship",
         ]
     );
@@ -217,9 +211,7 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
         "orbit.task.show",
         "orbit.task.artifact.get",
         "orbit.search",
-        "orbit.friction.list",
         "orbit.auto_task.list",
-        "orbit.workflow.run.delivery",
         "orbit.workflow.run.list",
         "orbit.workflow.run.show",
     ] {
@@ -231,8 +223,6 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
         "orbit.task.artifact.put",
         "orbit.friction.add",
         "orbit.friction.update",
-        "orbit.friction.rehome",
-        "orbit.auto_task.delete",
         "orbit.workflow.ship",
         "orbit.agent.invoke",
         "orbit.command.exec",
@@ -240,12 +230,9 @@ fn read_only_tools_advertise_the_hint_and_mutating_ones_do_not() {
         assert_eq!(annotations_of(name).read_only, Some(false), "{name}");
     }
 
+    // `rehome_to` moves the record and resolves the original.
     assert_eq!(
-        annotations_of("orbit.auto_task.delete").destructive,
-        Some(true)
-    );
-    assert_eq!(
-        annotations_of("orbit.friction.rehome").destructive,
+        annotations_of("orbit.friction.update").destructive,
         Some(true)
     );
     assert_eq!(annotations_of("orbit.task.add").destructive, Some(false));

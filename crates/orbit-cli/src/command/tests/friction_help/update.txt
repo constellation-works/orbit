@@ -23,7 +23,12 @@ Options:
           Optional replacement markdown body
 
       --rehome-to <REHOME_TO>
-          Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it
+          Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition
+
+      --move <MOVE>
+          With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true
+          
+          [possible values: true, false]
 
       --title <TITLE>
           Optional replacement title, max 120 chars; empty restores derivation

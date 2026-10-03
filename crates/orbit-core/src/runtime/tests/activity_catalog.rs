@@ -22,27 +22,23 @@ const AGENT_ACTIVITIES: [&str; 6] = [
     "task_pilot",
 ];
 
-const CONTROL_TOOLS: [&str; 11] = [
+const CONTROL_TOOLS: [&str; 8] = [
     "orbit.agent.invoke",
     "orbit.auto_task.add",
-    "orbit.auto_task.delete",
     "orbit.auto_task.mint",
-    "orbit.auto_task.toggle",
     "orbit.auto_task.update",
     "orbit.command.exec",
     "orbit.pipeline.invoke",
     "orbit.workflow.run.resume",
-    "orbit.workflow.run.workers",
     "orbit.workflow.ship",
 ];
 
-const READ_ONLY_MUTATIONS: [&str; 6] = [
+const READ_ONLY_MUTATIONS: [&str; 5] = [
     "orbit.task.add",
     "orbit.task.update",
     "orbit.task.artifact.put",
     "orbit.friction.add",
     "orbit.friction.update",
-    "orbit.friction.rehome",
 ];
 
 fn write_activity(path: &Path, name: &str, description: &str) {

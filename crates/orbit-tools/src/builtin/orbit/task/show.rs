@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_types::task::TASK_SHOW_PROJECTION_FIELDS_CSV;
+use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
@@ -30,7 +30,9 @@ impl Tool for OrbitTaskShowTool {
                 the requested field(s) as JSON. A single derived `terminal` \
                 selection remains keyed as an object. Valid values: \
                 {TASK_SHOW_PROJECTION_FIELDS_CSV}. \
-                `crew` is execution selection; `orchestrator` is separate orchestration attribution."
+                `crew` is execution selection; `orchestrator` is separate orchestration attribution. \
+                `{TASK_SHOW_DELIVERY_FIELD}` alone returns what a delivery run committed and landed \
+                for this task instead of task fields."
             ),
             param_type: "string_list".to_string(),
             required: false,
@@ -40,6 +42,15 @@ impl Tool for OrbitTaskShowTool {
             description:
                 "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`."
                     .to_string(),
+            param_type: "string".to_string(),
+            required: false,
+        });
+        parameters.push(ToolParam {
+            name: "run_id".to_string(),
+            description: format!(
+                "With `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only: the delivery run to report. \
+                Omitted, the newest task-delivery run submitted with this task is used."
+            ),
             param_type: "string".to_string(),
             required: false,
         });
@@ -71,7 +82,12 @@ impl Tool for OrbitTaskShowTool {
                 optional `fields` projection (or single-field alias `field`) to retrieve only \
                 specific task fields, including the derived read-only `terminal` field. \
                 The `crew` field \
-                selects execution, while `orchestrator` records orchestration attribution."
+                selects execution, while `orchestrator` records orchestration attribution. \
+                `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed \
+                and landed for the task: typed status, base/head and landed commit SHAs, PR \
+                number, timestamps and provenance only, from the host's own commit and merge \
+                step records. Missing or inconsistent evidence is reported as unavailable, never \
+                inferred. Full run details stay on the operator-only `orbit.workflow.run.show`."
                 .to_string(),
             parameters,
             builtin: true,

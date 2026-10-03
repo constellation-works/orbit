@@ -93,7 +93,9 @@ redaction policy for `Add`/`Update`, for example — pattern-match on the inner
 verb. Core's handler match remains exhaustive, so a new verb cannot omit runtime
 wiring.
 
-The `list` spec also declares the MCP-only `response_mode` parameter. Omitting
+The `list` spec also declares the tool-only `response_mode` parameter (no CLI
+flag; `list` is not advertised over MCP, where agents list frictions with
+`orbit.search`). Omitting
 it preserves the legacy record-array response for matches and every empty
 result. The explicit `with_notes` mode has one stable object shape,
 `{records, notes}`, so callers can request search guidance without making the

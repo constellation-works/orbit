@@ -70,6 +70,7 @@ fn param_type_tokens_are_the_tool_schema_vocabulary() {
     assert_eq!(ParamType::String.as_tool_param_type(), "string");
     assert_eq!(ParamType::StringList.as_tool_param_type(), "string_list");
     assert_eq!(ParamType::Integer.as_tool_param_type(), "integer");
+    assert_eq!(ParamType::Boolean.as_tool_param_type(), "boolean");
 }
 
 #[test]

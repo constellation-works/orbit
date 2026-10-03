@@ -228,7 +228,8 @@ async fn get_task_projects_artifact_manifest_without_content() {
     assert_eq!(artifacts.len(), 1);
     let artifact = artifacts.first().expect("artifact");
     let object = artifact.as_object().expect("artifact object");
-    let keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
     assert_eq!(
         keys,
         vec![

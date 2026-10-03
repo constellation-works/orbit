@@ -508,25 +508,64 @@ impl ServerMcpHost {
         ))
     }
 
-    fn list_workspaces(&self) -> Result<Value, OrbitError> {
+    fn list_workspaces(&self, input: &Value) -> Result<Value, OrbitError> {
+        let include_crews = orbit_mcp::workspace_list_includes_crews(input)?;
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
-        orbit_mcp::execute_discovery_tool(
+        let mut listing = orbit_mcp::execute_discovery_tool(
             "orbit.workspace.list",
             &registry,
             &self.process_machine_id,
-        )
+        )?;
+        if include_crews {
+            self.attach_crews(&mut listing);
+        }
+        Ok(listing)
     }
 
-    fn list_federated_workspaces(&self) -> Result<Value, OrbitError> {
+    fn list_federated_workspaces(&self, input: &Value) -> Result<Value, OrbitError> {
+        let include_crews = orbit_mcp::workspace_list_includes_crews(input)?;
         let registry_path =
             orbit_registry::workspace_registry::registry_path_for(&self.global_root);
         let registry = orbit_registry::workspace_registry::load_registry_from(&registry_path)?;
-        Ok(orbit_mcp::execute_federated_workspace_discovery(
-            &registry,
-            &self.process_machine_id,
-        ))
+        let mut listing =
+            orbit_mcp::execute_federated_workspace_discovery(&registry, &self.process_machine_id);
+        if include_crews {
+            self.attach_crews(&mut listing);
+        }
+        Ok(listing)
+    }
+
+    /// Add each listed workspace's effective crews, read from its own
+    /// runtime. A workspace whose runtime cannot open reports `crews_error`
+    /// instead, so one broken checkout does not hide the others' crews.
+    fn attach_crews(&self, listing: &mut Value) {
+        let Some(rows) = listing.get_mut("workspaces").and_then(Value::as_array_mut) else {
+            return;
+        };
+        for row in rows {
+            let Some(workspace_id) = row.get("id").and_then(Value::as_str).map(str::to_string)
+            else {
+                continue;
+            };
+            match self.workspace_crews(&workspace_id) {
+                Ok(crews) => row["crews"] = crews,
+                Err(error) => row["crews_error"] = Value::String(error.to_string()),
+            }
+        }
+    }
+
+    fn workspace_crews(&self, workspace_id: &str) -> Result<Value, OrbitError> {
+        let selected =
+            RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, workspace_id)?;
+        let runtime = self.open_selected_runtime(&selected)?;
+        let discovery = runtime.crew_discovery(
+            &selected.workspace.id,
+            selected.workspace.owner_machine_id.clone(),
+        )?;
+        serde_json::to_value(discovery)
+            .map_err(|error| OrbitError::Execution(format!("serialize crew discovery: {error}")))
     }
 
     fn call_global_tool(
@@ -541,10 +580,10 @@ impl ServerMcpHost {
             input,
             ToolEntryPoint::Mcp,
             context,
-            |_| match name {
-                "orbit.workspace.list" => self.list_workspaces(),
+            |input| match name {
+                "orbit.workspace.list" => self.list_workspaces(&input),
                 orbit_mcp::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL => {
-                    self.list_federated_workspaces()
+                    self.list_federated_workspaces(&input)
                 }
                 _ => Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string())),
             },
@@ -570,9 +609,17 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<(Arc<OrbitRuntime>, ResolvedWorkspaceSelection), OrbitError> {
         let selected = self.workspace_selection(name, input, context)?;
-        let runtime = self
-            .workspace_runtimes
-            .resolve(&self.global_root, &selected, || {
+        let runtime = self.open_selected_runtime(&selected)?;
+        Ok((runtime, selected))
+    }
+
+    /// The shared long-lived runtime for one resolved checkout.
+    fn open_selected_runtime(
+        &self,
+        selected: &ResolvedWorkspaceSelection,
+    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        self.workspace_runtimes
+            .resolve(&self.global_root, selected, || {
                 let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
                     &self.global_root,
                     &selected.workspace,
@@ -585,8 +632,7 @@ impl ServerMcpHost {
                     "{OPENED_WORKSPACE_RUNTIME_LOG}"
                 );
                 Ok(runtime)
-            })?;
-        Ok((runtime, selected))
+            })
     }
 
     /// Which registered workspace this call lands in.
@@ -722,28 +768,6 @@ impl ServerMcpHost {
                     ToolEntryPoint::Mcp,
                     context,
                     move |_| Err(error),
-                )
-                .map(|outcome| outcome.value);
-        }
-
-        if name == "orbit.crew.list" {
-            let workspace_id = selected.workspace.id.clone();
-            let owner_machine_id = selected.workspace.owner_machine_id.clone();
-            let crew_runtime = &runtime;
-            return runtime
-                .execute_in_process_tool_dispatch(
-                    name,
-                    input,
-                    ToolEntryPoint::Mcp,
-                    context,
-                    move |_| {
-                        serde_json::to_value(
-                            crew_runtime.crew_discovery(&workspace_id, owner_machine_id)?,
-                        )
-                        .map_err(|error| {
-                            OrbitError::Execution(format!("serialize crew discovery: {error}"))
-                        })
-                    },
                 )
                 .map(|outcome| outcome.value);
         }

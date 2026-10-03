@@ -92,6 +92,7 @@ fn update_schema_exposes_expected_parameters() {
             ("tags", "string_list", false),
             ("body", "string", false),
             ("rehome_to", "string", false),
+            ("move", "boolean", false),
             ("title", "string", false),
         ]
     );
@@ -119,13 +120,9 @@ fn registration_reproduces_the_shipped_mcp_surface() {
     advertised.sort_unstable();
     assert_eq!(
         advertised,
-        vec![
-            "orbit.friction.add",
-            "orbit.friction.list",
-            "orbit.friction.rehome",
-            "orbit.friction.update",
-        ],
-        "show, tags, stats, and resolve stay off the MCP surface"
+        vec!["orbit.friction.add", "orbit.friction.update"],
+        "listing goes through orbit.search and moving through update; show, tags, stats, \
+         resolve, list, and rehome stay off the MCP surface"
     );
     for definition in &definitions {
         assert_eq!(definition.scope, McpToolScope::WorkspaceRequired);

@@ -35,7 +35,7 @@ impl Tool for WorkflowAutoTool {
     }
     fn schema(&self) -> ToolSchema {
         let mut parameters = vec![
-            parameter("action", "string", true, "status, start or stop"),
+            parameter("action", "string", true, "status, start, stop or resize"),
             parameter(
                 "for_seconds",
                 "integer",
@@ -46,7 +46,25 @@ impl Tool for WorkflowAutoTool {
                 "concurrency",
                 "integer",
                 false,
-                "Optional start worker limit, positive u32; omitted uses runtime default",
+                "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize, from 1 to the ship job's own active-run limit",
+            ),
+            parameter(
+                "id",
+                "string",
+                false,
+                "Resize only: auto-drain run ID. Omitted targets the workspace's one live auto drain; refused when none or several are live",
+            ),
+            parameter(
+                "if_revision",
+                "integer",
+                false,
+                "Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten",
+            ),
+            parameter(
+                "reason",
+                "string",
+                false,
+                "Resize only: note recorded with the change",
             ),
             parameter(
                 "complete",
@@ -70,7 +88,7 @@ impl Tool for WorkflowAutoTool {
         parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.workflow.auto".into(),
-            description: "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into(),
+            description: "Observe workspace auto-drain readiness, start a bounded window, stop admissions while preserving admitted workers, or resize a running drain's worker limit. Resize keeps the run ID, deadline, completion authorization and dispatched children; a lower limit only stops new admissions and cancels nothing. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into(),
             parameters,
             builtin: true,
         }

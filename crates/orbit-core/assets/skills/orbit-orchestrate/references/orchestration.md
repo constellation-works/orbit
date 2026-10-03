@@ -49,7 +49,8 @@ backlog every pass, so a slot is refilled as soon as its own task finishes and a
 task filed mid-window starts without waiting for the batch around it.
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
---set N` (MCP: `orbit_workflow_run_workers`) records a live ceiling on the run
+--set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
+omit `id` to target the workspace's one live drain) records a live ceiling on the run
 itself, so **do not cancel a drain to change how many workers it uses** — that
 mints a new run id, restarts the window, and re-states the completion
 authorization. The retune keeps all of them:

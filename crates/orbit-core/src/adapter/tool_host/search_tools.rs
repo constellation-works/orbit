@@ -50,9 +50,10 @@ pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
     let result = runtime.global_search(GlobalSearchParams {
         query: optional_string_alias(&input, &["query"])?,
         kind,
+        // Zero is "unset": the runtime picks the default for the call shape.
         limit: optional_u32_alias(&input, &["limit"])?
             .map(|limit| limit as usize)
-            .unwrap_or(10),
+            .unwrap_or(0),
         tags: optional_string_list_alias(&input, &["tag", "tags"])?.unwrap_or_default(),
         all: optional_bool_alias(&input, &["all"])?.unwrap_or(false),
         status: optional_csv_or_string_list_alias(&input, &["status", "statuses"])?

@@ -240,10 +240,10 @@ fn owner_routing_fences_generic_writes_across_separate_stores() {
     assert_eq!(updated["description"], "Edited on host");
     let toggled = worker
         .run_tool(
-            "orbit.auto_task.toggle",
+            "orbit.auto_task.update",
             json!({"name":"host-chore","enabled":false,"model":"codex"}),
         )
-        .expect("host-brokered toggle");
+        .expect("host-brokered disable");
     assert_eq!(toggled["enabled"], false);
     let host_loaded = collect_auto_tasks(&owner_definition_root);
     assert_eq!(

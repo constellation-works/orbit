@@ -102,7 +102,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
       if(args.kind==='routine'){
         name='orbit_routine_control';delete arguments_.kind;
       }else if(args.kind==='auto_task'){
-        name=args.action==='toggle'?'orbit_auto_task_toggle':'orbit_auto_task_mint';delete arguments_.kind;delete arguments_.action;
+        name=args.action==='toggle'?'orbit_auto_task_update':'orbit_auto_task_mint';delete arguments_.kind;delete arguments_.action;
       }else{
         name='orbit_pipeline_invoke';arguments_={workspace:args.workspace,job_name:args.name,default_input:true};
       }

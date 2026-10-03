@@ -10,8 +10,9 @@ mod surface;
 mod tests;
 
 pub use self::discovery::{
-    FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, execute_discovery_tool,
-    execute_federated_workspace_discovery,
+    FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, WORKSPACE_LIST_INCLUDE_CREWS,
+    execute_discovery_tool, execute_federated_workspace_discovery, workspace_list_include_param,
+    workspace_list_includes_crews,
 };
 pub use self::identity::{McpServerIdentity, McpSessionAuthority, mcp_server_identity};
 pub use self::legacy::{ignored_caller_authorization_paths, warn_ignored_caller_authorization};

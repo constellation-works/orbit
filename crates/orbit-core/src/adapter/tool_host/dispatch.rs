@@ -79,16 +79,17 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskMint => super::auto_task_tools::mint(runtime, input),
         OrbitBuiltinAction::AutoTaskShow => super::auto_task_tools::show(runtime, input),
         OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
-        OrbitBuiltinAction::AutoTaskToggle => super::auto_task_tools::toggle(runtime, input),
-        OrbitBuiltinAction::AutoTaskDelete => super::auto_task_tools::delete(runtime, input),
         OrbitBuiltinAction::DesktopAutomation => super::desktop_automation_tools::control(
             runtime,
             input,
             submission_trigger(session_context),
         ),
-        OrbitBuiltinAction::DesktopDrain => {
-            super::desktop_drain_tools::control(runtime, input, submission_trigger(session_context))
-        }
+        OrbitBuiltinAction::DesktopDrain => super::desktop_drain_tools::control(
+            runtime,
+            input,
+            submission_trigger(session_context),
+            &super::workflow_tools::actor(runtime, agent.as_deref(), model.as_deref()),
+        ),
         OrbitBuiltinAction::DesktopRead => {
             super::desktop_tools::read(runtime, session_context, input)
         }
@@ -174,13 +175,9 @@ pub(super) fn execute(
             submission_trigger(session_context),
         ),
         OrbitBuiltinAction::WorkflowRunShow => super::workflow_tools::show(runtime, input),
-        OrbitBuiltinAction::WorkflowRunDelivery => super::workflow_tools::delivery(runtime, input),
         OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
         OrbitBuiltinAction::WorkflowRunResume => {
             super::workflow_tools::resume(runtime, input, agent, model)
-        }
-        OrbitBuiltinAction::WorkflowRunWorkers => {
-            super::workflow_tools::workers(runtime, input, agent, model)
         }
         OrbitBuiltinAction::WorkspaceClaimAcquire => {
             crate::runtime::workspace::claim::acquire(runtime, input, agent, model)

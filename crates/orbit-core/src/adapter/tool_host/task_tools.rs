@@ -4,8 +4,8 @@ use orbit_common::protocol::tool_input::{
     optional_string_list_alias, required_string,
 };
 use orbit_types::task::{
-    TaskPriority, TaskStatus, is_task_show_projection_field, unknown_task_show_field_message,
-    validate_relative_artifact_path,
+    TASK_SHOW_DELIVERY_FIELD, TaskPriority, TaskStatus, is_task_show_projection_field,
+    unknown_task_show_field_message, validate_relative_artifact_path,
 };
 use serde_json::{Value, json};
 
@@ -17,7 +17,7 @@ use super::input::{
     parse_relations, parse_task_priority, parse_task_status, parse_task_type,
 };
 use super::json::{
-    serialize_task, serialize_task_artifact_read, serialize_task_lint_report,
+    serialize_error, serialize_task, serialize_task_artifact_read, serialize_task_lint_report,
     serialize_task_write_response, task_fields_to_json, task_to_json,
 };
 
@@ -217,8 +217,19 @@ pub(super) fn reject(
 
 pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
-    let task = runtime.get_task(&id)?;
     let fields = optional_csv_or_string_list_alias(&input, &["fields", "field"])?;
+    let wants_delivery = fields
+        .as_ref()
+        .is_some_and(|fields| fields.iter().any(|field| field == TASK_SHOW_DELIVERY_FIELD));
+    if wants_delivery {
+        return delivery(runtime, &id, fields.as_deref().unwrap_or_default(), &input);
+    }
+    if input.get("run_id").is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`run_id` selects a delivery run and requires `field: \"{TASK_SHOW_DELIVERY_FIELD}\"`"
+        )));
+    }
+    let task = runtime.get_task(&id)?;
     let value = if let Some(fields) = &fields {
         let projected = task_fields_to_json(runtime, &task, fields)?;
         if fields.len() == 1 && fields[0] == "terminal" {
@@ -230,6 +241,26 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         serialize_task(runtime, &task)?
     };
     Ok(value)
+}
+
+/// [ORB-13744] The bounded public delivery observation: typed host evidence
+/// only, so it carries nothing to redact and nothing an agent wrote. It is a
+/// response of its own rather than a task field, so it cannot be mixed with
+/// record projections.
+fn delivery(
+    runtime: &OrbitRuntime,
+    id: &str,
+    fields: &[String],
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    if fields.len() != 1 {
+        return Err(OrbitError::InvalidInput(format!(
+            "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields"
+        )));
+    }
+    let run_id = optional_string(input, "run_id")?;
+    let observation = runtime.observe_task_delivery(id, run_id.as_deref())?;
+    serde_json::to_value(observation).map_err(serialize_error("serialize task delivery"))
 }
 
 /// Read one stored artifact's bytes through the task's own artifact owner.

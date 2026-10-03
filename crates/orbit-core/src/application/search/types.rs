@@ -77,13 +77,27 @@ pub struct GlobalSearchParams {
 }
 
 impl GlobalSearchParams {
-    /// The requested limit, defaulted when zero and capped at [`MAX_LIMIT`].
+    /// The requested limit, capped at [`MAX_LIMIT`]. Zero means unset: a
+    /// friction listing then returns up to the cap, any other search
+    /// [`DEFAULT_LIMIT`].
     pub fn normalized_limit(&self) -> usize {
-        if self.limit == 0 {
-            DEFAULT_LIMIT
-        } else {
-            self.limit.min(MAX_LIMIT)
+        match self.limit {
+            0 if self.is_friction_listing() => MAX_LIMIT,
+            0 => DEFAULT_LIMIT,
+            limit => limit.min(MAX_LIMIT),
         }
+    }
+
+    /// A `kind: friction` call with no query and no path lists the friction
+    /// records the status and tag filters admit, in `created_at` then ID
+    /// order, across every status unless a `friction:` status narrows it.
+    pub fn is_friction_listing(&self) -> bool {
+        self.kind == GlobalSearchKind::Friction
+            && self.path.is_none()
+            && self
+                .query
+                .as_deref()
+                .is_none_or(|query| query.trim().is_empty())
     }
 }
 
@@ -182,4 +196,9 @@ pub struct GlobalSearchHit {
     /// keeps that response byte-identical to before [ORB-11027].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<HitWorkspace>,
+    /// The full friction record, set only on a friction listing so a caller
+    /// triaging the set reads tags, reporter, task and disposition without a
+    /// second lookup per hit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<serde_json::Value>,
 }

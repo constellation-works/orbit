@@ -47,13 +47,14 @@ const SHIPPED: &[(&str, &str)] = &[
 const CUSTOM: &[(&str, &str)] = &[fixture!("custom_allowlist"), fixture!("custom_empty_tools")];
 
 /// Tools whose enforcement outcome is compared; each runs harmlessly
-/// in-memory once the policy admits it.
+/// in-memory once the policy admits it (the id-less friction update is
+/// refused as invalid input before it writes anything).
 fn probes() -> [(&'static str, Value); 4] {
     [
         ("orbit.search", json!({ "query": "compat" })),
         ("orbit.task.show", json!({ "id": "ORB-00001" })),
         ("orbit.task.list", json!({})),
-        ("orbit.friction.list", json!({})),
+        ("orbit.friction.update", json!({})),
     ]
 }
 

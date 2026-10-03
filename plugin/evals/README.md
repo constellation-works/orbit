@@ -5,8 +5,8 @@ plugin loaded and, by default, a no-plugin baseline arm; the score delta (Δ)
 is what the plugin contributes.
 
 All Orbit MCP calls are answered by mocks under `mocks/orbit/` — no real
-`orbit mcp serve` process starts. Stateless tools (`workspace_list`, `crew_list`)
-are fixed responders. Everything that depends on *which* record or workspace is
+`orbit mcp serve` process starts. The stateless `workspace_list` is a fixed
+responder. Everything that depends on *which* record or workspace is
 asked for, or on earlier calls — `task_add`/`task_list`/`task_show`/
 `task_update`, `search`, frictions, runs, `workflow_ship`, `agent_invoke` — is
 answered by one `type: agent` responder, `_server.md`, from a fixed fake world

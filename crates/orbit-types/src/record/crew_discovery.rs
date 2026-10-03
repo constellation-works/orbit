@@ -6,8 +6,8 @@ use crate::identity::Crew;
 use crate::record::RecordError;
 use crate::workflow::activity_job::Provider;
 
-/// Schema version of the [`CrewDiscoveryV1`] projection returned by
-/// `orbit.crew.list`.
+/// Schema version of the [`CrewDiscoveryV1`] projection returned as
+/// `crews` by `orbit.workspace.list` with `include: ["crews"]`.
 ///
 /// Bumped to 2 in ORB-10801, when the entry lost its `backend` field along
 /// with the agent execution backend selector it projected, and to 3 when each
@@ -72,7 +72,7 @@ impl CrewDiscoveryEntryV1 {
     }
 }
 
-/// Sanitized `orbit.crew.list` projection for one selected workspace.
+/// Sanitized crew projection for one selected workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrewDiscoveryV1 {
     pub schema_version: u32,

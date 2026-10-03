@@ -33,14 +33,6 @@ pub fn register(registry: &mut ToolRegistry) {
         auto_task::update::OrbitAutoTaskUpdateTool,
         McpToolScope::WorkspaceRequired,
     );
-    registry.register_mcp(
-        auto_task::toggle::OrbitAutoTaskToggleTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        auto_task::delete::OrbitAutoTaskDeleteTool,
-        McpToolScope::WorkspaceRequired,
-    );
     // Deterministic owner/follower operations remain active for runtime and
     // operator diagnostics, but have no public MCP schemas. The internal
     // transport selects their existing guarded handlers explicitly.
@@ -112,24 +104,12 @@ pub fn register(registry: &mut ToolRegistry) {
         workflow::OrbitWorkflowRunShowTool,
         McpToolScope::WorkspaceRequired,
     );
-    // [ORB-13744] The narrow public delivery read beside the operator-only
-    // run view. Deliberately ungoverned, like `orbit.task.show`: it answers
-    // only typed host evidence for a task of this workspace, and a plugin
-    // still needs it in `permissions.orbit_tools`.
-    registry.register_mcp(
-        workflow::OrbitWorkflowRunDeliveryTool,
-        McpToolScope::WorkspaceRequired,
-    );
     registry.register_mcp(
         workflow::OrbitWorkflowRunListTool,
         McpToolScope::WorkspaceRequired,
     );
     registry.register_mcp(
         workflow::OrbitWorkflowRunResumeTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        workflow::OrbitWorkflowRunWorkersTool,
         McpToolScope::WorkspaceRequired,
     );
 }

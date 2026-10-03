@@ -176,8 +176,8 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         json!({"workspace":selector,"id":"jrun-missing"}),
     );
     client.call_tool_err(
-        "orbit_workflow_run_workers",
-        json!({"workspace":selector,"id":"jrun-missing","concurrency":1}),
+        "orbit_workflow_auto",
+        json!({"workspace":selector,"action":"resize","id":"jrun-missing","concurrency":1}),
     );
     let runs = client.call_tool_ok(
         "orbit_workflow_run_list",
@@ -207,8 +207,8 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
             json!({"workspace":selector,"id":"jrun-missing"}),
         ),
         (
-            "orbit_workflow_run_workers",
-            json!({"workspace":selector,"id":"jrun-missing","concurrency":1}),
+            "orbit_workflow_auto",
+            json!({"workspace":selector,"action":"resize","id":"jrun-missing","concurrency":1}),
         ),
     ] {
         assert_eq!(

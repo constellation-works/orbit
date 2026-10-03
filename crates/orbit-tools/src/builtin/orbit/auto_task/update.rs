@@ -1,6 +1,7 @@
 use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input::{reject_unknown_tool_fields, required_string};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
 
@@ -41,17 +42,55 @@ impl Tool for OrbitAutoTaskUpdateTool {
                 param_type: "string".to_string(),
                 required: false,
             },
+            ToolParam {
+                name: "enabled".to_string(),
+                description: "Enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete.".to_string(),
+                param_type: "boolean".to_string(),
+                required: false,
+            },
+            super::super::task::guarded::param(
+                "expected_enabled",
+                "boolean",
+                "Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches. Requires operator authority and `workspace`, and accepts no other edits.",
+            ),
+            super::super::task::guarded::param(
+                "workspace",
+                "string",
+                "Explicit workspace, required with `expected_enabled`",
+            ),
         ];
         ToolSchema {
             name: "orbit.auto_task.update".to_string(),
-            description: "Update an existing auto-task definition (present fields only)."
+            description: "Update an existing auto-task definition (present fields only), including enabling or disabling it."
                 .to_string(),
             parameters,
             builtin: true,
         }
     }
 
-    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+    fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
+        if input.get("expected_enabled").is_some() {
+            // The checked toggle is its own operation: it changes `enabled`
+            // and nothing else, so a refused compare leaves no partial edit.
+            super::super::domain_control::ensure_operator_leaf(ctx)?;
+            reject_unknown_tool_fields(
+                &input,
+                &["name", "enabled", "expected_enabled", "workspace", "model"],
+            )?;
+            required_string(&input, &["workspace"], "workspace")?;
+            if input.get("enabled").is_none() {
+                return Err(OrbitError::InvalidInput(
+                    "`expected_enabled` requires the desired `enabled` state".to_string(),
+                ));
+            }
+            input["action"] = json!("toggle");
+            input["kind"] = json!("auto_task");
+            return super::super::execute_host_action(
+                ctx,
+                input,
+                OrbitBuiltinAction::DesktopAutomation,
+            );
+        }
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::AutoTaskUpdate)
     }
 }

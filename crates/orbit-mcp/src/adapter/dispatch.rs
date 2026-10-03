@@ -308,7 +308,7 @@ impl OrbitToolServer {
                     .iter()
                     .any(|key| input.get(*key).is_some())
             }
-            "orbit.auto_task.toggle" => input.get("expected_enabled").is_some(),
+            "orbit.auto_task.update" => input.get("expected_enabled").is_some(),
             "orbit.auto_task.mint" => input.get("acknowledge_unconditional").is_some(),
             "orbit.pipeline.invoke" => input.get("default_input") == Some(&Value::Bool(true)),
             "orbit.workflow.auto" | "orbit.routine.control" => true,

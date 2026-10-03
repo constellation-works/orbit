@@ -228,11 +228,14 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
                 }
             }
         }
+        // A query or tag narrows any search; `kind: friction` alone lists
+        // friction records.
         schema.insert(
             "allOf".to_string(),
             json!([{ "anyOf": [
                 { "required": ["query"] },
-                { "required": ["tag"] }
+                { "required": ["tag"] },
+                { "required": ["kind"], "properties": { "kind": { "const": "friction" } } }
             ] }]),
         );
     }

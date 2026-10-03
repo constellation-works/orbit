@@ -126,9 +126,13 @@ orbit auto-task restore <name>          # reinstate a deleted shipped default
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
 `show` first; mint only when creating that task is intended. Over MCP:
-`orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`,
-`orbit_auto_task_toggle`, `orbit_auto_task_delete`, and `orbit_auto_task_mint`.
-`show`, `restore`, `recover`, and `reset` stay CLI-only.
+`orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`, and
+`orbit_auto_task_mint`; `orbit_auto_task_update` with `enabled` is the
+kill-switch. Adding `expected_enabled` (the observed state) makes it a checked,
+atomic toggle that is refused when the definition no longer matches; that form
+needs operator authority and an explicit `workspace` and accepts no other
+edits. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` stay
+CLI-only.
 
 ### Deleting a definition
 
@@ -158,9 +162,8 @@ what and the optional `--reason`.
   deleted default's name creates your own definition instead; the opt-out
   stays, so reseeds never overwrite it.
 
-A user-authored definition records no opt-out: delete simply removes it. Over
-MCP: `orbit_auto_task_delete` (`name`, optional `reason` and `force`).
-`restore` is CLI-only.
+A user-authored definition records no opt-out: delete simply removes it.
+`delete` and `restore` are CLI-only; over MCP, disable a definition instead.
 
 Required tools in a template extend the selected agent activity's baseline;
 they do not replace it or bypass runtime capability, policy, filesystem,

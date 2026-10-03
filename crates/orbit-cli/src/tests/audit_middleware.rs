@@ -314,11 +314,12 @@ fn audit_guard_event_json_shapes_are_snapshotted() {
         audit_guard_event_json(AuditEventStatus::Denied),
     ];
 
-    let actual = serde_json::to_string_pretty(&events).expect("serialize audit snapshot");
-    assert_eq!(
-        actual,
-        include_str!("../snapshots/audit_guard_event_json_shapes.json").trim_end()
-    );
+    // Compared as JSON values: the shape is pinned, the key order is not.
+    let expected: Vec<Value> = serde_json::from_str(include_str!(
+        "../snapshots/audit_guard_event_json_shapes.json"
+    ))
+    .expect("parse audit snapshot");
+    assert_eq!(events, expected);
 }
 
 fn audit_guard_event_json(status: AuditEventStatus) -> Value {

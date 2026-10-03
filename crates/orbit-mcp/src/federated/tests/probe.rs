@@ -38,7 +38,7 @@ fn a_stall_before_the_tool_call_is_an_unreachable_destination() {
 
     for (phase, error) in [
         ("initialize", session.handshake().err()),
-        ("discovery", session.discover_workspaces().err()),
+        ("discovery", session.discover_workspaces(json!({})).err()),
         ("tools/list", session.list_tools().err()),
     ] {
         let error = error.unwrap_or_else(|| panic!("{phase} cannot complete against a stall"));
@@ -288,7 +288,7 @@ fn a_chattering_destination_still_answers_and_cannot_extend_the_deadline() {
     .expect("start a session against the chattering destination");
     session.handshake().expect("handshake through the chatter");
     let snapshot = session
-        .discover_workspaces()
+        .discover_workspaces(json!({}))
         .expect("discovery through the chatter");
     assert_eq!(snapshot.machine_id, OWNER_MACHINE);
     assert_eq!(

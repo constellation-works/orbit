@@ -19,8 +19,8 @@ use orbit_common::protocol::tool_input::{
 };
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    FrictionAddParams, FrictionListFilter, FrictionStoreBackend, FrictionUpdateParams,
-    StoredFrictionRecord,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionStoreBackend,
+    FrictionUpdateParams, StoredFrictionRecord,
 };
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use serde_json::{Value, json};
@@ -214,29 +214,47 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         let raw = raw.trim();
         (!raw.is_empty()).then(|| raw.to_string())
     });
-    if status.is_none()
-        && tags.is_none()
-        && body.is_none()
-        && title.is_none()
-        && rehome_to.is_none()
+    let move_record = match input.get("move") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(value)) => Some(*value),
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "`move` must be a boolean".to_string(),
+            ));
+        }
+    };
+    if move_record.is_some() && !matches!(rehome_to, Some(Some(_))) {
+        return Err(OrbitError::InvalidInput(
+            "`move` applies only with a non-empty `rehome_to`".to_string(),
+        ));
+    }
+    let edits = FrictionUpdateParams {
+        status,
+        tags,
+        title,
+        body,
+        resolved_by_task: None,
+        rehome_to: None,
+        updated_at: Utc::now(),
+    };
+    let has_edits = edits.status.is_some()
+        || edits.tags.is_some()
+        || edits.body.is_some()
+        || edits.title.is_some();
+    if let Some(Some(to_workspace)) = &rehome_to
+        && move_record != Some(false)
     {
+        let outcome = runtime.rehome_friction(&id, to_workspace, has_edits.then_some(edits))?;
+        return rehome_to_json(outcome, substitutions);
+    }
+    if !has_edits && rehome_to.is_none() {
         return Err(OrbitError::InvalidInput(
             "orbit.friction.update requires `status`, `tags`, `body`, `title`, or `rehome_to`"
                 .to_string(),
         ));
     }
-    let stored = crate::runtime::friction::store_for(runtime)?.update(
-        &id,
-        FrictionUpdateParams {
-            status,
-            tags,
-            title,
-            body,
-            resolved_by_task: None,
-            rehome_to,
-            updated_at: Utc::now(),
-        },
-    )?;
+    let stored = crate::runtime::friction::store_for(runtime)?
+        .update(&id, FrictionUpdateParams { rehome_to, ..edits })?;
     record_to_json_with_tag_normalizations(stored, substitutions)
 }
 
@@ -249,8 +267,19 @@ fn resolve(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 fn rehome(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let to_workspace = required_string(&input, &["to_workspace"], "to_workspace")?;
-    let outcome = runtime.rehome_friction(&id, &to_workspace)?;
-    let mut value = record_to_json(outcome.source)?;
+    rehome_to_json(
+        runtime.rehome_friction(&id, &to_workspace, None)?,
+        Vec::new(),
+    )
+}
+
+/// The resolved source record, with the owning workspace's copy as
+/// `rehomed_as` and any tags the target taxonomy lacks as `dropped_tags`.
+fn rehome_to_json(
+    outcome: FrictionRehomeOutcome,
+    substitutions: Vec<(String, String)>,
+) -> Result<Value, OrbitError> {
+    let mut value = record_to_json_with_tag_normalizations(outcome.source, substitutions)?;
     if let Some(object) = value.as_object_mut() {
         object.insert("rehomed_as".to_string(), record_to_json(outcome.target)?);
         if !outcome.dropped_tags.is_empty() {

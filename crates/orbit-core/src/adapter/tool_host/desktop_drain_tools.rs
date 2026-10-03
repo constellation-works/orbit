@@ -1,5 +1,6 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
+use crate::application::job::DrainWorkerLimitRequest;
 use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, required_string};
@@ -13,14 +14,27 @@ pub(super) fn readiness(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     Ok(value)
 }
 
+/// Inputs only `resize` accepts.
+const RESIZE_ONLY_FIELDS: [&str; 3] = ["id", "if_revision", "reason"];
+
 pub(super) fn control(
     runtime: &OrbitRuntime,
     input: Value,
     trigger: JobRunTrigger,
+    actor: &str,
 ) -> Result<Value, OrbitError> {
     let action = required_string(&input, &["action"], "action")?;
     let claim = optional_string(&input, "claim_token")?;
     let workspace = input["workspace"].clone();
+    if action != "resize"
+        && let Some(field) = RESIZE_ONLY_FIELDS
+            .iter()
+            .find(|field| input.get(**field).is_some())
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "`{field}` is a resize setting; {action} does not accept it"
+        )));
+    }
     let mut result = match action.as_str() {
         "start" => {
             let seconds = input
@@ -91,13 +105,74 @@ pub(super) fn control(
             })).collect::<Vec<_>>();
             json!({"action":"stop","outcome":stopped.outcome,"coordinators":coordinators,"pull_settlements":stopped.pull_settlements})
         }
+        "resize" => resize(runtime, &input, claim.as_deref(), actor)?,
         _ => {
             return Err(OrbitError::InvalidInput(
-                "action must be start or stop".into(),
+                "action must be start, stop or resize".into(),
             ));
         }
     };
     result["workspace"] = workspace;
     result["schema_version"] = json!(1);
     Ok(result)
+}
+
+/// [ORB-11253] Move a live drain's worker ceiling without replacing its run:
+/// the run ID, deadline, completion authorization and dispatched children
+/// stay as they are, and a lower ceiling only stops new admissions. Without
+/// an `id` it targets the workspace's one live auto drain.
+fn resize(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    claim: Option<&str>,
+    actor: &str,
+) -> Result<Value, OrbitError> {
+    if ["for_seconds", "complete"]
+        .iter()
+        .any(|key| input.get(key).is_some())
+    {
+        return Err(OrbitError::InvalidInput(
+            "resize accepts no start settings".into(),
+        ));
+    }
+    let concurrency = optional_u32(input, "concurrency")?
+        .ok_or_else(|| OrbitError::InvalidInput("resize requires `concurrency`".into()))?;
+    let expected_revision = optional_u32(input, "if_revision")?;
+    let reason = optional_string(input, "reason")?;
+    let run_id = match optional_string(input, "id")? {
+        Some(id) => id,
+        None => runtime.active_auto_drain_run_id()?,
+    };
+    let change = runtime.set_drain_worker_limit(DrainWorkerLimitRequest {
+        run_id: &run_id,
+        max_active_leaf_runs: concurrency,
+        expected_revision,
+        reason: reason.as_deref(),
+        actor,
+        source: "tool",
+        claim_token: claim,
+    })?;
+    Ok(json!({
+        "action": "resize",
+        "run_id": change.run_id,
+        "job_id": change.job_id,
+        "outcome": change.outcome,
+        "previous_concurrency": change.previous_max_active_leaf_runs,
+        "concurrency": change.max_active_leaf_runs,
+        "revision": change.revision,
+        "hard_limit": change.hard_limit,
+    }))
+}
+
+fn optional_u32(input: &Value, field: &str) -> Result<Option<u32>, OrbitError> {
+    match input.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .map(Some)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!("`{field}` must be a non-negative integer"))
+            }),
+    }
 }

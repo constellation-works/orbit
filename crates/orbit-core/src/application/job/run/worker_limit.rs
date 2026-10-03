@@ -25,8 +25,9 @@ use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, SHIP_WORKFLOW_ALIAS, fin
 const WORKER_LIMIT_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";
 const WORKER_LIMIT_COMPLETION_AUDIT: &str = "pipeline.run.workers.completed";
 
-/// The governed-operation id this control is authorized under.
-const WORKER_LIMIT_OPERATION: &str = "orbit.workflow.run.workers";
+/// The governed-operation id this control is authorized under: the
+/// `resize` action of the auto-drain control.
+const WORKER_LIMIT_OPERATION: &str = "orbit.workflow.auto";
 
 /// One operator request to move a live drain's worker ceiling.
 #[derive(Debug, Clone, Copy)]
@@ -204,6 +205,26 @@ impl OrbitRuntime {
             revision: applied.as_ref().map_or(0, |limit| limit.revision),
             hard_limit,
         })
+    }
+
+    /// The auto drain a resize without an explicit run ID targets: the one
+    /// pending or running in this workspace. None running, or more than one,
+    /// is refused rather than guessed, so the caller names the run.
+    pub fn active_auto_drain_run_id(&self) -> Result<String, OrbitError> {
+        let drain_job_id = workflow_job_id(AUTO_WORKFLOW_ALIAS)?;
+        let mut active = self
+            .stores()
+            .jobs()
+            .list_pending_or_running_job_runs(drain_job_id)?;
+        match active.len() {
+            0 => Err(OrbitError::InvalidInput(format!(
+                "no `{drain_job_id}` run is pending or running in this workspace"
+            ))),
+            1 => Ok(active.remove(0).run_id),
+            count => Err(OrbitError::InvalidInput(format!(
+                "{count} `{drain_job_id}` runs are live in this workspace; pass `id` to choose one"
+            ))),
+        }
     }
 
     /// The ceiling the leaf job imposes above the drain's own: no drain can

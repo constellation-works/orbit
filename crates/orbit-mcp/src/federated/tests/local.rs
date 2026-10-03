@@ -173,6 +173,7 @@ fn mixed_membership_lists_local_then_configured_remotes() {
     let local = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: OWNER_MACHINE.to_string(),
             workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
         },
@@ -181,6 +182,7 @@ fn mixed_membership_lists_local_then_configured_remotes() {
         .answering(
             REPLICA_MACHINE,
             DestinationSnapshot {
+                crews: Default::default(),
                 machine_id: REPLICA_MACHINE.to_string(),
                 workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
             },
@@ -229,6 +231,7 @@ fn an_explicit_local_ssh_row_does_not_duplicate_the_local_descriptor() {
         Arc::new(ScriptedProbe::new().answering(
             OWNER_MACHINE,
             DestinationSnapshot {
+                crews: Default::default(),
                 machine_id: OWNER_MACHINE.to_string(),
                 workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
             },
@@ -259,16 +262,16 @@ fn a_copied_local_selector_is_delivered_in_process_without_ssh() {
 
     let result = host
         .call_tool(
-            "orbit.crew.list",
+            "orbit.workflow.run.list",
             json!({ "workspace": format!("{OWNER_MACHINE}/ws_orbit") }),
             call_context,
         )
-        .expect("local crew.list");
+        .expect("local workflow.run.list");
     assert_eq!(result["workspace"], "ws_orbit");
 
     let calls = inner.calls.lock().expect("call log");
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "orbit.crew.list");
+    assert_eq!(calls[0].0, "orbit.workflow.run.list");
     assert_eq!(calls[0].1["workspace"], "ws_orbit");
     assert_eq!(
         calls[0].2.process_machine_id.as_deref(),
@@ -304,7 +307,7 @@ fn concurrent_local_routes_keep_each_calls_audit_evidence_isolated() {
             let host = Arc::clone(&host);
             scope.spawn(move || {
                 host.call_tool(
-                    "orbit.crew.list",
+                    "orbit.workflow.run.list",
                     json!({ "workspace": format!("{OWNER_MACHINE}/ws_orbit") }),
                     ToolSessionContext {
                         trace_id: Some(trace_id.to_string()),
@@ -355,6 +358,7 @@ fn mixed_routing_keeps_remote_calls_on_the_ssh_probe() {
     let local = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: OWNER_MACHINE.to_string(),
             workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
         },
@@ -362,6 +366,7 @@ fn mixed_routing_keeps_remote_calls_on_the_ssh_probe() {
     let remote = ScriptedProbe::new().answering(
         REPLICA_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: REPLICA_MACHINE.to_string(),
             workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
         },
@@ -380,7 +385,7 @@ fn mixed_routing_keeps_remote_calls_on_the_ssh_probe() {
     );
 
     host.call_tool(
-        "orbit.crew.list",
+        "orbit.workflow.run.list",
         json!({ "workspace": format!("{OWNER_MACHINE}/ws_orbit") }),
         ToolSessionContext::default(),
     )

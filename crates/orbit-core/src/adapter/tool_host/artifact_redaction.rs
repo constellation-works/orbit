@@ -285,14 +285,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             nested_arrays: &[],
             nested_objects: AUTO_TASK_TEMPLATE,
         },
-        OrbitBuiltinAction::AutoTaskDelete => ActionPolicy {
-            free_text_fields: &["reason"],
-            free_text_arrays: &[],
-            path_fields: &[],
-            path_arrays: &[],
-            nested_arrays: &[],
-            nested_objects: &[],
-        },
         OrbitBuiltinAction::AdrSupersede => ActionPolicy {
             free_text_fields: &[],
             free_text_arrays: &[],
@@ -306,7 +298,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::AutoTaskList
         | OrbitBuiltinAction::AutoTaskMint
         | OrbitBuiltinAction::AutoTaskShow
-        | OrbitBuiltinAction::AutoTaskToggle
         | OrbitBuiltinAction::DesktopRead
         | OrbitBuiltinAction::DesktopDrain
         | OrbitBuiltinAction::DesktopAutomation
@@ -342,11 +333,9 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::TaskLocksRelease
         | OrbitBuiltinAction::TaskLocksReserve
         | OrbitBuiltinAction::TaskShow
-        | OrbitBuiltinAction::WorkflowRunDelivery
         | OrbitBuiltinAction::WorkflowRunList
         | OrbitBuiltinAction::WorkflowRunResume
         | OrbitBuiltinAction::WorkflowRunShow
-        | OrbitBuiltinAction::WorkflowRunWorkers
         | OrbitBuiltinAction::WorkflowShip
         | OrbitBuiltinAction::WorkspaceClaimAcquire
         | OrbitBuiltinAction::WorkspaceClaimRelease
@@ -373,7 +362,6 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | OrbitBuiltinAction::TaskReject
             | OrbitBuiltinAction::AutoTaskAdd
             | OrbitBuiltinAction::AutoTaskUpdate
-            | OrbitBuiltinAction::AutoTaskDelete
             | OrbitBuiltinAction::Friction(FrictionVerb::Add | FrictionVerb::Update)
     )
 }
@@ -677,13 +665,13 @@ pub(super) fn artifact_target<'a>(
                 task_id: None,
             })
         }
-        OrbitBuiltinAction::AutoTaskAdd
-        | OrbitBuiltinAction::AutoTaskUpdate
-        | OrbitBuiltinAction::AutoTaskDelete => Ok(ArtifactTarget {
-            artifact_type: "auto_task",
-            artifact_id: response_string(response, "name")?,
-            task_id: None,
-        }),
+        OrbitBuiltinAction::AutoTaskAdd | OrbitBuiltinAction::AutoTaskUpdate => {
+            Ok(ArtifactTarget {
+                artifact_type: "auto_task",
+                artifact_id: response_string(response, "name")?,
+                task_id: None,
+            })
+        }
         _ => Err(OrbitError::Execution(format!(
             "unsupported redaction audit action: {action:?}"
         ))),
@@ -709,7 +697,6 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
         OrbitBuiltinAction::Friction(FrictionVerb::Update) => "orbit.friction.update",
         OrbitBuiltinAction::AutoTaskAdd => "orbit.auto_task.add",
         OrbitBuiltinAction::AutoTaskUpdate => "orbit.auto_task.update",
-        OrbitBuiltinAction::AutoTaskDelete => "orbit.auto_task.delete",
         _ => "orbit.unknown",
     }
 }

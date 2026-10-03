@@ -517,7 +517,7 @@ fn bound_session_keeps_declared_requirements_without_requiring_workspace() {
 }
 
 #[test]
-fn search_schema_requires_a_query_or_tag_and_an_unbound_workspace() {
+fn search_schema_requires_a_query_tag_or_friction_kind_and_an_unbound_workspace() {
     let definition = definition_with_scope(
         "orbit.search",
         vec![param("query"), param_with_type("tag", "string_list")],
@@ -530,7 +530,8 @@ fn search_schema_requires_a_query_or_tag_and_an_unbound_workspace() {
         schema["allOf"],
         json!([{ "anyOf": [
         { "required": ["query"] },
-        { "required": ["tag"] }
+        { "required": ["tag"] },
+        { "required": ["kind"], "properties": { "kind": { "const": "friction" } } }
     ] }])
     );
 }
@@ -1105,7 +1106,10 @@ fn task_add_schema_exposes_trimmed_fields_with_common_domain_enums() {
         .and_then(Value::as_object)
         .expect("properties object");
 
-    let property_names = properties.keys().map(String::as_str).collect::<Vec<_>>();
+    // Which fields are exposed, not their order: properties follow
+    // declaration order.
+    let mut property_names = properties.keys().map(String::as_str).collect::<Vec<_>>();
+    property_names.sort_unstable();
     assert_eq!(
         property_names,
         vec![
@@ -1233,10 +1237,9 @@ fn plugin_tool_advertises_its_declared_input_schema_keywords() {
         // The host's selector is the one addition: declared as a property so
         // `additionalProperties: false` still admits it, and required only
         // where an unbound session refuses a call without it.
-        assert_eq!(
-            properties.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["format", "level", "limit", "task_id", "workspace"]
-        );
+        let mut names = properties.keys().map(String::as_str).collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, ["format", "level", "limit", "task_id", "workspace"]);
         let expected_required = if workspace_required {
             json!(["task_id", "workspace"])
         } else {

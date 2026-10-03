@@ -61,21 +61,22 @@ without replacing its body.
 
 ## Listing and JSON response contract
 
-`orbit.friction.list` returns a JSON array of friction records by default,
-including when any combination of filters produces no records. This is the
-legacy contract and is stable for array consumers.
+Over MCP or `orbit tool run`, list frictions with `orbit.search`, `kind:
+"friction"`, and no `query`:
 
-Callers that want search guidance can explicitly send
-`"response_mode": "with_notes"`. That mode always returns an object with the
-same two fields: `records` is the record array and `notes` is a string array.
-An empty multi-word substring search may include guidance in `notes`; matches,
-one-word misses, and other empty filtered results return an empty `notes`
-array. Other `response_mode` values are rejected.
+```bash
+orbit tool run orbit.search --input '{"kind":"friction","status":"friction:open","model":"<agent-family>"}'
+```
 
-The human `orbit friction list` command and the dashboard opt into notes so
-they can show that guidance. `orbit friction list --json` remains a bare record
-array for compatibility; the notes envelope is available through the tool/MCP
-input above.
+A listing covers every status unless a `friction:<open|triaged|resolved>`
+status narrows it, can be filtered by `tag`, and is ordered by creation time
+then ID. It returns up to 1000 hits by default (also the maximum `limit`); each
+hit carries the full friction `record` (tags, model, `during_task`,
+`rehome_to`), and a `notes` entry reports a listing cut off at `limit`.
+
+The human `orbit friction list` command and the dashboard show search guidance
+notes. `orbit friction list --json` remains a bare record array for
+compatibility.
 
 ## Tags
 
@@ -110,7 +111,7 @@ orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged","m
 orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"resolved","model":"<agent-family>"}'
 ```
 
-`update` also accepts `tags`, `body`, and `rehome_to`. Over MCP, use `orbit_friction_update`
+`update` also accepts `tags`, `body`, `title`, and `rehome_to`. Over MCP, use `orbit_friction_update`
 with `status: resolved`; the separate CLI resolve operation is not an advertised
 MCP tool. Include the selected `workspace` in every MCP example here.
 
@@ -139,37 +140,37 @@ agent hits an Orbit or tooling defect, and the fix belongs to the workspace that
 owns that code. A task filed in the reporting workspace would be wrong-lane, and
 a `resolves` edge from the owning workspace cannot reach the record.
 
-**Record the owner.** When you know which workspace owns the fix but cannot
-move the record from here, set `rehome_to`. This is the `rehome_required`
-disposition. The record stays open, and curation counts it as dispositioned,
-not as uncovered. An empty string clears it.
+**Move it.** When the owning workspace is registered on this host, set
+`rehome_to` on an update:
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-workspace>","model":"<agent-family>"}'
+orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<name-or-ws-id>","model":"<agent-family>"}'
+orbit friction rehome <ID> --to-workspace <name-or-ws-id>   # CLI spelling of the same move
 ```
 
-**Move it.** When the owning workspace is registered on this host, move the
-record:
+Over MCP, use `orbit_friction_update` with the source `workspace`. Any other
+edits in the same call apply first, then the move runs as one transaction:
 
-```bash
-orbit friction rehome <ID> --to-workspace <name-or-ws-id>
-orbit tool run orbit.friction.rehome --input '{"id":"<ID>","to_workspace":"<name-or-ws-id>"}'
-```
-
-Over MCP, use `orbit_friction_rehome` with the source `workspace`. The move is
-one transaction:
-
-- The owning workspace gets a copy under an ID it allocates. The copy keeps the
-  title, reporter, creation time, task, triage status, and body, and adds a note
-  naming the source record.
+- The owning workspace gets a copy under an ID it allocates, returned as
+  `rehomed_as`. The copy keeps the title, reporter, creation time, task, triage
+  status, and body, and adds a note naming the source record.
 - The source is resolved. Its `rehome_to` names the owner, and a note in its
   body gives the new ID.
 
 Tags the owning taxonomy does not define are dropped and listed in
 `dropped_tags`. The move is refused when the record is already resolved, when
-the target is the current workspace or is not registered, or when either
-checkout is a replica that refuses coordination writes. A refused move writes
-nothing.
+the same call also sets `status: resolved`, when the target is the current
+workspace or is not registered, or when either checkout is a replica that
+refuses coordination writes. A refused move writes nothing.
+
+**Record the owner.** When you know which workspace owns the fix but it is not
+registered here, add `"move": false`. That records only the `rehome_required`
+disposition: the record stays open, and curation counts it as dispositioned,
+not as uncovered. `"rehome_to": ""` clears a recorded disposition.
+
+```bash
+orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-workspace>","move":false,"model":"<agent-family>"}'
+```
 
 ## Reading the corpus
 

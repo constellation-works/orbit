@@ -566,8 +566,8 @@ fn mcp_friction_rehome_moves_a_record_into_its_registered_owner() {
     let id = added["id"].as_str().expect("friction id").to_string();
 
     let moved = client.call_tool_ok(
-        "orbit_friction_rehome",
-        json!({ "id": id, "to_workspace": "mcp-owner" }),
+        "orbit_friction_update",
+        json!({ "id": id, "rehome_to": "mcp-owner" }),
     );
     assert_eq!(moved["status"], "resolved", "{moved}");
     assert_eq!(moved["rehome_to"], "ws_mcp-owner", "{moved}");
@@ -577,8 +577,8 @@ fn mcp_friction_rehome_moves_a_record_into_its_registered_owner() {
         .to_string();
 
     let again = client.call_tool_err(
-        "orbit_friction_rehome",
-        json!({ "id": id, "to_workspace": "mcp-owner" }),
+        "orbit_friction_update",
+        json!({ "id": id, "rehome_to": "mcp-owner" }),
     );
     assert!(
         again["message"]
@@ -613,7 +613,8 @@ fn mcp_search_without_query_or_tag_keeps_its_refusal_message() {
     let refused = client.call_tool_err("orbit_search", json!({ "model": "codex" }));
     assert_eq!(
         refused["message"],
-        "invalid input: search requires a query, --path, or --tag"
+        "invalid input: search requires a query, --path, or --tag; only kind friction lists \
+         without one"
     );
 }
 
@@ -766,9 +767,15 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
         .expect("write run checkpoints");
 
     let observed = client.call_tool_ok(
-        "orbit_workflow_run_delivery",
-        json!({ "run_id": RUN_ID, "task_id": task_id }),
+        "orbit_task_show",
+        json!({ "id": task_id, "field": "delivery", "run_id": RUN_ID }),
     );
+    // Without a run ID the read answers from the newest delivery run.
+    let newest = client.call_tool_ok(
+        "orbit_task_show",
+        json!({ "id": task_id, "field": "delivery" }),
+    );
+    assert_eq!(newest, observed);
     assert_eq!(observed["delivery_status"], "landed", "{observed}");
     assert_eq!(observed["workspace_id"], json!(workspace_id));
     assert_eq!(observed["commit"]["status"], "committed");
@@ -808,8 +815,8 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
 
     // A task the run was not submitted with is refused, not answered.
     let foreign = client.call_tool_err(
-        "orbit_workflow_run_delivery",
-        json!({ "run_id": RUN_ID, "task_id": "TST-99999" }),
+        "orbit_task_show",
+        json!({ "id": "TST-99999", "field": "delivery", "run_id": RUN_ID }),
     );
     assert_ne!(foreign["code"], "capability_denied", "{foreign}");
 
@@ -823,7 +830,7 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
             "audit",
             "list",
             "--tool",
-            "orbit.workflow.run.delivery",
+            "orbit.task.show",
             "--json",
         ]),
     );
@@ -839,10 +846,10 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
             .iter()
             .filter(|status| **status == "success")
             .count(),
-        1,
-        "the answered read is audited once: {rows}"
+        2,
+        "each answered read is audited once: {rows}"
     );
-    assert_eq!(statuses.len(), 2, "the refused read is audited too: {rows}");
+    assert_eq!(statuses.len(), 3, "the refused read is audited too: {rows}");
     assert!(!rows.to_string().contains(SECRET), "audit leaked run input");
 }
 
@@ -927,7 +934,10 @@ fn a_replica_mcp_session_enforces_checkout_capability_classes() {
             }),
         ),
         ("orbit_auto_task_list", json!({})),
-        ("orbit_friction_list", json!({})),
+        (
+            "orbit_friction_update",
+            json!({ "id": "F2099-01-001", "status": "triaged" }),
+        ),
     ] {
         let refused = client.call_tool_err(name, arguments);
         assert_eq!(refused["code"], "capability_refused", "{name}: {refused}");
@@ -956,10 +966,14 @@ fn a_replica_mcp_session_enforces_checkout_capability_classes() {
         "refused friction.add must not mutate local coordination state: {listed}"
     );
 
-    let crews = client.call_tool_ok("orbit_crew_list", json!({}));
+    let listed = client.call_tool_ok("orbit_workspace_list", json!({ "include": ["crews"] }));
+    let rows = listed["workspaces"].as_array().expect("workspace rows");
     assert!(
-        crews.get("crews").and_then(Value::as_array).is_some(),
-        "unclassified crew.list must remain permitted: {crews}"
+        !rows.is_empty()
+            && rows
+                .iter()
+                .all(|row| row["crews"]["crews"].is_array() || row["crews_error"].is_string()),
+        "unclassified discovery with crews must remain permitted: {listed}"
     );
 
     let marker = workspace.work.join("replica-command-exec-must-not-run");
@@ -3047,7 +3061,7 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
     );
 
     let listed = client.request("tools/list", Value::Null);
-    for tool_name in ["orbit_task_list", "orbit_task_show", "orbit_crew_list"] {
+    for tool_name in ["orbit_task_list", "orbit_task_show", "orbit_auto_task_list"] {
         let description = tool_workspace_description(&listed, tool_name);
         assert!(
             description.contains("selector") && description.contains("orbit_workspace_list"),
@@ -3088,7 +3102,7 @@ fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
         "a bare ws_* on federated task.show is unknown_selector: {bare_show}"
     );
 
-    let bare_list = client.call_tool_err("orbit_crew_list", json!({ "workspace": "ws_orbit" }));
+    let bare_list = client.call_tool_err("orbit_task_list", json!({ "workspace": "ws_orbit" }));
     assert_eq!(
         bare_list["code"], "unknown_selector",
         "a bare ws_* is unknown_selector before forwarding: {bare_list}"
@@ -3165,11 +3179,14 @@ fn federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations() 
         format!("{machine_id}/{}", row["id"].as_str().expect("id"))
     );
 
-    let crews = client.call_tool_ok("orbit_crew_list", json!({ "workspace": selector }));
+    client.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
+    let with_crews = client.call_tool_ok("orbit_workspace_list", json!({ "include": ["crews"] }));
+    let crews = &with_crews["workspaces"][0]["crews"];
     assert_eq!(
         crews["workspace_id"], row["id"],
-        "local selector must dispatch through the accepting machine: {crews}"
+        "the local row carries crews its own machine resolved: {with_crews}"
     );
+    assert!(crews["crews"].is_array(), "{with_crews}");
     assert!(
         !ssh_log.exists()
             || std::fs::read_to_string(&ssh_log)
@@ -3187,7 +3204,7 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
     let (machine_id, machine_name) = machine_identity(&workspace.home);
 
     let mut direct = workspace.serve();
-    direct.call_tool_ok("orbit_crew_list", json!({}));
+    direct.call_tool_ok("orbit_task_list", json!({}));
     drop(direct);
 
     let mut federated = federated_client(&workspace);
@@ -3195,7 +3212,7 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
     let selector = listed["workspaces"][0]["selector"]
         .as_str()
         .expect("local selector");
-    federated.call_tool_ok("orbit_crew_list", json!({ "workspace": selector }));
+    federated.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
     drop(federated);
 
     let output = orbit_ok(
@@ -3203,7 +3220,7 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
             "audit",
             "list",
             "--tool",
-            "orbit.crew.list",
+            "orbit.task.list",
             "--json",
         ]),
     );
@@ -3261,7 +3278,7 @@ fn federated_mcp_serve_collapses_an_explicit_local_destination_row() {
     );
     assert_eq!(local_rows[0]["machine_name"], machine_name);
     let selector = local_rows[0]["selector"].as_str().expect("selector");
-    client.call_tool_ok("orbit_crew_list", json!({ "workspace": selector }));
+    client.call_tool_ok("orbit_task_list", json!({ "workspace": selector }));
     assert!(
         !ssh_log.exists()
             || std::fs::read_to_string(&ssh_log)

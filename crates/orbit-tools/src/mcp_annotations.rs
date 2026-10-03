@@ -23,7 +23,6 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.auto_task.list"
         | "orbit.auto_task.show"
         | "orbit.drain.claims"
-        | "orbit.friction.list"
         | "orbit.friction.show"
         | "orbit.friction.stats"
         | "orbit.friction.tags"
@@ -31,7 +30,6 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.task.artifact.get"
         | "orbit.task.list"
         | "orbit.task.show"
-        | "orbit.workflow.run.delivery"
         | "orbit.workflow.run.list"
         | "orbit.workflow.run.show" => A::READ_ONLY,
 
@@ -43,16 +41,15 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.task.add" => A::additive(false),
 
         // Edits that set the fields given and touch nothing else.
-        "orbit.auto_task.toggle"
-        | "orbit.auto_task.update"
-        | "orbit.friction.update"
-        | "orbit.workflow.run.workers" => A::additive(true),
+        "orbit.auto_task.update" => A::additive(true),
 
         // A task edit can append a note or comment, so a repeat is not a no-op.
         "orbit.task.update" => A::additive(false),
 
         // Removes or replaces existing data.
-        "orbit.auto_task.delete" | "orbit.friction.rehome" => A::destructive(false),
+        // A friction edit with `rehome_to` moves the record and resolves the
+        // original, so a repeat is refused rather than a no-op.
+        "orbit.friction.update" => A::destructive(false),
         "orbit.task.artifact.put" => A::destructive(true),
 
         // Starts work outside Orbit's own state: an agent, a workflow run's

@@ -619,3 +619,44 @@ fn a_run_of_a_non_delivery_job_is_refused() {
         "{refused:?}"
     );
 }
+
+#[test]
+fn an_unnamed_run_defaults_to_the_newest_delivery_run_submitted_with_the_task() {
+    let (_root, runtime) = delivery_runtime();
+    let task_id = add_task(&runtime);
+    let other_task = add_task(&runtime);
+
+    let refused = runtime
+        .observe_task_delivery(&task_id, None)
+        .expect_err("a task no delivery run carried has nothing to observe");
+    assert!(
+        matches!(refused, OrbitError::InvalidInput(_)),
+        "{refused:?}"
+    );
+
+    let delivered = insert_run(&runtime, "task_pr_pipeline", &[&task_id]);
+    // Newer, but neither a delivery job nor a run that carried this task.
+    insert_run(&runtime, "task_pilot_pipeline", &[&task_id]);
+    insert_run(&runtime, "task_pr_pipeline", &[&other_task]);
+    let observed = runtime
+        .observe_task_delivery(&task_id, None)
+        .expect("observe the default run");
+    assert_eq!(observed.run_id, delivered.run_id);
+    assert_eq!(observed.task_id, task_id);
+
+    let redelivered = insert_run(&runtime, "task_pr_pipeline", &[&task_id]);
+    assert_eq!(
+        runtime
+            .observe_task_delivery(&task_id, None)
+            .expect("observe the newest run")
+            .run_id,
+        redelivered.run_id
+    );
+    assert_eq!(
+        runtime
+            .observe_task_delivery(&task_id, Some(&delivered.run_id))
+            .expect("a named run is observed as named")
+            .run_id,
+        delivered.run_id
+    );
+}

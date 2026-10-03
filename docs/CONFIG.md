@@ -189,13 +189,13 @@ orbit config get crews.sol.effort
 orbit config set crews.gemini.enabled true
 ```
 
-`config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.crew.list` returns the normalized crews of the selected checkout's effective config, each with its `enabled` state (schema version 3).
+`config set` refuses invalid values, unsupported provider/model combinations and misspelled fields before writing. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns, on each workspace row, the normalized crews of that checkout's effective config, each with its `enabled` state (schema version 3), or `crews_error` when that configuration cannot be read.
 
 ### Disabled crews
 
 `enabled = false` switches a crew off without deleting its definition. A table without the key is enabled, so configs written before the flag existed resolve exactly as they did.
 
-- **Listings show it.** `orbit config show` has an `ENABLED` column and counts disabled crews in the heading, `orbit config get crews.<name>.enabled` answers `true` or `false`, `orbit.crew.list` carries `enabled` per crew, and the dashboard's Config tab marks the row disabled and offers an enabled toggle.
+- **Listings show it.** `orbit config show` has an `ENABLED` column and counts disabled crews in the heading, `orbit config get crews.<name>.enabled` answers `true` or `false`, `orbit.workspace.list` with `include: ["crews"]` carries `enabled` per crew, and the dashboard's Config tab marks the row disabled and offers an enabled toggle.
 - **Pools skip it.** A disabled crew is never drawn from a complexity pool. A pool whose members are all disabled behaves like an empty pool: the task falls through to `default_crew`. A disabled crew may still be listed in a pool, so re-enabling it restores its share without editing the pool.
 - **Explicit references refuse.** Dispatch never substitutes another crew. A task's `crew`, an explicit run or activity crew, `workflow.default_crew`, `workflow.system_crew`, or a shipped job step's `crew: system` that resolves to a disabled crew fails with the crew's name and `orbit config set crews.<name>.enabled true`. When `system` mirrors `workflow.system_crew`, the message names the mirrored crew's table.
 - **Load still succeeds.** A lane key pointing at a disabled crew does not stop unrelated commands. `orbit doctor` reports it as a `config` warning with the enabling command.
