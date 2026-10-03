@@ -161,6 +161,12 @@ makes the decision `INCOMPLETE`. Cargo test scenarios also require completed
 test-suite summaries with at least one passing test; a renamed filter that
 selects zero tests cannot earn the scenario's assertions. The report retains
 passing, failing, ignored, and suite counts for these checks.
+Reviewed scenarios can declare `required_tests`: each named behavioral case
+must appear as passing in the Rust harness output. An unrelated passing test,
+or a required case that was skipped, renamed, or filtered out, cannot satisfy
+that scenario. The report retains the observed passing case names. Suite and
+surface mappings identify the selected boundary checks; they do not establish
+that every workflow asset or every subcommand has been executed.
 The command harness requires a POSIX host. It drains stdout and stderr while
 retaining at most one MiB per stream and marks truncated output. A disposable
 supervisor owns each command's process group until cleanup finishes. Timeout,

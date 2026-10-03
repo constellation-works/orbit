@@ -170,6 +170,30 @@ fn audit_cli_round_trips_real_mutation_filters_stats_and_export() {
         exported.as_array().unwrap().contains(event),
         "export must preserve persisted event fields"
     );
+    let csv_export = fixture.repo.join("audit.csv");
+    fixture
+        .command(&[
+            "audit",
+            "export",
+            "--format",
+            "csv",
+            "--output",
+            csv_export.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let mut csv = csv::Reader::from_path(csv_export).unwrap();
+    let id_column = csv
+        .headers()
+        .unwrap()
+        .iter()
+        .position(|column| column == "id")
+        .unwrap();
+    assert!(
+        csv.records()
+            .any(|record| record.unwrap().get(id_column) == Some(id.as_str())),
+        "CSV export must preserve the audited event identity"
+    );
     assert!(
         fs::read_dir(&fixture.home).unwrap().next().is_none(),
         "explicit root must keep isolated HOME untouched"
@@ -190,6 +214,7 @@ fn audit_cli_refusals_preserve_existing_events_and_export_bytes() {
         .failure();
     fixture
         .command(&["audit", "prune", "--older-than", "0s"])
+        .env("ORBIT_OPERATOR", "1")
         .assert()
         .failure();
     assert_eq!(
@@ -215,5 +240,34 @@ fn audit_cli_refusals_preserve_existing_events_and_export_bytes() {
         fs::read(export).unwrap(),
         b"retained evidence\n",
         "invalid export arguments must be validated before opening the destination"
+    );
+    // Confirmation alone does not grant authority to destroy audit evidence.
+    fixture
+        .command(&["audit", "prune", "--older-than", "0s", "--confirm"])
+        .assert()
+        .failure();
+    assert_eq!(fixture.task_events(), before);
+    let output = fixture
+        .command(&[
+            "audit",
+            "prune",
+            "--older-than",
+            "0s",
+            "--confirm",
+            "--format",
+            "json",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let pruned: Value = serde_json::from_slice(&output).unwrap();
+    assert!(pruned["pruned"].as_u64().unwrap() >= before.as_array().unwrap().len() as u64);
+    assert_eq!(
+        fixture.task_events(),
+        serde_json::json!([]),
+        "confirmed prune must remove matching persisted events"
     );
 }
