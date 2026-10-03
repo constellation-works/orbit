@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_updated: 2026-09-26
+last_updated: 2026-10-03
 last_validated: 2026-09-26
 ---
 
@@ -10,6 +10,8 @@ last_validated: 2026-09-26
 [specs/table-rendering.md §4](../specs/table-rendering.md) makes truncation a promise: a list command that can cut column *C* must have a named command that prints *C* in full for one record. This table records, for every list view rendered through `crates/orbit-cli/src/output/table.rs`, which columns can be truncated and where the whole value lives (ORB-10567).
 
 Only *flexible* columns are ever truncated — fixed columns render whole or are absent — so a view with no flexible column needs no detail counterpart. `--format json` / `--json` carries full values everywhere and is the fallback where no detail command exists.
+
+`orbit tool show <name>` also prints persisted metadata for disabled external tools listed by `orbit tool list --all`. Inspection preserves their disabled state; `orbit tool run` remains refused until the tool is enabled.
 
 ## Covered
 

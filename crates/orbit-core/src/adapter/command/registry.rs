@@ -4,6 +4,8 @@
 use std::path::Path;
 
 use orbit_common::{NotFoundKind, OrbitError};
+use orbit_tools::Tool;
+use orbit_tools::external::ExternalTool;
 use orbit_types::record::OrbitEvent;
 use orbit_types::tool::{McpToolDefinition, StoredTool, ToolParam};
 
@@ -89,14 +91,7 @@ impl OrbitRuntime {
         // Add external tools that are in the store but not yet in the registry
         for stored in &stored_tools {
             if !stored.builtin && !tools.iter().any(|t| t.name == stored.name) {
-                tools.push(ToolInfo {
-                    name: stored.name.clone(),
-                    description: stored.description.clone(),
-                    enabled: stored.enabled,
-                    active: true,
-                    builtin: false,
-                    parameters: stored.parameters.clone(),
-                });
+                tools.push(stored_external_tool_info(stored));
             }
         }
 
@@ -105,10 +100,19 @@ impl OrbitRuntime {
     }
 
     pub fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
-        let schema = self
-            .tool_registry()
-            .get_schema(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+        let Some(schema) = self.tool_registry().get_schema(name) else {
+            // Disabled external tools are deliberately absent from the executable
+            // registry. Their persisted catalog entry remains inspectable, using
+            // the same active/enabled distinction as list_all_tools.
+            if let Some(stored) = self.stores().tools().get_tool(name)?
+                && !stored.builtin
+                && !stored.enabled
+                && !stored.path.is_empty()
+            {
+                return Ok(stored_external_tool_info(&stored));
+            }
+            return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
+        };
 
         let stored = self.stores().tools().get_tool(name)?;
         let enabled = stored.is_none_or(|s| s.enabled);
@@ -286,12 +290,18 @@ impl OrbitRuntime {
     }
 
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {
-        if !self.tool_registry().has(name) {
+        let existing = self.stores().tools().get_tool(name)?;
+        let registered = self.tool_registry().has(name);
+        let disabled_external = existing
+            .as_ref()
+            .is_some_and(|stored| !stored.builtin && !stored.enabled && !stored.path.is_empty());
+        if !registered
+            && (!disabled_external || self.plugin_load().workspace_disabled_owner(name).is_some())
+        {
             return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
         }
 
-        let existing = self.stores().tools().get_tool(name)?;
-        if !self.tool_registry().is_active(name) {
+        if registered && !self.tool_registry().is_active(name) {
             let changes_stored_state = existing
                 .as_ref()
                 .map_or(!enabled, |stored| stored.enabled != enabled);
@@ -346,5 +356,24 @@ impl OrbitRuntime {
             };
             Ok(((), event))
         })
+    }
+}
+
+/// Project catalog metadata without adding a tool to the executable registry.
+fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
+    let schema = ExternalTool {
+        name: stored.name.clone(),
+        path: stored.path.clone(),
+        description: stored.description.clone(),
+        parameters: stored.parameters.clone(),
+    }
+    .schema();
+    ToolInfo {
+        name: schema.name,
+        description: schema.description,
+        enabled: stored.enabled,
+        active: true,
+        builtin: false,
+        parameters: schema.parameters,
     }
 }
