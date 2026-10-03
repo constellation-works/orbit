@@ -1,17 +1,13 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
-#[cfg(test)]
-use orbit_core::build_ship_input;
 use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, find_workflow};
-#[cfg(test)]
-use serde_json::Value;
 
 use crate::command::{CommandOut, Execute};
 
 use super::support::{WorkflowDispatchResult, workflow_dispatch_payload};
 
-pub(super) const SHIP_WORKFLOW: &str = "ship";
+const SHIP_WORKFLOW: &str = "ship";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ShipMode {
@@ -132,7 +128,7 @@ impl Execute for ShipCommand {
 /// workspace binding. Standalone runtimes without a binding may use a single
 /// unambiguous registry checkout for their data root. If no workspace can be
 /// identified, fall back to `pr` so omitted configuration uses reviewable delivery.
-pub(crate) fn resolve_ship_mode(
+fn resolve_ship_mode(
     args: &ShipCommand,
     runtime: &OrbitRuntime,
 ) -> Result<orbit_core::ShipMode, OrbitError> {
@@ -196,35 +192,6 @@ impl Execute for LegacyShipLocalCommand {
             "`orbit run ship-local` was replaced by `orbit run ship --mode local`".to_string(),
         ))
     }
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct WorkflowRunPlan {
-    pub workflow_alias: &'static str,
-    pub input: Value,
-}
-
-#[cfg(test)]
-pub(crate) fn build_ship_run_plan(
-    args: &ShipCommand,
-    config_base_branch: &str,
-    mode: orbit_core::ShipMode,
-) -> Result<WorkflowRunPlan, OrbitError> {
-    validate_task_selection(&args.task_ids)?;
-    let workflow_alias = SHIP_WORKFLOW;
-    ensure_workflow_exists(workflow_alias)?;
-    let base = args.base.as_deref().unwrap_or(config_base_branch);
-    Ok(WorkflowRunPlan {
-        workflow_alias,
-        input: build_ship_input(
-            mode,
-            base,
-            &args.task_ids,
-            args.completion(),
-            &args.allow_crew,
-        )?,
-    })
 }
 
 fn validate_task_selection(task_ids: &[String]) -> Result<(), OrbitError> {

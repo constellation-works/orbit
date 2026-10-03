@@ -399,7 +399,7 @@ impl ConfigTarget {
 /// VS Code stores its global `mcp.json` in this user-config folder, which
 /// differs across operating systems. Centralizing the branching here keeps
 /// `cfg(target_os = ...)` out of `ConfigTarget::resolve`.
-pub(super) fn vscode_home_user_dir(home: &Path) -> PathBuf {
+fn vscode_home_user_dir(home: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         home.join("Library")
@@ -661,7 +661,7 @@ pub(super) fn action_payload(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn format_action_summary(
+fn format_action_summary(
     action: McpAction<'_>,
     providers: &[McpProvider],
     repo_root: &Path,

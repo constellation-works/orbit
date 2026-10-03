@@ -19,7 +19,7 @@ use orbit_types::workspace::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::command::init::agent_detect::{RealAgentEnvProbe, detect};
+use crate::command::init::agent_detect::detect;
 use crate::command::init::config_seed_from_detection;
 
 use super::role::CliCheckoutRole;
@@ -78,13 +78,10 @@ pub struct WorkspaceInitArgs {
     pub force: bool,
 }
 
-pub(crate) const ONBOARDING_FINALIZE_GUIDANCE: &str = "review the managed `.gitignore` entry (Orbit ignores `.orbit/` as per-user state and does not auto-commit or discard operator changes)";
+const ONBOARDING_FINALIZE_GUIDANCE: &str = "review the managed `.gitignore` entry (Orbit ignores `.orbit/` as per-user state and does not auto-commit or discard operator changes)";
 const RELOCATED_ROOT_ONBOARDING_GUIDANCE: &str = "review generated Orbit definitions in the configured Orbit root before local workflows (Orbit does not auto-commit or discard operator changes)";
 
-pub(crate) fn onboarding_finalize_guidance(
-    workspace_root: &Path,
-    orbit_dir: &Path,
-) -> &'static str {
+fn onboarding_finalize_guidance(workspace_root: &Path, orbit_dir: &Path) -> &'static str {
     if manages_checkout_local_orbit_files(workspace_root, orbit_dir) {
         ONBOARDING_FINALIZE_GUIDANCE
     } else {
@@ -284,7 +281,7 @@ impl WorkspaceInitArgs {
                         workspace_base_branch: Some(seeded_base_branch),
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
-                        config_seed: Some(config_seed_from_detection(&detect(&RealAgentEnvProbe))),
+                        config_seed: Some(config_seed_from_detection(&detect())),
                         ..Default::default()
                     },
                 )?;
@@ -409,7 +406,7 @@ impl WorkspaceInitArgs {
 ///
 /// An explicit `--base-branch` always wins. Repositories without a checked-out
 /// branch retain the long-standing `main` fallback.
-pub(crate) fn checked_out_branch(cwd: &Path) -> String {
+fn checked_out_branch(cwd: &Path) -> String {
     let output = std::process::Command::new("git")
         .args(["branch", "--show-current"])
         .current_dir(cwd)
@@ -424,7 +421,7 @@ pub(crate) fn checked_out_branch(cwd: &Path) -> String {
         .unwrap_or_else(|| "main".to_string())
 }
 
-pub(super) fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
+fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
     match task_prefix {
         Some(task_prefix) => format!("{task_prefix}-{next:05}"),
         None => format!("{next:05}"),
@@ -479,7 +476,7 @@ fn describe_routine_collisions(collisions: &[RoutineNameCollision]) -> String {
         .join(", ")
 }
 
-pub(super) fn canonical_workspace_id(name: &str) -> String {
+fn canonical_workspace_id(name: &str) -> String {
     let mut canonical = String::new();
     let mut separator = false;
     for character in name.chars().flat_map(char::to_lowercase) {

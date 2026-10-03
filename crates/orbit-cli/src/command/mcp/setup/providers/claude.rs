@@ -171,7 +171,7 @@ fn remove_dir_if_empty(dir: &Path) -> Result<(), OrbitError> {
         .map_err(|err| OrbitError::Io(format!("failed to remove '{}': {err}", dir.display())))
 }
 
-pub(super) fn claude_mcp_server_value(launch: ServerLaunch<'_>) -> JsonValue {
+fn claude_mcp_server_value(launch: ServerLaunch<'_>) -> JsonValue {
     JsonValue::Object(JsonMap::from_iter([
         (
             "command".to_string(),
@@ -196,15 +196,7 @@ fn claude_safe_permissions(server_id: &str) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
-pub(super) fn claude_permission_name(tool_name: &str) -> String {
-    claude_permission_name_for_server(ORBIT_MCP_SERVER_ID, tool_name)
-}
-
 fn claude_permission_name_for_server(server_id: &str, tool_name: &str) -> String {
-    // pub(super) widened so providers/tests/claude.rs can call it
-    // (sibling under providers per ORB-00221 layout).
-    //
     // Claude derives MCP permission names from the connected server id in
     // .mcp.json. The v1 server registers as `orbit`, while the opt-in mux uses
     // `orbit-federated`; permission entries must follow the actual server id

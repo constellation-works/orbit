@@ -49,7 +49,7 @@ impl Execute for ConfigShowArgs {
     }
 }
 
-pub(super) fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> JsonValue {
+fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> JsonValue {
     let mut settings = Map::new();
     let mut provenance = Map::new();
     for entry in values {
@@ -99,7 +99,7 @@ pub(super) fn effective_text(
     render::effective_text(runtime, values, all)
 }
 
-pub(super) fn scoped_json(
+fn scoped_json(
     runtime: &OrbitRuntime,
     store: &orbit_config::ConfigStore,
     snapshot: &orbit_config::ConfigSnapshot,

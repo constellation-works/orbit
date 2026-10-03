@@ -79,7 +79,7 @@ pub(super) fn upgrade_text(result: &PluginUpgradeResult) -> String {
     text
 }
 
-pub(super) fn format_permission_change(change: &PluginPermissionChange) -> String {
+fn format_permission_change(change: &PluginPermissionChange) -> String {
     format!(
         "\n  {}: {} -> {}{}",
         change.grant,

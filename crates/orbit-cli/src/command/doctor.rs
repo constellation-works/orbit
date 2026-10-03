@@ -240,7 +240,7 @@ impl Execute for DoctorCommand {
 /// config warning. Provider auth is deliberately not probed: a status command
 /// may refresh credentials or call the network, while `doctor` must stay fast
 /// and read-only.
-pub(crate) fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
+fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     use std::collections::BTreeSet;
 
     let config = match ResolvedConfig::load(&ConfigRoots::new(
@@ -363,7 +363,7 @@ fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
     }
 }
 
-pub(crate) fn mcp_registration_row(
+fn mcp_registration_row(
     runtime: &OrbitRuntime,
     home_dir: Option<&std::path::Path>,
 ) -> WorkspaceDoctorResult {
@@ -434,7 +434,7 @@ pub(crate) fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> Co
 /// `orbit doctor providers`: one row per executor definition, naming the
 /// provider CLI it launches, where dispatch would find that CLI, and the
 /// sandbox mode the effective definition resolves to.
-pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
+fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
     use crate::output::table::{Column, Table};
 
     let defs = runtime.list_executor_defs()?;
@@ -505,7 +505,7 @@ pub(crate) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
 
 /// Report Orbit-owned state directories whose write bits let another local
 /// principal replace or unlink private files held beneath them.
-pub(crate) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+fn state_directory_permissions_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     #[cfg(unix)]
     {
         use std::collections::BTreeSet;
@@ -701,7 +701,7 @@ fn clock_unit_row() -> WorkspaceDoctorResult {
     }
 }
 
-pub(crate) fn clock_unit_row_from_inspection(
+fn clock_unit_row_from_inspection(
     inspection: &orbit_core::application::routines::ClockUnitInspection,
 ) -> WorkspaceDoctorResult {
     use orbit_core::application::routines::ClockUnitVerdict;
@@ -734,7 +734,7 @@ fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
 /// Render `--fix-orphan-task-stores --confirm`'s outcome, naming the empty
 /// and populated partition counts separately so a run that deleted task
 /// bundles is never described as removing only empty partitions [ORB-12144].
-pub(crate) fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String {
+fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval) -> String {
     format!(
         "Removed {} empty orphaned task-store partition(s) and {} populated partition(s) \
          ({} task bundle(s)).",
@@ -742,7 +742,7 @@ pub(crate) fn orphan_task_store_removal_message(removed: &OrphanTaskStoreRemoval
     )
 }
 
-pub(crate) fn human_detail(row: &WorkspaceDoctorResult) -> String {
+fn human_detail(row: &WorkspaceDoctorResult) -> String {
     row.remediation.as_ref().map_or_else(
         || row.message.clone(),
         |remediation| format!("{}\nAction: {remediation}", row.message),

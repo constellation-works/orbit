@@ -51,7 +51,7 @@ fn run_task_ids(run: &JobRun) -> BTreeSet<String> {
 
 /// Match each waited-on selector against the projection's active task locks
 /// and reservations, skipping `own` tasks.
-pub(super) fn resolve_lock_holders(
+fn resolve_lock_holders(
     selectors: &[String],
     locks: &Value,
     own: &BTreeSet<String>,

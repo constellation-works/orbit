@@ -221,7 +221,7 @@ impl Table {
     /// into a pipe is the failure this form exists to avoid. Each value is
     /// passed through [`escape_plain`] so an embedded tab or line break cannot
     /// split one record into extra fields or lines (spec §1).
-    pub(crate) fn render_plain(&self, sink: &OutputSink) -> String {
+    fn render_plain(&self, sink: &OutputSink) -> String {
         let visible = self.visible_columns(sink.suppress_uniform_columns());
         self.rows
             .iter()
@@ -244,7 +244,7 @@ impl Table {
     /// All three come from the sink in [`Table::emit`]. Tests pass them directly
     /// so geometry and styling are pinned rather than inherited from whatever
     /// terminal ran `cargo test`.
-    pub(crate) fn render_at(
+    fn render_at(
         &self,
         sink_width: Option<usize>,
         styled: bool,

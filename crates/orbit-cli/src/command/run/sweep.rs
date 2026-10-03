@@ -42,7 +42,7 @@ pub struct ShipSweepCommand {
     pub json: bool,
 }
 
-pub(crate) struct SweepReport {
+struct SweepReport {
     workspace_id: String,
     workspace_name: String,
     action: &'static str,
@@ -187,7 +187,7 @@ fn sweep_workspace(
     })
 }
 
-pub(crate) fn sweep_active_workspace(
+fn sweep_active_workspace(
     global_root: &Path,
     ws: &Workspace,
     checkout: &WorkspaceCheckout,

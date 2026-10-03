@@ -73,7 +73,7 @@ variants collapsed to one `Friction(FrictionVerb)`.
 **Contract stability was proven, not asserted.** `crates/orbit-cli/tests/snapshots/mcp_tools_list.json`
 is byte-unchanged, and `orbit friction [<verb>] --help` was captured from the
 pre-migration binary and frozen as fixtures under
-`crates/orbit-cli/src/command/tests/friction_help/`; the derived CLI reproduces
+`crates/orbit-cli/tests/help_goldens/friction/`; the derived CLI reproduces
 all eight help pages byte-for-byte.
 
 **The layering correction to the bearing.** Bearing 1 as written implies one

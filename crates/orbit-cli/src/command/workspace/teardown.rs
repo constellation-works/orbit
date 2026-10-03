@@ -230,7 +230,7 @@ fn planned_task_store_partitions(
     Ok(paths)
 }
 
-pub(super) fn format_teardown_plan(
+fn format_teardown_plan(
     workspace: &Workspace,
     checkout: &WorkspaceCheckout,
     partitions: &[PathBuf],
@@ -254,7 +254,7 @@ pub(super) fn format_teardown_plan(
     lines.join("\n")
 }
 
-pub(super) fn format_deleted_partition(path: &Path, workspace_name: &str) -> String {
+fn format_deleted_partition(path: &Path, workspace_name: &str) -> String {
     let id = path
         .file_name()
         .and_then(|name| name.to_str())

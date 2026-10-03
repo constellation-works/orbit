@@ -54,7 +54,7 @@ impl Execute for TaskPilotCommand {
     }
 }
 
-pub(crate) fn build_task_pilot_input(
+fn build_task_pilot_input(
     task_ids: &[String],
     base_branch: Option<&str>,
     max_tasks: Option<u32>,

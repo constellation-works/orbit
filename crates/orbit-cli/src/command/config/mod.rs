@@ -8,6 +8,3 @@ mod show;
 mod support;
 
 pub use command::{ConfigCommand, ConfigSubcommand};
-
-#[cfg(test)]
-mod tests;

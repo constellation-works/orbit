@@ -181,7 +181,7 @@ The step-by-step procedure is [references/cookbook.md](references/cookbook.md).
 - **Help stability is a convention, not a type.** The adapter matches
   `#[derive(Args)]`'s conventions because it was written to; nothing in the type
   system enforces that a future clap upgrade keeps them aligned. The frozen
-  `friction_help/*.txt` fixtures are the actual guard, and every future noun
+  `help_goldens/friction/*.txt` fixtures are the actual guard, and every future noun
   migration must capture its own before starting.
 - **Only one noun is migrated.** Readers of `orbit-tools` and `orbit-cli` will
   meet both the registry-driven and hand-wired shapes until the ratchet moves

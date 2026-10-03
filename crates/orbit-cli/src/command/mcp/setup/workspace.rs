@@ -32,7 +32,7 @@ pub(super) fn resolve_workspace_layout(
 /// workspace registry identifies relocated checkouts before filesystem
 /// walk-up, because it is the only source that knows a checkout whose Orbit
 /// root lives outside the repository.
-pub(super) fn resolve_workspace_layout_for_cwd(
+fn resolve_workspace_layout_for_cwd(
     cwd: &Path,
     root_override: Option<&Path>,
 ) -> Result<WorkspaceLayout, OrbitError> {

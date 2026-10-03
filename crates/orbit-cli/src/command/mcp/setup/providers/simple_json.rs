@@ -37,7 +37,7 @@ pub(in crate::command::mcp::setup) fn apply_simple_json_remove(
     write_or_remove_json_object(&target.mcp_path, &root)
 }
 
-pub(super) fn simple_mcp_server_value(launch: ServerLaunch<'_>) -> JsonValue {
+fn simple_mcp_server_value(launch: ServerLaunch<'_>) -> JsonValue {
     JsonValue::Object(JsonMap::from_iter([
         (
             "command".to_string(),

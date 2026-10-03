@@ -7,6 +7,3 @@ mod stats;
 mod support;
 
 pub use command::{AuditCommand, AuditSubcommand};
-
-#[cfg(test)]
-mod tests;

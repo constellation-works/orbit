@@ -289,22 +289,19 @@ const OPENED_WORKSPACE_RUNTIME_LOG: &str = "opened a workspace runtime";
 /// the files behind them and over both `config.toml` layers, so an edit to the
 /// runtime configuration takes effect on the next call rather than at the next
 /// server restart.
-///
-/// Generic over the cached value so the unit tests can exercise reuse and
-/// invalidation without opening real stores.
-struct WorkspaceRuntimeCache<T = OrbitRuntime> {
-    entries: Mutex<HashMap<String, CachedRuntime<T>>>,
+struct WorkspaceRuntimeCache {
+    entries: Mutex<HashMap<String, CachedRuntime>>,
 }
 
 /// One built runtime together with the facts it was composed from.
-struct CachedRuntime<T> {
+struct CachedRuntime {
     workspace: Workspace,
     checkout: WorkspaceCheckout,
     stamp: RegisteredRuntimeStamp,
-    value: Arc<T>,
+    value: Arc<OrbitRuntime>,
 }
 
-impl<T> CachedRuntime<T> {
+impl CachedRuntime {
     /// `ResolvedWorkspaceSelection::local_root` is deliberately not compared:
     /// [`RegisteredRuntimeFactory::open_registered_checkout_for`] composes
     /// against the registered checkout's own `.orbit` for both roots, so a
@@ -320,7 +317,7 @@ impl<T> CachedRuntime<T> {
     }
 }
 
-impl<T> Default for WorkspaceRuntimeCache<T> {
+impl Default for WorkspaceRuntimeCache {
     fn default() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
@@ -328,7 +325,7 @@ impl<T> Default for WorkspaceRuntimeCache<T> {
     }
 }
 
-impl<T> WorkspaceRuntimeCache<T> {
+impl WorkspaceRuntimeCache {
     /// Reuse the runtime already built for `selected`, or build one and keep it.
     ///
     /// `build` runs outside the cache lock: opening stores blocks on I/O, and
@@ -337,8 +334,8 @@ impl<T> WorkspaceRuntimeCache<T> {
         &self,
         global_root: &Path,
         selected: &ResolvedWorkspaceSelection,
-        build: impl FnOnce() -> Result<T, OrbitError>,
-    ) -> Result<Arc<T>, OrbitError> {
+        build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
+    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
         let stamp = RegisteredRuntimeStamp::read(global_root, &selected.checkout);
         if let Some(value) = self.reusable(selected, &stamp) {
             return Ok(value);
@@ -373,7 +370,7 @@ impl<T> WorkspaceRuntimeCache<T> {
         &self,
         selected: &ResolvedWorkspaceSelection,
         stamp: &RegisteredRuntimeStamp,
-    ) -> Option<Arc<T>> {
+    ) -> Option<Arc<OrbitRuntime>> {
         self.lock()
             .get(&selected.workspace.id)
             .filter(|cached| cached.matches(selected, stamp))
@@ -382,7 +379,7 @@ impl<T> WorkspaceRuntimeCache<T> {
 
     /// Poisoning is recoverable here: the map is an idempotent build cache, so
     /// a panic in another call cannot leave it logically inconsistent.
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, CachedRuntime<T>>> {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, CachedRuntime>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -933,7 +930,3 @@ fn execute_core_tool(
         .value;
     crate::command::task::show::attach_bound_workspace_identity(name, &input, owner, output)
 }
-
-#[cfg(test)]
-#[path = "tests/server.rs"]
-mod tests;

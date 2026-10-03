@@ -17,7 +17,7 @@ use crate::output::sink;
 
 pub(super) const STDIN_CLOSED_BEFORE_PROMPT: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--machine-name or --non-interactive";
 
-pub(super) const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt; pass --task-prefix/--machine-name or --non-interactive";
+const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt; pass --task-prefix/--machine-name or --non-interactive";
 
 /// Ceiling for one non-TTY prompt. Piped answers are already in the kernel
 /// buffer, so a working pipe returns immediately.
@@ -25,7 +25,7 @@ pub(super) const NON_TTY_PROMPT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A finite line bound prevents a pipe from retaining unlimited input while
 /// it holds the init identity lock. TTY input is not subject to this limit.
-pub(super) const MAX_NON_TTY_LINE_BYTES: usize = 64 * 1024;
+const MAX_NON_TTY_LINE_BYTES: usize = 64 * 1024;
 
 const STDIN_LINE_TOO_LONG: &str = "stdin interactive prompt answer is too long; pass --task-prefix/--machine-name or --non-interactive";
 
@@ -94,7 +94,7 @@ fn fill_leftover(buf: &mut Vec<u8>, deadline: Option<Instant>) -> io::Result<Fil
     Ok(Fill::More)
 }
 
-pub(super) fn take_complete_line(
+fn take_complete_line(
     buf: &mut Vec<u8>,
     scanned: usize,
     max_line_bytes: Option<usize>,
@@ -168,7 +168,7 @@ fn read_stdin_bytes(buf: &mut [u8], deadline: Option<Instant>) -> io::Result<usi
 }
 
 #[cfg(unix)]
-pub(super) fn wait_for_fd(fd: std::os::fd::RawFd, deadline: Instant) -> io::Result<()> {
+fn wait_for_fd(fd: std::os::fd::RawFd, deadline: Instant) -> io::Result<()> {
     let mut fds = [libc::pollfd {
         fd,
         events: libc::POLLIN,

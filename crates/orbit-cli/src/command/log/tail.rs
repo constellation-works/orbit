@@ -100,7 +100,7 @@ pub(super) fn build_filters(args: &TailArgs) -> Result<Filters, OrbitError> {
     build_shared_filters(args.target.clone(), args.level, args.since.as_deref())
 }
 
-pub(super) fn run_tail<W: Write + ?Sized>(
+fn run_tail<W: Write + ?Sized>(
     path: &Path,
     args: &TailArgs,
     filters: &Filters,
@@ -267,7 +267,7 @@ fn print_initial_window_with_hook<W: Write + ?Sized>(
 
 /// A chronological tail window whose storage never exceeds its requested
 /// record count. The line currently being parsed is held by the caller.
-pub(super) struct MatchingLineWindow {
+struct MatchingLineWindow {
     limit: usize,
     lines: VecDeque<String>,
 }
@@ -292,11 +292,6 @@ impl MatchingLineWindow {
 
     fn into_lines(self) -> VecDeque<String> {
         self.lines
-    }
-
-    #[cfg(test)]
-    pub(super) fn len(&self) -> usize {
-        self.lines.len()
     }
 }
 

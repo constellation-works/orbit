@@ -97,10 +97,7 @@ impl ClockCommand {
 /// `orbit clock status` as a detail payload: one JSON object under
 /// `--format json`/`ndjson`, the one-line summary (plus a health line when
 /// the clock is unhealthy) on a terminal.
-pub(crate) fn clock_status_payload(
-    status: &ClockStatus,
-    unit: Option<&ClockUnitInspection>,
-) -> Payload {
+fn clock_status_payload(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -> Payload {
     Payload::detail(
         clock_status_doc(status, unit),
         clock_status_text(status, unit),
@@ -109,7 +106,7 @@ pub(crate) fn clock_status_payload(
 
 /// The machine-readable record: every `ClockStatus` field, the derived
 /// `state`, and the installed unit's program facts when inspection succeeded.
-pub(crate) fn clock_status_doc(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -> Value {
+fn clock_status_doc(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -> Value {
     json!({
         "state": clock_state(status),
         "enabled": status.enabled,
@@ -127,10 +124,7 @@ pub(crate) fn clock_status_doc(status: &ClockStatus, unit: Option<&ClockUnitInsp
 }
 
 /// The human one-liner, followed by `clock health: …` when there is an issue.
-pub(crate) fn clock_status_text(
-    status: &ClockStatus,
-    unit: Option<&ClockUnitInspection>,
-) -> String {
+fn clock_status_text(status: &ClockStatus, unit: Option<&ClockUnitInspection>) -> String {
     let mut text = format!(
         "clock: {} | configured cadence: {}s | effective cadence: {} | platform: {}{}",
         clock_state(status),

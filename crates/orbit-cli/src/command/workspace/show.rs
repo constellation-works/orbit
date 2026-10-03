@@ -52,7 +52,7 @@ impl Execute for WorkspaceShowArgs {
     }
 }
 
-pub(super) fn registered_workspace_for_repo_root<'a>(
+fn registered_workspace_for_repo_root<'a>(
     registry: &'a WorkspaceRegistry,
     repo_root: Option<&Path>,
 ) -> Option<(&'a Workspace, &'a WorkspaceCheckout)> {
@@ -72,7 +72,7 @@ pub(super) fn registered_workspace_for_repo_root<'a>(
 /// `workspace show` had no machine-readable form; this is the record behind
 /// the text below, added with the rest of the payload conversion (ORB-10586).
 /// Both halves are built from the same two structs, so they cannot disagree.
-pub(super) fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceCheckout) -> Value {
+fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceCheckout) -> Value {
     json!({
         "orbit_root": checkout.orbit_dir.to_string_lossy(),
         "registered": true,
@@ -101,7 +101,7 @@ pub(super) fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceChe
     })
 }
 
-pub(super) fn format_workspace_show(workspace: &Workspace, checkout: &WorkspaceCheckout) -> String {
+fn format_workspace_show(workspace: &Workspace, checkout: &WorkspaceCheckout) -> String {
     let mut output = format!(
         "name:        {}\nid:          {}\nroot:        {}\norbit_dir:   {}\nbase_branch: {}\nship_mode:   {}\nstatus:      {}\n",
         workspace.name,

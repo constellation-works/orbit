@@ -47,7 +47,7 @@ impl Execute for ReadinessCommand {
 }
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs
-pub(super) fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
+fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
     let mut seen = std::collections::BTreeSet::new();
     for task_id in task_ids {
         if task_id.trim().is_empty() {
@@ -70,7 +70,7 @@ pub(crate) fn readiness_payload(payload: Value) -> CommandOut {
 }
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs
-pub(super) fn readiness_lines(payload: &Value) -> Vec<String> {
+fn readiness_lines(payload: &Value) -> Vec<String> {
     let capacity = &payload["capacity"];
     let mut lines = vec![format!(
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",

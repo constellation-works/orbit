@@ -42,7 +42,7 @@ impl Execute for RunLogsArgs {
     }
 }
 
-pub(crate) fn run_logs_payload(
+fn run_logs_payload(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     step_id: Option<&str>,

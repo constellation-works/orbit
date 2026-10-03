@@ -12,7 +12,7 @@ use orbit_config::ConfigSeed;
 use orbit_core::OrbitError;
 use orbit_registry::workspace_registry::global_orbit_dir;
 
-use super::agent_detect::{DetectedAgents, RealAgentEnvProbe, available_crew_families, detect};
+use super::agent_detect::{DetectedAgents, available_crew_families, detect};
 use super::agent_prompt::{Prompter, StdinPrompter, collect_default_crew, collect_system_crew};
 
 /// Probe the host and build the seed for `orbit init`.
@@ -29,7 +29,7 @@ pub(crate) fn collect_config_seed_for_init(
     force: bool,
     non_interactive: bool,
 ) -> Result<ConfigSeed, OrbitError> {
-    let detected = detect(&RealAgentEnvProbe);
+    let detected = detect();
     let seed = config_seed_from_detection(&detected);
     if non_interactive || !config_would_be_written(root_override, force)? {
         return Ok(seed);
@@ -47,16 +47,13 @@ pub(crate) fn config_seed_from_detection(detected: &DetectedAgents) -> ConfigSee
 
 /// Whether init will write a fresh config.toml, which is the only case worth
 /// prompting for — `orbit init` is idempotent over an existing global root.
-pub(crate) fn config_would_be_written(
-    root_override: Option<&Path>,
-    force: bool,
-) -> Result<bool, OrbitError> {
+fn config_would_be_written(root_override: Option<&Path>, force: bool) -> Result<bool, OrbitError> {
     Ok(force || !resolve_config_path(root_override)?.exists())
 }
 
 /// Prompt for the default crew and, when more than one cheap-tier family is
 /// detected, the system crew; both by seeded crew name. Does not prompt for QA.
-pub(crate) fn collect_interactive_crew_choices(
+fn collect_interactive_crew_choices(
     detected: &DetectedAgents,
     seed: ConfigSeed,
     prompter: &mut dyn Prompter,

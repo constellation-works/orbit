@@ -37,14 +37,14 @@ pub struct ClockTickArgs {
     pub json: bool,
 }
 
-pub(crate) fn report_is_noteworthy(action: &str) -> bool {
+fn report_is_noteworthy(action: &str) -> bool {
     matches!(
         action,
         "fired" | "retry_fired" | "baselined" | "error" | "minted"
     )
 }
 
-pub(crate) fn format_routine_report_line(report: &RoutineSweepReport) -> String {
+fn format_routine_report_line(report: &RoutineSweepReport) -> String {
     let mut line = format!("{} ({}): {}", report.routine, report.source, report.action);
     append_report_details(&mut line, &report.reason, &report.slot);
     if let Some(run_id) = &report.run_id {
@@ -65,7 +65,7 @@ pub(crate) fn format_batch(batch: &[BatchMember]) -> String {
         .join(", ")
 }
 
-pub(crate) fn format_auto_task_report_line(report: &AutoTaskSweepReport) -> String {
+fn format_auto_task_report_line(report: &AutoTaskSweepReport) -> String {
     let mut line = format!(
         "{} ({}, auto-task): {}",
         report.name, report.source, report.action
@@ -201,7 +201,7 @@ fn run_sweep_for_selected_root(
     run_sweep_at(&roots.global_root, options, workspace_selector)
 }
 
-pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {
+fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {
     let mut reports = outcome
         .reports
         .iter()

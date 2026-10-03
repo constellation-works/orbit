@@ -197,7 +197,7 @@ const RETIRED_ORBIT_BLOCK_LINES: &[&str] = &[
 const LEGACY_ORBIT_LINES: &[&str] = &[".orbit", "/.orbit", "/.orbit/"];
 
 /// Renders [`ORBIT_GITIGNORE_BLOCK`] as newline-terminated text.
-pub(super) fn orbit_gitignore_block() -> String {
+fn orbit_gitignore_block() -> String {
     let mut block = String::new();
     for line in ORBIT_GITIGNORE_BLOCK {
         block.push_str(line);

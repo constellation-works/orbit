@@ -199,7 +199,7 @@ pub(crate) fn format_code(target: &str, level: &str, fields: &Value) -> String {
     }
 }
 
-pub(crate) fn format_message(target: &str, fields: &Value) -> String {
+fn format_message(target: &str, fields: &Value) -> String {
     let getf = |k: &str| fields.get(k).and_then(Value::as_str).unwrap_or("");
     let getn = |k: &str| -> String {
         fields

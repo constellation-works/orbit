@@ -46,8 +46,6 @@ use orbit_common::fs::generation::ParticipantRole;
 use orbit_core::ActorIdentity;
 use orbit_core::composition::pin_executable_generation_as;
 
-#[cfg(test)]
-use crate::command::init::InitCommand;
 use crate::command::operation::{CommandOperation, DispatchContext, RuntimeNeed};
 use crate::output::sink::{FormatArg, OutputMode, OutputSink};
 

@@ -245,7 +245,3 @@ fn requested_authority(operator: bool) -> McpSessionAuthority {
         McpSessionAuthority::Agent
     }
 }
-
-#[cfg(test)]
-#[path = "tests/command.rs"]
-mod tests;
