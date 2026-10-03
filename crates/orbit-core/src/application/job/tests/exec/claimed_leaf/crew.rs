@@ -16,7 +16,6 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::*;
 use orbit_types::workflow::JobRunState;
 
 use super::*;
