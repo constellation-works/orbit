@@ -1,0 +1,1186 @@
+{
+  "an_empty_failed_step_read_recovers_the_failed_jobs_own_log": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": false,
+        "total_bytes": 530,
+        "returned_bytes": 530,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence": [
+          "/usr/bin/git log -1 --format=%H",
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 530,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_in_progress_parent_readiness_error_recovers_a_completed_failed_job": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 \n[... 18 bytes omitted; raise the byte budget for more ...]\n 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": true,
+        "total_bytes": 530,
+        "returned_bytes": 550,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence": [
+          "/usr/bin/git log -1 --format=%H",
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 530,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "readiness_does_not_read_a_running_failed_job": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "execution failed: gh run view --log failed: failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete; job log recovery failed: job 101560010340 is not a job of run 34060485218 that this run reported unsuccessful",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "a_successful_job_is_never_read_as_failed_step_evidence": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "run 34060485218 reported no failed job whose log could be read",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "job_metadata_naming_another_run_is_refused": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "gh run view reported run 99, not run 34060485218; refusing its job metadata",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "a_job_url_from_another_run_is_refused": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "run 34060485218 reported no failed job whose log could be read",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_unavailable_job_log_is_reported_rather_than_fabricated": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "job log fallback read 1 of 1 candidate job(s): job 101560010340 (`docs`): execution failed: gh api job logs failed: gh: Not Found (HTTP 404) token=[REDACTED_SECRET]",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_empty_job_log_falls_through_to_the_next_failed_job": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": false,
+        "total_bytes": 530,
+        "returned_bytes": 530,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence": [
+          "/usr/bin/git log -1 --format=%H",
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 530,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560019999/logs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_oversized_job_log_is_bounded_and_keeps_the_failing_tail": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very \n[... 1231950 bytes omitted; raise the byte budget for more ...]\n Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:20:00.0000000Z Compiling something very verbose\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": true,
+        "total_bytes": 1240142,
+        "returned_bytes": 8231,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 1240142,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "whole_run_scope_recovers_checkout_evidence_from_a_job_log": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": false,
+        "total_bytes": 530,
+        "returned_bytes": 530,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence": [
+          "/usr/bin/git log -1 --format=%H",
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 530,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "a_narrowed_job_must_belong_to_the_run": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "job 424242 is not a job of run 34060485218 that this run reported unsuccessful",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 424242 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "a_job_from_a_previous_rerun_attempt_is_refused": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "execution failed: gh run view --log failed: failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete; job log recovery failed: job 101560010340 is not a job of run 34060485218 that this run reported unsuccessful",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "a_failing_run_scoped_read_stays_an_error_instead_of_falling_back": {
+    "error": "execution failed: gh run view --log failed: unscripted transport failure",
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "auth_and_network_failures_do_not_trigger_job_log_recovery/0": {
+    "error": "execution failed: gh run view --log failed: HTTP 401: Bad credentials",
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "auth_and_network_failures_do_not_trigger_job_log_recovery/1": {
+    "error": "execution failed: gh run view --log failed: error connecting to api.github.com: network is unreachable",
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "auth_and_network_failures_do_not_trigger_job_log_recovery/2": {
+    "error": "execution failed: gh run view --log failed: HTTP 401 while run 34060485218 is still in progress; logs will be available when it is complete",
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "the_job_log_endpoint_is_a_read_of_this_repository_only": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": false,
+        "total_bytes": 530,
+        "returned_bytes": 530,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence": [
+          "/usr/bin/git log -1 --format=%H",
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 530,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --repo acme/orbit --log-failed",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "the_registered_tool_reads_every_log_request_in_the_selected_workspace/None": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 530,
+      "total_bytes": 530,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [
+        "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+      ],
+      "checkout_evidence": [
+        "/usr/bin/git log -1 --format=%H",
+        "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+      ],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 530,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "the_registered_tool_reads_every_log_request_in_the_selected_workspace/acme/orbit": {
+    "output": {
+      "run_id": "34060485218",
+      "scope": "failed",
+      "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+      "diagnostic_unit": null,
+      "failure_regions": null,
+      "source_complete": true,
+      "truncated": false,
+      "returned_bytes": 530,
+      "total_bytes": 530,
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "checkout_commits": [
+        "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+      ],
+      "checkout_evidence": [
+        "/usr/bin/git log -1 --format=%H",
+        "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+      ],
+      "checkout_evidence_complete": true,
+      "checkout_evidence_scanned_bytes": 530,
+      "checkout_evidence_source_truncated": false
+    },
+    "calls": [
+      "run view 34060485218 --repo acme/orbit --log-failed",
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "a_repository_that_could_traverse_the_endpoint_is_rejected": {
+    "error": "invalid input: invalid `repo`: \"acme/orbit?per_page=9\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'",
+    "calls": [],
+    "cwds": []
+  },
+  "source_read_limit_defers_without_retrying_or_returning_a_partial_unit": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "execution failed: gh run view --log failed: failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete; job log recovery failed: job log fallback read 1 of 1 candidate job(s): job 101560010340 (`docs`): execution failed: job log exceeded the 8 MiB source read limit; evidence is incomplete",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "live_long_job_logs_retain_complete_command_and_checkout/offline_capture": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": null,
+      "parsed": {
+        "log": "setup\tCheckout\tHEAD is now at a529122350000000000000000000000000000000\n##[group]Run cargo check\n##[endgroup]\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\n\n[... 23863 bytes omitted; raise the byte budget for more ...]\n dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nerror[E0063]: missing field `owner_machine_id`\n  --> crates/orbit-core/src/runtime.rs:92:7\n##[error]Process completed with exit code 101.\n",
+        "truncated": true,
+        "total_bytes": 40247,
+        "returned_bytes": 16442,
+        "source_complete": true,
+        "diagnostic_unit": "##[group]Run cargo check\n##[endgroup]\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nChecking dependency\nerror[E0063]: missing field `owner_machine_id`\n  --> crates/orbit-core/src/runtime.rs:92:7\n##[error]Process completed with exit code 101.\n",
+        "failure_regions": null,
+        "checkout_commits": [
+          "a529122350000000000000000000000000000000"
+        ],
+        "checkout_evidence": [
+          "HEAD is now at a529122350000000000000000000000000000000"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 40247,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list/None": {
+    "output": {
+      "count": 1,
+      "pull_requests": [
+        {
+          "number": 12,
+          "title": null,
+          "state": null,
+          "draft": null,
+          "head_branch": null,
+          "reported_head_sha": null,
+          "base_branch": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+          "updated_at": null
+        }
+      ]
+    },
+    "calls": [
+      "pr list --limit 30 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.pr.list/acme/orbit": {
+    "output": {
+      "count": 1,
+      "pull_requests": [
+        {
+          "number": 12,
+          "title": null,
+          "state": null,
+          "draft": null,
+          "head_branch": null,
+          "reported_head_sha": null,
+          "base_branch": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+          "updated_at": null
+        }
+      ]
+    },
+    "calls": [
+      "pr list --repo acme/orbit --limit 30 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list/None": {
+    "output": {
+      "count": 1,
+      "pull_requests": [
+        {
+          "number": 12,
+          "title": null,
+          "state": null,
+          "draft": null,
+          "head_branch": null,
+          "reported_head_sha": null,
+          "base_branch": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+          "updated_at": null
+        }
+      ]
+    },
+    "calls": [
+      "pr list --limit 30 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.pr.list/acme/orbit": {
+    "output": {
+      "count": 1,
+      "pull_requests": [
+        {
+          "number": 12,
+          "title": null,
+          "state": null,
+          "draft": null,
+          "head_branch": null,
+          "reported_head_sha": null,
+          "base_branch": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+          "updated_at": null
+        }
+      ]
+    },
+    "calls": [
+      "pr list --repo acme/orbit --limit 30 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list/None": {
+    "output": {
+      "count": 1,
+      "runs": [
+        {
+          "run_id": 34060485218,
+          "run_number": 12,
+          "workflow": "CI",
+          "title": "CI on agent-main",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "head_branch": "agent-main",
+          "reported_head_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-09-06T21:15:00Z",
+          "started_at": null,
+          "updated_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218"
+        }
+      ]
+    },
+    "calls": [
+      "run list --limit 20 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.list/acme/orbit": {
+    "output": {
+      "count": 1,
+      "runs": [
+        {
+          "run_id": 34060485218,
+          "run_number": 12,
+          "workflow": "CI",
+          "title": "CI on agent-main",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "head_branch": "agent-main",
+          "reported_head_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-09-06T21:15:00Z",
+          "started_at": null,
+          "updated_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218"
+        }
+      ]
+    },
+    "calls": [
+      "run list --repo acme/orbit --limit 20 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list/None": {
+    "output": {
+      "count": 1,
+      "runs": [
+        {
+          "run_id": 34060485218,
+          "run_number": 12,
+          "workflow": "CI",
+          "title": "CI on agent-main",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "head_branch": "agent-main",
+          "reported_head_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-09-06T21:15:00Z",
+          "started_at": null,
+          "updated_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218"
+        }
+      ]
+    },
+    "calls": [
+      "run list --limit 20 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.list/acme/orbit": {
+    "output": {
+      "count": 1,
+      "runs": [
+        {
+          "run_id": 34060485218,
+          "run_number": 12,
+          "workflow": "CI",
+          "title": "CI on agent-main",
+          "status": "completed",
+          "conclusion": "failure",
+          "event": "push",
+          "head_branch": "agent-main",
+          "reported_head_sha": "1111111111111111111111111111111111111111",
+          "created_at": "2026-09-06T21:15:00Z",
+          "started_at": null,
+          "updated_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218"
+        }
+      ]
+    },
+    "calls": [
+      "run list --repo acme/orbit --limit 20 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view/None": {
+    "output": {
+      "run_id": 34060485218,
+      "run_number": 12,
+      "workflow": "CI",
+      "title": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "head_branch": "agent-main",
+      "reported_head_sha": "1111111111111111111111111111111111111111",
+      "created_at": "2026-09-06T21:15:00Z",
+      "started_at": null,
+      "updated_at": null,
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "job_id": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560019999",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ],
+      "failed_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "failed_steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "calls": [
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_run_in_the_selected_workspace_rather_than_the_process_cwd/github.run.view/acme/orbit": {
+    "output": {
+      "run_id": 34060485218,
+      "run_number": 12,
+      "workflow": "CI",
+      "title": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "head_branch": "agent-main",
+      "reported_head_sha": "1111111111111111111111111111111111111111",
+      "created_at": "2026-09-06T21:15:00Z",
+      "started_at": null,
+      "updated_at": null,
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "job_id": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560019999",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ],
+      "failed_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "failed_steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "calls": [
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view/None": {
+    "output": {
+      "run_id": 34060485218,
+      "run_number": 12,
+      "workflow": "CI",
+      "title": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "head_branch": "agent-main",
+      "reported_head_sha": "1111111111111111111111111111111111111111",
+      "created_at": "2026-09-06T21:15:00Z",
+      "started_at": null,
+      "updated_at": null,
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "job_id": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560019999",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ],
+      "failed_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "failed_steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "calls": [
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  },
+  "discovery_tools_without_a_selected_workspace_keep_the_callers_directory/github.run.view/acme/orbit": {
+    "output": {
+      "run_id": 34060485218,
+      "run_number": 12,
+      "workflow": "CI",
+      "title": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "head_branch": "agent-main",
+      "reported_head_sha": "1111111111111111111111111111111111111111",
+      "created_at": "2026-09-06T21:15:00Z",
+      "started_at": null,
+      "updated_at": null,
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "job_id": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560019999",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": null,
+          "completed_at": null,
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ],
+      "failed_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340",
+          "failed_steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "calls": [
+      "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
+    ],
+    "cwds": [
+      "caller_directory"
+    ]
+  }
+}

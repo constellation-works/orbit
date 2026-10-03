@@ -680,3 +680,5 @@ fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
     has("orbit.workflow.auto", "reason", "string");
     has("orbit.task.show", "run_id", "string");
 }
+
+mod github_log_goldens;

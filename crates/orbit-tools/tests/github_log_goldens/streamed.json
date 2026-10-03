@@ -1,0 +1,3534 @@
+[
+  {
+    "name": "a_short_log_is_returned_whole_and_unmarked",
+    "parts": [
+      "error: assertion failed\n"
+    ],
+    "max_bytes": 1024,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "an_oversized_log_is_capped_while_keeping_both_ends",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "x",
+        "repeat": 200000
+      },
+      "\nTAIL-MARKER"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "truncation_never_splits_a_multibyte_character",
+    "parts": [
+      {
+        "text": "é",
+        "repeat": 50000
+      }
+    ],
+    "max_bytes": 1001,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "a_credential_in_the_log_is_redacted_before_it_is_returned",
+    "parts": [
+      "remote: fatal: bad credentials ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "checkout_evidence_reports_the_tested_commit_not_the_event_sha",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z /usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 chore: something\nci\tRun tests\t2026-09-06T06:07:50.0000000Z error: build failed\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "a_pinned_action_sha_is_never_reported_as_the_checked_out_commit",
+    "parts": [
+      "ci\tRun actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\t2026-09-06T06:07:50.0000000Z ##[group]Checking out the ref\nci\tRun actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force -B trunk refs/remotes/origin/trunk\nci\tRun actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\t2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "a_bare_sha_outside_a_checkout_step_is_not_treated_as_evidence",
+    "parts": [
+      "ci\tRun tests\t2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "git_log_head_command_in_an_unknown_step_names_its_following_sha",
+    "parts": [
+      "ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "only_the_immediate_output_of_the_recognized_command_is_checkout_evidence",
+    "parts": [
+      "ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git rev-parse HEAD\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z not a SHA\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "multiple_recognized_command_outputs_remain_ambiguous",
+    "parts": [
+      "ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z 4968f137ab9969c35634496414fdc1637d22fe37\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z 4444444444444444444444444444444444444444\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "checkout_evidence_lines_are_capped_and_redacted",
+    "parts": [
+      {
+        "text": "ci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 2222222 token ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\n",
+        "repeat": 100
+      }
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 5
+  },
+  {
+    "name": "a_log_without_checkout_evidence_yields_nothing_rather_than_a_guess",
+    "parts": [
+      "build\tRun tests\terror: build failed\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "checkout_evidence_caps_and_dedups_commits",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000000 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000000 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000001 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000001 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000002 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000002 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000003 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000003 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000004 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000004 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000005 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000005 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000006 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000006 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000007 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000007 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000008 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000008 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000009 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000009 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000000a -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000000a chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000000b -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000000b chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000000c -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000000c chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000000d -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000000d chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000000e -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000000e chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000000f -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000000f chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000010 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000010 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000011 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000011 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000012 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000012 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000013 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000013 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000014 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000014 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000015 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000015 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000016 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000016 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000017 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000017 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000018 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000018 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000019 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000019 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000001a -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000001a chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000001b -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000001b chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000001c -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000001c chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000001d -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000001d chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000001e -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000001e chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000001f -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000001f chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000020 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000020 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000021 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000021 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000022 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000022 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000023 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000023 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000024 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000024 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000025 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000025 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000026 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000026 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000027 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000027 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000028 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000028 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000029 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000029 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000002a -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000002a chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000002b -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000002b chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000002c -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000002c chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000002d -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000002d chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000002e -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000002e chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 000000000000000000000000000000000000002f -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 000000000000000000000000000000000000002f chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000030 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000030 chore\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 0000000000000000000000000000000000000031 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 0000000000000000000000000000000000000031 chore\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "an_overlong_line_unrelated_to_checkout_is_dropped_without_marking_identity_incomplete",
+    "parts": [
+      "ci\tRun tests\t2026-09-06T06:07:50.0000000Z ",
+      {
+        "text": "x",
+        "repeat": 20000
+      },
+      "\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "an_overlong_checkout_line_is_dropped_and_marks_identity_incomplete",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z ",
+      {
+        "text": "z",
+        "repeat": 20000
+      },
+      "\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "an_overlong_line_consumes_pending_checkout_command_context",
+    "parts": [
+      "ci\tUNKNOWN STEP\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git log -1 --format=%H\nci\tUNKNOWN STEP\t",
+      {
+        "text": "x",
+        "repeat": 20000
+      },
+      "\nci\tUNKNOWN STEP\t4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "streaming_log_finds_middle_checkout_without_retaining_it_in_the_excerpt",
+    "parts": [
+      "head-marker\n",
+      {
+        "text": "x",
+        "repeat": 400
+      },
+      "\nsetup\tCheckout\tHEAD is now at 4968f137ab9969c35634496414fdc1637d22fe37\n",
+      {
+        "text": "y",
+        "repeat": 400
+      },
+      "\ntail-marker\n"
+    ],
+    "max_bytes": 96,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "streaming_log_marks_identity_incomplete_after_the_hard_scan_limit",
+    "parts": [
+      {
+        "text": "x",
+        "repeat": 8388608
+      },
+      "\nsetup\tCheckout\tHEAD is now at 4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "chunks": [
+      4096
+    ]
+  },
+  {
+    "name": "command_output_past_the_hard_scan_limit_is_not_verified",
+    "parts": [
+      "ci\tUNKNOWN STEP\t[command]/usr/bin/git log -1 --format=%H\n",
+      {
+        "text": "x",
+        "repeat": 8388551
+      },
+      "\nci\tUNKNOWN STEP\t4968f137ab9969c35634496414fdc1637d22fe37\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "chunks": [
+      4096
+    ]
+  },
+  {
+    "name": "an_abbreviated_and_a_full_spelling_are_one_commit",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z [command]/usr/bin/git checkout --progress --force 4968f137ab9969c35634496414fdc1637d22fe37\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4968f13 feat: add provider\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "merge_parents_quoted_in_a_checkout_subject_are_not_checkout_identity",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch 4968f137ab9969c35634496414fdc1637d22fe37 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4444444444444444444444444444444444444444 Merge 4968f137ab9969c35634496414fdc1637d22fe37 into 2222222222222222222222222222222222222222\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "two_checkout_steps_naming_different_commits_stay_two_commits",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4968f137ab9969c35634496414fdc1637d22fe37 first\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at 4444444444444444444444444444444444444444 second\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "an_abbreviation_with_rival_expansions_is_not_resolved_to_a_guess",
+    "parts": [
+      "ci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch abc1234000000000000000000000000000000000 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z  * branch abc1234111111111111111111111111111111111 -> FETCH_HEAD\nci\tCheckout\t2026-09-06T06:07:50.0000000Z HEAD is now at abc1234 ambiguous\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "long_log_retains_complete_middle_command_independently_of_display",
+    "parts": [
+      {
+        "text": "setup output\n",
+        "repeat": 3000
+      },
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n",
+      {
+        "text": "cleanup output\n",
+        "repeat": 3000
+      }
+    ],
+    "max_bytes": 16384,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/0",
+    "parts": [
+      "2026-09-07T20:52:05Z cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/1",
+    "parts": [
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z "
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/2",
+    "parts": [
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/3",
+    "parts": [
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n##[warning]Log output was truncated\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/4",
+    "parts": [
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\npartial trailing line"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/scan_limit",
+    "parts": [
+      {
+        "text": "x",
+        "repeat": 8388608
+      },
+      "\n2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "chunks": [
+      4096
+    ]
+  },
+  {
+    "name": "incomplete_ambiguous_and_source_limited_commands_are_not_complete_units/command_limit",
+    "parts": [
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z ",
+      {
+        "text": "build output\n",
+        "repeat": 30000
+      },
+      "\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "selected_command_preserves_unicode_and_redacts_secrets_across_chunk_boundaries",
+    "parts": [
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing café ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9 field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "oversized_command_keeps_all_failure_regions_and_counts_assertion_omissions",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns/0",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n",
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns/1",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n",
+      "##[warning]Log output was truncated\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns/2",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns/3",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n",
+      "partial line"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns/4",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "thread 'another_failure' panicked at tests/example.rs:1:1:\n",
+        "repeat": 10000
+      },
+      "##[error]Process completed with exit code 1.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "partial_regions_never_override_missing_source_ambiguous_commands_or_hidden_columns/columns",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "café ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40,
+    "conflicting_column": true
+  },
+  {
+    "name": "failure_region_overflow_defers_instead_of_losing_secondary_failures",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "thread 'another_failure' panicked at tests/example.rs:1:1:\n",
+        "repeat": 10000
+      },
+      "##[error]Process completed with exit code 1.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "assertion_prefix_never_leaks_a_secret_cut_at_the_retention_boundary",
+    "parts": [
+      "##[group]Run cargo nextest run\n##[endgroup]\n",
+      {
+        "text": "PASS ordinary_test\n",
+        "repeat": 20000
+      },
+      "\nFAIL [ 0.1s] suite first_failure\nthread 'first_failure' panicked at tests/golden.rs:12:5:\nassertion `left == right` failed: tool_list.plain.txt golden drift\n  left: ",
+      {
+        "text": "x ",
+        "repeat": 245
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9 ",
+      {
+        "text": "tail ",
+        "repeat": 20000
+      },
+      "\n  right: expected golden\n",
+      {
+        "text": "PASS another_test\n",
+        "repeat": 100
+      },
+      "FAIL [ 0.2s] suite second_failure\nthread 'second_failure' panicked at tests/other.rs:20:7:\nassertion failed: second condition\nSummary [ 1.0s] 2 tests run: 2 failed\n##[error]Process completed with exit code 100.\n"
+    ],
+    "max_bytes": 128,
+    "max_evidence_lines": 40
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/head/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 16
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/head/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 12
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/head/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 10
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/head/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 4
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/tail/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 15
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/tail/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 11
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/tail/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 9
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/False/tail/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/True/head/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 0
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/True/tail/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 31
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/True/tail/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 27
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/True/tail/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 25
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/True/tail/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 19
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/64/True/tail/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 13
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 112
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 108
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 106
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 100
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 94
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 80
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/head/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 77
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 111
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 107
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 105
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 99
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 93
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 79
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/False/tail/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 76
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 48
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 44
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 42
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 36
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 30
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 16
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/head/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 13
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 175
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 171
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 169
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 163
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 157
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 143
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/256/True/tail/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 140
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 2032
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 2028
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 2026
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 2020
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 2014
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 2000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/head/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 1997
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 2031
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 2027
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 2025
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 2019
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 2013
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 1999
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/False/tail/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 1996
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 1008
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 1004
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 1002
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 996
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 990
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 976
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/head/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "n",
+        "repeat": 973
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/4",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3055
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/8",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3051
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/10",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3049
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/16",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3043
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/22",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3037
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/36",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3023
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/4096/True/tail/39",
+    "parts": [
+      "HEAD-MARKER\n",
+      {
+        "text": "y",
+        "repeat": 8000
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "n",
+        "repeat": 3020
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 4096,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  },
+  {
+    "name": "a_whole_credential_inside_a_window_or_across_the_short_join_is_redacted/False",
+    "parts": [
+      {
+        "text": "h",
+        "repeat": 20
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9 kept\n"
+    ],
+    "max_bytes": 80,
+    "max_evidence_lines": 40,
+    "tail_weighted": false
+  },
+  {
+    "name": "a_whole_credential_inside_a_window_or_across_the_short_join_is_redacted/windows/False",
+    "parts": [
+      "HEAD-MARKER ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\n",
+      {
+        "text": "x ",
+        "repeat": 4000
+      },
+      "\nTAIL-MARKER ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": false
+  },
+  {
+    "name": "a_whole_credential_inside_a_window_or_across_the_short_join_is_redacted/True",
+    "parts": [
+      {
+        "text": "h",
+        "repeat": 20
+      },
+      "ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9 kept\n"
+    ],
+    "max_bytes": 80,
+    "max_evidence_lines": 40,
+    "tail_weighted": true
+  },
+  {
+    "name": "a_whole_credential_inside_a_window_or_across_the_short_join_is_redacted/windows/True",
+    "parts": [
+      "HEAD-MARKER ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\n",
+      {
+        "text": "x ",
+        "repeat": 4000
+      },
+      "\nTAIL-MARKER ghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9\n"
+    ],
+    "max_bytes": 256,
+    "max_evidence_lines": 40,
+    "tail_weighted": true
+  },
+  {
+    "name": "ordinary_bounded_logs_keep_useful_ends_and_middle_evidence/False",
+    "parts": [
+      "HEAD-MARKER cargo test --workspace\n",
+      {
+        "text": "setup output\n",
+        "repeat": 400
+      },
+      "setup\tCheckout\tHEAD is now at 2d773a649844b168c5cfce4c80feadb8b025bb69 chore\n",
+      {
+        "text": "build output\n",
+        "repeat": 400
+      },
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n",
+      {
+        "text": "cleanup output\n",
+        "repeat": 400
+      },
+      "TAIL-MARKER assertion `left == right` failed\n"
+    ],
+    "max_bytes": 2048,
+    "max_evidence_lines": 40,
+    "tail_weighted": false,
+    "chunks": [
+      1,
+      7,
+      64,
+      4096
+    ]
+  },
+  {
+    "name": "streamed_excerpt_does_not_grow_with_the_source_log/False",
+    "parts": [
+      "HEAD-MARKER cargo test --workspace\n",
+      {
+        "text": "y\n",
+        "repeat": 524288
+      },
+      "setup\tCheckout\tHEAD is now at 2d773a649844b168c5cfce4c80feadb8b025bb69 chore\n",
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n",
+      {
+        "text": "y\n",
+        "repeat": 524288
+      },
+      "\nTAIL-MARKER assertion failed\n"
+    ],
+    "max_bytes": 1024,
+    "max_evidence_lines": 8,
+    "tail_weighted": false,
+    "chunks": [
+      4096
+    ]
+  },
+  {
+    "name": "ordinary_bounded_logs_keep_useful_ends_and_middle_evidence/True",
+    "parts": [
+      "HEAD-MARKER cargo test --workspace\n",
+      {
+        "text": "setup output\n",
+        "repeat": 400
+      },
+      "setup\tCheckout\tHEAD is now at 2d773a649844b168c5cfce4c80feadb8b025bb69 chore\n",
+      {
+        "text": "build output\n",
+        "repeat": 400
+      },
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n",
+      {
+        "text": "cleanup output\n",
+        "repeat": 400
+      },
+      "TAIL-MARKER assertion `left == right` failed\n"
+    ],
+    "max_bytes": 2048,
+    "max_evidence_lines": 40,
+    "tail_weighted": true,
+    "chunks": [
+      1,
+      7,
+      64,
+      4096
+    ]
+  },
+  {
+    "name": "streamed_excerpt_does_not_grow_with_the_source_log/True",
+    "parts": [
+      "HEAD-MARKER cargo test --workspace\n",
+      {
+        "text": "y\n",
+        "repeat": 524288
+      },
+      "setup\tCheckout\tHEAD is now at 2d773a649844b168c5cfce4c80feadb8b025bb69 chore\n",
+      "2026-09-07T20:52:05Z ##[group]Run cargo check\n2026-09-07T20:52:05Z shell: /usr/bin/bash -e {0}\n2026-09-07T20:52:05Z ##[endgroup]\n2026-09-07T20:52:23Z error[E0063]: missing field `owner_machine_id`\n2026-09-07T20:52:23Z   --> crates/orbit-core/src/runtime.rs:92:7\n2026-09-07T20:52:23Z    | WorkspaceRuntimeBinding {\n2026-09-07T20:52:23Z    | ^ missing `owner_machine_id`\n2026-09-07T20:52:31Z ##[error]Process completed with exit code 101.\n",
+      {
+        "text": "y\n",
+        "repeat": 524288
+      },
+      "\nTAIL-MARKER assertion failed\n"
+    ],
+    "max_bytes": 1024,
+    "max_evidence_lines": 8,
+    "tail_weighted": true,
+    "chunks": [
+      4096
+    ]
+  },
+  {
+    "name": "credential_straddling_a_retained_boundary_is_not_returned/reported_cut",
+    "parts": [
+      "abcdefghijghp_Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z9",
+      {
+        "text": "y",
+        "repeat": 4000
+      },
+      "\nTAIL-MARKER\n"
+    ],
+    "max_bytes": 64,
+    "max_evidence_lines": 40,
+    "chunks": [
+      1,
+      2,
+      3,
+      7,
+      8,
+      15,
+      16,
+      22,
+      32,
+      39,
+      40,
+      41,
+      63,
+      64,
+      127,
+      128,
+      1024,
+      4096,
+      8192
+    ]
+  }
+]
