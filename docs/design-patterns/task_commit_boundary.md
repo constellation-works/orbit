@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-09-19
+last_validated: 2026-10-03
 ---
 # Task/Reservation Commit Boundary
 
@@ -112,8 +112,14 @@ durable replay obligation. Nested files and replacements retain the same recover
 
 ## Composition and cost
 
-Every runtime builder branch uses `workspace_coordinated_backends`, including explicit
-data roots, checkoutless partitions, and alternate runtime constructors. The task and
+Runtime builder branches use `workspace_coordinated_backends`, including explicit
+data roots, checkoutless partitions, and alternate runtime constructors. Observation-only
+opens use `workspace_observational_backends` when a read-only command's partition is absent
+or coordination setup encounters a filesystem permission denial. This includes writable
+runtime opens before CLI tool dispatch: an absent partition reads as empty, and an actual
+mutation still fails at its storage write. The observation handle creates no partition,
+lock, or journal marker during construction and retains journal-binding verification and
+recovery before exposure. The task and
 reservation stores come from the same composition; the uncoordinated reservation factory
 has been removed. A durable `.task-commit-required` marker makes legacy task compositions
 refuse access to a coordinated partition, including compositions opened before activation.
