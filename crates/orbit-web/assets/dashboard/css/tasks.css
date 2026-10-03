@@ -406,9 +406,12 @@
 #tasks-panel { container: tasks-panel / inline-size; }
 @container tasks-panel (max-width: 620px) {
   .row {
-    /* The action column has the same fixed width as in the one-line row, so the
-       columns line up between groups whose quick actions differ in width. */
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 84px;
+    /* The first column holds the ID over the status select, so it is sized to
+       the select (status dot, `in-progress` and the chevron), not a share of
+       the panel; the title takes the rest of line 1. The action column has the
+       same fixed width as in the one-line row, so the columns line up between
+       groups whose quick actions differ in width. */
+    grid-template-columns: 112px minmax(0, 1fr) 84px;
     grid-template-areas:
       "id title title"
       "status crew quick";
