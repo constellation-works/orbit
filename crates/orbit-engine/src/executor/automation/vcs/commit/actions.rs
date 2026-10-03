@@ -30,7 +30,7 @@ use super::git_ops::{
 };
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
 use super::scope::{
-    ensure_candidate_ownership, filter_changed_files_for_task, task_candidate_paths,
+    NewPathIntent, ensure_candidate_ownership, filter_changed_files_for_task, task_candidate_paths,
 };
 use super::summary::ensure_durable_execution_summary;
 
@@ -96,7 +96,9 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         .map(|task_id| host.get_task(task_id))
         .collect::<Result<Vec<_>, _>>()?;
     let resolved_model = host.resolved_crew_model(batch_id)?;
-    let candidate_paths = task_candidate_paths(&workspace_path, &tasks)?;
+    // Multi-task scopes run only in local pipelines, whose workers can append
+    // exact selectors for the files they create.
+    let candidate_paths = task_candidate_paths(&workspace_path, &tasks, NewPathIntent::ExactFile)?;
     ensure_candidate_ownership(&candidate_paths, &workspace_path, &tasks, true)?;
 
     let mut committed_task_ids = Vec::new();
@@ -141,7 +143,8 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     ensure_named_branch(&workspace_path)?;
     ensure_no_unmerged_changes(&workspace_path)?;
 
-    let changed_files = task_candidate_paths(&workspace_path, &batch_tasks)?;
+    let changed_files =
+        task_candidate_paths(&workspace_path, &batch_tasks, NewPathIntent::ExactFile)?;
     if changed_files.is_empty() {
         return Ok(json!({}));
     }
@@ -200,6 +203,16 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
 
     ensure_no_unmerged_changes(&workspace_path)?;
 
+    // ORB-13756: the claim's worker binding, not step input, marks the frozen
+    // footprint as this run's new-path intent.
+    let new_path_intent = if host
+        .worker_invocation()
+        .is_some_and(|binding| binding.task_id == task.id)
+    {
+        NewPathIntent::AdmittedFootprint
+    } else {
+        NewPathIntent::ExactFile
+    };
     let task = if claimed_attempt_summary(host, input, task).is_some() {
         // ORB-13755: a claimed leaf delivers this attempt, whose summary lives
         // in the implementer output the pipeline handed this step, not in the
@@ -281,10 +294,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         }
     };
 
-    // Tracked paths carry repository identity. New paths require exact durable
-    // file intent (or a pre-staged writable index). Resolve and validate that
-    // set before mutating the index, then stage exactly those paths.
-    let candidate_paths = task_candidate_paths(&workspace_path, std::slice::from_ref(&task))?;
+    // Tracked paths carry repository identity. New paths require durable
+    // selector intent (or a pre-staged writable index). Resolve and validate
+    // that set before mutating the index, then stage exactly those paths.
+    let candidate_paths = task_candidate_paths(
+        &workspace_path,
+        std::slice::from_ref(&task),
+        new_path_intent,
+    )?;
     let candidate_paths = candidate_paths.into_iter().collect::<Vec<_>>();
     stage_paths(&workspace_path, &candidate_paths)?;
 
@@ -361,7 +378,12 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
 ) -> Result<(String, Vec<String>), OrbitError> {
     ensure_named_branch(workspace_path)?;
     ensure_no_unmerged_changes(workspace_path)?;
-    let candidate_paths = task_candidate_paths(workspace_path, std::slice::from_ref(task))?;
+    // Only `pr_failure_handoff` reaches this, and no claimed pipeline runs it.
+    let candidate_paths = task_candidate_paths(
+        workspace_path,
+        std::slice::from_ref(task),
+        NewPathIntent::ExactFile,
+    )?;
     stage_paths(
         workspace_path,
         &candidate_paths.into_iter().collect::<Vec<_>>(),

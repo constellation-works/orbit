@@ -158,6 +158,27 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   applied), then a line naming the delivered candidate. Each part is bounded, and a summary whose
   first line is `Outcome: failed` is refused before it becomes a settlement. Acceptance writes it
   as the owner's `execution_summary`.
+- New files are delivered inside the frozen footprint ([ORB-13756]). Local delivery accepts an
+  untracked path only when an exact `file:` selector or a writable-index stage declares it. A
+  claimed worker can do neither: its reported selectors are never applied and its index is not
+  writable, so every module split whose file names the implementer picks was refused at
+  `commit`. Under the trusted worker binding, for the claim's own task, the claimed `git_commit`
+  therefore treats any selector of the frozen footprint, `dir:` included, as new-path intent
+  (`NewPathIntent::AdmittedFootprint` in `vcs/commit/scope.rs`). An untracked path outside every
+  admitted selector is still refused by exact name before any index change. The footprint is
+  not widened. Selectors for files outside it still go through the owner and a fresh claim. Any
+  run's untracked scratch under `.orbit/tmp/` is never a candidate and is never refused, whatever
+  a selector covers. Local delivery keeps the exact-`file:` rule, because its worker can append
+  selectors. The rule therefore stays a deliberate local intent check rather than inferring
+  intent from ownership boundaries. The rejected alternative, letting the claimed leaf stage
+  selector-covered paths itself, would admit the same set through an index the worker cannot
+  write. Callers of `task_candidate_paths`:
+  - The `all` scope (`commit_batch_changes`) is the only one either claimed pipeline runs. It
+    picks footprint intent from the binding and exact-file intent otherwise.
+  - The `per_task` and `per_task_finalize` scopes run only in local pipelines and keep exact-file
+    intent.
+  - `commit_failure_candidate` is reached only from `pr_failure_handoff`, which no claimed
+    pipeline runs. It keeps exact-file intent.
 - The delivery gate judges this attempt ([ORB-13755]). Until acceptance, the owner's stored
   summary is whatever an earlier attempt left, and after a failed attempt that is its
   `Outcome: failed` failure settlement. The `Outcome: failed` gate in `git_commit` and in the
@@ -681,6 +702,7 @@ Acceptance criteria, not reported as passing.
 | Pull drain cancelled while its leaves are live | Each leaf delivers its own handoff or failure when it ends; unlaunched claims settle as failures; no claim is left `running` without a responsible follower process ([ORB-13663]) |
 | Detached child or in-run step retry reads a task | Owner routing and claim context survive; no local fallback |
 | Claimed implementer with no route to the owner (agent sandbox) | Claimed mode denies it the owner task tools; its output summary reaches `claim_handoff` and becomes the owner's `execution_summary` |
+| Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; an untracked path outside the footprint is refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
 | Handoff commits, response lost | Exactly one handoff and review transition |
@@ -743,5 +765,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-13642] — added claimed-mode implementation and evidence-bearing failure settlement.
 - [ORB-13663] — moved settlement ownership from the admitting drain to the admission record.
 - [ORB-13755] — scoped the claimed delivery gate to the attempt being delivered.
+- [ORB-13756] — let claimed runs deliver new files inside their frozen footprint.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

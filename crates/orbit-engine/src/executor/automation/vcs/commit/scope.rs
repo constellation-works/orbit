@@ -24,16 +24,35 @@ pub(super) fn filter_changed_files_for_task(
         .collect()
 }
 
+/// The run-scoped scratch root (`$ORBIT_SCRATCH_DIR`). Repositories normally
+/// ignore it; it is excluded here as well so no selector can deliver scratch.
+const SCRATCH_DIR: &str = ".orbit/tmp";
+
+/// Which task selectors declare a new (untracked) path as intended delivery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NewPathIntent {
+    /// Only an exact `file:` selector. A worker that can write task state
+    /// appends one after creating the file; directory selectors are ownership
+    /// boundaries, not new-file intent.
+    ExactFile,
+    /// Any selector of the claim's frozen footprint, `dir:` included. A
+    /// claimed worker cannot write owner task state or stage on a writable
+    /// index, so the footprint the owner admitted is the only intent it can
+    /// carry (distributed-drain design §3).
+    AdmittedFootprint,
+}
+
 /// Resolve the concrete paths a task worker authorized for delivery.
 ///
 /// Tracked changes already have repository identity. A new file has no such
-/// identity, so its exact task file selector (or a pre-staged index entry from
-/// a writable caller) supplies intent. Refusing unknown untracked paths before
-/// staging preserves both their bytes and the exact index the worker left
-/// behind.
+/// identity, so a task selector `intent` accepts (or a pre-staged index entry
+/// from a writable caller) supplies intent. Untracked paths under the scratch
+/// root are never candidates. Refusing unknown untracked paths before staging
+/// preserves both their bytes and the exact index the worker left behind.
 pub(super) fn task_candidate_paths(
     workspace_path: &Path,
     tasks: &[Task],
+    intent: NewPathIntent,
 ) -> Result<BTreeSet<String>, OrbitError> {
     let staged = git_output_paths(
         workspace_path,
@@ -44,22 +63,44 @@ pub(super) fn task_candidate_paths(
     let untracked = git_output_paths(
         workspace_path,
         &["ls-files", "--others", "--exclude-standard", "-z", "--"],
-    )?;
-    let declared_new_paths = tasks
+    )?
+    .into_iter()
+    .filter(|path| !path_matches_scope(path, SCRATCH_DIR))
+    .collect::<Vec<_>>();
+    let declared_new_scopes = tasks
         .iter()
-        .flat_map(|task| exact_file_scopes(task, workspace_path))
+        .flat_map(|task| match intent {
+            NewPathIntent::ExactFile => exact_file_scopes(task, workspace_path),
+            NewPathIntent::AdmittedFootprint => task_scopes(task, workspace_path),
+        })
         .collect::<BTreeSet<_>>();
+    let declared = |path: &str| {
+        declared_new_scopes.iter().any(|scope| match intent {
+            NewPathIntent::ExactFile => path == scope,
+            NewPathIntent::AdmittedFootprint => path_matches_scope(path, scope),
+        })
+    };
     let unknown = untracked
         .iter()
-        .filter(|path| !staged.contains(*path) && !declared_new_paths.contains(*path))
+        .filter(|path| !staged.contains(*path) && !declared(path))
         .cloned()
         .collect::<Vec<_>>();
     if !unknown.is_empty() {
+        let remedy = match intent {
+            NewPathIntent::ExactFile => {
+                "Declare every intended new source path with an exact `file:` task selector (or \
+                 stage it explicitly on a writable index)"
+            }
+            NewPathIntent::AdmittedFootprint => {
+                "A claimed run delivers new paths only inside the claim's frozen footprint; keep \
+                 new source under an admitted `file:` or `dir:` selector, or ask the owner to \
+                 widen the task before a fresh claim"
+            }
+        };
         return Err(OrbitError::Execution(format!(
-            "task delivery refused unknown untracked paths: {unknown:?}. Declare every intended new \
-             source path with an exact `file:` task selector (or stage it explicitly on a writable \
-             index), and write scratch and evidence under `.orbit/tmp/`. Orbit did not change the \
-             index or any listed file"
+            "task delivery refused unknown untracked paths: {unknown:?}. {remedy}, and write \
+             scratch and evidence under `{SCRATCH_DIR}/`. Orbit did not change the index or any \
+             listed file"
         )));
     }
 
@@ -69,11 +110,7 @@ pub(super) fn task_candidate_paths(
     )?
     .into_iter()
     .collect::<BTreeSet<_>>();
-    candidates.extend(
-        untracked
-            .into_iter()
-            .filter(|path| declared_new_paths.contains(path)),
-    );
+    candidates.extend(untracked.into_iter().filter(|path| declared(path)));
     Ok(candidates)
 }
 
