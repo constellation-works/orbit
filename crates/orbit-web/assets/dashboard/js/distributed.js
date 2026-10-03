@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { el, fetchJson, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -656,6 +656,7 @@ const FEEDBACK_TTL_MS = 20000;
 /// checkout keeps it hidden too — the owner machine holds claim state, and a
 /// note repeated on every task would be noise.
 export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onContent, formatTime } = {}) {
+  const visit = captureWorkspaceVisit();
   const announce = (rendered) => {
     if (onContent) onContent(rendered);
     return rendered;
@@ -669,6 +670,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   };
 
   const render = (payload) => {
+    if (!visit.isCurrent()) return false;
     container.textContent = "";
     if (payload && payload.owner_workspace === false) return announce(false);
     const claims = claimsForTask(payload, taskId);
@@ -699,6 +701,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   // Report the outcome in this container (if it is still on the page) and
   // remember it for the block that replaces it.
   const feedback = (text, kind, remedy) => {
+    if (!visit.isCurrent()) return;
     lastFeedback = { taskId, text, kind, remedy, at: Date.now() };
     for (const prior of container.querySelectorAll(".claim-feedback")) prior.remove();
     container.insertBefore(feedbackNode(text, kind, remedy), container.firstChild);
@@ -708,6 +711,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   // falls to the page. Put it on the outcome (or, failing that, the first
   // control) so a keyboard or screen-reader user lands where the result is.
   const focusOutcome = () => {
+    if (!visit.isCurrent()) return;
     const target = container.querySelector(".claim-feedback") || container.querySelector("button.claim-action");
     if (!target) return;
     // A note is not a tab stop, but it can take programmatic focus.
@@ -730,6 +734,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     // A render from the cached read runs before the caller has placed the
     // rebuilt block on the page, where it could not take focus yet.
     setTimeout(() => {
+      if (!visit.isCurrent()) return;
       const active = document.activeElement;
       if (active && active !== document.body && active !== previous) return;
       carried.tabIndex = -1;
@@ -738,6 +743,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   };
 
   const act = async (run) => {
+    if (!visit.isCurrent()) return;
     try {
       await perform(run);
     } finally {
@@ -749,7 +755,9 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     let body;
     try {
       body = await run();
+      if (!visit.isCurrent()) return;
     } catch (error) {
+      if (!visit.isCurrent()) return;
       // A refused action is the point of the backend check, not a bug in it.
       // Stale state re-reads before the operator decides again; an uncertain
       // merge is left alone until it is reconciled.
@@ -770,7 +778,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
     const summary = actionSummary(body);
     const reread = await refresh(summary);
     if (reread) feedback(summary, "ok");
-    if (onTaskChanged) onTaskChanged();
+    if (visit.isCurrent() && onTaskChanged) onTaskChanged();
   };
 
   // A failed read is one message with a way to try again. After a successful
@@ -778,6 +786,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   // sees a green confirmation next to a red error, or an error that hides that
   // the action went through.
   const failed = (error, recorded) => {
+    if (!visit.isCurrent()) return false;
     container.textContent = "";
     const detail = `claim state unavailable: ${error && error.message ? error.message : error}`;
     const note = feedbackNode(recorded ? `${recorded} — ${detail}` : detail, "error");
@@ -794,7 +803,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
   };
 
   const refresh = (recorded) =>
-    loadDistributedConsole({ force: true }).then(
+    !visit.isCurrent() ? Promise.resolve(false) : loadDistributedConsole({ force: true }).then(
       (payload) => {
         render(payload);
         return true;
