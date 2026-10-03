@@ -174,9 +174,9 @@ test('discovers opaque destinations, bounds 1000-task page, renders text and sen
     id:`ORB-${i}`,title:'<script>evil()</script>'
   }))));
   await flush();
-  assert.equal(f.get('list').children.length,50);
+  assert.equal(f.get('list').querySelectorAll('button').length,50);
   assert.ok(performance.now()-start<1000);
-  f.get('list').children[1].handlers.click();
+  f.get('list').querySelectorAll('button')[1].handlers.click();
   assert.equal(f.last().params.arguments.workspace,'host-a/ws_shared');
   assert.equal(f.last().params.arguments.id,'ORB-1');
   f.answer(f.last(),f.detail());
@@ -207,8 +207,8 @@ test('late navigation reads cannot replace selected identity; hidden stops polli
     id:'wrong',title:'Late'
   }]));
   await flush();
-  assert.equal(f.get('list').children[0].dataset.entityKey,'ORB-1');
-  assert.equal(f.get('list').children[0].children[0].textContent,'Good');
+  assert.equal(f.get('list').querySelectorAll('button')[0].dataset.entityKey,'ORB-1');
+  assert.equal(f.get('list').querySelectorAll('button')[0].children[0].textContent,'Good');
   f.document.hidden=true;
   f.events.visibilitychange();
   assert.equal(f.timers.size,0);
@@ -228,7 +228,7 @@ test('guarded comment carries revision; lost response retries same identity and 
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.get('comment').value='My preserved comment';
@@ -258,7 +258,7 @@ test('changes requested is evidence-bound and never terminal rejection; review u
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.get('evidence').value='artifact:checks';
@@ -283,8 +283,8 @@ test('runs fixture bounds 100 rows and retains unavailable usage',async()=>{
     id:`jrun-${i}`,state:'failed'
   }))));
   await flush();
-  assert.equal(f.get('list').children.length,50);
-  f.get('list').children[0].handlers.click();
+  assert.equal(f.get('list').querySelectorAll('button').length,50);
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),{
     schema_version:1,workspace:'host-a/ws_shared',scope:'run',run:{
       id:'jrun-0',state:'failed',usage:{
@@ -349,7 +349,7 @@ test('server action refusal disables completion; generic errors retain retry ide
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.actions.complete={
     enabled:false,reason:'Active run must stop'
@@ -382,7 +382,7 @@ test('comment pagination and logs pagination carry independent bounded offsets',
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.comments_pagination={
     truncated:true,next_offset:50
@@ -399,7 +399,7 @@ test('comment pagination and logs pagination carry independent bounded offsets',
     id:'jrun-1',state:'running'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),{
     schema_version:1,workspace:'host-a/ws_shared',run:{
       id:'jrun-1',state:'running'
@@ -418,7 +418,7 @@ test('filter coverage is explicit and full history uses the history tool',async(
   await f.init();
   f.get('query').value='needle';
   f.get('priority').value='high';
-  f.get('status').value='review';
+  f.click('review');
   f.get('filters').handlers.submit({
     preventDefault(){
     }
@@ -504,7 +504,7 @@ test('refreshing a changed task never silently rebases an edit or verdict draft'
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('edit');
@@ -539,8 +539,8 @@ test('wrong destination responses preserve good rows and mark current state stal
   wrong.workspace='host-b/ws_shared';
   f.answer(f.last(),wrong);
   await flush();
-  assert.equal(f.get('list').children[0].dataset.entityKey,'ORB-1');
-  assert.equal(f.get('list').children[0].children[0].textContent,'Good');
+  assert.equal(f.get('list').querySelectorAll('button')[0].dataset.entityKey,'ORB-1');
+  assert.equal(f.get('list').querySelectorAll('button')[0].children[0].textContent,'Good');
   assert.ok(f.get('state').textContent.includes('Stale'));
 });
 test('missing model-context capability keeps a self-contained copyable reference',async()=>{
@@ -554,7 +554,7 @@ test('missing model-context capability keeps a self-contained copyable reference
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('send');
@@ -573,7 +573,7 @@ test('review binds observed PR head and disables a draft when that head changes'
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.reviewed_head='head-a';
   d.snapshot.task.job_run_id='jrun-evidence';
@@ -610,7 +610,7 @@ test('task navigation preserves editor identity and per-task review outcomes and
     id:'ORB-2',title:'Two'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('edit');
@@ -618,7 +618,7 @@ test('task navigation preserves editor identity and per-task review outcomes and
   f.get('evidence').value='execution_summary';
   f.get('rationale').value='Checked first';
   f.get('criterion-outcomes').querySelectorAll('select')[0].value='met';
-  f.get('list').children[1].handlers.click();
+  f.get('list').querySelectorAll('button')[1].handlers.click();
   f.answer(f.last(),f.detail('ORB-2','second-revision'));
   await flush();
   assert.equal(f.get('editor').hidden,true);
@@ -626,7 +626,7 @@ test('task navigation preserves editor identity and per-task review outcomes and
   f.click('edit');
   assert.notEqual(f.get('draft-title').value,'First entity draft');
   f.get('draft-title').value='Second entity draft';
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail('ORB-1','changed-first'));
   await flush();
   assert.equal(f.get('rationale').value,'Checked first');
@@ -664,7 +664,7 @@ test('structured conflict displays fresh state but preserves the original edit d
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('edit');
@@ -697,7 +697,7 @@ test('late write completion cannot retarget a different entity or erase newly ty
     id:'ORB-2',title:'Two'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.get('comment').value='Submitted';
@@ -706,7 +706,7 @@ test('late write completion cannot retarget a different entity or erase newly ty
     }
   });
   const write=f.last();
-  f.get('list').children[1].handlers.click();
+  f.get('list').querySelectorAll('button')[1].handlers.click();
   f.answer(f.last(),f.detail('ORB-2','rev2'));
   await flush();
   f.get('comment').value='Second task draft';
@@ -723,7 +723,7 @@ test('late write completion cannot retarget a different entity or erase newly ty
     id:'ORB-2',title:'Two'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   assert.equal(f.get('comment').value,'');
@@ -736,7 +736,7 @@ test('typing during a successful edit retains the newer unsent draft',async()=>{
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('edit');
@@ -782,7 +782,7 @@ test('a truncated final log page exposes truncation without an endless next page
     id:'jrun-1',state:'failed'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),{
     schema_version:1,workspace:'host-a/ws_shared',run:{
       id:'jrun-1',state:'failed'
@@ -845,11 +845,11 @@ test('refresh preserves criterion control identity for keyboard focus and focuse
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   const criterion=f.get('criterion-outcomes').querySelectorAll('select')[0];
-  f.document.activeElement=f.get('list').children[0];
+  f.document.activeElement=f.get('list').querySelectorAll('button')[0];
   f.click('refresh');
   const requests=f.posted.filter(m=>['orbit_task_list','orbit_task_show','orbit_workflow_run_list','orbit_workflow_run_show'].includes(m.params?.name)).slice(-2);
   for(const request of requests)f.answer(request,request.params.name==='orbit_task_show'?f.detail():f.list([{
@@ -857,7 +857,7 @@ test('refresh preserves criterion control identity for keyboard focus and focuse
   }]));
   await flush();
   assert.equal(f.get('criterion-outcomes').querySelectorAll('select')[0],criterion);
-  assert.equal(f.get('list').children[0].focused,true);
+  assert.equal(f.get('list').querySelectorAll('button')[0].focused,true);
 });
 test('chat context bounds task text and references while retaining authoritative entity identity',async()=>{
   const f=fixture();
@@ -867,7 +867,7 @@ test('chat context bounds task text and references while retaining authoritative
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.task.title='x'.repeat(100000);
   d.snapshot.task.description='complete logs'.repeat(100000);
@@ -897,7 +897,7 @@ test('truncated task projection warns and honours disabled backend actions',asyn
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.content_truncated=true;
   d.snapshot.truncated_fields=['description'];
@@ -926,7 +926,7 @@ test('record-only acceptance is available with review authority and never asks f
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.actions.complete={
     enabled:false,reason:'Operator capability required'
@@ -953,7 +953,7 @@ test('bounded task rows visibly disclose truncation and omitted run identity',as
     id:'ORB-1',title:'Clipped title',title_truncated:true,crew:'Clipped crew',crew_truncated:true,relations:[],relations_total:80,relations_truncated:true,dependencies:[],dependencies_total:70,dependencies_truncated:true,job_run_id_omitted:true
   }]));
   await flush();
-  const summary=f.get('list').children[0].textContent;
+  const summary=f.get('list').querySelectorAll('button')[0].textContent;
   assert.ok(summary.includes('Truncated: title, crew'));
   assert.ok(summary.includes('of 80'));
   assert.ok(summary.includes('of 70'));
@@ -967,7 +967,7 @@ test('a failed current read clears the reference and copy action without claimin
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('send');
@@ -994,7 +994,7 @@ test('review comment JSON is readable literal text without granting action autho
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   d.snapshot.actions.complete={
     enabled:false,reason:'No operator authority'
@@ -1030,7 +1030,7 @@ test('malformed verdict JSON and ordinary comments preserve their literal body',
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   const d=f.detail();
   const malformed='desktop_review_verdict={broken <svg onload=evil()>\nrequest_id=original';
   const ordinary='<a href="javascript:evil()">click</a>';
@@ -1058,7 +1058,7 @@ test('proven precommit refusal preserves editable draft and permits correction w
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.click('edit');
@@ -1119,7 +1119,7 @@ test('canonical run projection displays separate timestamps and step truncation 
     id:'jrun-real',run_id:'jrun-real',job_id:'ship',state:'failed',created_at:'2026-10-03T01:00:00Z',started_at:'2026-10-03T01:01:00Z'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),{
     schema_version:1,workspace:'host-a/ws_shared',observed_at:'2026-10-03T01:10:00Z',scope:'run',run:{
       id:'jrun-real',run_id:'jrun-real',job_id:'ship',state:'failed',attempt:1,scheduled_at:'2026-10-03T00:59:00Z',created_at:'2026-10-03T01:00:00Z',started_at:'2026-10-03T01:01:00Z',finished_at:'2026-10-03T01:09:00Z',duration_ms:480000,steps:Array.from({
@@ -1164,7 +1164,7 @@ test('accepted write with failed snapshot remains successful and reconciles the 
     id:'ORB-1',title:'Task'
   }]));
   await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),f.detail());
   await flush();
   f.get('comment').value='One accepted comment';
@@ -1243,12 +1243,12 @@ test('canonical run rows show observed state attempt and duration without treati
     id:'jrun-running',run_id:'jrun-running',state:'running',attempt:1,duration_ms:null,created_at:'2026-10-03T01:00:00Z'
   }]));
   await flush();
-  const failed=f.get('list').children[0].textContent;
+  const failed=f.get('list').querySelectorAll('button')[0].textContent;
   assert.ok(failed.includes('failed'));
   assert.ok(failed.includes('Attempt 2'));
   assert.ok(failed.includes('1s'));
-  assert.equal(f.get('list').children[0].children[0].textContent,'Workflow run');
-  const running=f.get('list').children[1].textContent;
+  assert.equal(f.get('list').querySelectorAll('button')[0].children[0].textContent,'Workflow run');
+  const running=f.get('list').querySelectorAll('button')[1].textContent;
   assert.ok(running.includes('running'));
   assert.ok(running.includes('Duration unavailable'));
   assert.ok(!running.includes('Duration 0 ms'));
@@ -1257,10 +1257,10 @@ test('canonical run rows show observed state attempt and duration without treati
 test('a different selected entity clears prior detail through a failed read and retry',async()=>{
   const f=fixture();await f.init();f.click('runs');
   f.answer(f.last(),f.list([{id:'jrun-one',title:'First run'},{id:'jrun-two',title:'Second run'}]));await flush();
-  f.get('list').children[0].handlers.click();
+  f.get('list').querySelectorAll('button')[0].handlers.click();
   f.answer(f.last(),{schema_version:1,workspace:'host-a/ws_shared',run:{id:'jrun-one',title:'First run',state:'running',steps:[{step_id:'old-step'}]}});await flush();
   assert.equal(f.get('title').textContent,'First run');
-  f.get('list').children[1].handlers.click();
+  f.get('list').querySelectorAll('button')[1].handlers.click();
   assert.equal(f.get('title').textContent,'jrun-two');
   assert.match(f.get('identity').textContent,/Loading/);
   assert.ok(!f.get('details').textContent.includes('old-step'));
@@ -1282,7 +1282,7 @@ test('a different selected entity clears prior detail through a failed read and 
 test('switching views clears unrelated detail and stale rows while preserving comment drafts', async()=>{
   const f=fixture(); await f.init();
   f.click('refresh'); f.answer(f.last(),f.list([{id:'ORB-1',title:'One'}])); await flush();
-  f.get('list').children[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
+  f.get('list').querySelectorAll('button')[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
   f.get('comment').value='unsent comment';
   f.click('runs');
   assert.equal(f.get('panel').hidden,true);
@@ -1291,13 +1291,113 @@ test('switching views clears unrelated detail and stale rows while preserving co
   assert.ok(!f.posted.slice(-1).some(m=>m.params?.name==='orbit_task_show'));
   f.answer(f.last(),f.list()); await flush();
   f.click('tasks'); f.answer(f.last(),f.list([{id:'ORB-1',title:'One'}])); await flush();
-  f.get('list').children[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
+  f.get('list').querySelectorAll('button')[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
   assert.equal(f.get('comment').value,'unsent comment');
 });
-test('task filters expose blocked and terminal statuses, with human readable labels',async()=>{
-  const f=fixture(); await f.init(); f.click('tasks');
-  for(const status of ['blocked','rejected','archived','someday']) assert.ok(f.get('status').options.some(o=>o.value===status));
-  assert.equal(f.get('status').options.find(o=>o.value==='in_progress').textContent,'In progress');
+test('task status selection covers active work, expanded sets and All before grouping and pagination',async()=>{
+  const f=fixture(); await f.init();
+  const active=['in-progress','review','blocked','backlog'];
+  const terminal=['done','rejected','archived'];
+  const excluded=['proposed',...terminal,'someday'];
+  // More than a page of excluded newest tasks guards against browser filtering
+  // a mixed first page and silently losing matching older work.
+  const tasks=[
+    ...Array.from({length:65},(_,i)=>({id:`closed-${i}`,title:'Needle hidden',status:excluded[i%excluded.length],priority:'high'})),
+    ...Array.from({length:61},(_,i)=>({id:`active-${i}`,title:`Needle active ${i}`,status:active[i%active.length].replaceAll('-','_'),priority:'high'})),
+    ...Array.from({length:4},(_,i)=>({id:`low-${i}`,title:'Needle low',status:'backlog',priority:'low'})),
+    ...Array.from({length:5},(_,i)=>({id:`other-${i}`,title:'Other title',status:'backlog',priority:'high'})),
+  ];
+  const inputs=()=>f.get('task-status-options').querySelectorAll('input');
+  const included=()=>inputs().filter(input=>input.checked).map(input=>input.value).sort();
+  const headings=()=>f.get('list').querySelectorAll('h3').map(h=>h.dataset.status);
+  const answerList=async()=>{
+    const request=f.last();
+    assert.equal(request.params.name,'orbit_task_list');
+    const a=request.params.arguments;
+    const statuses=a.status?.split(',');
+    const matches=tasks.filter(t=>(!statuses||statuses.includes(t.status.replaceAll('_','-')))&&(!a.priority||t.priority===a.priority)&&(!a.search||(t.id+' '+t.title).toLowerCase().includes(a.search.toLowerCase())));
+    const items=matches.slice(a.offset,a.offset+a.limit);
+    f.answer(request,{...f.list(items),total:matches.length,pagination:{total:matches.length,offset:a.offset,limit:a.limit,next_offset:a.offset+items.length<matches.length?a.offset+items.length:null}});
+    await flush();
+    assert.equal(f.get('list').querySelectorAll('button').length,items.length);
+    return {a,items,total:matches.length};
+  };
+  assert.deepEqual(f.last().params.arguments.status.split(',').sort(),active.slice().sort(),'The explicit desktop default excludes proposed and terminal tasks');
+  assert.deepEqual(included(),active.slice().sort());
+  assert.equal(f.get('active-statuses')['aria-pressed'],'true');
+  f.click('refresh');
+  assert.equal((await answerList()).total,70);
+  assert.deepEqual(headings(),['review','blocked','in-progress','backlog']);
+  const firstGroup=f.get('list').querySelectorAll('h3')[0];
+  assert.equal(firstGroup.children[1].textContent,'13');
+  assert.ok(f.get('list').querySelectorAll('button').every(row=>row.dataset.entityKey.startsWith('active-')));
+  f.get('query').value='needle'; f.get('priority').value='high';
+  f.get('filters').handlers.submit({preventDefault(){}});
+  let page=await answerList();
+  assert.equal(page.total,61);
+  assert.equal(page.a.search,'needle'); assert.equal(page.a.priority,'high');
+  assert.match(f.get('pagination').textContent,/1–50 of 61/);
+  f.click('next'); page=await answerList();
+  assert.equal(page.a.offset,50); assert.equal(page.items.length,11);
+  assert.match(f.get('pagination').textContent,/51–61 of 61/);
+  assert.equal(f.get('next').disabled,true);
+  f.click('previous'); assert.equal((await answerList()).a.offset,0);
+  for(const status of ['proposed','done']){
+    const input=inputs().find(input=>input.value===status);
+    input.checked=true; input.handlers.change();
+    page=await answerList(); assert.equal(page.a.offset,0);
+  }
+  assert.equal(page.total,87);
+  assert.deepEqual(included(),[...active,'proposed','done'].sort());
+  assert.deepEqual(headings(),['proposed','review','blocked','in-progress','backlog','done']);
+  const order=f.get('list').querySelectorAll('button').map(row=>row.dataset.entityKey);
+  assert.deepEqual(order.slice(0,13),Array.from({length:13},(_,i)=>`closed-${i*5}`),'Grouping preserves server order within each status');
+  f.click('refresh'); page=await answerList();
+  assert.equal(page.total,87); assert.equal(page.a.search,'needle'); assert.equal(page.a.priority,'high');
+  f.click('next'); page=await answerList(); assert.equal(page.total,87); assert.equal(page.a.offset,50);
+  f.click('all-statuses'); page=await answerList();
+  assert.ok(!('status' in page.a)); assert.equal(page.total,126); assert.equal(page.a.offset,0);
+  assert.equal(f.get('all-statuses')['aria-pressed'],'true');
+  assert.deepEqual(included(),[...active,...excluded].sort());
+  assert.deepEqual(headings(),['proposed','someday','done','rejected','archived']);
+  f.click('review'); assert.equal(f.last().params.arguments.status,'review');
+  f.answer(f.last(),f.list()); await flush();
+  assert.equal(f.get('task-status-filter').hidden,true);
+  f.click('runs'); assert.equal(f.last().params.name,'orbit_workflow_run_list');
+  assert.ok(!('status' in f.last().params.arguments));
+  f.answer(f.last(),f.list()); await flush();
+  f.click('tasks'); page=await answerList(); assert.ok(!('status' in page.a));
+  f.click('active-statuses'); await answerList();
+  assert.deepEqual(included(),active.slice().sort());
+  const row=f.get('list').querySelectorAll('button')[0];
+  assert.equal(row.tag,'button'); assert.equal(row.type,'button');
+  f.document.activeElement=row;
+  f.click('refresh'); await answerList();
+  assert.equal(f.get('list').querySelectorAll('button')[0].focused,true);
+  row.handlers.click();
+  assert.equal(f.last().params.arguments.id,row.dataset.entityKey);
+  f.answer(f.last(),f.detail(row.dataset.entityKey)); await flush();
+  assert.equal(f.get('panel').hidden,false); assert.equal(f.get('title').focused,true);
+  f.click('close');
+  assert.ok(f.get('list').querySelectorAll('button').every(row=>row['aria-expanded']==='false'));
+  f.get('query').value='no such task'; f.get('filters').handlers.submit({preventDefault(){}});
+  page=await answerList(); assert.equal(page.total,0);
+  assert.deepEqual(headings(),[]); assert.equal(f.get('next').disabled,true);
+  assert.ok(f.get('list').children[0].textContent.length>0,'An empty matching dataset has a visible empty state');
+});
+
+test('removing the final task status keeps a nonempty server selection',async()=>{
+  const f=fixture(); await f.init();
+  const inputs=f.get('task-status-options').querySelectorAll('input');
+  for(const input of inputs.filter(input=>input.checked&&input.value!=='review')){
+    input.checked=false; input.handlers.change();
+    f.answer(f.last(),f.list()); await flush();
+  }
+  const review=inputs.find(input=>input.value==='review');
+  const count=f.posted.length;
+  review.checked=false; review.handlers.change();
+  assert.equal(review.checked,true); assert.equal(f.posted.length,count);
+  assert.equal(f.last().params.arguments.status,'review');
 });
 
 const drainRead=(workspace='host-a/ws_shared',capacity={})=>({schema_version:1,workspace,scope:'drain',controls_authorized:true,capacity:{active_leaf_runs:2,max_active_leaf_runs:4,free_slots:2,...capacity},tasks:[{task_id:'ORB-1',eligible:true},{task_id:'ORB-2',eligible:false,reason:'context_lock_conflict'}]});
@@ -1342,7 +1442,7 @@ test('a crew changed during create or edit remains an unsent draft after success
   const f=fixture();await f.init();
   if(mode==='edit'){
    f.click('refresh');f.answer(f.last(),f.list([{id:'ORB-1',title:'Task'}]));await flush();
-   f.get('list').children[0].handlers.click();f.answer(f.last(),f.detail());await flush();f.click('edit');
+   f.get('list').querySelectorAll('button')[0].handlers.click();f.answer(f.last(),f.detail());await flush();f.click('edit');
   }else f.click('create');
   f.get('draft-title').value='Submitted title';f.get('draft-description').value='Description';
   f.get('draft-criteria').value='Works';f.get('draft-priority').value='medium';f.get('draft-crew').value='sol';

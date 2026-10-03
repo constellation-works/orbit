@@ -13,6 +13,7 @@ const tasks=[
  {id:'ORB-202',title:'Verify Markdown and review evidence safely',status:'review',priority:'high',crew:'astra',updated_at:now,dependencies:[]},
  {id:'ORB-203',title:'Wait for the current delivery to release shared files',status:'blocked',priority:'medium',crew:'sol',updated_at:now,dependencies:['ORB-201']},
  {id:'ORB-204',title:'Keep narrow layouts readable with a long task title that wraps without clipping',status:'proposed',priority:'medium',crew:'luna',updated_at:now,dependencies:[]},
+ {id:'ORB-206',title:'Queue the next desktop improvement',status:'backlog',priority:'medium',crew:'sol',updated_at:now,dependencies:[]},
  {id:'ORB-205',title:'Make workspace changes preserve unsent drafts',status:'done',priority:'medium',crew:'sol',updated_at:now,dependencies:[]},
 ];
 const description='## A calmer daily workflow\n\nUse **clear hierarchy** and readable details, aligned with the Orbit dashboard.\n\n- Keep host and workspace visible\n- Preserve `unsent drafts` during refresh\n- Make the next action easy to find\n\n### Validation\n\n| Surface | Evidence |\n| --- | --- |\n| Tasks | Filter, open, edit |\n| Auto-drain | Readiness and guarded controls |\n\n```rust\nlet safe = "content stays data";\n```\n\n[Project](https://github.com/constellation-works/orbit)\n\n<script>window.__unsafe=true</script>\n<img src=x onerror="window.__unsafe=true">\n[unsafe](javascript:alert(1))';
@@ -22,8 +23,9 @@ function read(args){
   if(args.scope==='drain')return {schema_version:1,workspace,controls_authorized:true,capacity:{active_leaf_runs:live?2:0,max_active_leaf_runs:4,free_slots:live?2:4,drain_run_id:live,admissions_stopped:stopped,ends_at:live?new Date(Date.now()+3600000).toISOString():null},tasks:[{task_id:'ORB-201',eligible:true},{task_id:'ORB-202',eligible:true},{task_id:'ORB-203',eligible:false,reason:'context_lock_conflict',blocking_task_ids:['ORB-201']}]};
   if(args.scope==='task')return detail(args.id);
   if(args.scope==='run')return {schema_version:1,workspace,observed_at:now,run:{id:args.id,title:'Deliver eligible backlog',job_id:'workspace_auto',state:stopped?'success':'running',attempt:1,created_at:now,started_at:now,duration_ms:81234,steps:[{step_id:'admit',state:'success'},{step_id:'deliver',state:'running'}]},logs:{items:[],total:0}};
-  const items=args.scope==='runs'?[{id:'jrun-fixture-1',job_id:'workspace_auto',state:'running',attempt:1,duration_ms:81234,created_at:now},{id:'jrun-fixture-2',job_id:'task_pr_pipeline',state:'success',attempt:1,duration_ms:382900,created_at:now}]:tasks.filter(t=>(!args.status||t.status===args.status)&&(!args.priority||t.priority===args.priority)&&(!args.search||(t.id+' '+t.title).toLowerCase().includes(args.search.toLowerCase())));
-  return {schema_version:1,workspace,items,total:items.length,pagination:{next_offset:null,total:items.length}};
+  const items=args.scope==='runs'?[{id:'jrun-fixture-1',job_id:'workspace_auto',state:'running',attempt:1,duration_ms:81234,created_at:now},{id:'jrun-fixture-2',job_id:'task_pr_pipeline',state:'success',attempt:1,duration_ms:382900,created_at:now}]:tasks.filter(t=>(!args.status||args.status.split(',').includes(t.status.replaceAll('_','-')))&&(!args.priority||t.priority===args.priority)&&(!args.search||(t.id+' '+t.title).toLowerCase().includes(args.search.toLowerCase())));
+  const offset=args.offset||0,limit=args.limit||50;
+  return {schema_version:1,workspace,items:items.slice(offset,offset+limit),total:items.length,pagination:{offset,limit,next_offset:offset+limit<items.length?offset+limit:null,total:items.length}};
 }
 function automate(args){
   const receipt={schema_version:1,workspace,action:args.action,kind:args.kind,name:args.name};
