@@ -322,6 +322,11 @@ pub enum OrbitError {
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
     )]
     TaskCompletionLiveRun { task_id: String, run_id: String },
+    /// A guarded desktop mutation lost its task content compare-and-set.
+    #[error(
+        "task '{task_id}' revision conflict; refresh authoritative state and preserve your draft"
+    )]
+    TaskRevisionConflict { task_id: String },
     /// A resume was refused because the source run's retry lineage already
     /// has a non-terminal run. Raised atomically by the store insert on the
     /// shared resume path, so the CLI, MCP, and HTTP surfaces refuse the

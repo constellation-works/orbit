@@ -119,7 +119,19 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         .expect("resources/list");
     assert_eq!(resources.resources.len(), 1);
     let uri = &resources.resources[0].uri;
-    assert_eq!(uri, "ui://orbit/task-panel/v1/index.html");
+    assert_eq!(uri, "ui://orbit/control-center/v1/index.html");
+    let legacy = client
+        .peer()
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            "ui://orbit/task-panel/v1/index.html",
+        ))
+        .await
+        .expect("legacy resource remains reachable");
+    let legacy_wire = serde_json::to_value(legacy).expect("legacy resource JSON");
+    assert_eq!(
+        legacy_wire["contents"][0]["uri"],
+        "ui://orbit/task-panel/v1/index.html"
+    );
     let resource = client
         .peer()
         .read_resource(rmcp::model::ReadResourceRequestParams::new(uri))
@@ -632,4 +644,153 @@ async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
         );
         server_task.abort();
     }
+}
+
+/// Simulates selector translation by the real workspace/federation host.
+struct DesktopWireHost {
+    calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
+}
+impl McpHost for DesktopWireHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        let mut task_show = definition("orbit.task.show");
+        task_show.annotations = Some(McpToolAnnotations::READ_ONLY);
+        let mut definitions = vec![
+            task_show,
+            definition("orbit.desktop.read"),
+            definition("orbit.desktop.task.snapshot"),
+            definition("orbit.desktop.task.write"),
+        ];
+        for definition in &mut definitions {
+            definition.schema.builtin = true;
+        }
+        Ok(definitions)
+    }
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((name.into(), input.clone(), context));
+        if input["workspace"] != "host-qualified:opaque-workspace" {
+            return Err(OrbitError::UnknownSelector(
+                "unknown desktop destination".into(),
+            ));
+        }
+        Ok(
+            json!({"workspace":"/owner/local/checkout","schema_version":1,"run":{"run_id":"jrun-proof"},"snapshot":{"revision":"revision-1","task":{"id":"TST-1"}}}),
+        )
+    }
+}
+
+#[tokio::test]
+async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority() {
+    let host = Arc::new(DesktopWireHost {
+        calls: Mutex::new(Vec::new()),
+    });
+    let trusted = ToolSessionContext::default();
+    let server = OrbitToolServer::new_with_context(host.clone(), trusted.clone());
+    let (client_io, server_io) = duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(tokio::io::split(server_io))
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
+    });
+    let mut info = ClientInfo::default();
+    info.meta = Some(Meta(
+        json!({"orbit":{"workspace":"session-default","effective_capabilities":["operator"]}})
+            .as_object()
+            .unwrap()
+            .clone(),
+    ));
+    let client = info.serve(tokio::io::split(client_io)).await.unwrap();
+    for name in [
+        "orbit_desktop_read",
+        "orbit_desktop_task_snapshot",
+        "orbit_desktop_task_write",
+    ] {
+        let response = client
+            .peer()
+            .call_tool(call(
+                name,
+                json!({"workspace":"host-qualified:opaque-workspace","scope":"tasks","id":"TST-1"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.is_error, Some(false), "{response:?}");
+        assert_eq!(
+            response.structured_content.unwrap()["workspace"],
+            "host-qualified:opaque-workspace",
+            "opaque route survives owner path translation"
+        );
+        let missing = client
+            .peer()
+            .call_tool(call(name, json!({"id":"TST-1"})))
+            .await
+            .unwrap();
+        assert_eq!(
+            missing.is_error,
+            Some(true),
+            "session default never substitutes for explicit desktop selection"
+        );
+    }
+    let opened = client
+        .peer()
+        .call_tool(call(
+            "orbit_ui_open",
+            json!({"workspace":"host-qualified:opaque-workspace"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        opened.structured_content.unwrap()["workspace"],
+        "host-qualified:opaque-workspace"
+    );
+    assert_eq!(
+        host.calls.lock().unwrap().len(),
+        3,
+        "opening a selector shell performs no default read"
+    );
+    let inspected = client
+        .peer()
+        .call_tool(call(
+            "orbit_ui_inspect",
+            json!({"workspace":"host-qualified:opaque-workspace","id":"jrun-proof","kind":"run"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(inspected.is_error, Some(false));
+    assert_eq!(
+        inspected.structured_content.unwrap()["workspace"],
+        "host-qualified:opaque-workspace"
+    );
+    {
+        let calls = host.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[3].0, "orbit.desktop.read");
+        assert_eq!(calls[3].1["scope"], "run");
+        assert_eq!(
+            calls[3].2.effective_capabilities, trusted.effective_capabilities,
+            "UI claims cannot promote session authority"
+        );
+        assert!(calls[3].2.trace_id.is_some());
+    }
+    let mismatch = client
+        .peer()
+        .call_tool(call(
+            "orbit_ui_inspect",
+            json!({"workspace":"host-qualified:opaque-workspace","id":"jrun-other","kind":"run"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(mismatch.is_error, Some(true));
+    client.cancel().await.unwrap();
+    server_task.await.unwrap();
 }

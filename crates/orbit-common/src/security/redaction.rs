@@ -369,6 +369,9 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
                 run_id: redact_all(&run_id),
             }
         }
+        OrbitError::TaskRevisionConflict { task_id } => OrbitError::TaskRevisionConflict {
+            task_id: redact_all(&task_id),
+        },
         OrbitError::ResumeRunInFlight {
             source_run_id,
             run_id,

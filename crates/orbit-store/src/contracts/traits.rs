@@ -242,6 +242,50 @@ pub trait TaskStoreBackend: Send + Sync {
         ))
     }
 
+    /// Payload-bound task creation using the existing permanent allocation action key.
+    fn create_desktop_task(
+        &self,
+        _params: TaskCreateParams,
+        _key: &str,
+        _digest: &str,
+    ) -> Result<(Task, bool), OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop creation unsupported by backend".into(),
+        ))
+    }
+    /// Reconcile an accepted creation; a reserved but unpublished bundle returns None.
+    fn lookup_desktop_creation(
+        &self,
+        _key: &str,
+        _digest: &str,
+    ) -> Result<Option<Task>, OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop creation unsupported by backend".into(),
+        ))
+    }
+    /// Coherently read a task without claiming write authority or creating a write lock.
+    fn read_desktop_task(&self, _id: &str) -> Result<DesktopTaskRead, OrbitError> {
+        Err(OrbitError::Store(
+            "coherent desktop reads unsupported by backend".into(),
+        ))
+    }
+    /// Content revision including documents, history, comments and artifact manifest.
+    fn desktop_task_revision(&self, _id: &str) -> Result<String, OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop writes unsupported by backend".into(),
+        ))
+    }
+    /// One locked bundle commit for edits, comments and review verdict/status.
+    fn apply_desktop_task_mutation(
+        &self,
+        _id: &str,
+        _params: &DesktopTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        Err(OrbitError::Store(
+            "guarded desktop writes unsupported by backend".into(),
+        ))
+    }
+
     /// Status counts per complexity bucket from the generated task index.
     /// Default is empty; the v2 store answers from SQLite without bundle reads.
     fn task_completion_by_complexity(&self) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {

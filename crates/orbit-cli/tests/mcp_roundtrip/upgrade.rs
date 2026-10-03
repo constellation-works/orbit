@@ -188,6 +188,22 @@ fn persistent_client_upgrade_refusal_preserves_inode_schema_and_audited_calls() 
     assert_eq!(task["title"], "After refused upgrade");
     assert_eq!(audit_count(&workspace, "orbit.task.add"), 1);
     assert_eq!(audit_count(&workspace, "orbit.workspace.list"), 2);
+    let snapshot = client.call_tool_ok(
+        "orbit_desktop_task_snapshot",
+        json!({"workspace":"ws_mcp-roundtrip","id":task["id"]}),
+    );
+    assert_eq!(snapshot["task"]["id"], task["id"]);
+    assert!(snapshot["revision"].is_string());
+    let comment = json!({"workspace":"ws_mcp-roundtrip","request_id":"upgrade-live-desktop-proof","operation":{"kind":"comment","id":task["id"],"expected_revision":snapshot["revision"],"comment":"Live desktop writes remain audited after refused upgrade"}});
+    let written = client.call_tool_ok("orbit_desktop_task_write", comment.clone());
+    let replay = client.call_tool_ok("orbit_desktop_task_write", comment);
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(
+        written["snapshot"]["comments_total"],
+        replay["snapshot"]["comments_total"]
+    );
+    assert_eq!(audit_count(&workspace, "orbit.desktop.task.snapshot"), 1);
+    assert_eq!(audit_count(&workspace, "orbit.desktop.task.write"), 2);
     drop(client);
     let ready = preflight(&workspace);
     assert!(ready.status.success(), "{ready:?}");

@@ -48,6 +48,20 @@ impl OrbitRuntime {
         // only place a governed tool operation is authorized — a per-command
         // guard would be reopened by the next entry point that skips it.
         self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
+        // A desktop run projection retains the canonical run reader's authority
+        // on every entry point, including an MCP session without process grants.
+        if name == "orbit.desktop.read"
+            && matches!(
+                input.get("scope").and_then(Value::as_str),
+                Some("runs" | "run")
+            )
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.run.show",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
 
         if !tool_context.allowed_tools.is_empty()
             && !tool_allowed(name, &tool_context.allowed_tools)

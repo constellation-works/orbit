@@ -196,6 +196,31 @@ impl TaskStoreBackend for TaskV2Store {
         self.apply_atomic_task_mutation(id, params)
     }
 
+    fn create_desktop_task(
+        &self,
+        params: TaskCreateParams,
+        key: &str,
+        digest: &str,
+    ) -> Result<(Task, bool), OrbitError> {
+        self.create_desktop_task(params, key, digest)
+    }
+    fn lookup_desktop_creation(&self, key: &str, digest: &str) -> Result<Option<Task>, OrbitError> {
+        self.lookup_desktop_creation(key, digest)
+    }
+    fn read_desktop_task(&self, id: &str) -> Result<crate::contracts::DesktopTaskRead, OrbitError> {
+        self.read_desktop_task(id)
+    }
+    fn desktop_task_revision(&self, id: &str) -> Result<String, OrbitError> {
+        self.desktop_task_revision(id)
+    }
+    fn apply_desktop_task_mutation(
+        &self,
+        id: &str,
+        params: &crate::contracts::DesktopTaskMutationParams,
+    ) -> Result<AtomicTaskMutationOutcome, OrbitError> {
+        self.apply_desktop_task_mutation(id, params)
+    }
+
     fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<crate::contracts::TaskCompletionByComplexity>, OrbitError> {

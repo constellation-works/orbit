@@ -1,25 +1,16 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Orbit task panel</title>
-<style>
-/* ORBIT_PANEL_STYLE */</style>
-</head>
-<body>
-<h1>Orbit task panel</h1>
-<form id="selection">
-<label for="workspace">Workspace selector</label><input id="workspace" required autocomplete="off">
-<label for="task-key">Public task key</label><input id="task-key" required autocomplete="off">
-<button id="read" type="submit" disabled>Read task</button>
-</form>
+<title>Orbit control center</title><style>/* ORBIT_PANEL_STYLE */</style></head>
+<body><header><h1>Orbit</h1><label>Destination <select id="workspace" aria-label="Host and workspace" disabled><option value="">Discovering destinations…</option></select></label><button id="refresh" disabled>Refresh</button><span id="connection">Connecting</span></header>
 <p id="state" role="status" aria-live="polite">Connecting to host…</p>
-<p id="identity"></p>
-<h2 id="title"></h2><pre id="details"></pre>
-<button id="send" type="button" disabled>Send context to chat</button>
-<pre id="reference" tabindex="0" aria-label="Task reference"></pre>
-<script>/* ORBIT_PANEL_SCRIPT */</script>
-</body>
-</html>
+<nav aria-label="Orbit views"><button id="tasks" aria-pressed="true">Tasks</button><button id="runs" aria-pressed="false">Runs</button><button id="review" aria-pressed="false">Review</button></nav>
+<form id="filters"><label>Displayed task fields <input id="query" type="search" placeholder="Title and public key"></label><label>Status <select id="status"><option value="">All</option><option>proposed</option><option>backlog</option><option>in_progress</option><option>review</option><option>done</option></select></label><label>Priority <select id="priority"><option value="">All</option><option>low</option><option>medium</option><option>high</option><option>critical</option></select></label><button>Apply</button><button id="history" type="button">Search full history</button></form>
+<div id="history-results" hidden><h2>History search</h2><pre id="history-text"></pre></div>
+<main><section aria-label="Results"><div class="row"><h2 id="list-title">Tasks</h2><button id="create" disabled>New proposed task</button></div><div id="list" aria-live="polite"></div><p id="pagination"></p><button id="previous" disabled>Previous</button><button id="next" disabled>Next</button></section>
+<section id="panel" aria-label="Selected entity" hidden><div class="row"><h2 id="title" tabindex="-1"></h2><button id="close" aria-label="Close detail">Close</button></div><p id="identity"></p><p id="projection-warning" role="status" hidden></p><div id="details"></div><p id="detail-pagination"></p><button id="edit" disabled>Edit task</button><button id="send" disabled>Send context to chat</button><button id="copy" hidden>Copy reference</button><pre id="reference" tabindex="0"></pre><div class="row"><button id="previous-comments" hidden>Previous comments</button><button id="more-comments" hidden>More comments</button><button id="previous-history" hidden>Previous history</button><button id="more-history" hidden>More history</button><button id="previous-artifacts" hidden>Previous artifacts</button><button id="more-artifacts" hidden>More artifacts</button><button id="previous-logs" hidden>Previous logs</button><button id="more-logs" hidden>More logs</button></div>
+<form id="comment-form" hidden><label>Append comment <textarea id="comment" required maxlength="16000"></textarea></label><button id="comment-submit">Append comment</button></form>
+<form id="review-form" hidden><h3>Evidence-bound review</h3><div id="criterion-outcomes"></div><label>Evidence references, one per line <textarea id="evidence" required></textarea></label><label>Rationale / findings <textarea id="rationale" required></textarea></label><p id="review-reason"></p><button id="record-accept" type="button" disabled>Record acceptance · keep in review</button><button id="accept" type="button" disabled>Accept and mark done</button><button id="changes" type="button" disabled>Request changes · keep in review</button></form>
+</section></main>
+<section id="editor" hidden aria-label="Task editor"><h2 id="editor-title">New proposed task</h2><form id="task-form"><label>Title <input id="draft-title" required maxlength="500"></label><label>Description <textarea id="draft-description" maxlength="64000"></textarea></label><label>Acceptance criteria, one per line <textarea id="draft-criteria" required></textarea></label><label>Priority <select id="draft-priority"><option>medium</option><option>low</option><option>high</option><option>critical</option></select></label><label>Crew <input id="draft-crew"></label><button id="save">Save proposed task</button><button id="cancel-edit" type="button">Close editor · keep draft</button></form></section>
+<script>/* ORBIT_PANEL_SCRIPT */</script></body></html>

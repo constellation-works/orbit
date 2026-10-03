@@ -31,7 +31,7 @@ impl TaskRegistryStore {
         self.task_action(workspace, key, digest)?
             .ok_or_else(|| OrbitError::Store("task action reservation disappeared".into()))
     }
-    fn task_action(
+    pub(crate) fn task_action(
         &self,
         workspace: &str,
         key: &str,

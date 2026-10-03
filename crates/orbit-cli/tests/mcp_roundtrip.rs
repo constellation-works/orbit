@@ -5410,7 +5410,7 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
         assert_eq!(
             tool["_meta"]["ui"]["resourceUri"],
-            "ui://orbit/task-panel/v1/index.html"
+            "ui://orbit/control-center/v1/index.html"
         );
         assert_eq!(
             tool["_meta"]["openai/ui"]["entrypoints"][0]["type"],
@@ -5519,10 +5519,13 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
     assert_eq!(bare["code"], "unknown_selector");
     let static_resource = federated.request(
         "resources/read",
-        json!({"uri":"ui://orbit/task-panel/v1/index.html"}),
+        json!({"uri":"ui://orbit/control-center/v1/index.html"}),
     );
     assert_eq!(
         static_resource["result"]["contents"][0]["mimeType"],
         "text/html;profile=mcp-app"
     );
 }
+
+#[path = "mcp_roundtrip/desktop.rs"]
+mod desktop;

@@ -35,7 +35,7 @@ pub(crate) struct TaskRecordService<'a> {
 }
 
 impl TaskRecordService<'_> {
-    fn index_task(&self, task: &Task) {
+    pub(crate) fn index_task(&self, task: &Task) {
         if let Err(error) = self
             .lexical_index
             .store()
@@ -63,6 +63,21 @@ impl TaskRecordService<'_> {
         };
         self.index_task(&task);
         Ok(task)
+    }
+
+    pub(crate) fn create_guarded(
+        &self,
+        params: TaskCreateParams,
+        key: Option<&str>,
+        digest: Option<&str>,
+    ) -> Result<(Task, bool), OrbitError> {
+        if let (Some(key), Some(digest)) = (key, digest) {
+            let result = self.store.create_desktop_task(params, key, digest)?;
+            self.index_task(&result.0);
+            Ok(result)
+        } else {
+            self.create_with_key(params, key).map(|task| (task, false))
+        }
     }
 
     pub(crate) fn update(

@@ -12,7 +12,13 @@ import sys
 import threading
 
 ROOT = Path(__file__).resolve().parents[1]
-URI = "ui://orbit/task-panel/v1/index.html"
+URI = "ui://orbit/control-center/v1/index.html"
+LEGACY_URI = "ui://orbit/task-panel/v1/index.html"
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
 
 
 def main():
@@ -64,19 +70,14 @@ def main():
     routed = json.loads(run([str(binary), "workspace", "show", "--format", "json"]))
     if routed["checkout"]["repo_root"] != str(work):
         raise RuntimeError("fixture routing mismatch; no task authored")
-    task = json.loads(run([str(binary), "tool", "run", "orbit.task.add", "--input", json.dumps({
-        "workspace": str(work), "title": "MCP Apps disposable task <script>not executable</script>",
-        "description": "Read-only native probe fixture", "complexity": "low", "model": "codex"
-    })]))
-    task_key = task["id"]
     lines = queue.Queue(maxsize=256)
     stderr = (output / "server-stderr.log").open("w")
     process = subprocess.Popen([str(binary), "mcp", "serve"], cwd=work, env=env,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True)
-    def receive():
-        for line in process.stdout:
+    def receive(stream):
+        for line in stream:
             lines.put(line)
-    threading.Thread(target=receive, daemon=True).start()
+    threading.Thread(target=receive, args=(process.stdout,), daemon=True).start()
     counter = 0
     def rpc(method, params):
         nonlocal counter
@@ -94,7 +95,19 @@ def main():
         result = response.get("result")
         if not result or result.get("isError"):
             raise RuntimeError(f"tool call failed: {response}")
+        require(isinstance(result.get("structuredContent"), dict), "structured tool response absent")
         return result["structuredContent"]
+    def refused(name, arguments):
+        response = rpc("tools/call", {"name": name, "arguments": arguments})
+        data = response.get("result", {}).get("structuredContent", {})
+        require("error" in response or response.get("result", {}).get("isError") is True
+                or (data.get("mutation_applied") is False and data.get("refusal")),
+                f"expected refusal for {name}: {response}")
+    def read(scope, **fields):
+        return call("orbit_desktop_read", {"workspace": str(work), "scope": scope, **fields})
+    def write(request_id, operation):
+        return call("orbit_desktop_task_write", {"workspace": str(work), "model": "codex",
+                   "request_id": request_id, "operation": operation})
     try:
         initialized = rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "orbit-apps-probe", "version": "1"}})
@@ -103,21 +116,95 @@ def main():
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         process.stdin.flush()
         tools = rpc("tools/list", {})["result"]["tools"]
+        by_name = {tool["name"]: tool for tool in tools}
         for name, entrypoint in (("orbit_ui_open", "global"), ("orbit_ui_inspect", "thread")):
-            tool = next(tool for tool in tools if tool["name"] == name)
-            assert tool["_meta"]["ui"]["resourceUri"] == URI
-            assert tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": entrypoint}]
+            tool = by_name[name]
+            require(tool["_meta"]["ui"]["resourceUri"] == URI, f"wrong UI URI for {name}")
+            require(tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": entrypoint}], "entrypoint metadata mismatch")
+            require(tool["annotations"]["readOnlyHint"] is True, "opening a panel must be read-only")
+        for name in ("orbit_task_show", "orbit_desktop_read", "orbit_desktop_task_snapshot", "orbit_desktop_task_write"):
+            require(name in by_name, f"missing daily control-center tool {name}")
+            require("ui" not in by_name[name].get("_meta", {}), "ordinary data tools acquired automatic widgets")
         resources = rpc("resources/list", {})["result"]["resources"]
-        assert any(resource["uri"] == URI for resource in resources)
+        require(any(resource["uri"] == URI for resource in resources), "canonical resource not listed")
         contents = rpc("resources/read", {"uri": URI})["result"]["contents"][0]
-        assert contents["mimeType"] == "text/html;profile=mcp-app"
+        require(contents["mimeType"] == "text/html;profile=mcp-app", "wrong MCP Apps MIME")
+        require(contents["_meta"]["ui"]["csp"]["connectDomains"] == [], "resource allows network connections")
+        require(contents["_meta"]["ui"]["csp"]["resourceDomains"] == [], "resource allows external assets")
         (output / "task-panel.html").write_text(contents["text"])
-        assert "error" in rpc("resources/read", {"uri": "file:///etc/passwd"})
+        legacy = rpc("resources/read", {"uri": LEGACY_URI})["result"]["contents"][0]
+        require(legacy["text"] == contents["text"], "old open panels cannot load compatible resource")
+        for uri in ("file:///etc/passwd", URI + "?workspace=other", URI + "/../index.html"):
+            require("error" in rpc("resources/read", {"uri": uri}), "arbitrary resource URI accepted")
+        require(call("orbit_ui_open", {})["workspace"] is None, "empty open inferred a workspace")
+        create = {"kind": "create", "title": "MCP Apps disposable task <script>not executable</script>",
+                  "description": "Disposable daily control-center protocol fixture.",
+                  "acceptance_criteria": ["The disposable protocol checks preserve task identity"], "priority": "medium"}
+        created = write("probe-create", create)
+        task_key = created["snapshot"]["task"]["id"]
+        require(created["snapshot"]["task"]["status"] == "proposed", "create skipped proposed state")
+        replay = write("probe-create", create)
+        require(replay["replayed"] is True and replay["snapshot"]["task"]["id"] == task_key, "create retry duplicated a task")
+        refused("orbit_desktop_task_write", {"workspace": str(work), "model": "codex", "request_id": "probe-create",
+                "operation": {**create, "title": "conflicting retry"}})
+        listed = read("tasks", search="MCP Apps disposable task", status="proposed", limit=1)
+        require(listed["total"] == 1 and listed["items"][0]["id"] == task_key, "filtered task list is inconsistent")
+        require(listed["search_scope"] == "task key and title", "search scope missing")
+        empty = read("tasks", search="MCP Apps disposable task", offset=1, limit=1)
+        require(empty["total"] == 1 and empty["items"] == [], "pagination total changed with offset")
         panel = call("orbit_ui_inspect", {"workspace": str(work), "id": task_key})
-        assert panel["task"]["id"] == task_key and panel["workspace"] == str(work)
-        assert call("orbit_task_show", {"id": task_key})["title"] == panel["task"]["title"]
-        refused = rpc("tools/call", {"name": "orbit_ui_inspect", "arguments": {"id": task_key}})
-        assert refused["result"]["isError"] is True
+        require(panel["task"]["id"] == task_key and panel["workspace"] == str(work), "panel destination mismatch")
+        require(call("orbit_task_show", {"workspace": str(work), "id": task_key})["title"] == panel["task"]["title"], "ordinary reader disagrees")
+        snapshot = call("orbit_desktop_task_snapshot", {"workspace": str(work), "id": task_key})
+        stale_revision = snapshot["revision"]
+        edit = {"kind": "edit", "id": task_key, "expected_revision": stale_revision,
+                "fields": {"description": "Edited in disposable protocol fixture."}}
+        edited = write("probe-edit", edit)["snapshot"]
+        require(edited["revision"] != stale_revision, "edit did not change revision")
+        conflict = write("probe-stale-edit", {**edit, "fields": {"description": "Must not overwrite fresh evidence"}})
+        require(conflict.get("conflict", {}).get("code") == "revision_conflict", "stale edit did not return a typed conflict")
+        require(conflict["snapshot"]["revision"] == edited["revision"], "conflict did not carry a fresh snapshot")
+        current = read("task", id=task_key, limit=1)
+        require(current["task"]["description"] == "Edited in disposable protocol fixture.", "stale write changed task")
+        comment = {"kind": "comment", "id": task_key, "expected_revision": current["revision"], "comment": "Disposable review note"}
+        commented = write("probe-comment", comment)
+        retried = write("probe-comment", comment)
+        require(retried["replayed"] is True, "comment retry was not reconciled")
+        require(commented["snapshot"]["comments_total"] == retried["snapshot"]["comments_total"], "comment retry duplicated evidence")
+        read("task", id=task_key, comments_offset=0, history_offset=1, artifacts_offset=0, limit=1)
+        # Explicit fixture setup only: no dispatch, provider invocation or live task state.
+        run([str(binary), "task", "update", task_key, "--status", "review", "--force",
+             "--execution-summary", "Disposable protocol evidence; no implementation run was launched.", "--model", "codex", "--json"])
+        current = read("task", id=task_key)
+        criterion = current["task"]["acceptance_criteria"][0]
+        verdict = {"decision": "changes_requested", "rationale": "Exercise evidence-bound review without completion.",
+                   "criteria": [{"criterion": criterion, "met": False, "evidence": ["execution_summary"]}],
+                   "evidence": ["execution_summary"], "expected_run_id": None, "expected_head": None}
+        review = {"kind": "review", "id": task_key, "expected_revision": current["revision"], "verdict": verdict, "complete": False}
+        reviewed = write("probe-review-changes", review)["snapshot"]
+        require(reviewed["task"]["status"] == "review", "changes requested silently rejected/reopened task")
+        accepted_verdict = {**verdict, "decision": "accept", "criteria": [{"criterion": criterion, "met": True, "evidence": ["execution_summary"]}]}
+        accept = {**review, "expected_revision": reviewed["revision"], "verdict": accepted_verdict}
+        accepted = write("probe-review-accept", accept)["snapshot"]
+        require(accepted["task"]["status"] == "review", "record-only acceptance silently completed task")
+        require(accepted["actions"]["complete"]["enabled"] is False, "unprivileged MCP claims completion authority")
+        refused("orbit_desktop_task_write", {"workspace": str(work), "model": "codex", "request_id": "probe-complete-refused",
+                "operation": {**accept, "expected_revision": accepted["revision"], "complete": True}})
+        after = read("task", id=task_key)
+        require(after["revision"] == accepted["revision"], "refused completion left a partial mutation")
+        require(read("tasks", status="review")["total"] == 1, "review queue does not show fixture")
+        refused("orbit_desktop_read", {"workspace": str(work), "scope": "runs"})
+        refused("orbit_desktop_read", {"workspace": str(work), "scope": "run", "id": "jrun-probe-unprivileged"})
+        refused("orbit_ui_inspect", {"id": task_key})
+        refused("orbit_ui_inspect", {"workspace": "missing-disposable-workspace", "id": task_key})
+        refused("orbit_desktop_task_write", {"workspace": str(work), "model": "codex", "request_id": "probe-forged-authority",
+                "actor": "operator", "operation": {**accept, "expected_revision": after["revision"], "complete": True}})
+        # This reference is data only. Actual updateModelContext transport is tested by
+        # the shipped-script harness and must still be observed in the desktop host.
+        reference = {"workspace": after["workspace"], "kind": "task", "id": task_key,
+                     "revision": after["revision"], "observed_at": after["observed_at"],
+                     "title": after["task"]["title"][:180], "instruction": "Reread authoritative Orbit state before acting."}
+        (output / "context-reference.json").write_text(json.dumps(reference, indent=2) + "\n")
     finally:
         process.kill()
         process.wait(timeout=10)
@@ -128,7 +215,7 @@ def main():
     launcher.chmod(0o700)
     plugin = work / "plugins/orbit-probe"
     (plugin / ".codex-plugin").mkdir(parents=True, mode=0o700)
-    manifest = {"name": "orbit-probe", "description": "Isolated read-only Orbit MCP Apps candidate", "version": "0.0.0",
+    manifest = {"name": "orbit-probe", "description": "Isolated Orbit daily control-center candidate", "version": "0.0.0",
                 "mcpServers": {"orbit-probe": {"command": str(launcher), "args": []}}}
     (plugin / ".codex-plugin/plugin.json").write_text(json.dumps(manifest, indent=2) + "\n")
     marketplace = work / ".agents/plugins/marketplace.json"
@@ -152,7 +239,11 @@ def main():
                     fixture={"workspace": str(work), "task_key": task_key},
                     plugin={"source": str(plugin), "installed_path": None},
                     automated={"protocol": "PASS", "transcript": str(output / "protocol-transcript.json"),
-                               "ui_behavior": "NOT RUN"})
+                               "ui_behavior": "NOT RUN", "context_bridge": "NOT RUN",
+                               "scenarios": ["resource_contract", "ordinary_client", "explicit_destination", "create_retry", "request_id_collision_refusal", "filtered_pagination", "revision_guarded_edit", "stale_edit_refusal", "comment_retry", "evidence_bound_review", "completion_refusal", "run_authority_refusal"]})
+    evidence["native"]["reason"] = "NOT RUN/deferred: native handoff evidence is retained in archived ORB-13715; protocol checks do not establish native UI or model-context support."
+    evidence["notes"].append("Fixture review state was seeded by explicit CLI --force in disposable state; no execution was dispatched.")
+    evidence["notes"].append("Request receipts survive restart with retained workspace/task storage; no TTL. Desktop is not an operator-authority source.")
     (output / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
     print(json.dumps({"protocol": "PASS", "native": "NOT RUN", "evidence": str(output / "evidence.json"), "plugin": str(plugin), "workspace": str(work), "task_key": task_key}))
 

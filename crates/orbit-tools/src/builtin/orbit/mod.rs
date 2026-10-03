@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod auto_task;
 pub mod command;
+pub mod desktop;
 pub mod drain;
 pub mod friction;
 pub mod operation;
