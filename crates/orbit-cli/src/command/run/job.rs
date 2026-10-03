@@ -70,7 +70,7 @@ fn wait_for_submission(runtime: &OrbitRuntime, invoke: &PipelineInvokeResult) ->
     render_wait(invoke, &entry)
 }
 
-pub(super) fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
+fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
     let state = submission_state(invoke);
     let doc = json!({
         "job_id": invoke.job_name,
@@ -85,7 +85,7 @@ pub(super) fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
 
 /// Render a completed `--wait`, then fail the command for a non-success
 /// terminal state so a caller can branch on the exit status alone.
-pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> CommandOut {
+fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> CommandOut {
     let doc = json!({
         "job_id": invoke.job_name,
         "run_id": invoke.run_id,
@@ -105,11 +105,11 @@ pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEnt
     Ok(payload.into())
 }
 
-pub(super) fn submission_state(invoke: &PipelineInvokeResult) -> &'static str {
+fn submission_state(invoke: &PipelineInvokeResult) -> &'static str {
     if invoke.queued { "queued" } else { "submitted" }
 }
 
-pub(super) fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Vec<String> {
+fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Vec<String> {
     vec![
         format!("Job: {}", invoke.job_name),
         format!("Run ID: {}", invoke.run_id),
@@ -118,7 +118,7 @@ pub(super) fn submission_lines(invoke: &PipelineInvokeResult, state: &str) -> Ve
     ]
 }
 
-pub(super) fn wait_lines(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Vec<String> {
+fn wait_lines(invoke: &PipelineInvokeResult, entry: &PipelineWaitEntry) -> Vec<String> {
     let mut lines = vec![
         format!("Job: {}", invoke.job_name),
         format!("Run ID: {}", invoke.run_id),

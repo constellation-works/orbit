@@ -142,7 +142,7 @@ pub(super) fn workflow_dispatch_result_to_json(run: &WorkflowDispatchResult) -> 
     value
 }
 
-pub(super) fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Vec<String> {
+fn workflow_dispatch_result_lines(run: &WorkflowDispatchResult) -> Vec<String> {
     if matches!(run.state.as_str(), "submitted" | "queued")
         && run.error_code.is_none()
         && run.error_message.is_none()

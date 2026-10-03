@@ -325,7 +325,7 @@ fn insert_workspace_identity(
     Ok(())
 }
 
-pub(crate) fn normalize_task_show_fields(fields: &[String]) -> Result<Vec<String>, OrbitError> {
+fn normalize_task_show_fields(fields: &[String]) -> Result<Vec<String>, OrbitError> {
     let mut normalized = Vec::new();
     for field in fields {
         let trimmed = field.trim();

@@ -25,8 +25,6 @@ cli_src="crates/orbit-cli/src"
 allowed=(
   "$cli_src/output/sink.rs"
   "$cli_src/output/tests/sink.rs"
-  # Asserts the gate the sink resolves, so it names the variables on purpose.
-  "$cli_src/output/tests/gating.rs"
 )
 
 # `IsTerminal` covers `x.is_terminal()` too: the trait must be imported by name

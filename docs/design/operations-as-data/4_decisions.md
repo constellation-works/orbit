@@ -123,8 +123,8 @@ migrated code, proves nothing.
  Capture the pre-migration surface before writing any migration
 code, and commit it as test fixtures. For friction: `orbit friction [<verb>]
 --help` for all eight pages, captured from the binary built at the prior commit
-and frozen under `crates/orbit-cli/src/command/tests/friction_help/`, asserted
-via `include_str!`. The already-in-tree `mcp_tools_list.json` snapshot serves the
+and frozen under `crates/orbit-cli/tests/help_goldens/friction/`, asserted
+against the binary's `--help`. The already-in-tree `mcp_tools_list.json` snapshot serves the
 same role for MCP, where an empty `git diff` is the proof.
 
 

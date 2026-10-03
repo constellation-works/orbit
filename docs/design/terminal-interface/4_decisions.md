@@ -164,7 +164,7 @@ Rejected alternative: **a thread-local rather than a `OnceLock`.** Correct for c
 - The guard script's allowlist shrinks to the sink and its tests; `command/log/tail.rs` is no longer a grandfathered exception.
 - Cost: a renderer's behavior depends on whether `main` ran. A unit test gets the piped default, which is the safe answer but not the interactive one, so a test that means to exercise the terminal path must build a sink explicitly and pass it — `Table::render(width, styled)` exists for exactly that, and `Table::print()` is the only function that reads the global.
 - Cost: two sinks cannot be active concurrently in one process. An embedded or in-process invocation that wanted to render for a different destination would have to wait for the threaded sink of [Terminal Output Is a Rendering of a Structured Payload](#terminal-output-is-a-rendering-of-a-structured-payload) step 3. No such consumer exists today.
-- Cost: `apply_color_policy` mutates the `colored` crate's process-global override, so any test that asserts on styled output must serialize against it. One mutex in `output/tests/gating.rs` carries that today; a second such test suite would have to share it rather than add its own.
+- Cost: `apply_color_policy` mutates the `colored` crate's process-global override, so any test that asserts on styled output must serialize against it on one shared mutex rather than add its own.
 
 ## Task References
 

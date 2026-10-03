@@ -42,7 +42,7 @@ impl Execute for WorkspaceListArgs {
 /// `workspace list` had no machine-readable form either; one record per
 /// registered workspace, carrying the same fields the text columns show
 /// (ORB-10586).
-pub(super) fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas: bool) -> Value {
+fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas: bool) -> Value {
     Value::Array(
         registry
             .workspaces
@@ -74,10 +74,7 @@ pub(super) fn workspace_list_json(registry: &WorkspaceRegistry, include_replicas
     )
 }
 
-pub(super) fn format_workspace_list(
-    registry: &WorkspaceRegistry,
-    include_replicas: bool,
-) -> String {
+fn format_workspace_list(registry: &WorkspaceRegistry, include_replicas: bool) -> String {
     let workspaces: Vec<_> = registry
         .workspaces
         .iter()

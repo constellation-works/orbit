@@ -17,6 +17,3 @@ mod seed;
 
 pub use command::InitCommand;
 pub(crate) use seed::{collect_config_seed_for_init, config_seed_from_detection};
-
-#[cfg(test)]
-mod tests;

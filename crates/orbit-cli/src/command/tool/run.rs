@@ -170,9 +170,9 @@ impl Execute for ToolRunArgs {
     }
 }
 
-pub(super) const LOCAL_MACHINE_ID_FALLBACK: &str = "host/local";
+const LOCAL_MACHINE_ID_FALLBACK: &str = "host/local";
 
-pub(super) fn local_tool_session_context(
+fn local_tool_session_context(
     runtime: &OrbitRuntime,
     owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
 ) -> Result<ToolSessionContext, OrbitError> {
@@ -192,7 +192,7 @@ pub(super) fn local_tool_session_context(
     })
 }
 
-pub(super) fn local_machine_identity(
+fn local_machine_identity(
     global_root: &std::path::Path,
 ) -> Result<(String, Option<String>), OrbitError> {
     match inspect_machine_identity(global_root)? {
@@ -226,7 +226,7 @@ fn is_task_write_tool(tool_name: &str) -> bool {
 /// Task writes omit `comments`/`history` unless the tool-side `fields`/`field`
 /// projection asks for them. CLI `--fields` is otherwise a post-filter, so a
 /// write asked for those sidecars must also request them from the tool.
-pub(super) fn request_write_sidecars_from_cli_fields(
+fn request_write_sidecars_from_cli_fields(
     tool_name: &str,
     input: &mut Value,
     cli_fields: &[String],
@@ -259,7 +259,7 @@ fn requests_write_sidecar(fields: &[String]) -> bool {
         .any(|field| WRITE_SIDECAR_FIELDS.contains(&field.as_str()))
 }
 
-pub(super) fn shape_tool_output(
+fn shape_tool_output(
     tool_name: &str,
     output: Value,
     full: bool,
@@ -319,7 +319,7 @@ fn ensure_write_sidecars_present(
     Ok(())
 }
 
-pub(super) fn missing_write_sidecar_message(field: &str) -> String {
+fn missing_write_sidecar_message(field: &str) -> String {
     format!(
         "requested field `{field}` is not in the tool output. Task writes omit `comments` and \
          `history` by default; pass --input '{{\"fields\":[\"{field}\"]}}' (or \"field\":\"{field}\") \

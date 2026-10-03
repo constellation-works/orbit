@@ -47,7 +47,7 @@ impl BlockedNextStep {
 }
 
 /// The run id a blocking history note names (`run_id=<id>,`).
-pub(crate) fn run_id_in_note(note: &str) -> Option<&str> {
+fn run_id_in_note(note: &str) -> Option<&str> {
     let rest = note.split_once("run_id=")?.1;
     let id = rest.split([',', ' ', ';']).next()?;
     (!id.is_empty()).then_some(id)

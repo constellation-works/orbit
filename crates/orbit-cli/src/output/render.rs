@@ -107,7 +107,7 @@ fn emit_ndjson(doc: &Value) -> Result<(), OrbitError> {
 
 /// The records a document yields in `ndjson`: a list's elements, or the
 /// document itself when it is a single detail object.
-pub(crate) fn ndjson_records(doc: &Value) -> &[Value] {
+fn ndjson_records(doc: &Value) -> &[Value] {
     match doc {
         Value::Array(records) => records,
         single => std::slice::from_ref(single),

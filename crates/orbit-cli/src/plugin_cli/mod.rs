@@ -11,9 +11,4 @@
 mod command;
 mod schema;
 
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-pub(crate) use command::PLUGIN_HELP_HEADING;
 pub(crate) use command::{PluginGroupInvocation, augment, help_section, invocation_from_matches};

@@ -57,7 +57,7 @@ impl RoleAssignment {
         })
     }
 
-    pub(super) fn to_text(&self) -> String {
+    fn to_text(&self) -> String {
         match (self.role, self.owner_machine_id.as_deref()) {
             (WorkspaceCheckoutRole::Replica, Some(owner)) => format!(
                 "workspace '{}' local role set to replica (owner {owner}); run \
@@ -73,7 +73,7 @@ impl RoleAssignment {
 }
 
 /// Validate and persist one checkout role declaration.
-pub(super) fn assign_role_at(
+fn assign_role_at(
     registry_path: &Path,
     workspace: &str,
     role: WorkspaceCheckoutRole,

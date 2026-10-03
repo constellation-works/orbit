@@ -139,9 +139,9 @@ Update `command/operation_registry.rs`'s arm for the noun to read
 of matching verb by verb.
 
 Now cash in Step 0: commit the captured help files as
-`crates/orbit-cli/src/command/tests/<noun>_help/*.txt` and assert against them
-with `include_str!`. Rebuild the binary and `diff` its live `--help` against the
-captures too — the test and the binary should both be silent.
+`crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`
+in `crates/orbit-cli/tests/help_goldens.rs`, which compares the binary's live
+`--help` against them.
 
 ### Step 7. Derive the handler table
 
@@ -189,10 +189,7 @@ migration surfaced a cost the ADR does not already name, name it.
 
 Steps 1–4 are the whole cost for CLI and MCP. No surface file is edited: the
 subcommand, its flags, its `--help`, its tool schema, its MCP exposure, its audit
-metadata, and its JSON input projection all fall out of the spec. That claim is
-executable — `crates/orbit-cli/src/command/tests/operation_args.rs` declares a
-synthetic noun and asserts a complete working command line falls out of nothing
-but a registry entry.
+metadata, and its JSON input projection all fall out of the spec.
 
 ---
 

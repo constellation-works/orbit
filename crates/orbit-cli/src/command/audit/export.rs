@@ -54,7 +54,7 @@ impl Execute for AuditExportArgs {
 }
 
 // pub(super) widened for sibling-layout tests in audit/tests/export.rs
-pub(super) fn write_json_export<W: Write>(
+fn write_json_export<W: Write>(
     mut writer: W,
     events: &[AuditEvent],
     label: &str,
@@ -77,7 +77,7 @@ pub(super) fn write_json_export<W: Write>(
 }
 
 // pub(super) widened for sibling-layout tests in audit/tests/export.rs
-pub(super) fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
+fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
     let file =
         std::fs::File::create(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
     let writer = std::io::BufWriter::new(file);
@@ -89,7 +89,7 @@ pub(super) fn export_json(path: &str, events: &[AuditEvent]) -> Result<(), Orbit
 }
 
 // pub(super) widened for sibling-layout tests in audit/tests/export.rs
-pub(super) fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
+fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitError> {
     let mut writer =
         csv::Writer::from_path(path).map_err(|e| OrbitError::Io(format!("create {path}: {e}")))?;
 

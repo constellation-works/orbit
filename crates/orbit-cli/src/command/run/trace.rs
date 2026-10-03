@@ -72,7 +72,7 @@ pub(crate) struct TraceNode {
     pub(crate) children: Vec<TraceNode>,
 }
 
-pub(crate) fn build_trace_tree(events: &[RunAuditEvent]) -> TraceTree {
+fn build_trace_tree(events: &[RunAuditEvent]) -> TraceTree {
     let index_by_id = events
         .iter()
         .enumerate()

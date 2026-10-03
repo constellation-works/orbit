@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use super::format::summarize_error_message;
 
 /// The coordinator job whose leaves this summarizes.
-pub(super) const DRAIN_JOB: &str = "workspace_auto_pipeline";
+const DRAIN_JOB: &str = "workspace_auto_pipeline";
 /// The per-task job a drain dispatches, one run per admitted task.
 const LEAF_JOB: &str = "task_auto_pipeline";
 
@@ -68,12 +68,12 @@ pub(super) struct WaitingTask {
 }
 
 impl DrainLeafSummary {
-    pub(super) fn has_failed_leaves(&self) -> bool {
+    fn has_failed_leaves(&self) -> bool {
         !self.failed_leaves.is_empty()
     }
 
     /// Whether the drain left admissible or excluded work unstarted.
-    pub(super) fn has_starved_tasks(&self) -> bool {
+    fn has_starved_tasks(&self) -> bool {
         self.waiting.queued.is_some_and(|queued| queued > 0)
             || !self.waiting.deferred.is_empty()
             || self.waiting.excluded_total > 0

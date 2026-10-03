@@ -91,7 +91,7 @@ const UPDATE_FIELD_KEYS: [&str; 6] = ["status", "tags", "tag", "body", "title", 
 ///
 /// The tool's own refusal names its input fields, which is right for MCP and
 /// wrong for a person at a prompt.
-pub(crate) fn require_update_field(input: &Value) -> Result<(), orbit_core::OrbitError> {
+fn require_update_field(input: &Value) -> Result<(), orbit_core::OrbitError> {
     let any = input.as_object().is_some_and(|object| {
         UPDATE_FIELD_KEYS
             .iter()

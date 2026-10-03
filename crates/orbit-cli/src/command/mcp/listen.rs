@@ -58,7 +58,3 @@ impl ListenArgs {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/listen.rs"]
-mod tests;

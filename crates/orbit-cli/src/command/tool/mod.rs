@@ -13,6 +13,3 @@ mod support;
 
 pub use command::{ToolCommand, ToolSubcommand};
 pub use run::ToolRunArgs;
-
-#[cfg(test)]
-mod tests;

@@ -88,7 +88,7 @@ pub(crate) struct StatusChange {
 /// first is delivery; the other two clear the queue without it, which is why
 /// they are counted apart rather than summed into one "closed" number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum TerminalKind {
+enum TerminalKind {
     Closed,
     Dropped,
 }
@@ -379,7 +379,7 @@ impl Execute for TaskFlowArgs {
 
 /// Signed rendering, so a negative net — the healthy direction — is
 /// unmistakable next to an unsigned count.
-pub(crate) fn format_net(net: i64) -> String {
+fn format_net(net: i64) -> String {
     if net > 0 {
         format!("+{net}")
     } else {
@@ -404,11 +404,7 @@ fn bucket_width(raw: &str) -> Result<Duration, OrbitError> {
 
 /// Start of the oldest bucket, or `None` when the span overflows the
 /// timestamp range. `compute_flow` relies on this having been checked.
-pub(crate) fn report_start(
-    now: DateTime<Utc>,
-    width: Duration,
-    count: usize,
-) -> Option<DateTime<Utc>> {
+fn report_start(now: DateTime<Utc>, width: Duration, count: usize) -> Option<DateTime<Utc>> {
     let span = width.checked_mul(i32::try_from(count).ok()?)?;
     now.checked_sub_signed(span)
 }

@@ -170,7 +170,7 @@ impl Execute for TaskPublicationPublishArgs {
 
 // External publication deliberately runs without the catalog lock. Revalidate
 // its destination on a fresh snapshot before recording the completed publish.
-pub(super) fn record_success_at_registry_path(
+fn record_success_at_registry_path(
     registry_path: &std::path::Path,
     expected: &WorkspacePublicationBinding,
     outcome: &PublicationPublishOutcome,

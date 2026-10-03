@@ -7,8 +7,6 @@ use orbit_core::{
 };
 
 use crate::command::CommandOut;
-#[cfg(test)]
-use crate::command::Commands;
 pub use crate::command::operation::CommandMeta;
 
 /// Feeds the **persistent** SQLite audit event store on every CLI invocation.
@@ -166,14 +164,4 @@ impl Drop for AuditGuard<'_> {
             }
         }
     }
-}
-
-/// Compatibility adapter for focused audit tests and callers. Metadata now
-/// comes from the command-operation registry instead of a second command tree.
-#[cfg(test)]
-pub fn extract_command_meta(command: &Commands) -> CommandMeta {
-    command
-        .operation()
-        .audit_meta
-        .unwrap_or_else(|| unreachable!("audit commands do not emit audit metadata"))
 }

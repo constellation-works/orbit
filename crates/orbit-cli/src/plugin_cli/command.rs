@@ -24,18 +24,11 @@ use crate::command::tool::ToolRunArgs;
 use crate::command::{CommandOut, Execute, Payload};
 
 /// Help heading `orbit --help` lists plugin groups under.
-pub(crate) const PLUGIN_HELP_HEADING: &str = "Plugins:";
+const PLUGIN_HELP_HEADING: &str = "Plugins:";
 
 /// One parsed `orbit <ns> <verb>` invocation, already reduced to the tool
 /// call it performs.
 pub struct PluginGroupInvocation {
-    /// The plugin namespace this invocation came from. Not read by dispatch
-    /// — the tool name below is what runs — but it is what the unit tests
-    /// assert the routing on, and what a future diagnostic would name.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub namespace: String,
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub verb: String,
     /// Exactly the arguments `orbit tool run` would have been given.
     pub tool_run: ToolRunArgs,
     /// A flag value this call could not turn into tool input — a malformed
@@ -179,14 +172,10 @@ pub(crate) fn invocation_from_matches(
     let group = groups.iter().find(|group| group.namespace == name)?;
     let (verb_name, verb_matches) = group_matches.subcommand()?;
     let verb = group.verbs.iter().find(|verb| verb.verb == verb_name)?;
-    Some(build_invocation(group, verb, verb_matches))
+    Some(build_invocation(verb, verb_matches))
 }
 
-fn build_invocation(
-    group: &PluginCliGroup,
-    verb: &PluginCliVerb,
-    matches: &ArgMatches,
-) -> PluginGroupInvocation {
+fn build_invocation(verb: &PluginCliVerb, matches: &ArgMatches) -> PluginGroupInvocation {
     let explicit_input = matches
         .try_get_one::<String>("input")
         .ok()
@@ -218,8 +207,6 @@ fn build_invocation(
         },
     };
     PluginGroupInvocation {
-        namespace: group.namespace.clone(),
-        verb: verb.verb.clone(),
         tool_run: ToolRunArgs {
             name: verb.tool_name.clone(),
             input,

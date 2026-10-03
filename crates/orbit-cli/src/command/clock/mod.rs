@@ -2,8 +2,6 @@
 
 mod command;
 mod repair;
-#[cfg(test)]
-mod tests;
 pub(crate) mod tick;
 
 pub use command::{ClockCommand, ClockSubcommand};

@@ -90,7 +90,7 @@ fn run_events_payload(
     Ok(Payload::detail_table(doc, table).into())
 }
 
-pub(crate) fn filter_run_audit_events(
+fn filter_run_audit_events(
     events: Vec<RunAuditEvent>,
     step_filter: Option<&str>,
     event_type: Option<&str>,

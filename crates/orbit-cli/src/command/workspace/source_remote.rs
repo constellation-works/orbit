@@ -128,7 +128,7 @@ impl Execute for WorkspaceSourceRemoteRebindArgs {
     }
 }
 
-pub(super) fn rebind_at_registry_path(
+fn rebind_at_registry_path(
     registry_path: &Path,
     workspace_id: &str,
     remote: &str,

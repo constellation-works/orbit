@@ -11,10 +11,7 @@
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
 //! so `std::io::stdout().is_terminal()` is always `false` inside the child
 //! process, and both `crate::output::table::sink_width` and comfy-table's own
-//! `should_style` gate on that same check. Table-form golden coverage lives
-//! instead in `crates/orbit-cli/src/output/tests/table.rs`, which renders
-//! directly at an explicit pinned width. See that module's doc comment for
-//! the corresponding finding.
+//! `should_style` gate on that same check.
 //!
 //! ## Regenerating goldens
 //!
@@ -50,9 +47,8 @@ struct Command {
     args: &'static [&'static str],
 }
 
-/// List commands covered across table, plain, and json. Each renders through `output::table::Table` for its
-/// non-`--json` form, so the plain-form assertions here exercise the same
-/// contract as the pinned-width fixtures in `output/tests/table.rs`.
+/// List commands covered across plain and json. Each renders through
+/// `output::table::Table` for its non-`--json` form.
 const COMMANDS: &[Command] = &[
     Command {
         name: "tool_list",

@@ -49,7 +49,7 @@ impl Execute for AuditStatsArgs {
 /// and a governed tool's operation ID *is* its tool name, so an exact match on
 /// the filter selects that operation's denials. Without the filter the whole
 /// store is in scope.
-pub(super) fn scoped_to_tool(
+fn scoped_to_tool(
     mut denied_by_operation: Vec<(String, i64)>,
     tool: Option<&str>,
 ) -> Vec<(String, i64)> {
@@ -69,7 +69,7 @@ pub(super) fn scoped_to_tool(
 /// file lock, a held workspace claim) and the second, entry-point row a
 /// tool-surface refusal writes. The two numbers answer different questions and
 /// are not expected to add up.
-pub(super) fn denied_operations_section(denied_by_operation: &[(String, i64)]) -> String {
+fn denied_operations_section(denied_by_operation: &[(String, i64)]) -> String {
     use std::fmt::Write as _;
 
     let mut section = String::new();
@@ -84,7 +84,7 @@ pub(super) fn denied_operations_section(denied_by_operation: &[(String, i64)]) -
     section
 }
 
-pub(super) fn stats_to_json(stats: &AuditStats, denied_by_operation: &[(String, i64)]) -> Value {
+fn stats_to_json(stats: &AuditStats, denied_by_operation: &[(String, i64)]) -> Value {
     json!({
         "total": stats.total,
         "success_count": stats.success_count,

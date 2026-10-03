@@ -240,7 +240,7 @@ fn v2_step_target_summary(step: &JobV2Step) -> (String, String) {
     }
 }
 
-pub(super) fn format_join_mode(mode: &JoinMode) -> String {
+fn format_join_mode(mode: &JoinMode) -> String {
     match mode {
         JoinMode::All => "all".to_string(),
         JoinMode::Any => "any".to_string(),
@@ -248,7 +248,7 @@ pub(super) fn format_join_mode(mode: &JoinMode) -> String {
     }
 }
 
-pub(super) fn format_fan_in(fan_in: &FanInSpec) -> String {
+fn format_fan_in(fan_in: &FanInSpec) -> String {
     let join = format_join_mode(&fan_in.join);
     if let Some(collect) = &fan_in.collect {
         format!("join={join} collect={collect}")
@@ -257,7 +257,7 @@ pub(super) fn format_fan_in(fan_in: &FanInSpec) -> String {
     }
 }
 
-pub(super) fn format_retry(retry: &RetrySpec) -> String {
+fn format_retry(retry: &RetrySpec) -> String {
     let strategy = match retry.backoff_strategy {
         BackoffStrategy::Exponential => "exponential",
         BackoffStrategy::Linear => "linear",

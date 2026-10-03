@@ -7,15 +7,11 @@ use orbit_registry::{
     inspect_machine_identity, os_hostname,
 };
 use orbit_types::identity::validate_new_task_prefix;
-#[cfg(test)]
-use std::io::BufRead;
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use super::collect_config_seed_for_init;
 use super::prompt_stdin;
-#[cfg(test)]
-use super::prompt_stdin::STDIN_CLOSED_BEFORE_PROMPT;
 use serde_json::json;
 
 use crate::command::{CommandOut, CommandOutput, Execute, Payload};
@@ -258,7 +254,7 @@ fn reject_prefix_contradicting_minted_ids(
 
 /// The refusal for a requested prefix that cannot bind to the ids already
 /// minted, or `None` when it can. Adopting exactly the prefix in use is fine.
-pub(super) fn minted_prefix_conflict(
+fn minted_prefix_conflict(
     allocated: Option<(String, u32)>,
     requested_prefix: Option<&str>,
 ) -> Option<String> {
@@ -392,16 +388,6 @@ fn prompt_task_prefix() -> Result<String, OrbitError> {
     })
 }
 
-#[cfg(test)]
-pub(super) fn prompt_task_prefix_from(
-    reader: &mut impl BufRead,
-    output: &mut impl Write,
-) -> Result<String, OrbitError> {
-    collect_task_prefix(output, |prompt, output| {
-        read_line_from(prompt, reader, output)
-    })
-}
-
 fn collect_task_prefix<W, F>(output: &mut W, mut read_answer: F) -> Result<String, OrbitError>
 where
     W: Write,
@@ -435,31 +421,6 @@ fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
         }
         _ => OrbitError::Io(error.to_string()),
     }
-}
-
-#[cfg(test)]
-fn read_line_from(
-    prompt: &str,
-    reader: &mut impl BufRead,
-    output: &mut impl Write,
-) -> Result<String, OrbitError> {
-    write!(output, "{prompt}").map_err(|error| OrbitError::Io(error.to_string()))?;
-    output
-        .flush()
-        .map_err(|error| OrbitError::Io(error.to_string()))?;
-
-    let mut line = String::new();
-    let bytes_read = reader
-        .read_line(&mut line)
-        .map_err(|error| OrbitError::Io(error.to_string()))?;
-
-    if bytes_read == 0 {
-        return Err(OrbitError::InvalidInput(
-            STDIN_CLOSED_BEFORE_PROMPT.to_string(),
-        ));
-    }
-
-    Ok(line.trim().to_string())
 }
 
 fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput {

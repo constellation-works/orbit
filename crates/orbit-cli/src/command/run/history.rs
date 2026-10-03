@@ -12,7 +12,7 @@ use super::format::{
 use super::job::cli_job_run_to_json;
 use super::steps::RunRead;
 
-pub(crate) const DEFAULT_HISTORY_LIMIT: usize = 50;
+const DEFAULT_HISTORY_LIMIT: usize = 50;
 
 #[derive(Args)]
 #[command(

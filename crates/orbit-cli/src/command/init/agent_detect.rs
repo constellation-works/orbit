@@ -1,8 +1,6 @@
 //! Agent environment detection used to seed `orbit init` prompt defaults.
 //!
-//! Probes which agent CLIs are on `PATH`. The detection layer is gated by
-//! [`AgentEnvProbe`] so unit tests can simulate a host without touching the
-//! real `PATH`.
+//! Probes which agent CLIs are on `PATH`.
 //!
 //! Detection is frozen at `orbit init`: the results become an explicit
 //! `orbit_config::ConfigSeed`, and config loading itself never probes the
@@ -11,42 +9,32 @@
 use std::env;
 use std::path::PathBuf;
 
-/// Injectable seam for probing the host environment. Real code uses
-/// [`RealAgentEnvProbe`]; tests construct `MockAgentEnvProbe`.
-pub trait AgentEnvProbe {
-    /// Returns true when an executable named `name` is found on `PATH`.
-    fn binary_on_path(&self, name: &str) -> bool;
-}
-
-/// Real probe: walks the process `PATH` manually (no extra crate dep).
-pub struct RealAgentEnvProbe;
-
-impl AgentEnvProbe for RealAgentEnvProbe {
-    fn binary_on_path(&self, name: &str) -> bool {
-        let Some(path_var) = env::var_os("PATH") else {
-            return false;
-        };
-        for dir in env::split_paths(&path_var) {
-            if dir.as_os_str().is_empty() {
-                continue;
-            }
-            let candidate: PathBuf = dir.join(name);
-            if is_executable_file(&candidate) {
+/// Returns true when an executable named `name` is found on `PATH`. Walks the
+/// process `PATH` manually (no extra crate dep).
+fn binary_on_path(name: &str) -> bool {
+    let Some(path_var) = env::var_os("PATH") else {
+        return false;
+    };
+    for dir in env::split_paths(&path_var) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate: PathBuf = dir.join(name);
+        if is_executable_file(&candidate) {
+            return true;
+        }
+        // On Windows the binary may have an extension. Orbit only ships on
+        // Unix today, but this keeps the detector honest if that changes.
+        #[cfg(windows)]
+        for ext in ["exe", "cmd", "bat"] {
+            let mut with_ext = candidate.clone();
+            with_ext.set_extension(ext);
+            if is_executable_file(&with_ext) {
                 return true;
             }
-            // On Windows the binary may have an extension. Orbit only ships on
-            // Unix today, but this keeps the detector honest if that changes.
-            #[cfg(windows)]
-            for ext in ["exe", "cmd", "bat"] {
-                let mut with_ext = candidate.clone();
-                with_ext.set_extension(ext);
-                if is_executable_file(&with_ext) {
-                    return true;
-                }
-            }
         }
-        false
     }
+    false
 }
 
 #[cfg(unix)]
@@ -100,20 +88,19 @@ pub struct DetectedAgents {
     pub ollama_cli: bool,
 }
 
-/// Probe the host environment using `probe` and return a [`DetectedAgents`]
-/// snapshot.
-pub fn detect(probe: &dyn AgentEnvProbe) -> DetectedAgents {
+/// Probe the host `PATH` and return a [`DetectedAgents`] snapshot.
+pub fn detect() -> DetectedAgents {
     DetectedAgents {
-        claude_cli: probe.binary_on_path("claude"),
-        codex_cli: probe.binary_on_path("codex"),
-        gemini_cli: probe.binary_on_path("gemini"),
-        antigravity_cli: probe.binary_on_path("agy"),
-        grok_cli: probe.binary_on_path("grok"),
-        copilot_cli: probe.binary_on_path("copilot"),
-        cursor_cli: probe.binary_on_path("cursor-agent"),
-        pi_cli: probe.binary_on_path("pi"),
-        opencode_cli: probe.binary_on_path("opencode"),
-        ollama_cli: probe.binary_on_path("ollama"),
+        claude_cli: binary_on_path("claude"),
+        codex_cli: binary_on_path("codex"),
+        gemini_cli: binary_on_path("gemini"),
+        antigravity_cli: binary_on_path("agy"),
+        grok_cli: binary_on_path("grok"),
+        copilot_cli: binary_on_path("copilot"),
+        cursor_cli: binary_on_path("cursor-agent"),
+        pi_cli: binary_on_path("pi"),
+        opencode_cli: binary_on_path("opencode"),
+        ollama_cli: binary_on_path("ollama"),
     }
 }
 
@@ -151,36 +138,4 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
         families.push("opencode");
     }
     families
-}
-
-#[cfg(test)]
-pub(crate) mod testing {
-    //! In-crate test double exposed at `pub(crate)` so the `init` tests can
-    //! reuse it without copying the implementation.
-
-    use super::AgentEnvProbe;
-    use std::collections::HashSet;
-
-    /// Test double with a seedable PATH.
-    #[derive(Debug, Default, Clone)]
-    pub(crate) struct MockAgentEnvProbe {
-        binaries: HashSet<String>,
-    }
-
-    impl MockAgentEnvProbe {
-        pub(crate) fn new() -> Self {
-            Self::default()
-        }
-
-        pub(crate) fn with_binary(mut self, name: &str) -> Self {
-            self.binaries.insert(name.to_string());
-            self
-        }
-    }
-
-    impl AgentEnvProbe for MockAgentEnvProbe {
-        fn binary_on_path(&self, name: &str) -> bool {
-            self.binaries.contains(name)
-        }
-    }
 }

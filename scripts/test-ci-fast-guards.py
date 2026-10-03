@@ -242,7 +242,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                 ["test", "-p", "orbit-core", "--test", "ci_failure_goldens"],
                 ["test", "-p", "orbit-tools", "--test", "public_tool_surface", "github_log_goldens"],
                 ["test", "-p", "orbit-tools", "--test", "mcp_definitions"],
-                ["test", "-p", "orbit-cli", "--bin", "orbit", "help_matches_the_shipped_surface"],
+                ["test", "-p", "orbit-cli", "--test", "help_goldens"],
                 ["test", "-p", "orbit-cli", "--test", "output_goldens"],
                 [
                     "test",

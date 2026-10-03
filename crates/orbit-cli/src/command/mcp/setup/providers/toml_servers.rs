@@ -47,7 +47,7 @@ pub(in crate::command::mcp::setup) fn apply_toml_remove(
     write_or_remove_toml_document(&target.mcp_path, &doc)
 }
 
-pub(super) fn mcp_server_table(launch: ServerLaunch<'_>) -> Table {
+fn mcp_server_table(launch: ServerLaunch<'_>) -> Table {
     let mut table = Table::new();
     table.insert("command", value("orbit"));
     table.insert(
