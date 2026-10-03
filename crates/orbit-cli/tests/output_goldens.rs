@@ -29,7 +29,13 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use orbit_common::governance::authorization::{
+    CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface, authorize,
+    governed_tool,
+};
 use orbit_common::test_env;
+use orbit_tools::ToolRegistry;
+use orbit_types::tool::{McpTransport, ToolSessionContext};
 use regex::Regex;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir, tempdir_in};
@@ -358,6 +364,68 @@ fn assert_golden(file_name: &str, actual: &str) {
          before committing.",
         path.display()
     );
+}
+
+#[test]
+fn authorization_matrix_matches_live_registry() {
+    let agent = ToolSessionContext::trusted_local(None, Some("local".into()), None);
+    let remote = ToolSessionContext {
+        transport: Some(McpTransport::SshMcp),
+        caller_machine_id: Some("remote".into()),
+        ..agent.clone()
+    };
+    // Replica placement conveys no authority beyond the follower's agent grant.
+    let replica = ToolSessionContext {
+        caller_machine_id: Some("replica".into()),
+        ..remote.clone()
+    };
+    let callers = [
+        (
+            "operator_terminal",
+            CallerEnvelope {
+                interactive_terminal: true,
+                ..CallerEnvelope::default()
+            },
+        ),
+        ("agent_session", CallerEnvelope::mcp_session(&agent)),
+        ("remote_agent_session", CallerEnvelope::mcp_session(&remote)),
+        ("replica", CallerEnvelope::mcp_session(&replica)),
+    ]
+    .map(|(name, envelope)| (name, CallerCapabilities::resolve(&envelope)));
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let mut operations = std::collections::BTreeMap::new();
+    for schema in registry.all_schemas() {
+        operations.insert(("tool", schema.name.clone()), governed_tool(&schema.name));
+    }
+    for operation in GOVERNED_OPERATIONS {
+        let surface = match operation.surface {
+            OperationSurface::Tool => "tool",
+            OperationSurface::CliCommand => "cli_command",
+            OperationSurface::Dashboard => "dashboard",
+        };
+        operations.insert((surface, operation.id.to_string()), Some(operation));
+    }
+    let rows = operations
+        .into_iter()
+        .map(|((surface, id), operation)| {
+            let verdicts = callers
+                .iter()
+                .map(|(name, caller)| {
+                    let allowed = operation.is_none_or(|op| authorize(op, caller).is_ok());
+                    ((*name).into(), json!(if allowed { "allow" } else { "deny" }))
+                })
+                .collect::<serde_json::Map<String, Value>>();
+            json!({
+                "surface": surface,
+                "operation": id,
+                "required_any": operation.map(|op| op.allowed.iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default(),
+                "verdicts": verdicts,
+            })
+        })
+        .collect::<Vec<_>>();
+    let actual = serde_json::to_string_pretty(&rows).expect("authorization matrix JSON") + "\n";
+    assert_golden("authorization_matrix.json", &actual);
 }
 
 #[test]

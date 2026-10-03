@@ -474,6 +474,119 @@ impl Drop for McpClient {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn agent_task_deletion_is_denied_through_every_dispatch_path() {
+    const CHILD_ENV: &str = "ORBIT_TEST_AUTHORIZATION_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let temp = tempdir().expect("isolated authorization home");
+        let mut child = Command::new(std::env::current_exe().expect("integration binary"));
+        test_env::clear_inherited_authority(|name| {
+            child.env_remove(name);
+        });
+        child
+            .current_dir(temp.path())
+            .env("HOME", temp.path())
+            .env("USERPROFILE", temp.path())
+            .env("ORBIT_AGENT_MODEL", "codex")
+            .env(CHILD_ENV, "1")
+            .args([
+                "--exact",
+                "agent_task_deletion_is_denied_through_every_dispatch_path",
+                "--nocapture",
+            ]);
+        let output = assert_cmd::Command::from_std(child)
+            .timeout(RESPONSE_TIMEOUT)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        assert!(String::from_utf8_lossy(&output).contains("1 passed"));
+        return;
+    }
+
+    use orbit_core::OrbitRuntime;
+    use orbit_core::adapter::command::ToolEntryPoint;
+    use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
+
+    let runtime = OrbitRuntime::in_memory().expect("isolated runtime");
+    let task = runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "workspace": "fixture", "title": "Deletion guard", "description": "Keep history",
+                "complexity": "low", "model": "codex",
+            }),
+        )
+        .expect("seed a disposable task");
+    let task_id = task["id"].as_str().expect("created task id");
+    let input = json!({"id": task_id, "force": true});
+    for (path, result) in [
+        (
+            "runtime",
+            runtime.run_tool("orbit.task.delete", input.clone()),
+        ),
+        (
+            "human attribution",
+            runtime.run_tool_as_human("orbit.task.delete", input.clone()),
+        ),
+    ] {
+        assert!(
+            matches!(result, Err(orbit_common::OrbitError::CapabilityDenied(_))),
+            "agent deletion must be capability-denied through {path}: {result:?}"
+        );
+        assert!(runtime.get_task(task_id).is_ok(), "{path} deleted the task");
+    }
+    for entry in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
+        for transport in [McpTransport::Local, McpTransport::SshMcp] {
+            let result = runtime.execute_tool_command_dispatch_with_session_context(
+                "orbit.task.delete",
+                input.clone(),
+                None,
+                Some("codex".into()),
+                entry,
+                ToolSessionContext {
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    transport: Some(transport),
+                    caller_machine_id: Some("agent-origin".into()),
+                    ..ToolSessionContext::default()
+                },
+            );
+            assert!(
+                result.is_err(),
+                "agent deletion reached {entry:?}/{transport:?}: {result:?}"
+            );
+            assert!(
+                runtime.get_task(task_id).is_ok(),
+                "{entry:?}/{transport:?} deleted the task"
+            );
+        }
+    }
+    // Positive control: the same handler really deletes when an operator authorizes it.
+    {
+        let _operator = test_env::scoped([("ORBIT_OPERATOR", Some("1"))]);
+        runtime
+            .run_tool("orbit.task.delete", input)
+            .expect("operator reaches task deletion");
+        assert!(
+            runtime.get_task(task_id).is_err(),
+            "operator deletion must persist"
+        );
+    }
+    // Ordinary agent MCP discovery hides deletion, but guessed names must also fail.
+    let workspace = McpWorkspace::init();
+    let real_task_id = author_task(&workspace, "MCP deletion guard");
+    for args in [vec![], vec!["--remote-caller-machine-id", "hm_agent"]] {
+        let mut client = workspace.serve_with_args(&args);
+        for name in ["orbit_task_delete", "orbit.task.delete"] {
+            let refused = client.call_tool_err(name, json!({"id": real_task_id, "force": true}));
+            assert_eq!(refused["code"], "tool_not_found", "{name}: {refused}");
+            let shown = client.call_tool_ok("orbit_task_show", json!({"id": real_task_id}));
+            assert_eq!(shown["id"], real_task_id, "MCP deletion destroyed the task");
+        }
+    }
+}
+
+#[test]
 fn mcp_serve_tools_list_matches_production_snapshot() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();

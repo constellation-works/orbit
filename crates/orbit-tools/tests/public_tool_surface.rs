@@ -7,6 +7,47 @@ use std::collections::BTreeSet;
 use orbit_common::protocol::tool_input::RETIRED_TASK_ADD_INPUT_FIELDS;
 use orbit_tools::{ToolContext, ToolRegistry};
 
+#[test]
+fn every_task_tool_rejects_unknown_and_mistyped_fields_at_dispatch() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let mut schemas = registry.all_schemas();
+    schemas.sort_by(|left, right| left.name.cmp(&right.name));
+    let tasks = schemas
+        .iter()
+        .filter(|schema| schema.name.starts_with("orbit.task."))
+        .collect::<Vec<_>>();
+    assert!(
+        !tasks.is_empty(),
+        "task tools must be discovered from the live registry"
+    );
+    for schema in tasks {
+        let assert_rejected = |field: &str, input| {
+            let error = registry
+                .execute(&schema.name, &ToolContext::default(), input)
+                .expect_err("invalid task arguments must fail before domain execution");
+            assert!(
+                matches!(error, orbit_common::OrbitError::InvalidInput(_))
+                    && error.to_string().contains(field),
+                "{} must reject field {field} at dispatch, got {error:?}",
+                schema.name,
+            );
+        };
+        assert_rejected("unknown_probe", serde_json::json!({"unknown_probe": true}));
+        for parameter in &schema.parameters {
+            let invalid = if matches!(parameter.param_type.as_str(), "boolean" | "bool") {
+                serde_json::json!({"wrong_type": true})
+            } else {
+                serde_json::json!(false)
+            };
+            assert_rejected(
+                &parameter.name,
+                serde_json::json!({&parameter.name: invalid}),
+            );
+        }
+    }
+}
+
 const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
     "git.push",
     "github.pr.comment",

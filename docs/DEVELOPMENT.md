@@ -131,6 +131,20 @@ host. Do not disable `linux-bwrap` or try to make bwrap nest from a fixture.
 
 ## Testing & Coverage
 
+Authorization coverage is generated from the live governed-operation and
+builtin tool registries by `authorization_matrix_matches_live_registry` in the
+CLI `output_goldens` integration binary. `make goldens UPDATE=1` regenerates
+its operation/capability/caller verdict table; review every capability diff.
+The `public_tool_surface` integration binary dispatches invalid arguments to
+every registered `orbit.task.*` tool, including inactive tools, and checks each
+declared parameter. Task dispatch refuses unknown fields and incompatible
+types before domain execution. Transport wrappers remain supported, as do
+existing optional nulls, numeric strings, string booleans and string/list
+forms. Handler-specific required fields and guarded modes are still validated
+by their handlers. `agent_task_deletion_is_denied_through_every_dispatch_path`
+in `mcp_roundtrip` exercises runtime, CLI/MCP dispatch and local/remote MCP
+sessions in a disposable child process with a 120-second deadline.
+
 CI collects workspace test coverage with
 [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) on every PR
 (the `Coverage (informational)` job in `.github/workflows/ci.yml`) and

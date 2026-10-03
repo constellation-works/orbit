@@ -997,7 +997,7 @@
         "id",
         "path"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "annotations": {
       "readOnlyHint": true,
@@ -1041,7 +1041,7 @@
         "id",
         "source_path"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "annotations": {
       "readOnlyHint": false,
@@ -1157,7 +1157,7 @@
           "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
         }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "annotations": {
       "readOnlyHint": true,
@@ -1242,7 +1242,7 @@
       "required": [
         "id"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "annotations": {
       "readOnlyHint": true,

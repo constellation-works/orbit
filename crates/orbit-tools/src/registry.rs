@@ -179,6 +179,9 @@ impl ToolRegistry {
             .tools
             .get(name)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+        if name.starts_with("orbit.task.") && tool.plugin.is_none() {
+            validate_task_arguments(&input, &tool.tool.schema())?;
+        }
         tool.tool.execute(ctx, input)
     }
 
@@ -272,6 +275,66 @@ impl ToolRegistry {
         validate_mcp_tool_definitions(&definitions)?;
         Ok(definitions)
     }
+}
+
+/// Task argument shapes are checked before a handler can ignore a mistyped
+/// optional field or reach the application host. Required fields and richer
+/// guarded modes remain the handler's responsibility.
+fn validate_task_arguments(input: &Value, schema: &ToolSchema) -> Result<(), OrbitError> {
+    use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
+    use orbit_common::protocol::tool_schema::tool_parameter_schema;
+
+    let object = input
+        .as_object()
+        .ok_or_else(|| OrbitError::InvalidInput("task tool arguments must be an object".into()))?;
+    let allowed = schema
+        .parameters
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<Vec<_>>();
+    reject_unknown_tool_fields(input, &allowed)?;
+    for parameter in &schema.parameters {
+        let Some(value) = object.get(&parameter.name) else {
+            continue;
+        };
+        // Existing optional parsers treat null as absence, and accept numeric
+        // strings and string booleans. Check their normalized shape without
+        // changing the value passed to the handler.
+        if value.is_null() && !parameter.required {
+            continue;
+        }
+        let mut normalized = value.clone();
+        // The persisted relation parser also accepts one relation object.
+        if parameter.name == "relations" && value.is_object() {
+            normalized = Value::Array(vec![value.clone()]);
+        }
+        if let Some(raw) = value.as_str() {
+            match parameter.param_type.as_str() {
+                "boolean" | "bool" => match raw.trim().to_ascii_lowercase().as_str() {
+                    "true" => normalized = Value::Bool(true),
+                    "false" => normalized = Value::Bool(false),
+                    _ => {}
+                },
+                "integer" | "u64" => {
+                    if let Ok(number) = raw.trim().parse::<u64>() {
+                        normalized = Value::from(number);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let shape = Value::Object(tool_parameter_schema(&parameter.param_type));
+        let validator = jsonschema::JSONSchema::compile(&shape).map_err(|error| {
+            OrbitError::Execution(format!("invalid task parameter schema: {error}"))
+        })?;
+        if !validator.is_valid(&normalized) {
+            return Err(OrbitError::InvalidInput(format!(
+                "`{}` must have type {}",
+                parameter.name, parameter.param_type,
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Workspace-independent source for every canonical registry-backed MCP definition.
