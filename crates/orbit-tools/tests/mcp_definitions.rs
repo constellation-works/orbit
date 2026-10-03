@@ -65,6 +65,8 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.auto_task.toggle",
             "orbit.auto_task.update",
             "orbit.command.exec",
+            "orbit.desktop.automation",
+            "orbit.desktop.drain",
             "orbit.desktop.read",
             "orbit.desktop.task.snapshot",
             "orbit.desktop.task.write",
