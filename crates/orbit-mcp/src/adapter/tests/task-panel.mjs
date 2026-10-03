@@ -1375,3 +1375,21 @@ test('automation confirmation survives an observational refresh but cancels on d
  assert.equal(actionButton(f,'Submit job'),undefined,'changed definition invalidates confirmation');
  assert.equal(f.posted.filter(m=>m.params?.name==='orbit_pipeline_invoke').length,0);
 });
+
+test('automation selection and confirmation keep keyboard focus without passive focus stealing',async()=>{
+ const f=fixture();await f.init();f.click('automation');f.answer(f.last(),automationRead());await flush();
+ const row=f.get('automation-list').children[0];f.document.activeElement=row;row.handlers.click();
+ assert.equal(f.get('automation-list').children[0].focused,true,'selection retains focus on the replacement row');
+ f.get('automation-list').children[0].handlers.click();
+ assert.equal(f.get('automation-list').children[0].focused,true,'closing the selection retains row focus');
+ f.click('automation-jobs');const job={name:'maintenance',state:'enabled',run_available:true,steps:2};
+ f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[job]));await flush();
+ f.get('automation-list').children[0].handlers.click();actionButton(f,'Run job…').handlers.click();
+ assert.equal(actionButton(f,'Submit job').focused,true,'opening confirmation focuses Submit');
+ actionButton(f,'Cancel').handlers.click();
+ assert.equal(actionButton(f,'Run job…').focused,true,'cancel restores the action opener');
+ f.document.activeElement=f.get('workspace');f.click('automation-refresh');
+ f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[job]));await flush();
+ assert.ok(!f.get('automation-list').children[0].focused,'passive refresh does not move focus into the list');
+ assert.ok(!actionButton(f,'Run job…').focused,'passive refresh does not move focus into detail actions');
+});

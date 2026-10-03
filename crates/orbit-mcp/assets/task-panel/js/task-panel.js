@@ -66,7 +66,7 @@
       el('record-accept').disabled=true;
       el('changes').disabled=true;
     }
-    el('review-reason').textContent=reviewedRevisionChanged?'Task changed while reviewing. Clear evidence and rationale, then refresh and review the current state.':a.complete?.reason||'Acceptance records a verdict and marks the task done. Changes requested leaves it in review.';
+    el('review-reason').textContent=reviewedRevisionChanged?'Task changed while reviewing. Clear evidence and rationale, then refresh and review the current state.':a.complete?.reason||'Record acceptance keeps the task in review. Accept and mark done records acceptance and completes the task. Request changes keeps it in review.';
   }
   function stale(message){
     fresh=false;
