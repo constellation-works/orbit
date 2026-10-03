@@ -5,12 +5,12 @@
     {
       "name": "DOMPurify",
       "npm_package": "dompurify",
-      "version": "3.4.15",
+      "version": "3.4.16",
       "upstream": "https://github.com/cure53/DOMPurify",
-      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.15.tgz",
+      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.16.tgz",
       "npm_file": "dist/purify.min.js",
       "path": "purify.min.js",
-      "sha256": "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"
+      "sha256": "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
     },
     {
       "name": "marked",
