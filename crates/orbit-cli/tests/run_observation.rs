@@ -219,6 +219,38 @@ fn canonical(path: &Path) -> PathBuf {
 /// defaults, leaves the stale runs and their reservations exactly as stored
 /// while still returning the finished-run and step-failure evidence.
 #[test]
+fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
+    let fixture = Fixture::init();
+    let before = fixture.snapshot();
+    let report = fixture.json(&[
+        "run",
+        "readiness",
+        "--concurrency",
+        "3",
+        "--limit",
+        "1",
+        "--json",
+    ]);
+    assert_eq!(report["capacity"]["max_active_leaf_runs"], 3);
+    assert!(report["tasks"].as_array().unwrap().len() <= 1);
+    assert_eq!(
+        fixture.snapshot(),
+        before,
+        "readiness must not reconcile or reserve at runtime open"
+    );
+    fixture
+        .orbit()
+        .args(["run", "readiness", "--limit", "0", "--json"])
+        .assert()
+        .failure();
+    assert_eq!(
+        fixture.snapshot(),
+        before,
+        "invalid readiness must also preserve state"
+    );
+}
+
+#[test]
 fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
     let fixture = Fixture::init();
     let before = fixture.snapshot();
