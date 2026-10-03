@@ -12,6 +12,7 @@ mod claimed_leaf;
 mod completion;
 mod local_ship;
 mod review_gate;
+mod task_auto;
 
 use chrono::Utc;
 use orbit_engine::{
