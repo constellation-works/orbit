@@ -33,18 +33,6 @@ pub(super) fn stub_backend(dir: &Path, script: &str) -> PathBuf {
     path
 }
 
-pub(super) fn provenance(grants: &[PluginGrant]) -> PluginProvenance {
-    PluginProvenance {
-        name: "demo".into(),
-        version: "1.0.0".into(),
-        manifest_digest: "abc".into(),
-        grants: grants
-            .iter()
-            .map(|grant| grant.as_str().to_string())
-            .collect(),
-    }
-}
-
 pub(super) fn spec(
     command: PathBuf,
     root: &Path,
@@ -114,33 +102,6 @@ pub(super) fn context(cwd: &Path) -> ToolContext {
     ToolContext {
         cwd: Some(cwd.to_string_lossy().into_owned()),
         ..ToolContext::default()
-    }
-}
-
-/// Live-sandbox tests are `#[ignore]` in the portable suite and selected by
-/// the Linux CI sandbox gate. Once selected, an unavailable sandbox is a test
-/// failure rather than a green early return.
-pub(super) fn require_sandbox() {
-    #[cfg(target_os = "linux")]
-    {
-        let probe = orbit_exec::probe_landlock();
-        assert!(
-            probe.available,
-            "plugin sandbox unavailable: {}",
-            probe.detail
-        );
-    }
-    #[cfg(target_os = "macos")]
-    {
-        assert!(
-            orbit_exec::sandbox_exec_available(),
-            "plugin sandbox unavailable: {}",
-            orbit_exec::sandbox_exec_unavailable_message()
-        );
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        panic!("plugin sandbox unavailable on {}", std::env::consts::OS);
     }
 }
 
