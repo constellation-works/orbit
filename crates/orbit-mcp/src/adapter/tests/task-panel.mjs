@@ -102,7 +102,7 @@ function fixture(){
   const answer=(m,data,isError=false)=>receive({
     source:parent,data:{
       jsonrpc:'2.0',id:m.id,result:m.method==='tools/call'?{
-        structuredContent:data,isError
+        structuredContent:m.params?.arguments?.include_catalog&&data.scope==='jobs'?{catalog:data}:data,isError
       }:data
     }
   });
@@ -237,8 +237,8 @@ test('guarded comment carries revision; lost response retries same identity and 
     }
   });
   const write=f.last();
-  assert.equal(write.params.name,'orbit_desktop_task_write');
-  assert.equal(write.params.arguments.operation.expected_revision,'rev1');
+  assert.equal(write.params.name,'orbit_task_update');
+  assert.equal(write.params.arguments.expected_revision,'rev1');
   for(const timer of [...f.timers.values()])timer();
   await flush();
   assert.equal(f.get('comment').value,'My preserved comment');
@@ -264,8 +264,8 @@ test('changes requested is evidence-bound and never terminal rejection; review u
   f.get('evidence').value='artifact:checks';
   f.get('rationale').value='Fix missing test';
   f.click('changes');
-  const op=f.last().params.arguments.operation;
-  assert.equal(op.kind,'review');
+  const op=f.last().params.arguments;
+  assert.equal(f.last().params.name,'orbit_task_update');
   assert.equal(op.verdict.decision,'changes_requested');
   assert.equal(op.complete,false);
   assert.equal(op.verdict.criteria[0].criterion,'Works');
@@ -319,15 +319,15 @@ test('create and edit forms send exact typed fields; closing editor retains draf
     }
   });
   const create=f.last();
-  assert.equal(create.params.arguments.operation.kind,'create');
-  assert.equal(create.params.arguments.operation.priority,'high');
-  assert.deepEqual([...create.params.arguments.operation.acceptance_criteria],['Criterion one','Criterion two']);
+  assert.equal(create.params.name,'orbit_task_add');
+  assert.equal(create.params.arguments.priority,'high');
+  assert.deepEqual([...create.params.arguments.acceptance_criteria],['Criterion one','Criterion two']);
   f.answer(create,{
     snapshot:f.detail().snapshot,replayed:false
   });
   await flush();
-  const readRequests=f.posted.filter(m=>m.params?.name==='orbit_desktop_read').slice(-2);
-  for(const request of readRequests)f.answer(request,request.params.arguments.scope==='task'?f.detail():f.list());
+  const readRequests=f.posted.filter(m=>['orbit_task_list','orbit_task_show','orbit_workflow_run_list','orbit_workflow_run_show'].includes(m.params?.name)).slice(-2);
+  for(const request of readRequests)f.answer(request,request.params.name==='orbit_task_show'?f.detail():f.list());
   await flush();
   f.click('edit');
   f.get('draft-title').value='Changed title';
@@ -335,11 +335,11 @@ test('create and edit forms send exact typed fields; closing editor retains draf
     preventDefault(){
     }
   });
-  const edit=f.last().params.arguments.operation;
-  assert.equal(edit.kind,'edit');
+  const edit=f.last().params.arguments;
+  assert.equal(f.last().params.name,'orbit_task_update');
   assert.equal(edit.expected_revision,'rev1');
-  assert.equal(edit.fields.title,'Changed title');
-  assert.ok(!('title' in edit));
+  assert.equal(edit.title,'Changed title');
+  assert.ok(!('fields' in edit));
 });
 test('server action refusal disables completion; generic errors retain retry identity and draft',async()=>{
   const f=fixture();
@@ -371,7 +371,7 @@ test('server action refusal disables completion; generic errors retain retry ide
   assert.equal(f.get('comment-submit').disabled,true);
   const original=f.last();
   f.click('refresh');
-  assert.equal(f.last().params.name,'orbit_desktop_task_write');
+  assert.equal(f.last().params.name,'orbit_task_update');
   assert.deepEqual(f.last().params.arguments,original.params.arguments);
 });
 test('comment pagination and logs pagination carry independent bounded offsets',async()=>{
@@ -394,7 +394,7 @@ test('comment pagination and logs pagination carry independent bounded offsets',
   assert.equal(f.last().params.arguments.comments_offset,50);
   assert.equal(f.last().params.arguments.limit,50);
   f.click('runs');
-  const pending=f.posted.filter(m=>m.params?.arguments?.scope==='runs').at(-1);
+  const pending=f.posted.filter(m=>m.params?.name==='orbit_workflow_run_list').at(-1);
   f.answer(pending,f.list([{
     id:'jrun-1',state:'running'
   }]));
@@ -479,7 +479,7 @@ test('run tool notifications preserve conversation entity identity and bounded c
     }
   });
   const detailRequest=f.last();
-  assert.equal(detailRequest.params.arguments.scope,'run');
+  assert.equal(detailRequest.params.name,'orbit_workflow_run_show');
   assert.equal(detailRequest.params.arguments.id,'jrun-selected');
   f.answer(detailRequest,{
     schema_version:1,workspace:'host-a/ws_shared',run:{
@@ -512,8 +512,8 @@ test('refreshing a changed task never silently rebases an edit or verdict draft'
   f.get('evidence').value='execution_summary';
   f.get('rationale').value='Reviewed original evidence';
   f.click('refresh');
-  const requests=f.posted.filter(m=>m.params?.name==='orbit_desktop_read').slice(-2);
-  for(const request of requests)f.answer(request,request.params.arguments.scope==='task'?f.detail('ORB-1','rev2'):f.list());
+  const requests=f.posted.filter(m=>['orbit_task_list','orbit_task_show','orbit_workflow_run_list','orbit_workflow_run_show'].includes(m.params?.name)).slice(-2);
+  for(const request of requests)f.answer(request,request.params.name==='orbit_task_show'?f.detail('ORB-1','rev2'):f.list());
   await flush();
   assert.equal(f.get('draft-title').value,'Keep this edit');
   assert.equal(f.get('save').disabled,true);
@@ -582,7 +582,7 @@ test('review binds observed PR head and disables a draft when that head changes'
   f.get('evidence').value='execution_summary';
   f.get('rationale').value='Checked';
   f.click('changes');
-  const verdict=f.last().params.arguments.operation.verdict;
+  const verdict=f.last().params.arguments.verdict;
   assert.equal(verdict.expected_head,'head-a');
   assert.equal(verdict.expected_run_id,'jrun-evidence');
   f.answer(f.last(),{
@@ -592,10 +592,10 @@ test('review binds observed PR head and disables a draft when that head changes'
   });
   await flush();
   f.click('refresh');
-  const requests=f.posted.filter(m=>m.params?.name==='orbit_desktop_read').slice(-2);
+  const requests=f.posted.filter(m=>['orbit_task_list','orbit_task_show','orbit_workflow_run_list','orbit_workflow_run_show'].includes(m.params?.name)).slice(-2);
   const changed=f.detail();
   changed.snapshot.reviewed_head='head-b';
-  for(const request of requests)f.answer(request,request.params.arguments.scope==='task'?changed:f.list());
+  for(const request of requests)f.answer(request,request.params.name==='orbit_task_show'?changed:f.list());
   await flush();
   assert.equal(f.get('changes').disabled,true);
   assert.equal(f.get('accept').disabled,true);
@@ -685,7 +685,7 @@ test('structured conflict displays fresh state but preserves the original edit d
   assert.ok(f.get('identity').title.includes('fresh-revision'));
   assert.ok(f.get('state').textContent.includes('Write refused'));
   f.click('refresh');
-  assert.equal(f.last().params.name,'orbit_desktop_read');
+  assert.equal(f.last().params.name,'orbit_task_show');
 });
 test('late write completion cannot retarget a different entity or erase newly typed comment',async()=>{
   const f=fixture();
@@ -716,8 +716,8 @@ test('late write completion cannot retarget a different entity or erase newly ty
   await flush();
   assert.ok(f.get('identity').textContent.includes('ORB-2'));
   assert.equal(f.get('comment').value,'Second task draft');
-  const requests=f.posted.filter(m=>m.params?.name==='orbit_desktop_read').slice(-2);
-  for(const request of requests)f.answer(request,request.params.arguments.scope==='task'?f.detail('ORB-2','rev2'):f.list([{
+  const requests=f.posted.filter(m=>['orbit_task_list','orbit_task_show','orbit_workflow_run_list','orbit_workflow_run_show'].includes(m.params?.name)).slice(-2);
+  for(const request of requests)f.answer(request,request.params.name==='orbit_task_show'?f.detail('ORB-2','rev2'):f.list([{
     id:'ORB-1',title:'One'
   },{
     id:'ORB-2',title:'Two'
@@ -851,8 +851,8 @@ test('refresh preserves criterion control identity for keyboard focus and focuse
   const criterion=f.get('criterion-outcomes').querySelectorAll('select')[0];
   f.document.activeElement=f.get('list').children[0];
   f.click('refresh');
-  const requests=f.posted.filter(m=>m.params?.name==='orbit_desktop_read').slice(-2);
-  for(const request of requests)f.answer(request,request.params.arguments.scope==='task'?f.detail():f.list([{
+  const requests=f.posted.filter(m=>['orbit_task_list','orbit_task_show','orbit_workflow_run_list','orbit_workflow_run_show'].includes(m.params?.name)).slice(-2);
+  for(const request of requests)f.answer(request,request.params.name==='orbit_task_show'?f.detail():f.list([{
     id:'ORB-1',title:'Task'
   }]));
   await flush();
@@ -939,7 +939,7 @@ test('record-only acceptance is available with review authority and never asks f
   f.get('rationale').value='Criteria checked';
   f.get('criterion-outcomes').querySelectorAll('select')[0].value='met';
   f.click('record-accept');
-  const op=f.last().params.arguments.operation;
+  const op=f.last().params.arguments;
   assert.equal(op.verdict.decision,'accept');
   assert.equal(op.complete,false);
   assert.equal(op.verdict.criteria[0].met,true);
@@ -1086,8 +1086,8 @@ test('proven precommit refusal preserves editable draft and permits correction w
   });
   const corrected=f.last();
   assert.notEqual(corrected.params.arguments.request_id,rejected.params.arguments.request_id);
-  assert.equal(corrected.params.arguments.operation.fields.crew,'crew_sol');
-  assert.equal(corrected.params.arguments.operation.expected_revision,'rev1');
+  assert.equal(corrected.params.arguments.crew,'crew_sol');
+  assert.equal(corrected.params.arguments.expected_revision,'rev1');
 });
 test('a refusal without explicit no-mutation proof remains an ambiguous outcome and retains identity',async()=>{
   const f=fixture();
@@ -1262,8 +1262,8 @@ test('switching views clears unrelated detail and stale rows while preserving co
   f.click('runs');
   assert.equal(f.get('panel').hidden,true);
   assert.equal(f.get('list').children.length,0);
-  assert.equal(f.last().params.arguments.scope,'runs');
-  assert.ok(!f.posted.slice(-1).some(m=>m.params?.arguments?.scope==='task'));
+  assert.equal(f.last().params.name,'orbit_workflow_run_list');
+  assert.ok(!f.posted.slice(-1).some(m=>m.params?.name==='orbit_task_show'));
   f.answer(f.last(),f.list()); await flush();
   f.click('tasks'); f.answer(f.last(),f.list([{id:'ORB-1',title:'One'}])); await flush();
   f.get('list').children[0].handlers.click(); f.answer(f.last(),f.detail()); await flush();
@@ -1278,12 +1278,12 @@ test('task filters expose blocked and terminal statuses, with human readable lab
 const drainRead=(workspace='host-a/ws_shared',capacity={})=>({schema_version:1,workspace,scope:'drain',controls_authorized:true,capacity:{active_leaf_runs:2,max_active_leaf_runs:4,free_slots:2,...capacity},tasks:[{task_id:'ORB-1',eligible:true},{task_id:'ORB-2',eligible:false,reason:'context_lock_conflict'}]});
 test('drain defaults to review, explicit completion is forwarded and stop keeps start settings out',async()=>{
   const f=fixture();await f.init();f.click('drain');
-  assert.equal(f.last().params.arguments.scope,'drain');
+  assert.equal(f.last().params.arguments.action,'status');
   f.answer(f.last(),drainRead());await flush();
   assert.equal(f.get('drain-start').disabled,false);
   f.get('drain-duration').value='3600';f.get('drain-concurrency').value='3';f.get('drain-complete').checked=false;
   f.get('drain-form').handlers.submit({preventDefault(){}});
-  const request=f.last();assert.equal(request.params.name,'orbit_desktop_drain');
+  const request=f.last();assert.equal(request.params.name,'orbit_workflow_auto');
   assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)),{workspace:'host-a/ws_shared',action:'start',for_seconds:3600,concurrency:3,complete:false});
   f.answer(request,{schema_version:1,workspace:'host-a/ws_shared',action:'start',run_id:'jrun-new',state:'submitted',completion:'review'});await flush();
   f.answer(f.last(),drainRead('host-a/ws_shared',{drain_run_id:'jrun-new'}));await flush();
@@ -1297,7 +1297,7 @@ test('drain response loss never resubmits a start and remains uncertain across w
   f.receive({source:f.parent,data:{jsonrpc:'2.0',id:request.id,error:{message:'connection lost'}}});await flush();
   assert.ok(f.get('drain-feedback').textContent.includes('outcome unknown'));
   f.click('refresh');f.answer(f.last(),drainRead());await flush();
-  assert.equal(f.posted.filter(m=>m.params?.name==='orbit_desktop_drain').length,1);
+  assert.equal(f.posted.filter(m=>m.params?.name==='orbit_workflow_auto'&&m.params.arguments.action==='start').length,1);
   assert.equal(f.get('drain-start').disabled,true);
   f.get('workspace').value='host-b/ws_shared';f.get('workspace').handlers.change();f.answer(f.last(),drainRead('host-b/ws_shared'));await flush();
   assert.equal(f.get('drain-start').disabled,false);
@@ -1322,18 +1322,18 @@ test('task editor traps background interaction, Escape preserves draft and resto
 const automationRead=(scope='routines',workspace='host-a/ws_shared',items=[{name:'daily',enabled:true,state:'scheduled',target:'job:maintenance',schedule:{cron:'0 9 * * *'},toggle_available:true}])=>({schema_version:1,workspace,scope,items,total:items.length,controls_authorized:true,pagination:{next_offset:null},notes:[]});
 const actionButton=(f,text)=>f.get('automation-detail').querySelectorAll('button').find(b=>b.textContent===text);
 test('automation switches read scopes, toggles observed state and requires an explicit mint confirmation',async()=>{
- const f=fixture();await f.init();f.click('automation');assert.equal(f.last().params.arguments.scope,'routines');
+ const f=fixture();await f.init();f.click('automation');assert.equal(f.last().params.name,'orbit_routine_control');
  f.answer(f.last(),automationRead());await flush();f.get('automation-list').children[0].handlers.click();
  actionButton(f,'Disable definition').handlers.click();const toggle=f.last();
- assert.deepEqual(JSON.parse(JSON.stringify(toggle.params.arguments)),{workspace:'host-a/ws_shared',action:'toggle',kind:'routine',name:'daily',expected_enabled:true,enabled:false,target:'job:maintenance'});
+ assert.deepEqual(JSON.parse(JSON.stringify(toggle.params.arguments)),{workspace:'host-a/ws_shared',action:'toggle',name:'daily',expected_enabled:true,enabled:false,target:'job:maintenance'});
  f.answer(toggle,{schema_version:1,workspace:'host-a/ws_shared',action:'toggle',kind:'routine',name:'daily',enabled:false});await flush();
  f.answer(f.last(),automationRead());await flush();
- f.click('automation-auto_tasks');assert.equal(f.last().params.arguments.scope,'auto_tasks');
+ f.click('automation-auto_tasks');assert.equal(f.last().params.name,'orbit_auto_task_list');
  f.answer(f.last(),automationRead('auto_tasks','host-a/ws_shared',[{name:'qa',enabled:true,mint_available:true}]));await flush();
  f.get('automation-list').children[0].handlers.click();const before=f.posted.length;
  actionButton(f,'Mint task…').handlers.click();assert.equal(f.posted.length,before,'opening confirmation has no effect');
  assert.match(f.get('automation-detail').textContent,/ignores the schedule/);
- actionButton(f,'Mint one task').handlers.click();assert.equal(f.last().params.arguments.acknowledge_unconditional,true);assert.equal(f.last().params.arguments.kind,'auto_task');
+ actionButton(f,'Mint one task').handlers.click();assert.equal(f.last().params.arguments.acknowledge_unconditional,true);assert.equal(f.last().params.name,'orbit_auto_task_mint');
 });
 test('automation scopes unknown outcomes and never repeats a run after refresh',async()=>{
  const f=fixture();await f.init();f.click('automation');f.answer(f.last(),automationRead());await flush();
@@ -1343,7 +1343,7 @@ test('automation scopes unknown outcomes and never repeats a run after refresh',
  assert.match(f.get('automation-feedback').textContent,/outcome unknown/);
  f.click('automation-refresh');f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[{name:'maintenance',run_available:true}]));await flush();
  assert.equal(actionButton(f,'Run job…').disabled,true);
- assert.equal(f.posted.filter(m=>m.params?.name==='orbit_desktop_automation').length,1);
+ assert.equal(f.posted.filter(m=>m.params?.name==='orbit_pipeline_invoke').length,1);
  f.get('workspace').value='host-b/ws_shared';f.get('workspace').handlers.change();f.answer(f.last(),automationRead('jobs','host-b/ws_shared',[{name:'maintenance',run_available:true}]));await flush();
  f.get('automation-list').children[0].handlers.click();assert.equal(actionButton(f,'Run job…').disabled,false);
 });
@@ -1373,5 +1373,5 @@ test('automation confirmation survives an observational refresh but cancels on d
  assert.equal(actionButton(f,'Submit job').disabled,false,'same definition retains confirmation');
  f.click('automation-refresh');f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[{...job,state:'disabled',run_available:false}]));await flush();
  assert.equal(actionButton(f,'Submit job'),undefined,'changed definition invalidates confirmation');
- assert.equal(f.posted.filter(m=>m.params?.name==='orbit_desktop_automation').length,0);
+ assert.equal(f.posted.filter(m=>m.params?.name==='orbit_pipeline_invoke').length,0);
 });

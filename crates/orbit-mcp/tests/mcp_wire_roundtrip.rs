@@ -571,6 +571,16 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
         .await
         .unwrap();
     assert_eq!(hidden.is_error, Some(true));
+    let hidden_alias = client
+        .peer()
+        .call_tool(call(
+            "orbit_desktop_task_snapshot",
+            json!({"workspace":"selected","id":"TST-1"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(hidden_alias.is_error, Some(true));
+
     assert_eq!(
         host.calls.lock().unwrap().len(),
         3,
@@ -656,12 +666,23 @@ impl McpHost for DesktopWireHost {
         task_show.annotations = Some(McpToolAnnotations::READ_ONLY);
         let mut definitions = vec![
             task_show,
-            definition("orbit.desktop.read"),
-            definition("orbit.desktop.task.snapshot"),
-            definition("orbit.desktop.task.write"),
+            definition("orbit.task.list"),
+            definition("orbit.task.update"),
+            definition("orbit.workflow.run.show"),
         ];
         for definition in &mut definitions {
             definition.schema.builtin = true;
+            if definition.schema.name == "orbit.workflow.run.show" {
+                definition
+                    .schema
+                    .parameters
+                    .push(orbit_types::tool::ToolParam {
+                        name: "view".into(),
+                        param_type: "string".into(),
+                        required: false,
+                        description: "Bounded observation".into(),
+                    });
+            }
         }
         Ok(definitions)
     }
@@ -711,17 +732,26 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
             .clone(),
     ));
     let client = info.serve(tokio::io::split(client_io)).await.unwrap();
-    for name in [
-        "orbit_desktop_read",
-        "orbit_desktop_task_snapshot",
-        "orbit_desktop_task_write",
+    for (name, arguments, missing_arguments) in [
+        (
+            "orbit_task_list",
+            json!({"workspace":"host-qualified:opaque-workspace","view":"bounded"}),
+            json!({"view":"bounded"}),
+        ),
+        (
+            "orbit_task_show",
+            json!({"workspace":"host-qualified:opaque-workspace","id":"TST-1","snapshot":true}),
+            json!({"id":"TST-1","snapshot":true}),
+        ),
+        (
+            "orbit_task_update",
+            json!({"workspace":"host-qualified:opaque-workspace","id":"TST-1","request_id":"wire-proof","expected_revision":"seen","comment":"proof"}),
+            json!({"id":"TST-1","request_id":"wire-proof","expected_revision":"seen","comment":"proof"}),
+        ),
     ] {
         let response = client
             .peer()
-            .call_tool(call(
-                name,
-                json!({"workspace":"host-qualified:opaque-workspace","scope":"tasks","id":"TST-1"}),
-            ))
+            .call_tool(call(name, arguments))
             .await
             .unwrap();
         assert_eq!(response.is_error, Some(false), "{response:?}");
@@ -732,7 +762,7 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
         );
         let missing = client
             .peer()
-            .call_tool(call(name, json!({"id":"TST-1"})))
+            .call_tool(call(name, missing_arguments))
             .await
             .unwrap();
         assert_eq!(
@@ -774,8 +804,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     {
         let calls = host.calls.lock().unwrap();
         assert_eq!(calls.len(), 4);
-        assert_eq!(calls[3].0, "orbit.desktop.read");
-        assert_eq!(calls[3].1["scope"], "run");
+        assert_eq!(calls[3].0, "orbit.workflow.run.show");
+        assert_eq!(calls[3].1["view"], "bounded");
         assert_eq!(
             calls[3].2.effective_capabilities, trusted.effective_capabilities,
             "UI claims cannot promote session authority"
@@ -793,4 +823,69 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     assert_eq!(mismatch.is_error, Some(true));
     client.cancel().await.unwrap();
     server_task.await.unwrap();
+}
+
+struct CanonicalContractHost;
+impl McpHost for CanonicalContractHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        orbit_mcp::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+    }
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        _: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Ok(json!({"name":name,"input":input}))
+    }
+}
+
+#[tokio::test]
+async fn old_mux_handshake_preserves_discovery_and_domain_dispatch_without_modern_advertisement_growth()
+ {
+    for legacy in [true, false] {
+        let server = OrbitToolServer::new(Arc::new(CanonicalContractHost));
+        let (client_io, server_io) = duplex(128 * 1024);
+        let server_task = tokio::spawn(async move {
+            let service = server.serve(server_io).await.unwrap();
+            service.waiting().await.unwrap();
+        });
+        let mut info = ClientInfo::default();
+        info.client_info.name = "orbit-federated-mux".into();
+        if !legacy {
+            info.meta = Some(Meta(
+                json!({"orbit":{"domain_contract":1}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ));
+        }
+        let client = info.serve(client_io).await.unwrap();
+        let listed = client.peer().list_all_tools().await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .filter(|tool| tool.name.starts_with("orbit_desktop_"))
+                .count(),
+            if legacy { 5 } else { 0 }
+        );
+        let call = client
+            .peer()
+            .call_tool(
+                CallToolRequestParams::new("orbit_desktop_task_snapshot").with_arguments(
+                    json!({"workspace":"ws_fixture","id":"TST-1"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            )
+            .await
+            .unwrap();
+        let value = call.structured_content.unwrap();
+        assert_eq!(value["name"], "orbit.task.show");
+        assert_eq!(value["input"]["snapshot"], true);
+        client.cancel().await.unwrap();
+        server_task.await.unwrap();
+    }
 }

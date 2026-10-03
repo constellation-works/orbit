@@ -16,6 +16,7 @@
 //! destination's answer is cached between calls.
 
 mod capability;
+pub(crate) mod compatibility;
 mod config;
 mod descriptor;
 mod host;

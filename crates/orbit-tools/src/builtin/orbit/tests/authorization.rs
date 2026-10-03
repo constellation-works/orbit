@@ -57,9 +57,12 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.workflow.run.resume", Placement::Advertised),
     ("orbit.workflow.run.show", Placement::Advertised),
     ("orbit.workflow.run.workers", Placement::Advertised),
-    ("orbit.desktop.drain", Placement::Advertised),
-    ("orbit.desktop.automation", Placement::Advertised),
+    ("orbit.desktop.drain", Placement::Unadvertised),
+    ("orbit.desktop.automation", Placement::Unadvertised),
     ("orbit.workflow.ship", Placement::Advertised),
+    ("orbit.workflow.auto", Placement::Advertised),
+    ("orbit.pipeline.invoke", Placement::Advertised),
+    ("orbit.routine.control", Placement::Advertised),
     // Destructive administration: off MCP, and governed so that being off MCP
     // is not the only thing standing between an agent and the operation
     // [ORB-10453].

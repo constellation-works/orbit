@@ -125,6 +125,7 @@ fn schema_exposes_only_trimmed_create_task_fields() {
             "orchestrator",
             "fields",
             "field",
+            "request_id",
             "model",
         ]
     );
@@ -135,7 +136,7 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .filter(|param| param.required)
         .map(|param| param.name.as_str())
         .collect();
-    assert_eq!(required, vec!["title", "description", "complexity"]);
+    assert_eq!(required, vec!["title", "description"]);
     let workspace = schema
         .parameters
         .iter()
@@ -157,7 +158,10 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .find(|p| p.name == "complexity")
         .expect("complexity param");
     assert_eq!(complexity.param_type, "string");
-    assert!(complexity.required);
+    assert!(
+        !complexity.required,
+        "request_id creation supplies the guarded proposed defaults; ordinary creation still requires complexity at execution"
+    );
 
     let relations = schema
         .parameters

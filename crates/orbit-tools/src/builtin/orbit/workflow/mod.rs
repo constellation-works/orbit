@@ -1,6 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind};
 
@@ -106,12 +106,25 @@ impl Tool for OrbitWorkflowRunShowTool {
         ToolSchema {
             name: "orbit.workflow.run.show".to_string(),
             description: "Fetch one durable workflow run by ID.".to_string(),
-            parameters: vec![run_id_param()],
+            parameters: std::iter::once(run_id_param())
+                .chain(super::domain_control::bounded_params(&[
+                    ("log_offset", "integer", "Bounded log record offset"),
+                    ("limit", "integer", "Bounded detail page size"),
+                ]))
+                .collect(),
             builtin: true,
         }
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::domain_control::bounded(&input)? {
+            return super::domain_control::bounded_read(
+                ctx,
+                input,
+                "run",
+                &["workspace", "view", "id", "log_offset", "limit", "model"],
+            );
+        }
         execute(ctx, input, OrbitBuiltinAction::WorkflowRunShow)
     }
 }
@@ -190,12 +203,64 @@ impl Tool for OrbitWorkflowRunListTool {
                     param_type: "string".to_string(),
                     required: false,
                 },
-            ],
+            ].into_iter().chain(super::domain_control::bounded_params(&[("offset", "integer", "Bounded list offset"),("status", "string", "Bounded run state filter"),("include_catalog", "boolean", "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs")])).collect(),
             builtin: true,
         }
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::domain_control::bounded(&input)? {
+            let include_catalog = input
+                .get("include_catalog")
+                .map(|v| {
+                    v.as_bool().ok_or_else(|| {
+                        OrbitError::InvalidInput("include_catalog must be a boolean".into())
+                    })
+                })
+                .transpose()?
+                .unwrap_or(false);
+            super::reject_unknown_tool_arguments(&input, &self.schema())?;
+            let mut run_input = input.clone();
+            if let Some(object) = run_input.as_object_mut() {
+                object.remove("include_catalog");
+            }
+            let runs = super::domain_control::bounded_read(
+                ctx,
+                run_input,
+                "runs",
+                &["workspace", "view", "offset", "limit", "status", "model"],
+            )?;
+            if include_catalog {
+                orbit_common::protocol::tool_input::reject_unknown_tool_fields(
+                    &input,
+                    &[
+                        "workspace",
+                        "view",
+                        "offset",
+                        "limit",
+                        "include_catalog",
+                        "model",
+                    ],
+                )?;
+                let mut catalog_input = input;
+                if let Some(object) = catalog_input.as_object_mut() {
+                    object.remove("include_catalog");
+                }
+                let catalog = super::domain_control::bounded_read(
+                    ctx,
+                    catalog_input,
+                    "jobs",
+                    &["workspace", "view", "offset", "limit", "model"],
+                )?;
+                return Ok(json!({"workspace":runs["workspace"], "runs":runs, "catalog":catalog}));
+            }
+            return Ok(runs);
+        }
+        if input.get("include_catalog").is_some() {
+            return Err(OrbitError::InvalidInput(
+                "include_catalog requires view:bounded".into(),
+            ));
+        }
         execute(ctx, input, OrbitBuiltinAction::WorkflowRunList)
     }
 }

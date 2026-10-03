@@ -2,6 +2,7 @@ pub mod add;
 pub mod artifact_get;
 pub mod artifact_put;
 pub mod delete;
+pub(super) mod guarded;
 pub mod lint;
 pub mod list;
 pub mod locks;

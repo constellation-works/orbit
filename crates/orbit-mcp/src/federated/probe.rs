@@ -115,6 +115,12 @@ pub trait DestinationProbe: Send + Sync {
 pub trait RoutedSession: Send {
     fn snapshot(&mut self) -> Result<DestinationSnapshot, OrbitError>;
     fn advertised_tools(&mut self) -> Result<Vec<String>, OrbitError>;
+    /// Verify an extension against the peer's live input schema. Names alone
+    /// do not prove an older peer understands newly added arguments.
+    fn supports_tool_argument(&mut self, _name: &str, _argument: &str) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+
     fn call_tool(
         &mut self,
         name: &str,
@@ -244,6 +250,21 @@ impl RoutedSession for InProcessRoutedSession {
             .collect())
     }
 
+    fn supports_tool_argument(&mut self, name: &str, argument: &str) -> Result<bool, OrbitError> {
+        Ok(self
+            .inner
+            .list_mcp_tool_definitions()?
+            .iter()
+            .any(|definition| {
+                definition.schema.name == name
+                    && definition
+                        .schema
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name == argument)
+            }))
+    }
+
     fn call_tool(
         &mut self,
         name: &str,
@@ -343,6 +364,7 @@ pub(super) struct SshRoutedSession {
     session: DestinationSession,
     snapshot: Option<DestinationSnapshot>,
     tools: Option<Vec<String>>,
+    tool_schemas: std::collections::HashMap<String, Value>,
     /// The budget the tool call itself gets, stamped at dispatch rather than
     /// at session start.
     delivery_timeout: Duration,
@@ -354,6 +376,7 @@ impl SshRoutedSession {
             session,
             snapshot: None,
             tools: None,
+            tool_schemas: std::collections::HashMap::new(),
             delivery_timeout,
         }
     }
@@ -373,9 +396,30 @@ impl RoutedSession for SshRoutedSession {
         if let Some(tools) = &self.tools {
             return Ok(tools.clone());
         }
-        let tools = self.session.list_tools()?;
+        let definitions = self.session.list_tool_definitions()?;
+        let tools = definitions
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        self.tool_schemas = definitions
+            .iter()
+            .filter_map(|tool| {
+                tool["name"]
+                    .as_str()
+                    .map(|name| (name.to_string(), tool["inputSchema"].clone()))
+            })
+            .collect();
         self.tools = Some(tools.clone());
         Ok(tools)
+    }
+    fn supports_tool_argument(&mut self, name: &str, argument: &str) -> Result<bool, OrbitError> {
+        self.advertised_tools()?;
+        Ok(self
+            .tool_schemas
+            .get(&mcp_advertised_tool_name(name))
+            .and_then(|schema| schema.get("properties"))
+            .and_then(|properties| properties.get(argument))
+            .is_some())
     }
 
     fn call_tool(
@@ -558,7 +602,7 @@ impl DestinationSession {
         let response = self.request_probe(
             "initialize",
             json!({
-                "_meta": {"orbit": {"worker_invocation": binding}},
+                "_meta": {"orbit": {"worker_invocation": binding, "domain_contract":1}},
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
@@ -597,15 +641,22 @@ impl DestinationSession {
         snapshot_from_discovery_content(&self.destination, content)
     }
 
-    pub(super) fn list_tools(&mut self) -> Result<Vec<String>, OrbitError> {
+    pub(super) fn list_tool_definitions(&mut self) -> Result<Vec<Value>, OrbitError> {
         let response = self.request_probe("tools/list", json!({}))?;
-        let tools = response["result"]["tools"].as_array().ok_or_else(|| {
-            unreachable(
-                &self.destination,
-                "tools/list answer carried no tools array".to_string(),
-            )
-        })?;
-        Ok(tools
+        response["result"]["tools"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| {
+                unreachable(
+                    &self.destination,
+                    "tools/list answer carried no tools array".to_string(),
+                )
+            })
+    }
+    #[cfg(test)]
+    pub(super) fn list_tools(&mut self) -> Result<Vec<String>, OrbitError> {
+        Ok(self
+            .list_tool_definitions()?
             .iter()
             .filter_map(|tool| tool["name"].as_str().map(ToOwned::to_owned))
             .collect())

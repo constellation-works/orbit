@@ -78,7 +78,10 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].
-        "orbit_desktop_automation"
+        "orbit_pipeline_invoke"
+        | "orbit_workflow_auto"
+        | "orbit_routine_control"
+        | "orbit_desktop_automation"
         | "orbit_desktop_drain"
         | "orbit_agent_invoke"
         | "orbit_command_exec"

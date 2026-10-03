@@ -79,10 +79,10 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "complexity".to_string(),
-                description: "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
+                description: "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
                     .to_string(),
                 param_type: "string".to_string(),
-                required: true,
+                required: false,
             },
             ToolParam {
                 name: "type".to_string(),
@@ -125,6 +125,7 @@ impl Tool for OrbitTaskAddTool {
                 required: false,
             },
         ];
+        parameters.push(super::guarded::param("request_id", "string", "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot."));
         parameters.extend(super::super::model_identity_params());
 
         ToolSchema {
@@ -135,7 +136,14 @@ impl Tool for OrbitTaskAddTool {
         }
     }
 
+    fn input_schema(&self) -> Option<Value> {
+        Some(super::guarded::input_schema(&self.schema(), true))
+    }
+
     fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
+        if super::guarded::is_guarded(&input) {
+            return super::guarded::write(ctx, input, true);
+        }
         super::super::reject_agent_field(&input, "orbit.task.add")?;
         reject_retired_task_add_input_fields(&input)?;
         super::super::reject_unknown_tool_arguments(&input, &self.schema())?;

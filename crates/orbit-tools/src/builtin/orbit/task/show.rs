@@ -21,6 +21,7 @@ impl Tool for OrbitTaskShowTool {
             param_type: "string".to_string(),
             required: true,
         }];
+        parameters.push(super::guarded::param("snapshot", "boolean", "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections."));
         parameters.extend(super::super::identity_params());
         parameters.push(ToolParam {
             name: "fields".to_string(),
@@ -55,6 +56,12 @@ impl Tool for OrbitTaskShowTool {
             param_type: "string".to_string(),
             required: false,
         });
+        parameters.extend(super::super::domain_control::bounded_params(&[
+            ("limit", "integer", "Bounded detail page size"),
+            ("comments_offset", "integer", "Comment offset"),
+            ("history_offset", "integer", "History offset"),
+            ("artifacts_offset", "integer", "Artifact metadata offset"),
+        ]));
         ToolSchema {
             name: "orbit.task.show".to_string(),
             description: "Fetch a single Orbit task as JSON. `id` is a globally unique primary \
@@ -72,6 +79,48 @@ impl Tool for OrbitTaskShowTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::super::domain_control::bounded(&input)? {
+            return super::super::domain_control::bounded_read(
+                ctx,
+                input,
+                "task",
+                &[
+                    "workspace",
+                    "view",
+                    "id",
+                    "limit",
+                    "comments_offset",
+                    "history_offset",
+                    "artifacts_offset",
+                    "model",
+                ],
+            );
+        }
+        if let Some(snapshot) = input.get("snapshot") {
+            let enabled = snapshot
+                .as_bool()
+                .ok_or_else(|| OrbitError::InvalidInput("snapshot must be a boolean".into()))?;
+            if enabled {
+                orbit_common::protocol::tool_input::reject_unknown_tool_fields(
+                    &input,
+                    &["workspace", "id", "snapshot", "model"],
+                )?;
+                orbit_common::protocol::tool_input::required_string(
+                    &input,
+                    &["workspace"],
+                    "workspace",
+                )?;
+                let mut input = input;
+                if let Some(object) = input.as_object_mut() {
+                    object.remove("snapshot");
+                }
+                return super::super::execute_host_action(
+                    ctx,
+                    input,
+                    OrbitBuiltinAction::DesktopTaskSnapshot,
+                );
+            }
+        }
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskShow)
     }
 }

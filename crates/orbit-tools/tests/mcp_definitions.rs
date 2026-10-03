@@ -65,11 +65,6 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.auto_task.toggle",
             "orbit.auto_task.update",
             "orbit.command.exec",
-            "orbit.desktop.automation",
-            "orbit.desktop.drain",
-            "orbit.desktop.read",
-            "orbit.desktop.task.snapshot",
-            "orbit.desktop.task.write",
             // [ORB-12495] The distributed drain's read-only half, and
             // [ORB-13625] the executor lifecycle a follower's drain calls.
             "orbit.drain.claim.bind",
@@ -80,6 +75,8 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.friction.list",
             "orbit.friction.rehome",
             "orbit.friction.update",
+            "orbit.pipeline.invoke",
+            "orbit.routine.control",
             "orbit.search",
             "orbit.task.add",
             "orbit.task.artifact.get",
@@ -88,6 +85,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.pull",
             "orbit.task.show",
             "orbit.task.update",
+            "orbit.workflow.auto",
             "orbit.workflow.run.delivery",
             "orbit.workflow.run.list",
             "orbit.workflow.run.resume",

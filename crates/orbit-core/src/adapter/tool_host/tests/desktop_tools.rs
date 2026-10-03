@@ -228,10 +228,9 @@ fn desktop_drain_readiness_and_idle_stop_reuse_runtime_without_dispatch() {
 }
 
 #[test]
-fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_dispatch() {
-    if !isolated(
-        "desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_dispatch",
-    ) {
+fn domain_automation_scopes_definitions_checks_conflicts_and_mints_without_dispatch() {
+    if !isolated("domain_automation_scopes_definitions_checks_conflicts_and_mints_without_dispatch")
+    {
         return;
     }
     let _guard = unmanaged_tool_env_guard();
@@ -243,6 +242,34 @@ fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_disp
     let routines = runtime.shared_root().join("routines");
     std::fs::create_dir_all(&routines).unwrap();
     std::fs::write(routines.join("desktop-routine.yaml"),"schemaVersion: 1\nname: desktop-routine\nenabled: true\ntrigger:\n  cron: '0 9 * * *'\ntarget: job:desktop-maintenance\n").unwrap();
+    fn read(
+        runtime: &crate::OrbitRuntime,
+        repo: &std::path::Path,
+        scope: &str,
+        limit: usize,
+    ) -> serde_json::Value {
+        let (name, input) = match scope {
+            "routines" => (
+                "orbit.routine.control",
+                json!({"workspace":repo,"action":"list","limit":limit}),
+            ),
+            "auto_tasks" => (
+                "orbit.auto_task.list",
+                json!({"workspace":repo,"view":"bounded","limit":limit}),
+            ),
+            "jobs" => (
+                "orbit.workflow.run.list",
+                json!({"workspace":repo,"view":"bounded","include_catalog":true,"limit":limit}),
+            ),
+            _ => unreachable!(),
+        };
+        let value = run_tool_as_operator(runtime, name, input).expect("read definitions");
+        if scope == "jobs" {
+            value["catalog"].clone()
+        } else {
+            value
+        }
+    }
     // Anonymous sessions cannot inspect operator run/schedule state or mutate it.
     for scope in ["routines", "auto_tasks", "jobs"] {
         let denied = runtime.execute_tool_command_dispatch_with_session_context(
@@ -254,24 +281,14 @@ fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_disp
             ToolSessionContext::default(),
         );
         assert!(matches!(denied, Err(OrbitError::CapabilityDenied(_))));
-        let data = run_tool_as_operator(
-            &runtime,
-            "orbit.desktop.read",
-            json!({"workspace":repo,"scope":scope,"limit":1}),
-        )
-        .expect("read definitions");
+        let data = read(&runtime, &repo, scope, 1);
         assert!(data["items"].as_array().unwrap().len() <= 1);
     }
-    let read = run_tool_as_operator(
-        &runtime,
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"routines"}),
-    )
-    .unwrap();
+    let read = read(&runtime, &repo, "routines", 25);
     assert_eq!(read["items"][0]["name"], "desktop-routine", "{read}");
-    let mut toggle = json!({"workspace":repo,"action":"toggle","kind":"routine","name":"desktop-routine","target":"job:desktop-maintenance","expected_enabled":true,"enabled":false});
+    let mut toggle = json!({"workspace":repo,"action":"toggle","name":"desktop-routine","target":"job:desktop-maintenance","expected_enabled":true,"enabled":false});
     let denied = runtime.execute_tool_command_dispatch_with_session_context(
-        "orbit.desktop.automation",
+        "orbit.routine.control",
         toggle.clone(),
         None,
         None,
@@ -280,28 +297,30 @@ fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_disp
     );
     assert!(matches!(denied, Err(OrbitError::CapabilityDenied(_))));
     toggle["target"] = json!("job:changed-target");
-    assert!(run_tool_as_operator(&runtime, "orbit.desktop.automation", toggle.clone()).is_err());
+    assert!(run_tool_as_operator(&runtime, "orbit.routine.control", toggle.clone()).is_err());
     toggle["target"] = json!("job:desktop-maintenance");
     assert_eq!(
-        run_tool_as_operator(&runtime, "orbit.desktop.automation", toggle.clone()).unwrap()["enabled"],
+        run_tool_as_operator(&runtime, "orbit.routine.control", toggle.clone()).unwrap()["enabled"],
         false
     );
     assert!(
-        run_tool_as_operator(&runtime, "orbit.desktop.automation", toggle).is_err(),
+        run_tool_as_operator(&runtime, "orbit.routine.control", toggle).is_err(),
         "stale toggle refused"
     );
-    let toggle = json!({"workspace":repo,"action":"toggle","kind":"auto_task","name":"desktop-chore","expected_enabled":true,"enabled":false});
-    run_tool_as_operator(&runtime, "orbit.desktop.automation", toggle.clone()).unwrap();
-    assert!(run_tool_as_operator(&runtime, "orbit.desktop.automation", toggle).is_err());
-    let mut mint = json!({"workspace":repo,"action":"mint","kind":"auto_task","name":"desktop-chore","acknowledge_unconditional":false});
-    assert!(run_tool_as_operator(&runtime, "orbit.desktop.automation", mint.clone()).is_err());
+    let toggle =
+        json!({"workspace":repo,"name":"desktop-chore","expected_enabled":true,"enabled":false});
+    run_tool_as_operator(&runtime, "orbit.auto_task.toggle", toggle.clone()).unwrap();
+    assert!(run_tool_as_operator(&runtime, "orbit.auto_task.toggle", toggle).is_err());
+    let mut mint =
+        json!({"workspace":repo,"name":"desktop-chore","acknowledge_unconditional":false});
+    assert!(run_tool_as_operator(&runtime, "orbit.auto_task.mint", mint.clone()).is_err());
     mint["acknowledge_unconditional"] = json!(true);
-    let minted = run_tool_as_operator(&runtime, "orbit.desktop.automation", mint).unwrap();
+    let minted = run_tool_as_operator(&runtime, "orbit.auto_task.mint", mint).unwrap();
     assert!(minted["task_id"].is_string());
     let runs = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.read",
-        json!({"workspace":repo,"scope":"runs"}),
+        "orbit.workflow.run.list",
+        json!({"workspace":repo,"view":"bounded"}),
     )
     .unwrap();
     assert_eq!(runs["total"], 0, "mint creates a task without dispatching");
@@ -309,8 +328,8 @@ fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_disp
     worker_command_override::set(["sh", "-c", "sleep 1"]);
     let started = run_tool_as_operator(
         &runtime,
-        "orbit.desktop.automation",
-        json!({"workspace":repo,"kind":"job","action":"run","name":"desktop-maintenance"}),
+        "orbit.pipeline.invoke",
+        json!({"workspace":repo,"default_input":true,"job_name":"desktop-maintenance"}),
     )
     .expect("submit no-input catalog job");
     worker_command_override::clear();
@@ -330,8 +349,8 @@ fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_disp
     assert!(
         run_tool_as_operator(
             &runtime,
-            "orbit.desktop.automation",
-            json!({"workspace":repo,"kind":"job","action":"run","name":"desktop-maintenance"})
+            "orbit.pipeline.invoke",
+            json!({"workspace":repo,"default_input":true,"job_name":"desktop-maintenance"})
         )
         .is_err(),
         "disabled definition cannot dispatch"
@@ -339,7 +358,14 @@ fn desktop_automation_scopes_definitions_checks_conflicts_and_mints_without_disp
     let replica = runtime
         .clone()
         .with_coordination_write_owner(Some("other-host".into()));
-    assert!(run_tool_as_operator(&replica,"orbit.desktop.automation",json!({"workspace":repo,"action":"toggle","kind":"auto_task","name":"desktop-chore","expected_enabled":false,"enabled":true})).is_err());
+    assert!(
+        run_tool_as_operator(
+            &replica,
+            "orbit.auto_task.toggle",
+            json!({"workspace":repo,"name":"desktop-chore","expected_enabled":false,"enabled":true})
+        )
+        .is_err()
+    );
     assert!(
         !runtime
             .auto_task_show("desktop-chore")
@@ -380,4 +406,229 @@ fn desktop_drain_persists_bounded_window_and_explicit_completion_policy() {
         );
     }
     worker_command_override::clear();
+}
+
+#[test]
+fn domain_guarded_task_verbs_share_receipts_and_revision_guards_with_legacy_routes() {
+    if !isolated("domain_guarded_task_verbs_share_receipts_and_revision_guards_with_legacy_routes")
+    {
+        return;
+    }
+    let _guard = unmanaged_tool_env_guard();
+    let (_root, runtime, repo) = test_runtime();
+    let request = json!({"workspace":repo,"model":"codex","request_id":"domain-create","title":"Domain capture","description":"Daily work","acceptance_criteria":["Observed proof"],"priority":"medium"});
+    let created = runtime
+        .run_tool("orbit.task.add", request.clone())
+        .expect("guarded create");
+    let retry = runtime
+        .run_tool("orbit.task.add", request)
+        .expect("guarded create replay");
+    assert_eq!(retry["replayed"], true);
+    assert_eq!(created["snapshot"]["task"]["status"], "proposed");
+    assert_eq!(created["snapshot"]["task"]["created_by"], "codex");
+    let id = created["snapshot"]["task"]["id"].clone();
+    let legacy = runtime.run_tool("orbit.desktop.task.write", json!({"workspace":repo,"model":"codex","request_id":"domain-create","operation":{"kind":"create","title":"Domain capture","description":"Daily work","acceptance_criteria":["Observed proof"],"priority":"medium"}})).expect("reconcile via shipped compatibility route");
+    assert_eq!(legacy["snapshot"]["task"]["id"], id);
+    assert_eq!(legacy["replayed"], true);
+    let snapshot = runtime
+        .run_tool(
+            "orbit.task.show",
+            json!({"workspace":repo,"id":id,"snapshot":true}),
+        )
+        .expect("versioned snapshot");
+    assert_eq!(snapshot["revision"], created["snapshot"]["revision"]);
+    let comment = json!({"workspace":repo,"request_id":"domain-comment","id":id,"expected_revision":snapshot["revision"],"comment":"One durable comment"});
+    let first = runtime
+        .run_tool("orbit.task.update", comment.clone())
+        .expect("comment");
+    let second = runtime
+        .run_tool("orbit.task.update", comment)
+        .expect("comment replay");
+    assert_eq!(second["replayed"], true);
+    assert_eq!(
+        first["snapshot"]["comments_total"],
+        second["snapshot"]["comments_total"]
+    );
+    let stale = runtime.run_tool("orbit.task.update", json!({"workspace":repo,"request_id":"domain-edit-stale","id":id,"expected_revision":snapshot["revision"],"title":"Stale edit"})).expect("structured revision refusal");
+    assert_eq!(stale["conflict"]["code"], "revision_conflict");
+    assert_eq!(stale["snapshot"]["task"]["title"], "Domain capture");
+    for input in [
+        json!({"workspace":repo,"request_id":"mixed","id":id,"expected_revision":second["snapshot"]["revision"],"title":"bad","comment":"mixed"}),
+        json!({"workspace":repo,"request_id":"status","id":id,"expected_revision":second["snapshot"]["revision"],"status":"done"}),
+        json!({"workspace":repo,"request_id":"spoof","id":id,"expected_revision":second["snapshot"]["revision"],"title":"bad","actor":"human"}),
+    ] {
+        assert!(
+            runtime.run_tool("orbit.task.update", input).is_err(),
+            "mixed guarded writes must refuse before committing"
+        );
+    }
+}
+
+#[test]
+fn domain_extensions_preserve_operator_authority_and_explicit_workspace_requirements() {
+    if !isolated(
+        "domain_extensions_preserve_operator_authority_and_explicit_workspace_requirements",
+    ) {
+        return;
+    }
+    let _guard = unmanaged_tool_env_guard();
+    let (_root, runtime, repo) = test_runtime();
+    for (name, input) in [
+        (
+            "orbit.workflow.auto",
+            json!({"workspace":repo,"action":"status"}),
+        ),
+        (
+            "orbit.workflow.auto",
+            json!({"workspace":repo,"action":"start","for_seconds":60}),
+        ),
+        (
+            "orbit.routine.control",
+            json!({"workspace":repo,"action":"list"}),
+        ),
+        (
+            "orbit.auto_task.toggle",
+            json!({"workspace":repo,"name":"none","enabled":false,"expected_enabled":true}),
+        ),
+        (
+            "orbit.auto_task.mint",
+            json!({"workspace":repo,"name":"none","acknowledge_unconditional":true}),
+        ),
+        (
+            "orbit.pipeline.invoke",
+            json!({"workspace":repo,"job_name":"none","default_input":true}),
+        ),
+        (
+            "orbit.pipeline.invoke",
+            json!({"workspace":repo,"job_name":"none","input":{"task_ids":["TST-1"]}}),
+        ),
+        (
+            "orbit.workflow.run.list",
+            json!({"workspace":repo,"view":"bounded","include_catalog":true}),
+        ),
+        (
+            "orbit.auto_task.list",
+            json!({"workspace":repo,"view":"bounded"}),
+        ),
+    ] {
+        let result = runtime.execute_tool_command_dispatch_with_session_context(
+            name,
+            input,
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            ToolSessionContext::default(),
+        );
+        assert!(
+            matches!(result, Err(OrbitError::CapabilityDenied(_))),
+            "{name}: {result:?}"
+        );
+    }
+    for (name, input) in [
+        ("orbit.task.list", json!({"view":"bounded"})),
+        ("orbit.task.show", json!({"id":"TST-1","snapshot":true})),
+        (
+            "orbit.task.add",
+            json!({"request_id":"no-workspace","title":"No implicit route","description":"","acceptance_criteria":["proof"]}),
+        ),
+        (
+            "orbit.task.list",
+            json!({"workspace":repo,"view":"bounded","fields":["title"]}),
+        ),
+        (
+            "orbit.task.show",
+            json!({"workspace":repo,"id":"TST-1","snapshot":true,"fields":["title"]}),
+        ),
+    ] {
+        assert!(
+            runtime.run_tool(name, input).is_err(),
+            "{name} refuses an implicit destination or mixed projections"
+        );
+    }
+    let status = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.auto",
+        json!({"workspace":repo,"action":"status"}),
+    )
+    .expect("authorized observational readiness");
+    assert_eq!(status["controls_authorized"], true);
+    let catalog = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.list",
+        json!({"workspace":repo,"view":"bounded","include_catalog":true}),
+    )
+    .expect("combined bounded runs and catalog");
+    assert!(catalog["runs"]["items"].is_array());
+    assert!(catalog["catalog"]["items"].is_array());
+}
+
+#[test]
+fn guarded_task_update_review_cannot_inherit_completion_from_generic_update() {
+    if !isolated("guarded_task_update_review_cannot_inherit_completion_from_generic_update") {
+        return;
+    }
+    let _guard = unmanaged_tool_env_guard();
+    let (_root, runtime, repo) = test_runtime();
+    let runtime = runtime.with_actor(crate::ActorIdentity::human("fixture"));
+    let task = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Review fixture".into(),
+            acceptance_criteria: vec!["verified behavior".into()],
+            ..Default::default()
+        })
+        .expect("task");
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(orbit_types::task::TaskStatus::Review),
+                execution_summary: Some("verified fixture".into()),
+                ..Default::default()
+            },
+        )
+        .expect("review fixture");
+    let mut agent = ToolSessionContext::default();
+    agent
+        .effective_capabilities
+        .insert(orbit_types::tool::McpCapability::Agent);
+    let snapshot = runtime
+        .desktop_task_snapshot(&task.id, &agent)
+        .expect("snapshot");
+    let request = json!({"workspace":repo,"request_id":"domain-review","id":task.id,"expected_revision":snapshot.revision,"complete":true,"verdict":{"decision":"accept","rationale":"Verified behavior","criteria":[{"criterion":"verified behavior","met":true,"evidence":["execution_summary"]}],"evidence":["execution_summary"],"expected_run_id":null,"expected_head":null}});
+    let refused = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            request.clone(),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            agent.clone(),
+        )
+        .expect("structured refusal before write")
+        .value;
+    assert_eq!(refused["mutation_applied"], false);
+    assert_eq!(
+        runtime.get_task(&task.id).expect("unchanged").status,
+        orbit_types::task::TaskStatus::Review
+    );
+    let mut record = request.clone();
+    record["request_id"] = json!("domain-record");
+    record["complete"] = json!(false);
+    let recorded = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            record,
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            agent,
+        )
+        .expect("agent records evidence without completing")
+        .value;
+    assert_eq!(recorded["snapshot"]["task"]["status"], "review");
+    let mut complete = request;
+    complete["expected_revision"] = recorded["snapshot"]["revision"].clone();
+    let accepted = run_tool_as_operator(&runtime, "orbit.task.update", complete)
+        .expect("operator may explicitly complete");
+    assert_eq!(accepted["snapshot"]["task"]["status"], "done");
 }

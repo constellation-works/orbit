@@ -7,6 +7,7 @@ use super::{
 use crate::ToolRegistry;
 
 pub fn register(registry: &mut ToolRegistry) {
+    // Shipped canonical routes remain callable for existing clients, without advertisements.
     for tool in [
         desktop::DesktopTool::Read,
         desktop::DesktopTool::Drain,
@@ -14,8 +15,16 @@ pub fn register(registry: &mut ToolRegistry) {
         desktop::DesktopTool::Snapshot,
         desktop::DesktopTool::Write,
     ] {
-        registry.register_mcp(tool, McpToolScope::WorkspaceRequired);
+        registry.register(tool);
     }
+    registry.register_mcp(
+        super::domain_control::WorkflowAutoTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_mcp(
+        super::domain_control::RoutineControlTool,
+        McpToolScope::WorkspaceRequired,
+    );
     // Managed workers can ask the owning host to edit its live definitions.
     // The child receives no raw write grant for the registered checkout.
     registry.register_mcp(
@@ -122,7 +131,10 @@ pub fn register(registry: &mut ToolRegistry) {
         task::update::OrbitTaskUpdateTool,
         McpToolScope::WorkspaceRequired,
     );
-    registry.register(pipeline::invoke::OrbitPipelineInvokeTool);
+    registry.register_mcp(
+        pipeline::invoke::OrbitPipelineInvokeTool,
+        McpToolScope::WorkspaceRequired,
+    );
     registry.register(pipeline::wait::OrbitPipelineWaitTool);
     registry.register_mcp(search::OrbitSearchTool, McpToolScope::WorkspaceRequired);
     registry.register_mcp(

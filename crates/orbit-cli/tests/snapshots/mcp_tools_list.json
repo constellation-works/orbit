@@ -170,6 +170,18 @@
           "description": "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
           "type": "boolean"
         },
+        "limit": {
+          "description": "Bounded page size",
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Bounded list offset",
+          "type": "integer"
+        },
+        "view": {
+          "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+          "type": "string"
+        },
         "workspace": {
           "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
           "type": "string"
@@ -190,12 +202,16 @@
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
+        "acknowledge_unconditional": {
+          "description": "True acknowledges unconditional creation; requires operator authority",
+          "type": "boolean"
+        },
         "name": {
           "description": "Definition name. Required.",
           "type": "string"
         },
         "workspace": {
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "description": "Explicit workspace for acknowledged mint",
           "type": "string"
         }
       },
@@ -221,12 +237,16 @@
           "description": "Whether to enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete. Required.",
           "type": "boolean"
         },
+        "expected_enabled": {
+          "description": "Observed enabled state checked atomically; requires operator authority",
+          "type": "boolean"
+        },
         "name": {
           "description": "Definition name. Required.",
           "type": "string"
         },
         "workspace": {
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "description": "Explicit workspace for checked toggle",
           "type": "string"
         }
       },
@@ -388,462 +408,6 @@
       "type": "object"
     },
     "name": "orbit_crew_list"
-  },
-  {
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
-    "description": "Operator-only automation actions in one selected workspace. Toggle uses the observed enabled state; routine toggles also require the observed target. Mint ignores schedule and dedupe and needs explicit acknowledgement. Run submits a no-input catalog job; delivery jobs require auto-drain. Never replay after a lost response; inspect authoritative state first.",
-    "inputSchema": {
-      "additionalProperties": true,
-      "properties": {
-        "acknowledge_unconditional": {
-          "description": "Required true for mint: ignores enabled, schedule and dedupe, creates a task without dispatch",
-          "type": "boolean"
-        },
-        "action": {
-          "description": "toggle, mint or run",
-          "type": "string"
-        },
-        "enabled": {
-          "description": "Required for toggle: desired enabled flag",
-          "type": "boolean"
-        },
-        "expected_enabled": {
-          "description": "Required for toggle: observed enabled flag",
-          "type": "boolean"
-        },
-        "kind": {
-          "description": "routine, auto_task or job",
-          "type": "string"
-        },
-        "model": {
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "name": {
-          "description": "Exact definition or job name from the desktop projection",
-          "type": "string"
-        },
-        "target": {
-          "description": "Required for routine toggle: observed target",
-          "type": "string"
-        },
-        "workspace": {
-          "description": "Exact selector returned by workspace discovery. No implicit destination.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "action",
-        "kind",
-        "name",
-        "workspace"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_desktop_automation"
-  },
-  {
-    "annotations": {
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": true,
-      "readOnlyHint": false
-    },
-    "description": "Start a bounded auto-drain window or stop admissions and deliver recorded settlements in one workspace. Requires an existing operator session. Stop preserves admitted workers. Start is not retry-safe: after a lost reply inspect drain readiness and runs before another submission. Never retries automatically.",
-    "inputSchema": {
-      "additionalProperties": true,
-      "properties": {
-        "action": {
-          "description": "start or stop",
-          "type": "string"
-        },
-        "claim_token": {
-          "description": "Workspace claim token when held by another operator",
-          "type": "string"
-        },
-        "complete": {
-          "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
-          "type": "boolean"
-        },
-        "concurrency": {
-          "description": "Optional start worker limit, positive u32; omitted uses runtime default",
-          "type": "integer"
-        },
-        "for_seconds": {
-          "description": "Required for start: window length in seconds, 1 through 604800",
-          "type": "integer"
-        },
-        "model": {
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "workspace": {
-          "description": "Exact selector returned by workspace discovery. No implicit destination.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "action",
-        "workspace"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_desktop_drain"
-  },
-  {
-    "annotations": {
-      "readOnlyHint": true
-    },
-    "description": "Read a bounded desktop view in one explicit workspace. Task search matches public key/title only; history search uses orbit_search. Run reads require the same operator authority as workflow run observation. This never reconciles or starts execution.",
-    "inputSchema": {
-      "additionalProperties": true,
-      "properties": {
-        "artifacts_offset": {
-          "description": "Artifact metadata page offset",
-          "type": "integer"
-        },
-        "comments_offset": {
-          "description": "Comment page offset",
-          "type": "integer"
-        },
-        "history_offset": {
-          "description": "Task history page offset",
-          "type": "integer"
-        },
-        "id": {
-          "description": "Public task key or run ID for detail scope",
-          "type": "string"
-        },
-        "limit": {
-          "description": "Page size, 1 through 50; default 25",
-          "type": "integer"
-        },
-        "log_offset": {
-          "description": "Run log record offset",
-          "type": "integer"
-        },
-        "model": {
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "offset": {
-          "description": "Zero-based list offset; default 0",
-          "type": "integer"
-        },
-        "priority": {
-          "description": "Task priority filter",
-          "type": "string"
-        },
-        "scope": {
-          "description": "tasks, task, runs, run, drain, routines, auto_tasks or jobs",
-          "type": "string"
-        },
-        "search": {
-          "description": "Case-insensitive public task key/title substring",
-          "type": "string"
-        },
-        "status": {
-          "description": "Task status or run state filter",
-          "type": "string"
-        },
-        "workspace": {
-          "description": "Exact selector returned by workspace discovery. No implicit destination.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "scope",
-        "workspace"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_desktop_read"
-  },
-  {
-    "annotations": {
-      "readOnlyHint": true
-    },
-    "description": "Read a versioned task snapshot with opaque revision and server-computed available actions. A snapshot grants no authority.",
-    "inputSchema": {
-      "additionalProperties": true,
-      "properties": {
-        "id": {
-          "description": "Public task key",
-          "type": "string"
-        },
-        "model": {
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "workspace": {
-          "description": "Exact selector returned by workspace discovery. No implicit destination.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "workspace"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_desktop_task_snapshot"
-  },
-  {
-    "annotations": {
-      "readOnlyHint": false
-    },
-    "description": "Apply one revision-guarded, retry-safe proposed-task create, field edit, comment or evidence-bound review. Reuse request_id with identical payload to reconcile a lost response. Changes requested stays in review. Completion requires existing trusted operator authority; it never merges, publishes or dispatches work.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "model": {
-          "type": "string"
-        },
-        "operation": {
-          "oneOf": [
-            {
-              "additionalProperties": false,
-              "properties": {
-                "acceptance_criteria": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "crew": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "description": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "create"
-                },
-                "priority": {
-                  "type": "string"
-                },
-                "title": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "title",
-                "description",
-                "acceptance_criteria"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "expected_revision": {
-                  "type": "string"
-                },
-                "fields": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "acceptance_criteria": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "crew": {
-                      "type": "string"
-                    },
-                    "description": {
-                      "type": "string"
-                    },
-                    "priority": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    }
-                  },
-                  "type": "object"
-                },
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "edit"
-                }
-              },
-              "required": [
-                "kind",
-                "id",
-                "expected_revision",
-                "fields"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "comment": {
-                  "type": "string"
-                },
-                "expected_revision": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "comment"
-                }
-              },
-              "required": [
-                "kind",
-                "id",
-                "expected_revision",
-                "comment"
-              ],
-              "type": "object"
-            },
-            {
-              "additionalProperties": false,
-              "properties": {
-                "complete": {
-                  "default": false,
-                  "type": "boolean"
-                },
-                "expected_revision": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                },
-                "kind": {
-                  "const": "review"
-                },
-                "verdict": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "criteria": {
-                      "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "criterion": {
-                            "type": "string"
-                          },
-                          "evidence": {
-                            "items": {
-                              "type": "string"
-                            },
-                            "type": "array"
-                          },
-                          "met": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": [
-                          "criterion",
-                          "met",
-                          "evidence"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "decision": {
-                      "enum": [
-                        "accept",
-                        "changes_requested"
-                      ]
-                    },
-                    "evidence": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "expected_head": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "expected_run_id": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "rationale": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "decision",
-                    "rationale",
-                    "criteria",
-                    "evidence"
-                  ],
-                  "type": "object"
-                }
-              },
-              "required": [
-                "kind",
-                "id",
-                "expected_revision",
-                "verdict"
-              ],
-              "type": "object"
-            }
-          ]
-        },
-        "request_id": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "workspace": {
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "workspace",
-        "request_id",
-        "operation"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_desktop_task_write"
   },
   {
     "annotations": {
@@ -1242,6 +806,163 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Submit a durable pipeline run and return immediately with its run ID. Public submissions require an operator; managed runs may invoke only a host-authorized child pipeline admission.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "input"
+            ]
+          },
+          "if": {
+            "properties": {
+              "default_input": {
+                "const": true
+              }
+            },
+            "required": [
+              "default_input"
+            ]
+          },
+          "then": {
+            "propertyNames": {
+              "enum": [
+                "workspace",
+                "job_name",
+                "default_input",
+                "model"
+              ]
+            },
+            "required": [
+              "workspace"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "agent": {
+          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+          "type": "string"
+        },
+        "default_input": {
+          "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.",
+          "type": "boolean"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "items": {
+                "type": "object"
+              },
+              "type": "array"
+            }
+          ],
+          "description": "Required unless default_input:true: JSON object forwarded as the run input payload."
+        },
+        "job_name": {
+          "description": "Registered v2 job name to invoke.",
+          "type": "string"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "priority": {
+          "description": "Optional queue priority (`low`, `medium`, `high`, or `critical`).",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Explicit workspace required for default-input catalog submission",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_name"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_pipeline_invoke"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "List workspace routine status or toggle one definition using its observed enabled state and target. Requires trusted operator authority and explicit workspace. Never replay a toggle after a lost reply; observe authoritative state first.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "description": "list or toggle",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Required for toggle: desired enabled state",
+          "type": "boolean"
+        },
+        "expected_enabled": {
+          "description": "Required for toggle: observed enabled state",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "List size 1 through 50; default 25",
+          "type": "integer"
+        },
+        "model": {
+          "description": "Diagnostic model attribution; never grants authority",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Required for toggle: exact routine name",
+          "type": "string"
+        },
+        "offset": {
+          "description": "List offset; default 0",
+          "type": "integer"
+        },
+        "target": {
+          "description": "Required for toggle: observed routine target",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Exact workspace selector from discovery",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_routine_control"
+  },
+  {
+    "annotations": {
       "openWorldHint": false,
       "readOnlyHint": true
     },
@@ -1359,6 +1080,52 @@
     "description": "Create an Orbit task and return the created task JSON",
     "inputSchema": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "complexity"
+            ]
+          },
+          "if": {
+            "required": [
+              "request_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "acceptance_criteria": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "crew": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "propertyNames": {
+              "enum": [
+                "workspace",
+                "request_id",
+                "model",
+                "title",
+                "description",
+                "acceptance_criteria",
+                "priority",
+                "crew"
+              ]
+            },
+            "required": [
+              "workspace",
+              "acceptance_criteria"
+            ]
+          }
+        }
+      ],
       "properties": {
         "acceptance_criteria": {
           "anyOf": [
@@ -1379,7 +1146,7 @@
           "type": "boolean"
         },
         "complexity": {
-          "description": "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
+          "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
           "enum": [
             "low",
             "medium",
@@ -1404,7 +1171,10 @@
         },
         "crew": {
           "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "description": {
           "description": "Task description markdown",
@@ -1449,6 +1219,10 @@
         "relations": {
           "description": "Optional typed task relations as an array of {type, target} objects",
           "type": "array"
+        },
+        "request_id": {
+          "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
+          "type": "string"
         },
         "required_tools": {
           "anyOf": [
@@ -1499,8 +1273,7 @@
       },
       "required": [
         "title",
-        "description",
-        "complexity"
+        "description"
       ],
       "type": "object"
     },
@@ -1641,6 +1414,10 @@
           ],
           "type": "string"
         },
+        "offset": {
+          "description": "Bounded view list offset",
+          "type": "integer"
+        },
         "parent_id": {
           "description": "Optional parent task ID to list subtasks for",
           "type": "string"
@@ -1649,9 +1426,17 @@
           "description": "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
           "type": "string"
         },
+        "priority": {
+          "description": "Bounded view priority filter",
+          "type": "string"
+        },
         "ready": {
           "description": "When true, keep only tasks whose dependencies are satisfied",
           "type": "boolean"
+        },
+        "search": {
+          "description": "Bounded view key/title substring",
+          "type": "string"
         },
         "status": {
           "anyOf": [
@@ -1683,6 +1468,10 @@
         },
         "type": {
           "description": "Optional task type filter",
+          "type": "string"
+        },
+        "view": {
+          "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
           "type": "string"
         },
         "workspace": {
@@ -1779,6 +1568,14 @@
           "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
           "type": "string"
         },
+        "artifacts_offset": {
+          "description": "Artifact metadata offset",
+          "type": "integer"
+        },
+        "comments_offset": {
+          "description": "Comment offset",
+          "type": "integer"
+        },
         "field": {
           "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
           "type": "string"
@@ -1797,9 +1594,17 @@
           ],
           "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution."
         },
+        "history_offset": {
+          "description": "History offset",
+          "type": "integer"
+        },
         "id": {
           "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
           "type": "string"
+        },
+        "limit": {
+          "description": "Bounded detail page size",
+          "type": "integer"
         },
         "model": {
           "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
@@ -1809,6 +1614,14 @@
             "gemini",
             "grok"
           ],
+          "type": "string"
+        },
+        "snapshot": {
+          "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
+          "type": "boolean"
+        },
+        "view": {
+          "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
           "type": "string"
         },
         "workspace": {
@@ -1833,6 +1646,98 @@
     "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
     "inputSchema": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "request_id"
+                ]
+              },
+              {
+                "required": [
+                  "expected_revision"
+                ]
+              },
+              {
+                "required": [
+                  "verdict"
+                ]
+              },
+              {
+                "required": [
+                  "complete"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "oneOf": [
+              {
+                "propertyNames": {
+                  "enum": [
+                    "workspace",
+                    "request_id",
+                    "model",
+                    "id",
+                    "expected_revision",
+                    "verdict",
+                    "complete"
+                  ]
+                },
+                "required": [
+                  "verdict"
+                ]
+              },
+              {
+                "propertyNames": {
+                  "enum": [
+                    "workspace",
+                    "request_id",
+                    "model",
+                    "id",
+                    "expected_revision",
+                    "comment"
+                  ]
+                },
+                "required": [
+                  "comment"
+                ]
+              },
+              {
+                "properties": {
+                  "acceptance_criteria": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "propertyNames": {
+                  "enum": [
+                    "workspace",
+                    "request_id",
+                    "model",
+                    "id",
+                    "expected_revision",
+                    "title",
+                    "description",
+                    "acceptance_criteria",
+                    "priority",
+                    "crew"
+                  ]
+                }
+              }
+            ],
+            "required": [
+              "workspace",
+              "request_id",
+              "expected_revision"
+            ]
+          }
+        }
+      ],
       "properties": {
         "acceptance_criteria": {
           "anyOf": [
@@ -1855,6 +1760,10 @@
         "comment": {
           "description": "Task comment to append",
           "type": "string"
+        },
+        "complete": {
+          "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
+          "type": "boolean"
         },
         "complexity": {
           "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
@@ -1908,6 +1817,10 @@
         },
         "execution_summary": {
           "description": "Replacement execution summary text",
+          "type": "string"
+        },
+        "expected_revision": {
+          "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately.",
           "type": "string"
         },
         "field": {
@@ -1978,6 +1891,10 @@
           "description": "Replacement typed task relations as an array of {type, target} objects",
           "type": "array"
         },
+        "request_id": {
+          "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot.",
+          "type": "string"
+        },
         "source_task_id": {
           "description": "For bug tasks: originating task ID that introduced the defect (empty string clears)",
           "type": "string"
@@ -2023,6 +1940,71 @@
             "chore"
           ],
           "type": "string"
+        },
+        "verdict": {
+          "additionalProperties": false,
+          "properties": {
+            "criteria": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "criterion": {
+                    "type": "string"
+                  },
+                  "evidence": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "met": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "criterion",
+                  "met",
+                  "evidence"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "decision": {
+              "enum": [
+                "accept",
+                "changes_requested"
+              ]
+            },
+            "evidence": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "expected_head": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expected_run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rationale": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision",
+            "rationale",
+            "criteria",
+            "evidence"
+          ],
+          "type": "object"
         },
         "workspace": {
           "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
@@ -2145,6 +2127,60 @@
   },
   {
     "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "description": "status, start or stop",
+          "type": "string"
+        },
+        "claim_token": {
+          "description": "Workspace claim token when held by another operator",
+          "type": "string"
+        },
+        "complete": {
+          "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+          "type": "boolean"
+        },
+        "concurrency": {
+          "description": "Optional start worker limit, positive u32; omitted uses runtime default",
+          "type": "integer"
+        },
+        "for_seconds": {
+          "description": "Required for start: window length in seconds, 1 through 604800",
+          "type": "integer"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Exact selector returned by workspace discovery. No implicit destination.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "workspace"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_workflow_auto"
+  },
+  {
+    "annotations": {
       "openWorldHint": false,
       "readOnlyHint": true
     },
@@ -2182,6 +2218,10 @@
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
+        "include_catalog": {
+          "description": "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs",
+          "type": "boolean"
+        },
         "job_id": {
           "description": "Optional job ID filter.",
           "type": "string"
@@ -2190,12 +2230,24 @@
           "description": "Maximum runs to return (default 25; values above 200 are rejected).",
           "type": "integer"
         },
+        "offset": {
+          "description": "Bounded list offset",
+          "type": "integer"
+        },
         "since": {
           "description": "Optional RFC 3339 lower bound for run creation time.",
           "type": "string"
         },
         "state": {
           "description": "Optional concrete run-state filter, or `terminal`.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Bounded run state filter",
+          "type": "string"
+        },
+        "view": {
+          "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
           "type": "string"
         },
         "workspace": {
@@ -2249,6 +2301,18 @@
       "properties": {
         "id": {
           "description": "Job run ID.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Bounded detail page size",
+          "type": "integer"
+        },
+        "log_offset": {
+          "description": "Bounded log record offset",
+          "type": "integer"
+        },
+        "view": {
+          "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
           "type": "string"
         },
         "workspace": {

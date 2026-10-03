@@ -186,6 +186,12 @@ impl Tool for OrbitTaskUpdateTool {
                 required: false,
             },
         ]);
+        parameters.extend([
+            super::guarded::param("request_id", "string", "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot."),
+            super::guarded::param("expected_revision", "string", "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately."),
+            super::guarded::param("verdict", "object", "Evidence-bound review verdict: decision (accept or changes_requested), rationale, criteria [{criterion,met,evidence}], evidence, expected_run_id and expected_head. Review requires request_id and expected_revision."),
+            super::guarded::param("complete", "boolean", "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches."),
+        ]);
         parameters.extend(super::super::model_identity_params());
 
         ToolSchema {
@@ -196,7 +202,14 @@ impl Tool for OrbitTaskUpdateTool {
         }
     }
 
+    fn input_schema(&self) -> Option<Value> {
+        Some(super::guarded::input_schema(&self.schema(), false))
+    }
+
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::guarded::is_guarded(&input) {
+            return super::guarded::write(ctx, input, false);
+        }
         super::super::reject_agent_field(&input, "orbit.task.update")?;
         if ["required_tools", "requiredTools", "required-tool"]
             .iter()

@@ -369,7 +369,13 @@ fn auto_task_surface_exposes_host_brokered_definition_writes() {
     let mint = registry
         .get_schema("orbit.auto_task.mint")
         .expect("orbit.auto_task.mint schema");
-    assert_eq!(mint.parameters.len(), 1);
+    assert_eq!(
+        mint.parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["name", "workspace", "acknowledge_unconditional"]
+    );
     assert_eq!(mint.parameters[0].name, "name");
     assert!(mint.parameters[0].required);
 }
@@ -407,6 +413,7 @@ fn task_add_schema_uses_trimmed_authoring_surface() {
             "orchestrator",
             "fields",
             "field",
+            "request_id",
             "model",
         ]
     );

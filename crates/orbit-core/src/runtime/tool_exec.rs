@@ -48,6 +48,37 @@ impl OrbitRuntime {
         // only place a governed tool operation is authorized — a per-command
         // guard would be reopened by the next entry point that skips it.
         self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
+        // Domain extensions preserve the authority of the operations they expose.
+        // Discovery and a client-supplied mode never grant operator capabilities.
+        if name == "orbit.pipeline.invoke"
+            && !orbit_tools::has_pipeline_child_admission(&tool_context)
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.ship",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        if (name == "orbit.pipeline.invoke"
+            && input.get("default_input") == Some(&Value::Bool(true)))
+            || (name == "orbit.auto_task.toggle" && input.get("expected_enabled").is_some())
+            || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
+        {
+            self.authorize_tool_operation(
+                "orbit.desktop.automation",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        if name == "orbit.auto_task.list"
+            && input.get("view").and_then(Value::as_str) == Some("bounded")
+        {
+            self.authorize_tool_operation(
+                "orbit.workflow.run.show",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
         // A desktop run projection retains the canonical run reader's authority
         // on every entry point, including an MCP session without process grants.
         if name == "orbit.desktop.read"

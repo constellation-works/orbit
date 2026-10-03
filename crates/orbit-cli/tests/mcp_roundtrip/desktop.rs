@@ -5,8 +5,8 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
     let mut client = workspace.serve();
-    let create = json!({"workspace":selector,"model":"codex","request_id":"desktop-create-proof","operation":{"kind":"create","title":"Desktop capture","description":"Durable evidence","acceptance_criteria":["One effect across restart"]}});
-    let created = client.call_tool_ok("orbit_desktop_task_write", create.clone());
+    let create = json!({"workspace":selector,"model":"codex","request_id":"desktop-create-proof","title":"Desktop capture","description":"Durable evidence","acceptance_criteria":["One effect across restart"]});
+    let created = client.call_tool_ok("orbit_task_add", create.clone());
     let id = created["snapshot"]["task"]["id"]
         .as_str()
         .unwrap()
@@ -16,51 +16,68 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     assert_eq!(created["snapshot"]["task"]["status"], "proposed");
     drop(client);
     let mut client = workspace.serve();
-    let replay = client.call_tool_ok("orbit_desktop_task_write", create.clone());
+    let replay = client.call_tool_ok("orbit_task_add", create.clone());
     assert_eq!(replay["replayed"], true);
     assert_eq!(replay["snapshot"]["task"]["id"], id);
     let mut changed = create;
-    changed["operation"]["title"] = json!("Changed retry");
+    changed["title"] = json!("Changed retry");
     assert_eq!(
-        client.call_tool_ok("orbit_desktop_task_write", changed)["mutation_applied"],
+        client.call_tool_ok("orbit_task_add", changed)["mutation_applied"],
         false
     );
-    let comment = json!({"workspace":selector,"model":"codex","request_id":"desktop-comment-proof","operation":{"kind":"comment","id":id,"expected_revision":replay["snapshot"]["revision"],"comment":"Recorded once"}});
-    let first = client.call_tool_ok("orbit_desktop_task_write", comment.clone());
+    let comment = json!({"workspace":selector,"model":"codex","request_id":"desktop-comment-proof","id":id,"expected_revision":replay["snapshot"]["revision"],"comment":"Recorded once"});
+    let first = client.call_tool_ok("orbit_task_update", comment.clone());
     drop(client);
     let mut client = workspace.serve();
-    let again = client.call_tool_ok("orbit_desktop_task_write", comment);
+    let again = client.call_tool_ok("orbit_task_update", comment);
     assert_eq!(again["replayed"], true);
     assert_eq!(
         again["snapshot"]["comments_total"],
         first["snapshot"]["comments_total"]
     );
-    let stale = client.call_tool_ok("orbit_desktop_task_write", json!({"workspace":selector,"request_id":"desktop-stale-proof","operation":{"kind":"edit","id":id,"expected_revision":replay["snapshot"]["revision"],"fields":{"title":"Stale edit"}}}));
-    assert_eq!(stale["conflict"]["code"], "revision_conflict");
-    assert_eq!(stale["snapshot"]["task"]["title"], "Desktop capture");
-    let snapshot = client.call_tool_ok(
+    // Cached tool lists and already-open clients keep their shipped aliases.
+    let legacy = client.call_tool_ok("orbit_desktop_task_write", json!({"workspace":selector,"model":"codex","request_id":"desktop-comment-proof","operation":{"kind":"comment","id":id,"expected_revision":replay["snapshot"]["revision"],"comment":"Recorded once"}}));
+    assert_eq!(legacy["replayed"], true);
+    assert_eq!(
+        legacy["snapshot"]["comments_total"],
+        again["snapshot"]["comments_total"]
+    );
+    let legacy_snapshot = client.call_tool_ok(
         "orbit_desktop_task_snapshot",
         json!({"workspace":selector,"id":id}),
     );
+    assert_eq!(legacy_snapshot["revision"], again["snapshot"]["revision"]);
+    let legacy_read = client.call_tool_ok(
+        "orbit_desktop_read",
+        json!({"workspace":selector,"scope":"tasks","limit":1}),
+    );
+    assert_eq!(legacy_read["items"][0]["id"], id);
+    let stale = client.call_tool_ok("orbit_task_update", json!({"workspace":selector,"request_id":"desktop-stale-proof","id":id,"expected_revision":replay["snapshot"]["revision"],"title":"Stale edit"}));
+    assert_eq!(stale["conflict"]["code"], "revision_conflict");
+    assert_eq!(stale["snapshot"]["task"]["title"], "Desktop capture");
+    let snapshot = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
     assert_eq!(snapshot["revision"], again["snapshot"]["revision"]);
     assert_eq!(snapshot["actions"]["complete"]["enabled"], false);
-    let list = client.call_tool_ok("orbit_desktop_read", json!({"workspace":selector,"scope":"tasks","search":"Desktop","status":"proposed","limit":1}));
+    let list = client.call_tool_ok("orbit_task_list", json!({"workspace":selector,"view":"bounded","search":"Desktop","status":"proposed","limit":1}));
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], id);
-    for tool in [
-        "orbit_desktop_read",
-        "orbit_desktop_task_snapshot",
-        "orbit_desktop_task_write",
+    for (tool, input) in [
+        ("orbit_task_list", json!({"view":"bounded"})),
+        ("orbit_task_show", json!({"id":id,"snapshot":true})),
+        (
+            "orbit_task_update",
+            json!({"id":id,"request_id":"implicit","expected_revision":"seen","comment":"proof"}),
+        ),
     ] {
-        assert_eq!(
-            client.call_tool_err(tool, json!({"id":id,"scope":"tasks"}))["code"],
-            "invalid_input"
-        );
+        assert_eq!(client.call_tool_err(tool, input)["code"], "invalid_input");
     }
     assert_eq!(
         client.call_tool_err(
-            "orbit_desktop_read",
-            json!({"workspace":selector,"scope":"runs"})
+            "orbit_workflow_run_list",
+            json!({"workspace":selector,"view":"bounded"})
         )["code"],
         "capability_denied"
     );
@@ -75,13 +92,13 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
         .clone();
     assert!(qualified.is_string());
     let snapshot = federated.call_tool_ok(
-        "orbit_desktop_task_snapshot",
-        json!({"workspace":qualified,"id":id}),
+        "orbit_task_show",
+        json!({"workspace":qualified,"id":id,"snapshot":true}),
     );
     assert_eq!(snapshot["workspace"], qualified);
     assert_eq!(snapshot["task"]["id"], id);
     federated.call_tool_err(
-        "orbit_desktop_task_snapshot",
-        json!({"workspace":"ws_mcp-roundtrip","id":id}),
+        "orbit_task_show",
+        json!({"workspace":"ws_mcp-roundtrip","id":id,"snapshot":true}),
     );
 }
