@@ -4,7 +4,8 @@
 
 //! Golden-file regression coverage for the plain and `json` forms of the
 //! list commands, per `docs/design/terminal-interface/specs/output-modes.md`
-//! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571).
+//! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571),
+//! plus the layer provenance `config show --json` reports.
 //!
 //! The "table" form (a real terminal, pinned width, truncation) cannot be
 //! produced from this harness: `assert_cmd` captures stdout through a pipe,
@@ -499,6 +500,72 @@ fn task_show_relations_and_artifacts_match_golden() {
 /// variables (output-modes.md §1's invariant); the sweep exists to pin that
 /// invariant against a regression, not because any one combination is
 /// expected to behave differently from the others.
+/// The effective-config projection of `config show --json` attributes every
+/// key to the layer that supplies it (workspace, global or built-in) and
+/// records the layers it shadows. Both config files are written by the test,
+/// so the seeded crew catalog cannot leak in. Built-in values are policy that
+/// changes on its own schedule, so the golden keeps only their attribution;
+/// values a config file sets are pinned in full.
+#[test]
+fn config_show_effective_provenance_matches_golden() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.home.join(".orbit/config.toml"),
+        concat!(
+            "[workflow]\n",
+            "base_branch = \"main\"\n",
+            "default_crew = \"golden\"\n",
+            "\n",
+            "[crews.golden]\n",
+            "provider = \"codex\"\n",
+            "model = \"global-model\"\n",
+            "\n",
+            "[execution.codex]\n",
+            "sandbox = \"read-only\"\n",
+        ),
+    )
+    .expect("write global config");
+    std::fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        concat!(
+            "[workflow]\n",
+            "base_branch = \"agent-main\"\n",
+            "\n",
+            "[crews.golden]\n",
+            "model = \"workspace-model\"\n",
+        ),
+    )
+    .expect("write workspace config");
+
+    let shown = parse_json_stdout(
+        &fixture.run(&["config", "show", "--json"], &[]),
+        "config show",
+    );
+    let settings = shown["settings"].as_object().expect("settings object");
+    let mut provenance = serde_json::Map::new();
+    for (key, entry) in shown["provenance"].as_object().expect("provenance object") {
+        let scope = entry["scope"].as_str().expect("provenance scope");
+        let mut projected = serde_json::Map::new();
+        projected.insert("scope".to_string(), json!(scope));
+        projected.insert("state".to_string(), entry["state"].clone());
+        projected.insert("path".to_string(), entry["path"].clone());
+        if scope != "built-in" {
+            projected.insert("value".to_string(), settings[key].clone());
+        }
+        projected.insert("shadowed_by".to_string(), entry["shadowed_by"].clone());
+        provenance.insert(key.clone(), Value::Object(projected));
+    }
+    let projection = json!({
+        "source": shown["source"],
+        "provenance": provenance,
+    });
+    let rendered = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&projection).expect("serialize projection")
+    );
+    assert_golden("config_show_effective.json", &fixture.redact(&rendered));
+}
+
 #[test]
 fn no_ansi_escapes_under_any_color_configuration() {
     let fixture = Fixture::new();
