@@ -65,6 +65,9 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.auto_task.toggle",
             "orbit.auto_task.update",
             "orbit.command.exec",
+            "orbit.desktop.read",
+            "orbit.desktop.task.snapshot",
+            "orbit.desktop.task.write",
             // [ORB-12495] The distributed drain's read-only half, and
             // [ORB-13625] the executor lifecycle a follower's drain calls.
             "orbit.drain.claim.bind",

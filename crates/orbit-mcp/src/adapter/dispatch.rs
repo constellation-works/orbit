@@ -294,9 +294,9 @@ impl OrbitToolServer {
                 .as_deref()
                 .is_none_or(|selector| selector.trim().is_empty())
         {
-            return Ok(tool_error_result(&OrbitError::InvalidInput(
-                "desktop operations require an explicit workspace selector from discovery".into(),
-            )));
+            return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
+                "tool '{canonical}' requires an explicit workspace selector from discovery"
+            ))));
         }
         let host = Arc::clone(&self.host);
         let execution_name = canonical.clone();
