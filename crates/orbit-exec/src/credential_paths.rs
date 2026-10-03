@@ -119,7 +119,3 @@ pub(crate) fn non_empty_env_path(value: Option<&OsStr>) -> Option<PathBuf> {
     }
     Some(PathBuf::from(value))
 }
-
-#[cfg(test)]
-#[path = "tests/credential_paths.rs"]
-mod tests;

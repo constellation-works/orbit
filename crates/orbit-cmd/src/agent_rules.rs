@@ -84,9 +84,7 @@ pub fn inject_agent_rules(workspace_root: &Path) -> Result<InjectAgentRulesResul
 
 /// Normalize the template to a single trailing newline so the file produced
 /// from a brand-new write ends cleanly.
-// Widened to pub(crate) so sibling `src/tests/agent_rules.rs` can pin the
-// trim/marker shape after the test-layout migration.
-pub(crate) fn normalized_block(template: &str) -> Result<String, OrbitError> {
+fn normalized_block(template: &str) -> Result<String, OrbitError> {
     if !template.contains(START_MARKER) || !template.contains(END_MARKER) {
         return Err(OrbitError::InvalidInput(format!(
             "agent-rules template missing required markers ({START_MARKER} / {END_MARKER})"
@@ -99,9 +97,7 @@ pub(crate) fn normalized_block(template: &str) -> Result<String, OrbitError> {
     Ok(block)
 }
 
-// Widened to pub(crate) so sibling `src/tests/agent_rules.rs` can exercise
-// per-file apply/replace/reject paths after the test-layout migration.
-pub(crate) fn apply_to_file(path: &Path, block: &str) -> Result<InjectionAction, OrbitError> {
+fn apply_to_file(path: &Path, block: &str) -> Result<InjectionAction, OrbitError> {
     if !path.exists() {
         atomic_write_text(path, block).map_err(|e| OrbitError::Io(e.to_string()))?;
         return Ok(InjectionAction::Created);

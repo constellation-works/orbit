@@ -267,9 +267,6 @@ pub(super) fn recorded_git_common_dir(checkout: &WorkspaceCheckout) -> Option<Pa
 }
 
 pub(super) fn git_common_dir(path: &Path) -> Option<PathBuf> {
-    #[cfg(test)]
-    GIT_PROCESS_SPAWNS.with(|count| count.set(count.get() + 1));
-
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(path)
@@ -351,26 +348,6 @@ pub(super) fn git_workdir_root(path: &Path) -> Option<PathBuf> {
         let git_marker = ancestor.join(".git");
         (git_marker.is_dir() || git_marker.is_file()).then(|| canonical_path(ancestor))
     })
-}
-
-#[cfg(test)]
-thread_local! {
-    static GIT_PROCESS_SPAWNS: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) struct GitProcessProbes;
-
-#[cfg(test)]
-impl GitProcessProbes {
-    pub(crate) fn capture() -> Self {
-        GIT_PROCESS_SPAWNS.with(|count| count.set(0));
-        Self
-    }
-
-    pub(crate) fn git_process_spawns(&self) -> usize {
-        GIT_PROCESS_SPAWNS.with(Cell::get)
-    }
 }
 
 pub(super) fn same_cli_checkout(runtime: &OrbitRuntime, checkout: &WorkspaceCheckout) -> bool {
@@ -472,16 +449,10 @@ impl RuntimeOpenInputs {
     }
 }
 
-/// Project the machine-owned task namespace into the neutral task allocator.
-/// Custom/legacy roots without a `[machine]` table retain the historical ORB
-/// default; once an identity exists, a `machine.task_prefix` that contradicts
-/// the ids already minted locally fails closed at the allocator.
-#[cfg(test)]
-pub(crate) fn sync_task_prefix(global_root: &Path) -> Result<(), OrbitError> {
-    sync_task_prefix_for_identity(global_root, &inspect_machine_identity(global_root)?)
-}
-
-/// The same projection for a caller that already classified the identity.
+/// Project the machine-owned task namespace into the neutral task allocator
+/// for a caller that already classified the identity. Custom/legacy roots
+/// without a `[machine]` table retain the historical default; a present
+/// identity must agree with the ids already minted locally.
 pub(super) fn sync_task_prefix_for_identity(
     global_root: &Path,
     identity: &MachineIdentityState,

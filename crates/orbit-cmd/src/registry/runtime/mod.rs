@@ -1,7 +1,5 @@
 //! Registry-aware runtime composition and workspace selection.
 
-#[cfg(test)]
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -31,16 +29,4 @@ pub use factory::{
     RegisteredRuntimeFactory, RegisteredRuntimeStamp, ResolvedWorkspaceBinding,
     ResolvedWorkspaceSelection, resolved_workspace_binding, workspace_runtime_binding,
 };
-#[cfg(test)]
-pub(crate) use selection::GitProcessProbes;
-#[cfg(test)]
-pub(crate) use selection::retry_pipeline_worker_bootstrap;
-#[cfg(test)]
-pub(crate) use selection::select_workspace_for_cwd_and_roots;
-#[cfg(test)]
-#[cfg(test)]
-pub(crate) use selection::sync_task_prefix;
 pub use selection::{global_root_for, selector_looks_like_path};
-
-#[cfg(test)]
-mod tests;

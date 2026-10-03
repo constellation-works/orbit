@@ -54,11 +54,6 @@ impl RegisteredCheckout {
             checkout: checkout.clone(),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn repo_root(&self) -> &Path {
-        &self.checkout.repo_root
-    }
 }
 
 impl RegistryWorkspaceCatalog {

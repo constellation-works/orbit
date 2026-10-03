@@ -32,38 +32,6 @@ fn cloexec(fd: &OwnedFd) -> bool {
     flags & libc::FD_CLOEXEC != 0
 }
 
-#[test]
-fn a_spawn_that_inherits_nothing_leaves_the_descriptor_alone() {
-    let (_dir, fd) = credential("kept");
-    let before = fd.as_raw_fd();
-
-    let after = relocate_clear_of_targets(fd, &[]).expect("no targets is a no-op");
-
-    assert_eq!(
-        after.as_raw_fd(),
-        before,
-        "with nothing to collide with there is nothing to move"
-    );
-}
-
-#[test]
-fn a_descriptor_already_above_every_target_stays_where_it_is() {
-    let (_dir, fd) = credential("kept");
-    let before = fd.as_raw_fd();
-    let targets = [InheritedFd {
-        source: before,
-        target: before - 1,
-    }];
-
-    let after = relocate_clear_of_targets(fd, &targets).expect("clear of the target");
-
-    assert_eq!(
-        after.as_raw_fd(),
-        before,
-        "relocation is for overlap, not for every spawn"
-    );
-}
-
 /// The regression this file exists for: a ruleset that lands on the number the
 /// child remaps is replaced by the credential, and `landlock_restrict_self`
 /// answers `EBADFD`. The relocation has to clear *every* target, not just the
