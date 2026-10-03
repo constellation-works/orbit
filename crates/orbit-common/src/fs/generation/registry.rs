@@ -23,7 +23,8 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use super::identity::{Access, CompatibilityIdentity};
-use super::{refusal, validated_generation_root};
+use super::paths::validated_generation_root;
+use super::refusal::refusal;
 use crate::OrbitError;
 
 const PARTICIPANTS_DIR: &str = ".generation-participants";
