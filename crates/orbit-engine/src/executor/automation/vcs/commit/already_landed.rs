@@ -21,7 +21,7 @@ use crate::context::RuntimeHost;
 
 use super::super::delivery_marker::delivery_markers;
 use super::super::git::{git_output, git_output_paths, git_success};
-use super::pinned_object_id;
+use super::checkpoint::pinned_object_id;
 
 pub(super) const ARTIFACT: &str = "already-landed.json";
 

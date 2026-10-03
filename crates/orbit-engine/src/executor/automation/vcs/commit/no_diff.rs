@@ -16,7 +16,7 @@ use crate::context::RuntimeHost;
 
 use super::super::git::git_output;
 use super::already_landed::{log_matches, run_in_lineage};
-use super::pinned_object_id;
+use super::checkpoint::pinned_object_id;
 
 pub(super) const ARTIFACT: &str = "no-diff.json";
 

@@ -1,7 +1,7 @@
 // Migrated from the inline `state_env_var_tests` block in src/context.rs
 // when the module was decomposed (ORB-10015). The `state_env_vars` cases went
 // with the v1 executor transport in [ORB-10395]; the v2 child-environment
-// coverage lives in `activity_job::cli_runner::tests::orchestrator`.
+// coverage lives in `activity_job::cli_runner::orchestrator::tests::dispatch`.
 use super::super::{ProvenanceEnv, provenance_env};
 
 #[test]

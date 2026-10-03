@@ -2,11 +2,10 @@
 
 mod argv;
 mod claimed_leaf;
-mod cli_run;
+pub(in crate::activity_job::cli_runner) mod cli_run;
 mod envelope;
 mod inspection;
 mod launcher;
-mod orchestrator;
 mod orchestrator_env;
 #[cfg(target_os = "macos")]
 mod orchestrator_macos;

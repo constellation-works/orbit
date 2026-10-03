@@ -1,10 +1,11 @@
 #![allow(missing_docs)]
 
 /// [ORB-10879] The composition rule behind the exit-0 attribution, asserted
-/// without Bubblewrap: the spawn-boundary tests in `tests/orchestrator.rs` are
-/// `#[ignore]`d because a host whose kernel forbids unprivileged user
-/// namespaces (including every nested Orbit sandbox) cannot run them, so the
-/// message contract gets a check that always runs.
+/// without Bubblewrap: the spawn-boundary tests in
+/// `orchestrator/tests/completion.rs` are `#[ignore]`d because a host whose
+/// kernel forbids unprivileged user namespaces (including every nested Orbit
+/// sandbox) cannot run them, so the message contract gets a check that always
+/// runs.
 #[test]
 fn sandbox_write_attribution_rides_along_with_the_frame_classification() {
     let denial = "Orbit linux-bwrap policy denied the attempted write: \
