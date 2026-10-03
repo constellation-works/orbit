@@ -340,6 +340,16 @@ for air-gapped or staged rollouts. The layout is `latest-version.txt` plus
 checksum verification are unchanged — a mirror does not lower the bar. `ORBIT_INSTALL_REPO`
 selects a different GitHub repository, as it does for `install.sh`.
 
+`orbit update` verifies the manifest with the compiled release trust set unless
+`ORBIT_RELEASE_TRUSTED_KEYS_FILE` is set and
+`ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE=1`. Records are the same
+`id|not_after|revoked_at|public_key_path` lines `install.sh` reads: blank lines and
+`#` comments are ignored, and a relative public-key path is resolved next to the
+record file. A key whose signature matches is rejected when `revoked_at` is set,
+even if `not_after` is still in the future. `orbit update` does not honor
+`ORBIT_RELEASE_PUBLIC_KEY_FILE` by itself; setting it together with the trust file
+is an error. Without the acknowledged file, only the compiled keys verify.
+
 Both HTTP releases and local mirrors limit each input before buffering it: latest-release
 metadata and `latest-version.txt` to 64 KiB, the checksum manifest to 1 MiB, its detached
 signature to 16 KiB, and the compressed archive to 256 MiB. An input over its limit fails

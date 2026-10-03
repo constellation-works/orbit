@@ -30,6 +30,7 @@ pub mod lock;
 mod report;
 pub mod source;
 pub mod stage;
+mod trust;
 pub mod version;
 
 pub use admission::{acquire_admissions, admission_authorities};
