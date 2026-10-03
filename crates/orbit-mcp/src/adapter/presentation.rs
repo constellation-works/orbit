@@ -85,7 +85,15 @@ pub(super) fn resource_content(uri: &str) -> ResourceContents {
         )
         .replace(
             "/* ORBIT_PANEL_SCRIPT */",
-            include_str!("../../assets/task-panel/js/task-panel.js"),
+            &[
+                include_str!("../../../orbit-web/assets/dashboard/vendor/marked.umd.js"),
+                include_str!("../../../orbit-web/assets/dashboard/vendor/purify.min.js"),
+                include_str!("../../assets/task-panel/js/presentation.js"),
+                include_str!("../../assets/task-panel/js/drain.js"),
+                include_str!("../../assets/task-panel/js/automation.js"),
+                include_str!("../../assets/task-panel/js/task-panel.js"),
+            ]
+            .join("\n"),
         );
     ResourceContents::text(html, uri)
         .with_mime_type(MIME)

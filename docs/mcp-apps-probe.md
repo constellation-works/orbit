@@ -1,6 +1,6 @@
 # Orbit desktop control-center validation
 
-The candidate adds Tasks, Runs and Review views to the existing Orbit plugin.
+The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin.
 It serves `ui://orbit/control-center/v1/index.html` as
 `text/html;profile=mcp-app`; the old `ui://orbit/task-panel/v1/index.html` remains
 readable so an already-open panel can reload. `orbit_ui_open` advertises a
@@ -19,11 +19,15 @@ this probe.
 
 ## Application and resource contract
 
-The adapter embeds `crates/orbit-mcp/assets/task-panel/{index.html,css/task-panel.css,js/task-panel.js}`
+The adapter embeds `crates/orbit-mcp/assets/task-panel/{index.html,css/task-panel.css,js/*.js}`
 into one static resource. The frontend uses plain JavaScript with JSDoc, matching
 the existing dashboard asset workflow without a TypeScript build dependency.
-No frontend build or separate asset endpoint is needed. The bundle uses text sinks for task content, restricts external assets,
-connections and frames, and never interpolates task text into executable HTML.
+No frontend build or separate asset endpoint is needed. The presentation helper embeds
+Orbit dashboard's existing pinned `marked` and DOMPurify assets in the static
+resource. Markdown escapes raw HTML before sanitization, strips resource-loading
+and form elements, and permits only HTTP(S) links with `noopener noreferrer`.
+Other UI text uses text sinks. CSP still blocks external assets, connections and
+frames. The protocol crate adds no dependency on the web runtime.
 Resource lookup accepts only the two exact versioned URIs. It does not resolve
 paths, query strings or arbitrary artifact contents.
 
@@ -70,6 +74,61 @@ history. They are untrusted discussion context: reread before acting. Selection
 changes, failed reads, timeout and teardown invalidate context. Late responses
 cannot retarget another selection. The script harness exercises these cases;
 actual model-context delivery still requires the desktop host.
+
+## Auto-drain and Automation
+
+`orbit_desktop_read` adds operator-only `drain`, `routines`, `auto_tasks` and
+`jobs` scopes. They are observational and explicitly workspace-scoped. Automation
+lists use offset/limit pagination (up to 50 rows), disclose definition load errors,
+and preserve inactive-plugin states. Routine status and auto-task next slots use
+the shared scheduler owners. These are workspace definitions, not host service
+health: enabled does not imply that the separate host clock is running.
+
+`orbit_desktop_drain` starts a bounded window (1–604800 seconds, optional positive
+u32 concurrency) or stops admissions and settles recorded work through the same
+runtime as CLI/dashboard. Completion defaults to review. Selecting **Complete
+automatically** explicitly authorizes completion of every task admitted during the
+window. Stopping preserves admitted workers. Readiness is a sample of up to 50
+tasks; eligibility may change immediately.
+
+`orbit_desktop_automation` supports routine/auto-task toggles, explicit manual
+mint, and no-input catalog job submission. Toggle requests carry the observed
+enabled flag; routine requests also carry the observed target. The domain owner
+checks routine changes and auto-task compare-and-set occurs under the scheduler
+cursor lock. Manual mint requires an acknowledgement that schedule, enabled and
+dedupe are ignored; it creates a task without dispatching it. Job submissions
+share the dashboard's no-input submission policy and refuse delivery jobs,
+disabled jobs and subroutines. Definition controls refuse replica coordination
+writes. Both new write tools require an existing operator session and refuse
+managed-run callers; payloads cannot grant authority.
+
+Drain and automation actions do **not** have task-write retry receipts. The UI
+never replays them automatically. A lost or malformed reply is an unknown outcome:
+inspect authoritative definitions, Tasks and Runs. The affected panel keeps writes
+disabled for that workspace/category until reopened. A refresh only reads.
+Switching destinations or leaving a view invalidates late responses. In-panel
+confirmations survive polling only while the definition remains unchanged.
+
+The layout shares the dashboard palette, compact rows, status badges and readable
+Markdown. It adapts from a sidebar at desktop widths to horizontal navigation in
+narrow hosts. Editing uses a keyboard-contained dialog, preserving drafts on Escape,
+view changes and refresh. Technical evidence remains expandable.
+
+### Isolated rendered preview
+
+```sh
+node crates/orbit-mcp/src/adapter/tests/panel-preview.mjs
+# Open http://127.0.0.1:4318 in a browser.
+```
+
+This loopback fixture serves the same embedded asset assembly with a simulated
+MCP Apps parent bridge. It never calls Orbit or modifies a real workspace. Exercise
+Tasks/Review/Runs navigation, edit and Escape, dark/light themes, 375/560/880/1440px
+widths, Markdown including hostile HTML, drain start/stop, automation tabs,
+confirmation/cancel and workspace changes. Browser rendering is distinct from
+installed-plugin acceptance; a candidate binary still needs a plugin-host restart
+to be used by the installed launcher. Protocol/DOM tests and this preview do not
+claim that a new binary was installed in Codex Desktop.
 
 ## Retry receipts and their lifetime
 

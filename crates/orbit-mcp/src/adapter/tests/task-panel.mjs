@@ -10,7 +10,7 @@ import {
   test
 }
 from 'node:test';
-const source=process.env.ORBIT_PANEL_RESOURCE?readFileSync(process.env.ORBIT_PANEL_RESOURCE,'utf8').match(/<script>([\s\S]*?)<\/script>/)?.[1]:readFileSync(new URL('../../../assets/task-panel/js/task-panel.js',import.meta.url),'utf8');
+const source=process.env.ORBIT_PANEL_RESOURCE?readFileSync(process.env.ORBIT_PANEL_RESOURCE,'utf8').match(/<script>([\s\S]*?)<\/script>/)?.[1]:['presentation.js','drain.js','automation.js','task-panel.js'].map(file=>readFileSync(new URL('../../../assets/task-panel/js/'+file,import.meta.url),'utf8')).join('\n');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 class Node {
   constructor(tag='div'){
@@ -24,14 +24,18 @@ class Node {
     this.hidden=false;
     this.dataset={
     };
+    this.parentElement={hidden:false};
     this.style={
     };
     this.classList={
       add(){
       },remove(){
+      },toggle(){
       }
     };
   }
+  set textContent(value){this.text=String(value);this.children=[];}
+  get textContent(){return this.text+this.children.map(n=>n.textContent||'').join('');}
   set innerHTML(_){
     throw new Error('Unsafe HTML rendering');
   }
@@ -53,6 +57,7 @@ class Node {
   focus(){
     this.focused=true;
   }
+  checkValidity(){return true;}
   reportValidity(){
     return true;
   }
@@ -202,7 +207,8 @@ test('late navigation reads cannot replace selected identity; hidden stops polli
     id:'wrong',title:'Late'
   }]));
   await flush();
-  assert.equal(f.get('list').children[0].textContent,'ORB-1 · Good');
+  assert.equal(f.get('list').children[0].dataset.entityKey,'ORB-1');
+  assert.equal(f.get('list').children[0].children[0].textContent,'Good');
   f.document.hidden=true;
   f.events.visibilitychange();
   assert.equal(f.timers.size,0);
@@ -533,7 +539,8 @@ test('wrong destination responses preserve good rows and mark current state stal
   wrong.workspace='host-b/ws_shared';
   f.answer(f.last(),wrong);
   await flush();
-  assert.equal(f.get('list').children[0].textContent,'ORB-1 · Good');
+  assert.equal(f.get('list').children[0].dataset.entityKey,'ORB-1');
+  assert.equal(f.get('list').children[0].children[0].textContent,'Good');
   assert.ok(f.get('state').textContent.includes('Stale'));
 });
 test('missing model-context capability keeps a self-contained copyable reference',async()=>{
@@ -675,7 +682,7 @@ test('structured conflict displays fresh state but preserves the original edit d
   assert.equal(f.get('draft-title').value,'My edited title');
   assert.equal(f.get('editor').hidden,false);
   assert.equal(f.get('save').disabled,true);
-  assert.ok(f.get('identity').textContent.includes('fresh-revision'));
+  assert.ok(f.get('identity').title.includes('fresh-revision'));
   assert.ok(f.get('state').textContent.includes('Write refused'));
   f.click('refresh');
   assert.equal(f.last().params.name,'orbit_desktop_read');
@@ -789,7 +796,7 @@ test('a truncated final log page exposes truncation without an endless next page
   });
   await flush();
   assert.equal(f.get('more-logs').hidden,true);
-  assert.ok(f.get('details').children.some(n=>n.children[1].textContent.includes('stdout_truncated')));
+  assert.ok(f.get('details').children.some(n=>n.children[1].textContent.includes('stdout truncated')));
 });
 test('disposed editor cannot submit even when a form event is dispatched directly',async()=>{
   const f=fixture();
@@ -946,7 +953,7 @@ test('bounded task rows visibly disclose truncation and omitted run identity',as
     id:'ORB-1',title:'Clipped title',title_truncated:true,crew:'Clipped crew',crew_truncated:true,relations:[],relations_total:80,relations_truncated:true,dependencies:[],dependencies_total:70,dependencies_truncated:true,job_run_id_omitted:true
   }]));
   await flush();
-  const summary=f.get('list').children[0].children[0].textContent;
+  const summary=f.get('list').children[0].textContent;
   assert.ok(summary.includes('Truncated: title, crew'));
   assert.ok(summary.includes('of 80'));
   assert.ok(summary.includes('of 70'));
@@ -1234,12 +1241,12 @@ test('canonical run rows show observed state attempt and duration without treati
     id:'jrun-running',run_id:'jrun-running',state:'running',attempt:1,duration_ms:null,created_at:'2026-10-03T01:00:00Z'
   }]));
   await flush();
-  const failed=f.get('list').children[0].children[0].textContent;
+  const failed=f.get('list').children[0].textContent;
   assert.ok(failed.includes('failed'));
   assert.ok(failed.includes('Attempt 2'));
-  assert.ok(failed.includes('Duration 1250 ms'));
-  assert.ok(failed.includes('Step unavailable'));
-  const running=f.get('list').children[1].children[0].textContent;
+  assert.ok(failed.includes('1s'));
+  assert.equal(f.get('list').children[0].children[0].textContent,'Workflow run');
+  const running=f.get('list').children[1].textContent;
   assert.ok(running.includes('running'));
   assert.ok(running.includes('Duration unavailable'));
   assert.ok(!running.includes('Duration 0 ms'));
@@ -1264,4 +1271,105 @@ test('task filters expose blocked and terminal statuses, with human readable lab
   const f=fixture(); await f.init(); f.click('tasks');
   for(const status of ['blocked','rejected','archived','someday']) assert.ok(f.get('status').options.some(o=>o.value===status));
   assert.equal(f.get('status').options.find(o=>o.value==='in_progress').textContent,'In progress');
+});
+
+const drainRead=(workspace='host-a/ws_shared',capacity={})=>({schema_version:1,workspace,scope:'drain',controls_authorized:true,capacity:{active_leaf_runs:2,max_active_leaf_runs:4,free_slots:2,...capacity},tasks:[{task_id:'ORB-1',eligible:true},{task_id:'ORB-2',eligible:false,reason:'context_lock_conflict'}]});
+test('drain defaults to review, explicit completion is forwarded and stop keeps start settings out',async()=>{
+  const f=fixture();await f.init();f.click('drain');
+  assert.equal(f.last().params.arguments.scope,'drain');
+  f.answer(f.last(),drainRead());await flush();
+  assert.equal(f.get('drain-start').disabled,false);
+  f.get('drain-duration').value='3600';f.get('drain-concurrency').value='3';f.get('drain-complete').checked=false;
+  f.get('drain-form').handlers.submit({preventDefault(){}});
+  const request=f.last();assert.equal(request.params.name,'orbit_desktop_drain');
+  assert.deepEqual(JSON.parse(JSON.stringify(request.params.arguments)),{workspace:'host-a/ws_shared',action:'start',for_seconds:3600,concurrency:3,complete:false});
+  f.answer(request,{schema_version:1,workspace:'host-a/ws_shared',action:'start',run_id:'jrun-new',state:'submitted',completion:'review'});await flush();
+  f.answer(f.last(),drainRead('host-a/ws_shared',{drain_run_id:'jrun-new'}));await flush();
+  assert.equal(f.get('drain-start').disabled,true);
+  f.click('drain-stop');assert.deepEqual(JSON.parse(JSON.stringify(f.last().params.arguments)),{workspace:'host-a/ws_shared',action:'stop'});
+});
+test('drain response loss never resubmits a start and remains uncertain across workspace changes',async()=>{
+  const f=fixture();await f.init();f.click('drain');f.answer(f.last(),drainRead());await flush();
+  f.get('drain-duration').value='1800';f.get('drain-complete').checked=true;
+  f.get('drain-form').handlers.submit({preventDefault(){}});const request=f.last();assert.equal(request.params.arguments.complete,true);
+  f.receive({source:f.parent,data:{jsonrpc:'2.0',id:request.id,error:{message:'connection lost'}}});await flush();
+  assert.ok(f.get('drain-feedback').textContent.includes('outcome unknown'));
+  f.click('refresh');f.answer(f.last(),drainRead());await flush();
+  assert.equal(f.posted.filter(m=>m.params?.name==='orbit_desktop_drain').length,1);
+  assert.equal(f.get('drain-start').disabled,true);
+  f.get('workspace').value='host-b/ws_shared';f.get('workspace').handlers.change();f.answer(f.last(),drainRead('host-b/ws_shared'));await flush();
+  assert.equal(f.get('drain-start').disabled,false);
+  f.get('workspace').value='host-a/ws_shared';f.get('workspace').handlers.change();f.answer(f.last(),drainRead());await flush();
+  assert.equal(f.get('drain-start').disabled,true);
+});
+test('late drain read cannot enable controls for a different workspace and a read failure disables controls',async()=>{
+  const f=fixture();await f.init();f.click('drain');const old=f.last();
+  f.get('workspace').value='host-b/ws_shared';f.get('workspace').handlers.change();const current=f.last();
+  f.answer(old,drainRead());await flush();assert.equal(f.get('drain-start').disabled,true);
+  f.answer(current,drainRead('host-b/ws_shared'));await flush();assert.equal(f.get('drain-start').disabled,false);
+  f.click('drain-refresh');f.answer(f.last(),{message:'operator required'},true);await flush();
+  assert.equal(f.get('drain-start').disabled,true);assert.equal(f.get('drain-stop').disabled,true);
+});
+test('task editor traps background interaction, Escape preserves draft and restores invoking control',async()=>{
+  const f=fixture();await f.init();const invoker=new Node('button');f.document.activeElement=invoker;
+  f.click('create');f.get('draft-title').value='Keep this';assert.equal(f.get('app-shell').inert,true);
+  f.events.keydown({key:'Escape',preventDefault(){}});assert.equal(f.get('editor').hidden,true);assert.equal(f.get('app-shell').inert,false);assert.equal(invoker.focused,true);
+  f.click('create');assert.equal(f.get('draft-title').value,'Keep this');
+});
+
+const automationRead=(scope='routines',workspace='host-a/ws_shared',items=[{name:'daily',enabled:true,state:'scheduled',target:'job:maintenance',schedule:{cron:'0 9 * * *'},toggle_available:true}])=>({schema_version:1,workspace,scope,items,total:items.length,controls_authorized:true,pagination:{next_offset:null},notes:[]});
+const actionButton=(f,text)=>f.get('automation-detail').querySelectorAll('button').find(b=>b.textContent===text);
+test('automation switches read scopes, toggles observed state and requires an explicit mint confirmation',async()=>{
+ const f=fixture();await f.init();f.click('automation');assert.equal(f.last().params.arguments.scope,'routines');
+ f.answer(f.last(),automationRead());await flush();f.get('automation-list').children[0].handlers.click();
+ actionButton(f,'Disable definition').handlers.click();const toggle=f.last();
+ assert.deepEqual(JSON.parse(JSON.stringify(toggle.params.arguments)),{workspace:'host-a/ws_shared',action:'toggle',kind:'routine',name:'daily',expected_enabled:true,enabled:false,target:'job:maintenance'});
+ f.answer(toggle,{schema_version:1,workspace:'host-a/ws_shared',action:'toggle',kind:'routine',name:'daily',enabled:false});await flush();
+ f.answer(f.last(),automationRead());await flush();
+ f.click('automation-auto_tasks');assert.equal(f.last().params.arguments.scope,'auto_tasks');
+ f.answer(f.last(),automationRead('auto_tasks','host-a/ws_shared',[{name:'qa',enabled:true,mint_available:true}]));await flush();
+ f.get('automation-list').children[0].handlers.click();const before=f.posted.length;
+ actionButton(f,'Mint task…').handlers.click();assert.equal(f.posted.length,before,'opening confirmation has no effect');
+ assert.match(f.get('automation-detail').textContent,/ignores the schedule/);
+ actionButton(f,'Mint one task').handlers.click();assert.equal(f.last().params.arguments.acknowledge_unconditional,true);assert.equal(f.last().params.arguments.kind,'auto_task');
+});
+test('automation scopes unknown outcomes and never repeats a run after refresh',async()=>{
+ const f=fixture();await f.init();f.click('automation');f.answer(f.last(),automationRead());await flush();
+ f.click('automation-jobs');f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[{name:'maintenance',run_available:true}]));await flush();
+ f.get('automation-list').children[0].handlers.click();actionButton(f,'Run job…').handlers.click();actionButton(f,'Submit job').handlers.click();const write=f.last();
+ f.receive({source:f.parent,data:{jsonrpc:'2.0',id:write.id,error:{message:'lost reply'}}});await flush();
+ assert.match(f.get('automation-feedback').textContent,/outcome unknown/);
+ f.click('automation-refresh');f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[{name:'maintenance',run_available:true}]));await flush();
+ assert.equal(actionButton(f,'Run job…').disabled,true);
+ assert.equal(f.posted.filter(m=>m.params?.name==='orbit_desktop_automation').length,1);
+ f.get('workspace').value='host-b/ws_shared';f.get('workspace').handlers.change();f.answer(f.last(),automationRead('jobs','host-b/ws_shared',[{name:'maintenance',run_available:true}]));await flush();
+ f.get('automation-list').children[0].handlers.click();assert.equal(actionButton(f,'Run job…').disabled,false);
+});
+test('late automation reads cannot replace another destination and pagination is explicit',async()=>{
+ const f=fixture();await f.init();f.click('automation');const stale=f.last();
+ f.get('workspace').value='host-b/ws_shared';f.get('workspace').handlers.change();const current=f.last();
+ f.answer(stale,automationRead());await flush();assert.equal(f.get('automation-list').children.length,0);
+ f.answer(current,{...automationRead('routines','host-b/ws_shared'),total:30,pagination:{next_offset:25}});await flush();
+ f.click('automation-next');assert.equal(f.last().params.arguments.offset,25);assert.equal(f.last().params.arguments.workspace,'host-b/ws_shared');
+ f.answer(f.last(),{message:'permission denied'},true);await flush();assert.match(f.get('automation-feedback').textContent,/Automation unavailable/);
+});
+test('late drain receipt after leaving the view cannot refresh or overwrite current feedback',async()=>{
+ const f=fixture();await f.init();f.click('drain');f.answer(f.last(),drainRead());await flush();
+ f.get('drain-duration').value='3600';f.get('drain-form').handlers.submit({preventDefault(){}});const write=f.last();
+ f.click('tasks');const count=f.posted.length;
+ f.answer(write,{schema_version:1,workspace:'host-a/ws_shared',action:'start',run_id:'late',state:'submitted',completion:'review'});await flush();
+ assert.equal(f.posted.length,count,'late write does not request hidden readiness');
+ assert.equal(f.get('drain-start').disabled,true);
+});
+test('automation confirmation survives an observational refresh but cancels on definition change',async()=>{
+ const f=fixture();await f.init();f.click('automation');f.answer(f.last(),automationRead());await flush();
+ f.click('automation-jobs');const job={name:'maintenance',state:'enabled',run_available:true,steps:2};
+ f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[job]));await flush();
+ f.get('automation-list').children[0].handlers.click();actionButton(f,'Run job…').handlers.click();
+ f.click('automation-refresh');assert.equal(actionButton(f,'Submit job').disabled,true);
+ f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[job]));await flush();
+ assert.equal(actionButton(f,'Submit job').disabled,false,'same definition retains confirmation');
+ f.click('automation-refresh');f.answer(f.last(),automationRead('jobs','host-a/ws_shared',[{...job,state:'disabled',run_available:false}]));await flush();
+ assert.equal(actionButton(f,'Submit job'),undefined,'changed definition invalidates confirmation');
+ assert.equal(f.posted.filter(m=>m.params?.name==='orbit_desktop_automation').length,0);
 });
