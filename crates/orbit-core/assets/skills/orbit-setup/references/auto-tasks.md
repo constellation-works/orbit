@@ -125,8 +125,10 @@ orbit auto-task restore <name>          # reinstate a deleted shipped default
 
 `mint` ignores the schedule, the dedupe policy, and `enabled`, and leaves the
 scheduler's cursor untouched — so it creates real work even for a disabled definition. Inspect with
-`show` first; mint only when creating that task is intended. Over MCP: `orbit_auto_task_list` and
-`orbit_auto_task_mint`.
+`show` first; mint only when creating that task is intended. Over MCP:
+`orbit_auto_task_add`, `orbit_auto_task_list`, `orbit_auto_task_update`,
+`orbit_auto_task_toggle`, `orbit_auto_task_delete`, and `orbit_auto_task_mint`.
+`show`, `restore`, `recover`, and `reset` stay CLI-only.
 
 ### Deleting a definition
 

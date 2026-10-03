@@ -6,7 +6,7 @@ The connected tool schema is authoritative for supported fields.
 ## Behavior-affecting optional fields
 
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first. Not an `orbit.task.add` input: it is stripped with the other
+  status first. Not an `orbit.task.add` input: it is refused with the other
   `RETIRED_TASK_ADD_INPUT_FIELDS`, so set it with `orbit.task.update` after
   creation. Unlike `resolves`, task IDs are global: a prerequisite owned by
   another workspace registered on this machine is read from its owner, and
@@ -28,7 +28,7 @@ The connected tool schema is authoritative for supported fields.
   but inert. Only `produces`/`resolves` accept non-task targets; the rest
   require a task ID. A dangling target (unknown in every workspace this host
   can see) succeeds but emits a `TaskRelationDangling` audit event.
-- `parent_id` is a retired `orbit.task.add` input and is stripped with the
+- `parent_id` is a retired `orbit.task.add` input and is refused with the
   other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
   in `relations` when creating a subtask. `source_task_id` is also retired
   from `orbit.task.add`; for bug tasks, set it after creation with
