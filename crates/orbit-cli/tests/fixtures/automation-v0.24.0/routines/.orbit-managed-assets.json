@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "assetKind": "routine",
+  "assets": {
+    "task_pilot": "8db34a457366d4f12dea254fcb28c0d0d432bbf0410677b7b6c06575816be7f4"
+  },
+  "routineProvenance": {
+    "task_pilot": {
+      "templateDigest": "d62349c4e7719f861a5695f1f5e6c466289ebc5ff606bf6c2db88b6dcd00baac",
+      "renderedDigest": "8db34a457366d4f12dea254fcb28c0d0d432bbf0410677b7b6c06575816be7f4",
+      "binding": {
+        "name": "task-pilot-legacy-workspace",
+        "ownerMachine": "hm_workspace_sync",
+        "branch": "main"
+      }
+    }
+  }
+}
