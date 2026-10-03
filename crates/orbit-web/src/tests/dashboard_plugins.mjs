@@ -388,4 +388,31 @@ assert(panelText('graph/status').includes('6666') && !panelText('graph/status').
 assert(panelText('graph/files').includes('a-second.rs') && !panelText('graph/files').includes('a-first.rs') && !panelText('graph/files').includes('b-middle.rs'), `return visit shows its own files read: ${panelText('graph/files')}`);
 deferPanelReads = false;
 
+// Refreshes must replace a card whenever its displayed metadata changes,
+// even when the installed version and panel/link identities stay the same.
+const graphCard = () => withClass('plugin-card').find(card => card.dataset.key === 'graph');
+const beforeMetadata = graphCard();
+await fetchAndRenderPlugins();
+await settle();
+assert(graphCard() === beforeMetadata, 'unchanged metadata retains the existing card');
+graph.pinned = false;
+graph.unsandboxed = true;
+graph.description = 'Updated plugin description';
+graph.tools[0].active = false;
+graph.tools[0].advertised_name = 'renamed_graph_status';
+graph.panels[0].title = 'Updated index title';
+graph.links[0].title = 'Updated explorer title';
+await fetchAndRenderPlugins();
+await settle();
+const refreshed = graphCard();
+assert(refreshed !== beforeMetadata, 'changed metadata replaces the stale card at the same version');
+assert(!descendants(refreshed).some(node => hasClass(node, 'plugin-chip') && node.textContent === 'pinned'), 'removed pin disappears on refresh');
+assert(refreshed.textContent.includes('unsandboxed'), 'changed sandbox status appears on refresh');
+assert(refreshed.textContent.includes('Updated plugin description'), 'description updates on refresh');
+assert(refreshed.textContent.includes('Updated index title'), 'panel title updates on refresh');
+assert(refreshed.textContent.includes('Updated explorer title'), 'link title updates on refresh');
+const toolChip = descendants(refreshed).find(node => node.textContent === 'graph.status' && hasClass(node, 'plugin-chip'));
+assert(hasClass(toolChip, 'plugin-chip-idle'), 'tool activation status updates on refresh');
+assert(toolChip.title.includes('renamed_graph_status'), 'advertised tool name updates on refresh');
+
 console.log('dashboard plugins panel assertions passed');
