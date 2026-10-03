@@ -57,7 +57,7 @@ fn installed_if_replaced() -> Option<PathBuf> {
 fn installed_if_replaced() -> Option<PathBuf> {
     let installed = std::env::current_exe().ok()?;
     let mut file = std::fs::File::open(&installed).ok()?;
-    super::verify_running_image(&mut file)
+    super::image::verify_running_image(&mut file)
         .is_err()
         .then_some(installed)
 }

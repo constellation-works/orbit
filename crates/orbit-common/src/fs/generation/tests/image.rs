@@ -1,4 +1,4 @@
-use super::{macho_commands_length, macho_uuid};
+use super::super::image::{macho_commands_length, macho_uuid};
 
 #[test]
 fn native_image_uuid_parser_rejects_missing_truncated_and_unknown_images() {
