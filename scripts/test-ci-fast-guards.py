@@ -239,6 +239,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(
             calls,
             [
+                ["test", "-p", "orbit-core", "--test", "ci_failure_goldens"],
+                ["test", "-p", "orbit-tools", "--test", "public_tool_surface", "github_log_goldens"],
                 ["test", "-p", "orbit-tools", "--test", "mcp_definitions"],
                 ["test", "-p", "orbit-cli", "--bin", "orbit", "help_matches_the_shipped_surface"],
                 ["test", "-p", "orbit-cli", "--test", "output_goldens"],
@@ -269,18 +271,20 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         "output": os.environ.get("ORBIT_UPDATE_OUTPUT_GOLDENS"),
         "mcp": os.environ.get("ORBIT_MCP_UPDATE_SNAPSHOT"),
         "sandbox": os.environ.get("ORBIT_UPDATE_SANDBOX_GOLDENS"),
+        "logs": os.environ.get("ORBIT_UPDATE_LOG_GOLDENS"),
     }) + "\\n")
 ''',
         )
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(calls), 8)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")
             self.assertEqual(call["mcp"], "1")
             self.assertEqual(call["sandbox"], "1")
+            self.assertEqual(call["logs"], "1")
 
     def test_goldens_rejects_unknown_flags(self):
         result = self.run_guard("check-goldens.sh", "--fast")

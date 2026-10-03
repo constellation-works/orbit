@@ -1,0 +1,348 @@
+[
+  {
+    "name": "dependabot_alert_request_is_bounded_and_projects_compact_evidence",
+    "op": "dependabot",
+    "input": {
+      "repo": "openai/orbit",
+      "limit": 500
+    },
+    "raw": {
+      "number": 7,
+      "state": "open",
+      "dependency": {
+        "package": {
+          "ecosystem": "cargo",
+          "name": "time"
+        },
+        "manifest_path": "Cargo.lock",
+        "scope": "runtime"
+      },
+      "security_advisory": {
+        "severity": "high",
+        "ghsa_id": "GHSA-1234",
+        "cve_id": "CVE-2026-1",
+        "summary": "A concise summary",
+        "description": "long prose must not escape"
+      },
+      "security_vulnerability": {
+        "vulnerable_version_range": "< 1.2.3",
+        "first_patched_version": {
+          "identifier": "1.2.3"
+        }
+      },
+      "html_url": "https://github.test/security/7"
+    }
+  },
+  {
+    "name": "dependabot_pull_request_discovery_requests_and_projects_the_head_branch",
+    "op": "dependabot_pr",
+    "input": {
+      "repo": "openai/orbit"
+    },
+    "raw": {
+      "number": 4,
+      "title": "Bump time",
+      "url": "https://github.test/pr/4",
+      "body": "Bumps time.",
+      "author": {
+        "login": "app/dependabot"
+      },
+      "headRefName": "dependabot/cargo/time-1.2.3"
+    }
+  },
+  {
+    "name": "dependabot_alert_request_rejects_repository_path_injection",
+    "op": "dependabot",
+    "input": {
+      "repo": "acme/repo?per_page=999"
+    },
+    "raw": null
+  },
+  {
+    "name": "code_and_secret_scanning_requests_are_bounded_and_validate_repository/code_scanning",
+    "op": "code_scanning",
+    "input": {
+      "repo": "openai/orbit",
+      "limit": 500
+    },
+    "raw": null
+  },
+  {
+    "name": "code_and_secret_scanning_requests_are_bounded_and_validate_repository/secret_scanning",
+    "op": "secret_scanning",
+    "input": {
+      "repo": "openai/orbit",
+      "limit": 500
+    },
+    "raw": null
+  },
+  {
+    "name": "code_and_secret_scanning_requests_are_bounded_and_validate_repository/injection",
+    "op": "secret_scanning",
+    "input": {
+      "repo": "acme/repo?state=resolved"
+    },
+    "raw": null
+  },
+  {
+    "name": "scanning_projections_retain_evidence_but_structurally_drop_secret/code",
+    "op": "code_scanning",
+    "input": {
+      "repo": "openai/orbit"
+    },
+    "raw": {
+      "number": 9,
+      "state": "open",
+      "rule": {
+        "id": "rust/sql-injection",
+        "name": "SQL injection",
+        "description": "unsafe query",
+        "security_severity_level": "high",
+        "tags": [
+          "security"
+        ]
+      },
+      "tool": {
+        "name": "CodeQL",
+        "guid": "tool-guid",
+        "version": "2.0"
+      },
+      "most_recent_instance": {
+        "ref": "refs/heads/main",
+        "commit_sha": "abc123",
+        "message": {
+          "text": "user input reaches query"
+        },
+        "location": {
+          "path": "src/db.rs",
+          "start_line": 17,
+          "end_line": 19,
+          "start_column": 4,
+          "end_column": 20
+        },
+        "classifications": [
+          "test"
+        ]
+      },
+      "instances_url": "must not escape"
+    }
+  },
+  {
+    "name": "scanning_projections_retain_evidence_but_structurally_drop_secret/secret",
+    "op": "secret_scanning",
+    "input": {
+      "repo": "openai/orbit"
+    },
+    "raw": {
+      "number": 12,
+      "state": "open",
+      "secret_type": "example_token",
+      "secret_type_display_name": "Example token",
+      "secret": "orbit-sentinel-secret-99f0",
+      "validity": "active",
+      "publicly_leaked": false,
+      "multi_repo": false
+    }
+  },
+  {
+    "name": "scanning_projections_retain_evidence_but_structurally_drop_secret/location",
+    "op": "secret_location",
+    "input": {
+      "repo": "openai/orbit",
+      "alert_number": 12
+    },
+    "raw": {
+      "type": "commit",
+      "details": {
+        "path": "config/dev.env",
+        "start_line": 3,
+        "end_line": 3,
+        "commit_sha": "def456",
+        "commit_url": "https://github.test/commit/def456",
+        "diff": "orbit-sentinel-secret-99f0"
+      }
+    }
+  },
+  {
+    "name": "run_list_applies_every_filter_and_caps_the_limit",
+    "op": "run_list",
+    "input": {
+      "branch": "release",
+      "workflow": "ci.yml",
+      "status": "failure",
+      "event": "push",
+      "limit": 5000,
+      "repo": "owner/name"
+    },
+    "raw": null
+  },
+  {
+    "name": "run_list_defaults_to_an_unfiltered_bounded_query",
+    "op": "run_list",
+    "input": {},
+    "raw": null
+  },
+  {
+    "name": "a_filter_value_cannot_smuggle_another_gh_flag",
+    "op": "run_list",
+    "input": {
+      "branch": "--repo"
+    },
+    "raw": null
+  },
+  {
+    "name": "run_view_requires_a_numeric_run_id",
+    "op": "run_view",
+    "input": {
+      "run": "--log"
+    },
+    "raw": null
+  },
+  {
+    "name": "run_view_projects_the_reported_head_sha_and_collects_failed_jobs",
+    "op": "run_view",
+    "input": {
+      "run": "34060485218"
+    },
+    "raw": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "a_cancelled_job_counts_as_unsuccessful",
+    "op": "run_view",
+    "input": {
+      "run": "34060485218"
+    },
+    "raw": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560019999,
+          "name": "test (ubuntu)",
+          "status": "completed",
+          "conclusion": "success",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "success"
+            }
+          ]
+        },
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "steps": [
+            {
+              "number": 5,
+              "name": "cargo doc",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "run_logs_defaults_to_failed_steps_and_accepts_the_full_log/failed",
+    "op": "logs",
+    "input": {
+      "run": "99"
+    },
+    "raw": null
+  },
+  {
+    "name": "run_logs_defaults_to_failed_steps_and_accepts_the_full_log/all",
+    "op": "logs",
+    "input": {
+      "run": "99",
+      "scope": "all",
+      "job": "5"
+    },
+    "raw": null
+  },
+  {
+    "name": "run_logs_rejects_an_unknown_scope",
+    "op": "logs",
+    "input": {
+      "run": "99",
+      "scope": "everything"
+    },
+    "raw": null
+  },
+  {
+    "name": "pr_list_projects_each_head_sha_under_its_own_name",
+    "op": "pr_list",
+    "input": {},
+    "raw": {
+      "number": 3,
+      "title": "Fix it",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "topic",
+      "headRefOid": "deadbee",
+      "baseRefName": "trunk"
+    }
+  },
+  {
+    "name": "pr_list_defaults_to_a_bounded_open_query",
+    "op": "pr_list",
+    "input": {},
+    "raw": null
+  }
+]

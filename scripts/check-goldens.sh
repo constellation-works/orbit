@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # Verify (or, with --update, regenerate) checked-in orbit-cli help and
-# description goldens and the sandbox profile goldens without running the
+# description, CI log, and sandbox profile goldens without running the
 # workspace test suite.
 #
 # Covers:
+#   - sanitized CI signature and GitHub log fixture goldens
 #   - builtin MCP definition and annotation conformance
 #   - CLI long-help text under crates/orbit-cli/src/command/tests/
 #   - crates/orbit-cli/tests/output_goldens/ (including tool_list.json)
@@ -15,6 +16,7 @@ set -euo pipefail
 #   - crates/orbit-core/tests/sandbox_profile_goldens/ (resolved Linux sandbox)
 #
 # Regeneration env vars (also printed by the failing tests):
+#   ORBIT_UPDATE_LOG_GOLDENS=1
 #   ORBIT_UPDATE_HELP_GOLDENS=1
 #   ORBIT_UPDATE_OUTPUT_GOLDENS=1
 #   ORBIT_MCP_UPDATE_SNAPSHOT=1
@@ -34,14 +36,20 @@ case "${1:-}" in
 esac
 
 if [[ "$update" == true ]]; then
+  export ORBIT_UPDATE_LOG_GOLDENS=1
   export ORBIT_UPDATE_HELP_GOLDENS=1
   export ORBIT_UPDATE_OUTPUT_GOLDENS=1
   export ORBIT_MCP_UPDATE_SNAPSHOT=1
   export ORBIT_UPDATE_SANDBOX_GOLDENS=1
 fi
 
+# Gates always cover the full corpus, even after an individual fixture replay.
+unset ORBIT_LOG_GOLDEN_CASE
+
 cargo="${CARGO:-cargo}"
 
+"$cargo" test -p orbit-core --test ci_failure_goldens
+"$cargo" test -p orbit-tools --test public_tool_surface github_log_goldens
 "$cargo" test -p orbit-tools --test mcp_definitions
 "$cargo" test -p orbit-cli --bin orbit help_matches_the_shipped_surface
 "$cargo" test -p orbit-cli --test output_goldens
