@@ -3,11 +3,55 @@
 
 use orbit_common::OrbitError;
 use orbit_types::telemetry::canonical_actor_for_role_label;
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
+use std::path::Path;
+use std::time::Duration;
 
 use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use crate::driver::sqlite::migration::{SUPPORTED_SCHEMA_VERSION, current_schema_version};
 use crate::{Store, StoreTx, now_string};
 
 impl Store {
+    /// Append an audit row without opening the rest of the store for writes.
+    ///
+    /// Foreign-generation readers use this narrow path while retaining their
+    /// read-only state handles. It never creates or migrates a database, changes
+    /// file permissions, or writes a schema this binary does not support exactly.
+    pub fn append_audit_event_at_path(
+        path: &Path,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        if std::fs::metadata(path)?.permissions().readonly() {
+            return Err(OrbitError::Store("audit database is read-only".into()));
+        }
+        let mut conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        conn.busy_timeout(Duration::from_millis(u64::from(
+            orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+        )))
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+        // Hold the writer lock across the schema check and insert so another
+        // process cannot migrate the database between them.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let version = current_schema_version(&tx)?;
+        if version != SUPPORTED_SCHEMA_VERSION {
+            return Err(OrbitError::Migration(format!(
+                "cannot append audit event: store schema {version} differs from supported schema {SUPPORTED_SCHEMA_VERSION}"
+            )));
+        }
+        insert_audit_event_record_on_connection(&tx, params, invocation)?;
+        tx.commit()
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
     pub fn insert_audit_event_record(
         &self,
         params: &AuditEventInsertParams,

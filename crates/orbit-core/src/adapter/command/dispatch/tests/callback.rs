@@ -201,6 +201,42 @@ fn dispatch_cli(runtime: &OrbitRuntime, tool: &str) -> Result<serde_json::Value,
     dispatch_entry(runtime, tool, ToolEntryPoint::Cli)
 }
 
+#[test]
+fn granted_plugin_read_only_callback_persists_audit_on_write_free_runtime() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &granted_plugin_read_only_callback_persists_audit_on_write_free_runtime,
+    )) {
+        return;
+    }
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let session = bind_live_callback_session(&runtime);
+    let _credential = present_callback_descriptor(&session);
+    set_plugin_callback_env("callback", Some("orbit.task.list"));
+    let reader = super::execute::write_free_runtime(&runtime);
+
+    let outcome = reader
+        .execute_tool_command_dispatch(
+            "orbit.task.list",
+            json!({"limit": 1}),
+            None,
+            None,
+            ToolEntryPoint::Cli,
+        )
+        .expect("granted read-only callback");
+    assert!(outcome.audit_recorded);
+    let rows = reader
+        .list_audit_events(None, Some("orbit.task.list".into()), None, None, 16)
+        .expect("callback audit");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, AuditEventStatus::Success);
+    let plugin = rows[0].plugin.as_ref().expect("callback provenance");
+    assert_eq!(plugin.name, "callback");
+    assert_eq!(plugin.grants, vec!["orbit_tools"]);
+    assert!(reader.sqlite_store().expect("state handle").is_read_only());
+}
+
 fn assert_plugin_allowlist_denied(error: &OrbitError, tool: &str) {
     let message = error.to_string();
     assert!(

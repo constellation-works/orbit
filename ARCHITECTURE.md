@@ -131,6 +131,13 @@ Orbit has two roots: global `~/.orbit/` and the workspace `.orbit/`.
 | Command audit | Global only | One authoritative SQLite trail |
 | Global defaults stamp | Global only | Lets a warm open skip re-hashing managed catalogs |
 
+A runtime that joins a foreign executable generation retains read-only state
+handles and skips operational repairs. Tool dispatch appends its command audit
+through a separate connection to the existing global database, without creating
+or migrating it. This append requires the exact supported store schema; an
+unwritable or incompatible database still leaves read-only tool results available
+with an audit warning. Ordinary writable runtimes reuse their audit handle.
+
 ## Automation persistence
 
 - Automation state (consumer checkpoints, delivery-owner intents, accepted coverage, and recovery records) lives in the host SQLite store's feature migrations. Every checkpoint and receipt change is generation-fenced. Recovery never moves a cursor, drops an obligation, or mints a receipt.
