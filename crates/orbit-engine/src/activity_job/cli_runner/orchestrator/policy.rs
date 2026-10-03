@@ -251,6 +251,6 @@ pub(super) fn drop_inherited_policy_env(child_env: &mut Vec<(String, String)>) {
     });
 }
 
-pub(super) fn resolved_activity_fs_profile_name(fs_profile: Option<&str>) -> &str {
+fn resolved_activity_fs_profile_name(fs_profile: Option<&str>) -> &str {
     fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE)
 }

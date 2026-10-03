@@ -1050,39 +1050,26 @@ After [ORB-10313], the VCS handoff seam uses one shared durable predicate (`reje
 
 ### 8.12 Test surfaces guarding executor invariants
 
-Risk-weighted regression tests live next to the executor modules they guard
-under `crates/orbit-engine/src/activity_job/job_executor/tests/`
-([T20260509-7]). Each executor-block module has a matching test module under
-`tests/`, and each test names the specific invariant it guards in the function
-name. The
-current surface:
+Executor invariants are tested at the crate boundary, following
+[the test strategy](../../design-patterns/test_strategy.md).
+`crates/orbit-engine/tests/v2_runtime.rs` runs job assets with `parallel:`,
+`fan_out:` and `loop:` blocks through `execute_job_with_resume`. It pins the
+`JoinMode` decision for branches and fan-in workers, spawn-index output
+ordering under the `max_workers` cap, and loop exit on break, failure or an
+exhausted iteration budget.
 
-- `step.rs` (`step.rs`) — linear step success and pipeline propagation,
-  failure short-circuit (mod.rs:131-148), retry `max_attempts` exhaustion,
-  non-retryable bypass, success on intermediate attempt, and
-  `compute_backoff_ms` linear/exponential monotonicity and cap behavior.
-- `parallel.rs` (`parallel.rs`) — `JoinMode::All`, `JoinMode::Any`,
-  `JoinMode::Quorum`, `StepJoin` audit event ordering, and audit
-  parent-stack inheritance into branch threads.
-- `fanout.rs` (`fan_out.rs`) — empty items emit `FanoutDispatched{0}`
-  and `FaninJoined{0,0}`, collected outputs are spawn-index ordered even
-  when workers complete out of order, `max_workers` semaphore caps
-  in-flight workers, structural error surfaces under unsatisfied join,
-  `fan_in.collect` writes the collected value under the alias key, and
-  per-worker `WorkerState` events appear in `dispatched`→`finished` order.
-- `loop.rs` (`loop_block.rs`) — `items` length over `max_iterations`
-  errors, `break_when` exits with `LoopIterationEnd{broke=true}`,
-  exhausting iterations emits `LoopDidNotConverge`, and the loop exits on
-  first body failure.
-- `pipeline_durability.rs` (`exec_ctx.rs`, `fan_out.rs:53-56`) —
-  a step's output remains visible to later steps via
-  `{{ steps.<id>.output.* }}`, and the pipeline snapshot taken into
-  fan-out workers preserves upstream values past the fan-out boundary.
+The unit tests under
+`crates/orbit-engine/src/activity_job/job_executor/tests/` are the admitted
+exceptions:
 
-Shared host scaffolding (`ScriptedHost`, `Action`, job/step builders) lives
-in `tests/mod.rs` so each block module stays focused on its own invariants.
-New executor blocks must land with a matching test module under `tests/`
-covering the analogous invariants — see [Each new executor block ships with a sibling test module](./4_decisions.md#each-new-executor-block-ships-with-a-sibling-test-module).
+- `step.rs` covers the `compute_backoff_ms` bounds.
+- `validate.rs` rejects reading the output of a conditionally run step.
+- `resume.rs` checks that a re-executed PR step's output reaches promotion and
+  its checkpoint.
+
+Their shared scaffolding (`ScriptedHost`, `Action`, job/step builders) lives in
+`tests/mod.rs`. A new executor block is covered first by a boundary job in
+`v2_runtime.rs`. It gets a unit test only when it meets the admission criteria.
 
 ### 8.13 Recoverable automatic workflows (planned)
 

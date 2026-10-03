@@ -18,7 +18,7 @@ use super::spawn::linux_bwrap_mask;
 /// the child program. The profile path is the literal `<profile.sb>` because
 /// the real path is a tempfile created at spawn time and only meaningful to
 /// the kernel — the placeholder keeps the audit record stable across runs.
-pub(super) fn audit_argv_for_dispatch(
+fn audit_argv_for_dispatch(
     program: &str,
     args: &[String],
     sandbox: Option<&ResolvedSandbox>,
@@ -173,7 +173,7 @@ fn rewrite_claude_debug_file_path(static_args: &mut [String]) {
 }
 
 // pub(crate) widened for tests/ layout under ORB-00225; test reaches via exposed surface.
-pub(crate) fn rewrite_debug_file_value(static_args: &mut [String], state_dir: &std::path::Path) {
+fn rewrite_debug_file_value(static_args: &mut [String], state_dir: &std::path::Path) {
     let mut idx = 0;
     while idx + 1 < static_args.len() {
         if static_args[idx] == "--debug-file" {

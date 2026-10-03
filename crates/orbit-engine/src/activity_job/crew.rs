@@ -103,10 +103,7 @@ fn explicit_crew(input: &Value) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-pub(crate) fn resolve_from_config(
-    config: &CrewConfig,
-    inline: &AgentLoopSpec,
-) -> ResolvedAgentSettings {
+fn resolve_from_config(config: &CrewConfig, inline: &AgentLoopSpec) -> ResolvedAgentSettings {
     ResolvedAgentSettings {
         provider: config.provider.unwrap_or(inline.provider),
         model: config.model.clone().or_else(|| inline.model.clone()),

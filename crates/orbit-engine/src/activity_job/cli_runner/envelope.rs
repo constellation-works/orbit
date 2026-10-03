@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::super::dispatcher::DispatchError;
 
-pub(in crate::activity_job) fn cli_agent_envelope_json(
+pub(super) fn cli_agent_envelope_json(
     spec: &AgentLoopSpec,
     run_id: &str,
     input: &Value,
@@ -129,7 +129,7 @@ fn cli_exec_result(
     }
 }
 
-pub(super) fn user_prompt_from_input(input: &Value) -> Result<String, DispatchError> {
+fn user_prompt_from_input(input: &Value) -> Result<String, DispatchError> {
     match input {
         Value::Object(map) => match map.get("prompt") {
             Some(Value::String(text)) => Ok(text.clone()),

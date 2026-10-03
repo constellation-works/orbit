@@ -18,7 +18,7 @@ set -euo pipefail
 # This guard exists because the failure mode is silent: a new failure writer that
 # formats its own note, or a second copy of the threshold, reintroduces the blob
 # and nothing else notices until history is fat again. The runtime bound itself
-# is pinned by crates/orbit-engine/src/context/tests/outcome.rs; this script
+# is pinned by crates/orbit-engine/tests/history_note.rs; this script
 # pins the structural invariants that no unit test can see.
 #
 # Re-measure any time with: scripts/measure-history-signal.py

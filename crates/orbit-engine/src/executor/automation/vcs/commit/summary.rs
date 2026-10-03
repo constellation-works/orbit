@@ -29,7 +29,7 @@ use super::super::pr::meaningful_execution_summary;
 const DERIVED_SUMMARY_EVENT: &str = "execution_summary_derived";
 
 /// Cap on individually named files; the remainder is reported as a count.
-pub(super) const MAX_LISTED_FILES: usize = 25;
+const MAX_LISTED_FILES: usize = 25;
 
 /// Give the task a durable execution summary when nothing else did.
 ///
@@ -76,7 +76,7 @@ pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
 
 /// One worktree entry, reduced to the two facts a summary reports.
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct WorktreeChange {
+struct WorktreeChange {
     pub(super) kind: &'static str,
     pub(super) path: String,
 }
@@ -98,7 +98,7 @@ fn worktree_changes(workspace_path: &Path) -> Result<Vec<WorktreeChange>, OrbitE
 /// Each record is `XY <path>` terminated by NUL; a rename or copy is followed
 /// by a second NUL-terminated field holding the source path, which belongs to
 /// the record before it rather than starting a new one.
-pub(super) fn parse_status_entries(raw: &str) -> Vec<WorktreeChange> {
+fn parse_status_entries(raw: &str) -> Vec<WorktreeChange> {
     let mut changes = Vec::new();
     let mut fields = raw.split('\0');
     while let Some(entry) = fields.next() {
@@ -154,11 +154,7 @@ fn change_kind(index_state: char, worktree_state: char) -> &'static str {
     }
 }
 
-pub(super) fn render_derived_summary(
-    task_id: &str,
-    run_id: &str,
-    changes: &[WorktreeChange],
-) -> String {
+fn render_derived_summary(task_id: &str, run_id: &str, changes: &[WorktreeChange]) -> String {
     let mut lines = vec![
         format!(
             "Execution summary derived by Orbit for {task_id} from the change delivered by run \

@@ -300,7 +300,7 @@ message stays inline verbatim and only 18 of 497 (3.6%) elide.
 Two guards, because the failure mode is silent. `scripts/check-history-note-size.sh`
 (wired into `make ci-fast` and `make ci`) fails on a second threshold
 declaration, a second `workflow_run_failed` note producer, or an elision that
-drops its retrieval pointer. `crates/orbit-engine/src/context/tests/outcome.rs`
+drops its retrieval pointer. `crates/orbit-engine/tests/history_note.rs`
 pins the runtime bound, the verbatim pass-through below the cap, and UTF-8-safe
 slicing of arbitrary subprocess bytes.
 

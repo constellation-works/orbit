@@ -53,7 +53,7 @@ pub(super) fn remove_worktree(
 /// timeout alone therefore never authorizes deletion. An ordinary refusal
 /// propagates as-is; a timeout goes to [`recover_timed_out_removal`], which
 /// re-establishes Git's verdict independently before touching anything.
-pub(super) fn remove_worktree_without_force(
+fn remove_worktree_without_force(
     repo_root: &Path,
     workspace_path: &Path,
 ) -> Result<(), OrbitError> {
@@ -75,10 +75,7 @@ pub(super) fn remove_worktree_without_force(
 /// path. A tree that cannot be verified — dirty, locked, holding submodules,
 /// or whose checks cannot complete inside the Git budget — is left in place
 /// with its registration intact and reported as an error.
-pub(super) fn recover_timed_out_removal(
-    workspace_path: &Path,
-    timeout_ms: u64,
-) -> Result<(), OrbitError> {
+fn recover_timed_out_removal(workspace_path: &Path, timeout_ms: u64) -> Result<(), OrbitError> {
     if let Err(reason) = verify_interrupted_removal(workspace_path) {
         return Err(OrbitError::Execution(format!(
             "git worktree remove timed out after {timeout_ms}ms before its safety checks could be confirmed; preserved worktree '{}' in place and registered because {reason}. Rescue or inspect its contents, then remove it manually or retry with a larger git timeout",

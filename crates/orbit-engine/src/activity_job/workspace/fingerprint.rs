@@ -226,10 +226,7 @@ fn git_fingerprint_with_head(
     })
 }
 
-pub(crate) fn untracked_file_identity(
-    root: &Path,
-    path: &str,
-) -> Result<Option<String>, DispatchError> {
+fn untracked_file_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
     match untracked_path_kind(root, path)? {
         UntrackedPathKind::Missing => Ok(None),
         UntrackedPathKind::Symlink => untracked_symlink_identity(root, path),

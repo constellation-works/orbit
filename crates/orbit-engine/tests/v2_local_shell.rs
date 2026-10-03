@@ -144,6 +144,39 @@ fn the_activity_fs_profile_reaches_sandbox_resolution() {
     assert_eq!(host.observed_executor().as_deref(), Some("local-shell"));
 }
 
+/// A shell step is not an agent: its environment is the host's policy
+/// baseline plus the step's explicit `env` entries. Nothing ambient reaches it,
+/// and neither does the Orbit registry or workspace identity the host carries,
+/// so a nested `orbit` call cannot inherit the run's authority the way a
+/// dispatched CLI agent deliberately does.
+#[test]
+fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let host = ShellHost::new(repo.path());
+    assert!(host.orbit_registry_root().is_some());
+    assert!(host.orbit_workspace_selector().is_some());
+    assert!(
+        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+        "the probe needs an ambient variable cargo exports to test processes"
+    );
+
+    let outcome = dispatch(
+        &shell_activity(json!({
+            "shell": "/bin/sh",
+            "script": "echo \"$ORBIT_BASELINE|$ORBIT_EXPLICIT|[$CARGO_MANIFEST_DIR][$ORBIT_REGISTRY_ROOT][$ORBIT_WORKSPACE]\"",
+            "env": { "ORBIT_EXPLICIT": "from-config" },
+        })),
+        json!({}),
+        &host,
+    )
+    .expect("dispatch succeeds");
+
+    assert_eq!(
+        outcome.output["stdout"],
+        json!("from-policy|from-config|[][][]\n")
+    );
+}
+
 fn dispatch(yaml: &str, input: Value, host: &ShellHost) -> Result<DispatchOutcome, DispatchError> {
     let asset = load_activity_asset(yaml).expect("activity asset loads");
     let audit_root = tempfile::tempdir().expect("tempdir");
@@ -235,11 +268,24 @@ impl RuntimeHost for ShellHost {
         Ok(self.root.to_string_lossy().into_owned())
     }
 
+    // A host bound to a registered workspace. A CLI agent launched from it
+    // would receive both of these; a shell step must not.
+    fn orbit_registry_root(&self) -> Option<String> {
+        Some("/authoritative/registry".to_string())
+    }
+
+    fn orbit_workspace_selector(&self) -> Option<String> {
+        Some("ws_owner".to_string())
+    }
+
     fn agent_subprocess_environment(&self, _required_env_vars: &[&str]) -> Vec<(String, String)> {
-        vec![(
-            "PATH".to_string(),
-            std::env::var("PATH").unwrap_or_default(),
-        )]
+        vec![
+            (
+                "PATH".to_string(),
+                std::env::var("PATH").unwrap_or_default(),
+            ),
+            ("ORBIT_BASELINE".to_string(), "from-policy".to_string()),
+        ]
     }
 
     fn resolve_local_shell_executor(

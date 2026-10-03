@@ -177,7 +177,7 @@ fn exact_file_scopes(task: &Task, workspace_path: &Path) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn normalize_task_scope(raw: &str, workspace_path: &Path) -> Option<String> {
+fn normalize_task_scope(raw: &str, workspace_path: &Path) -> Option<String> {
     let anchor = anchor_path(raw).ok()?;
     let relative = if anchor.is_absolute() {
         anchor.strip_prefix(workspace_path).ok()?.to_path_buf()
@@ -204,7 +204,7 @@ fn normalize_relative_path(path: &Path) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-pub(super) fn path_matches_scope(path: &str, scope: &str) -> bool {
+fn path_matches_scope(path: &str, scope: &str) -> bool {
     path == scope
         || scope == "."
         || path

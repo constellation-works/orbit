@@ -64,7 +64,7 @@ use wait_timeout::ChildExt;
 /// wall-clock guard.
 pub(super) const DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS: u64 = 300;
 
-pub(super) type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
+type SpawnOutput = (CapturedOutput, CapturedOutput, Option<i32>, Duration, bool);
 
 const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
 /// How often a reader without a wakeup fd rechecks its cancel flag.

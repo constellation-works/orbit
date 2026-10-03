@@ -546,7 +546,7 @@ pub(super) fn attempt_failure_activity(
     }
 }
 
-pub(super) fn crew_overridden_recovery_spec(
+fn crew_overridden_recovery_spec(
     recovery: &ResolvedRecoveryActivity,
     ctx: &ExecCtx<'_>,
     input: &Value,

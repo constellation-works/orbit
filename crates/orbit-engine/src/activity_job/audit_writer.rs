@@ -25,8 +25,8 @@ pub trait EnvelopeSink: Send + Sync {
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError>;
 
     /// Read persisted events when the sink supports inspection. Backs
-    /// [`V2AuditWriter::events_snapshot`] outside this crate's own unit
-    /// tests; sinks that cannot be inspected return `Ok(None)`.
+    /// [`V2AuditWriter::events_snapshot`]; sinks that cannot be inspected
+    /// return `Ok(None)`.
     fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
         Ok(None)
     }
@@ -56,8 +56,6 @@ pub struct V2AuditWriter {
     workspace_path: Option<String>,
     inner: Arc<dyn AuditSink>,
     envelope_sink: Option<Arc<dyn EnvelopeSink>>,
-    #[cfg(test)]
-    events: Mutex<Vec<V2AuditEvent>>,
     emitted_event_count: AtomicU64,
     event_counter: Mutex<u64>,
     parent_stacks: Mutex<HashMap<ThreadId, Vec<String>>>,
@@ -99,8 +97,6 @@ impl V2AuditWriter {
             workspace_path: None,
             inner,
             envelope_sink: None,
-            #[cfg(test)]
-            events: Mutex::new(Vec::new()),
             emitted_event_count: AtomicU64::new(0),
             event_counter: Mutex::new(0),
             parent_stacks: Mutex::new(HashMap::new()),
@@ -110,7 +106,7 @@ impl V2AuditWriter {
     }
 
     /// Attach a SQLite sink for §7 envelope events. When set, every emitted
-    /// envelope event is persisted alongside the in-memory snapshot.
+    /// envelope event is persisted there and read back by `events_snapshot`.
     pub fn with_envelope_sink(mut self, sink: Arc<dyn EnvelopeSink>) -> Self {
         self.envelope_sink = Some(sink);
         self
@@ -199,12 +195,6 @@ impl V2AuditWriter {
             // the complete set of attempted envelope writes.
             self.note_audit_failure(event.envelope.event_type.as_str(), &error);
         }
-        #[cfg(test)]
-        self.events
-            .lock()
-            .map_err(|_| WriteError::Poisoned)?
-            .push(event);
-
         self.emitted_event_count.fetch_add(1, Ordering::Relaxed);
         Ok(event_id)
     }
@@ -370,27 +360,13 @@ impl V2AuditWriter {
         self.emitted_event_count.load(Ordering::Relaxed)
     }
 
-    /// Snapshot of emitted events, retained only for this crate's own unit
-    /// tests that inspect envelope contents.
-    #[cfg(test)]
-    pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
-        Ok(self
-            .events
-            .lock()
-            .map_err(|_| WriteError::Poisoned)?
-            .clone())
-    }
-
     /// Read envelope events back from the configured persistence sink.
     ///
-    /// This is the cross-crate snapshot path: `#[cfg(test)]` items are
-    /// invisible to dependent crates, so `orbit-core`'s engine-host tests
-    /// (and any integration test) reach persisted events through the sink
-    /// instead of an in-memory buffer. Test helpers stay always-compiled
-    /// rather than feature-gated so build and test dependency graphs remain
-    /// identical. Fails with [`WriteError::SnapshotUnavailable`] when no sink
-    /// is attached or the sink cannot be inspected.
-    #[cfg(not(test))]
+    /// `orbit-core`'s engine-host tests and integration tests reach persisted
+    /// events through the sink. Test helpers stay always-compiled rather than
+    /// feature-gated so build and test dependency graphs remain identical.
+    /// Fails with [`WriteError::SnapshotUnavailable`] when no sink is attached
+    /// or the sink cannot be inspected.
     pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
         self.envelope_sink
             .as_ref()

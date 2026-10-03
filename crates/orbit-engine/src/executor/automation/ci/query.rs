@@ -134,7 +134,7 @@ impl RemoteBranchHeads {
 }
 
 // pub(super) widened for sibling-layout tests in ci/tests/query.rs
-pub(super) fn parse_remote_branch_heads(output: &str) -> BTreeMap<String, String> {
+fn parse_remote_branch_heads(output: &str) -> BTreeMap<String, String> {
     output
         .lines()
         .filter_map(|line| {

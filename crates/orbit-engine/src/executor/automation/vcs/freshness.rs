@@ -731,7 +731,7 @@ enum RecoveryCheckpointLookup {
 /// of the very same directory must not be discarded as foreign. Two spellings
 /// match when they name one existing directory; anything unresolvable does
 /// not match, so a checkpoint for another checkout is still refused.
-pub(super) fn recorded_workspace_matches(recorded: Option<&str>, workspace: &Path) -> bool {
+fn recorded_workspace_matches(recorded: Option<&str>, workspace: &Path) -> bool {
     let Some(recorded) = recorded else {
         return false;
     };
