@@ -184,6 +184,15 @@ This traverses executable help in a disposable environment and returns command
 paths. Its output explicitly records `behavioral_coverage: false`: reaching help
 does not verify command execution, persistence, errors, or every argument.
 
+For direct command-path evidence from the disposable task administration and
+run observation fixtures, run
+`ORBIT_QA_TRACE_CLI=1 cargo test -p orbit-cli --test task_admin_cli --test run_observation -- --nocapture`.
+After a successful JSON command completes, these fixtures emit a `QA_CLI`
+record containing its argv, exit code, and named test. Compare those records
+with the passing harness cases. Help-only paths and source references inside
+other tests remain separate evidence; a passing suite alone does not prove
+every discovered path.
+
 For a failure, search open and closed `ws_orbit` tasks using the scenario ID,
 exact error, and boundary. Reuse an open task only when its reproducer covers
 the same defect. Reassess closed repairs against the current revision. File a
