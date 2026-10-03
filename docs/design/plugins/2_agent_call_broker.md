@@ -5,7 +5,7 @@ summary: "Design: a per-run host broker runs plugin backends for sandboxed agent
 owner: claude
 status: Draft
 tags: [plugins, security, sandbox, secrets, ipc]
-paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
+paths: ["crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-core/src/runtime/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, F2026-09-230]
 last_updated: 2026-09-27
@@ -88,7 +88,7 @@ to be spawned from outside the agent sandbox.
 The in-sandbox path has two more defects today, even before any deny is added. Neither agent
 profile grants writes to `state/plugins/` or `state/plugin-secrets/`
 (`append_linux_runtime_write_roots` and `append_orbit_child_runtime_write_roots` in
-`crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs`). So an agent-initiated call
+`crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/`). So an agent-initiated call
 cannot:
 
 - create a missing `{{plugin_state}}` or write to it, even when the backend holds an `fs.write`

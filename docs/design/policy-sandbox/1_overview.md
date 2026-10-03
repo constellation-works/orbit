@@ -69,8 +69,8 @@ When the default policy denies workspace `.orbit/**`, the v2 host re-allows only
 | Allow/deny enum | `crates/orbit-types/src/policy/policy_decision.rs` | [T20260426-0622] |
 | Policy facade | `crates/orbit-policy/src/{lib,engine,evaluator,decision}.rs` | [T20260416-0728] |
 | Profile resolution + deny injection | `crates/orbit-types/src/policy/policy_def.rs` (`effective_profile`, `check_path`) | [T20260416-0728] |
-| Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
-| Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
+| Versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | [ORB-10560], [ORB-10573], [ORB-10602] |
+| Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/resolve.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
 | Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/lib.rs` | [ORB-10833] |
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/dispatcher.rs`, `crates/orbit-engine/src/activity_job/job_executor/{step,target}.rs` | [T20260419-0503] |
 | Exec spawn primitive | `crates/orbit-exec/src/{lib,runner,process,sandbox}.rs` | [T20260417-0550] |
