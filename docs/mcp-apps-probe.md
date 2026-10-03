@@ -16,6 +16,13 @@ validation, audit and workspace resolution (STD-02 §R2, STD-05 §R1). No shared
 contract or dependency edge was added. The manifest requires rmcp 2.1.0; the
 current lockfile resolves 2.2.0 and supplies the necessary hooks.
 
+The checked-in panel sources follow the dashboard asset layout under
+`crates/orbit-mcp/assets/task-panel/`: `index.html`, `css/task-panel.css` and
+`js/task-panel.js`. `crates/orbit-mcp/src/adapter/presentation.rs` embeds them
+and inlines the stylesheet and script into the single resource. There is no
+frontend build step or separate asset route; the JavaScript behavior harness
+remains in `crates/orbit-mcp/src/adapter/tests/task-panel.mjs`.
+
 Task text is displayed with `textContent`, including Markdown as plain text.
 The bundle has no external assets, fetches, frames, artifact execution or
 navigation. Both resource CSP metadata and a restrictive HTML CSP limit it.

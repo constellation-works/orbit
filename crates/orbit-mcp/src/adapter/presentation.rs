@@ -75,8 +75,15 @@ pub(super) fn resource() -> Resource {
 
 pub(super) fn resource_content() -> ResourceContents {
     // Entirely static: task content is never interpolated into executable HTML.
-    let html = include_str!("task-panel.html")
-        .replace("/* ORBIT_PANEL_SCRIPT */", include_str!("task-panel.js"));
+    let html = include_str!("../../assets/task-panel/index.html")
+        .replace(
+            "/* ORBIT_PANEL_STYLE */",
+            include_str!("../../assets/task-panel/css/task-panel.css"),
+        )
+        .replace(
+            "/* ORBIT_PANEL_SCRIPT */",
+            include_str!("../../assets/task-panel/js/task-panel.js"),
+        );
     ResourceContents::text(html, RESOURCE_URI)
         .with_mime_type(MIME)
         .with_meta(Meta(

@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { test } from 'node:test';
 const source = process.env.ORBIT_PANEL_RESOURCE
   ? readFileSync(process.env.ORBIT_PANEL_RESOURCE, 'utf8').match(/<script>([\s\S]*?)<\/script>/)?.[1]
-  : readFileSync(new URL('../task-panel.js', import.meta.url), 'utf8');
+  : readFileSync(new URL('../../../assets/task-panel/js/task-panel.js', import.meta.url), 'utf8');
 assert.equal(typeof source, 'string', 'the served bundle must contain executable panel JavaScript');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 function fixture() {
