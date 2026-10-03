@@ -104,141 +104,6 @@ tags = [" review ", "", "hard", "review"]
 }
 
 #[test]
-fn retired_duel_config_written_by_orbit_init_loads_and_is_ignored() {
-    let config = load_config(
-        r#"
-[workflow]
-base_branch = "agent-main"
-
-[duel]
-candidates = ["claude", "codex", "gemini"]
-
-[duel.models]
-claude = "opus"
-codex = "gpt-6-sol"
-gemini = "pro"
-"#,
-    )
-    .expect("retired init-era duel config must load");
-
-    assert_eq!(config.workflow_base_branch, "agent-main");
-    assert!(config.snapshot.value_for("duel.candidates").is_none());
-    assert!(config.snapshot.value_for("duel.models").is_none());
-    assert!(RETIRED_DUEL_CONFIG_WARNING.contains("[duel]"));
-    assert!(RETIRED_DUEL_CONFIG_WARNING.contains("[duel.models]"));
-}
-
-/// [ORB-12236] Registering an owner checkout is the automation opt-in. A
-/// workspace that still carries the retired key keeps loading, and the key
-/// selects nothing.
-#[test]
-fn retired_routines_role_loads_and_is_not_a_registry_key() {
-    let config = load_config(
-        r#"
-[workflow]
-base_branch = "agent-main"
-
-[routines]
-role = "source"
-"#,
-    )
-    .expect("retired [routines] config must load");
-
-    assert_eq!(config.workflow_base_branch, "agent-main");
-    assert!(config.snapshot.value_for("routines.role").is_none());
-    assert!(RETIRED_ROUTINES_CONFIG_WARNING.contains("[routines]"));
-}
-
-#[test]
-fn deprecated_task_id_pattern_loads_valid_regex_from_workspace_config() {
-    load_config("[knowledge]\ntask_id_pattern = \"[A-Z]+-\\\\d+\"\n").expect("config loads");
-}
-
-#[test]
-fn deprecated_task_id_pattern_ignores_invalid_regex_at_load_time() {
-    load_config("[knowledge]\ntask_id_pattern = \"[unclosed\"\n")
-        .expect("deprecated invalid regex must load");
-}
-
-#[test]
-fn deprecated_task_id_pattern_ignores_empty_string() {
-    load_config("[knowledge]\ntask_id_pattern = \"  \"\n")
-        .expect("deprecated empty pattern must load");
-}
-
-#[test]
-fn deprecated_task_id_pattern_absent_when_section_absent() {
-    let config = load_config("[scoring]\nenabled = true\n").expect("config loads");
-    assert_eq!(config.pr.task_url_template.as_deref(), None);
-}
-
-#[test]
-fn pr_config_defaults_to_no_task_url_template_without_config() {
-    let global = tempdir().expect("global tempdir");
-    let workspace = tempdir().expect("workspace tempdir");
-
-    let config =
-        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("config loads");
-
-    assert_eq!(config.pr.task_url_template.as_deref(), None);
-}
-
-#[test]
-fn pr_task_url_template_loads_from_workspace_config() {
-    let config =
-        load_config("[pr]\ntask_url_template = \"https://orbit-cli.com/tasks/{task_id}\"\n")
-            .expect("config loads");
-
-    assert_eq!(
-        config.pr.task_url_template.as_deref(),
-        Some("https://orbit-cli.com/tasks/{task_id}")
-    );
-}
-
-/// [ORB-10801] `[runtime] backend` selected the retired agent-loop execution
-/// backend. `cli` named the surviving path, so it stays accepted and inert.
-#[test]
-fn retired_runtime_backend_cli_is_accepted_and_ignored() {
-    load_config("[runtime]\nbackend = \"cli\"\n").expect("`backend = \"cli\"` must keep loading");
-}
-
-/// [ORB-10801] `ORBIT_BACKEND` was tier 2 of the same retired chain, and gets
-/// the same treatment: `cli` is inert, the removed values fail closed.
-#[test]
-fn retired_backend_env_override_is_inert_for_cli_and_fails_closed_otherwise() {
-    let empty = toml::Value::Table(toml::map::Map::new());
-
-    for accepted in [None, Some(""), Some("cli")] {
-        retired_backend_override_check(&empty, accepted)
-            .unwrap_or_else(|error| panic!("{accepted:?} must be accepted: {error}"));
-    }
-
-    for removed in ["http", "auto"] {
-        let error = retired_backend_override_check(&empty, Some(removed))
-            .expect_err("a removed ORBIT_BACKEND value must fail closed");
-        let message = error.to_string();
-        assert!(message.contains("ORBIT_BACKEND"), "message: {message}");
-        assert!(message.contains(removed), "message: {message}");
-        assert!(message.contains("CLI agent path"), "message: {message}");
-    }
-}
-
-/// [ORB-10801] The removed values fail closed rather than being reinterpreted
-/// as CLI agent execution behind the operator's back.
-#[test]
-fn retired_runtime_backend_http_fails_closed_with_migration() {
-    for removed in ["http", "auto", "clii"] {
-        let error = load_config(&format!("[runtime]\nbackend = \"{removed}\"\n"))
-            .expect_err("retired backend value must fail config load");
-        let message = error.to_string();
-
-        assert!(message.contains("[runtime]"), "message: {message}");
-        assert!(message.contains(removed), "message: {message}");
-        assert!(message.contains("CLI agent path"), "message: {message}");
-    }
-}
-
-#[test]
 fn crews_load_when_present_and_well_formed() {
     let config = load_config(
         r#"
@@ -543,44 +408,6 @@ fn workflow_default_crew_uses_environment_then_claude_system_default() {
     assert!(error.to_string().contains("CONSTELLATION_DEFAULT_PROVIDER"));
 }
 
-/// [ORB-10801] `[crews.<name>] backend` pinned the same retired selector. A
-/// crew that still declares `cli` keeps loading; the removed values are
-/// refused rather than re-pointed at the CLI agent silently.
-#[test]
-fn retired_crew_backend_is_inert_for_cli_and_fails_closed_otherwise() {
-    load_config(
-        r#"
-[crews.legacy]
-model = "gpt-test"
-provider = "codex"
-backend = "cli"
-
-[workflow]
-default_crew = "legacy"
-"#,
-    )
-    .expect("`backend = \"cli\"` must keep loading");
-
-    for removed in ["http", "auto"] {
-        let error = load_config(&format!(
-            r#"
-[crews.legacy]
-model = "gpt-test"
-provider = "codex"
-backend = "{removed}"
-
-[workflow]
-default_crew = "legacy"
-"#
-        ))
-        .expect_err("a removed crew backend must fail config load");
-        let message = error.to_string();
-        assert!(message.contains("[crews.legacy]"), "message: {message}");
-        assert!(message.contains(removed), "message: {message}");
-        assert!(message.contains("CLI agent path"), "message: {message}");
-    }
-}
-
 #[test]
 fn flat_crews_with_incomplete_assignment_fail_load() {
     let error = load_config(
@@ -594,181 +421,6 @@ provider = "codex"
     assert!(matches!(error, OrbitError::InvalidInput(_)));
     assert!(error.to_string().contains("[crews.codex]"));
     assert!(error.to_string().contains("model"));
-}
-
-#[test]
-fn legacy_role_tables_fail_with_flat_shape_rewrite_guidance() {
-    let error = load_config(
-        r#"
-[crews.legacy]
-planner = { model = "planner-model", provider = "claude", backend = "cli" }
-implementer = { model = "implementer-model", provider = "codex", backend = "cli" }
-reviewer = { model = "reviewer-model", provider = "gemini", backend = "cli" }
-
-[workflow]
-default_crew = "legacy"
-"#,
-    )
-    .expect_err("legacy role tables must fail config load");
-    let message = error.to_string();
-
-    for expected in [
-        "[crews.legacy]",
-        "planner/implementer/reviewer",
-        "model",
-        "provider",
-    ] {
-        assert!(
-            message.contains(expected),
-            "expected {message:?} to contain {expected:?}"
-        );
-    }
-}
-
-#[test]
-fn flat_crew_mixed_with_role_tables_fails_with_flat_shape_rewrite_guidance() {
-    let error = load_config(
-        r#"
-[crews.mixed]
-model = "gpt-test"
-provider = "codex"
-backend = "cli"
-implementer = { model = "gpt-test", provider = "codex", backend = "cli" }
-"#,
-    )
-    .expect_err("mixed crew shape must fail config load");
-    let message = error.to_string();
-
-    for expected in [
-        "[crews.mixed]",
-        "planner/implementer/reviewer",
-        "model",
-        "provider",
-    ] {
-        assert!(
-            message.contains(expected),
-            "expected {message:?} to contain {expected:?}"
-        );
-    }
-}
-
-#[test]
-fn task_artifact_store_rejects_removed_key() {
-    let error = load_config("[task]\nartifact_store = \"v2\"\n")
-        .expect_err("artifact store selector must be rejected");
-    let message = error.to_string();
-
-    assert!(message.contains("[task] artifact_store"));
-    assert!(message.contains("no longer supported"));
-    assert!(message.contains("v2"));
-}
-
-#[test]
-fn workflow_auto_ship_defaults_false_and_loads_when_set() {
-    let global = tempdir().expect("global tempdir");
-    let workspace = tempdir().expect("workspace tempdir");
-
-    write_config(workspace.path(), "");
-    let config =
-        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("config loads");
-    assert!(!config.workflow_auto_ship);
-
-    write_config(
-        workspace.path(),
-        r#"
-[workflow]
-auto_ship = true
-"#,
-    );
-    let config =
-        ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("config loads");
-    assert!(config.workflow_auto_ship);
-}
-
-#[test]
-fn shipped_default_config_has_no_workspace_specific_identifiers() {
-    let shipped = include_str!("../../../assets/default-config.toml");
-
-    for forbidden in ["ORB-", "agent-main", "dk-server", "F2026-"] {
-        assert!(
-            !shipped.contains(forbidden),
-            "seeded default config must not leak workspace-specific marker {forbidden:?} into every consumer's config"
-        );
-    }
-}
-
-/// The seeded config documents `[workflow.task_pilot_freshness]` only as a
-/// comment: uncommenting its keys must reproduce the built-in defaults, and a
-/// fresh seed must leave both keys at those defaults with the seeded crew keys
-/// still inside `[workflow]`.
-#[test]
-fn seeded_task_pilot_freshness_comment_matches_built_in_defaults() {
-    let shipped = crate::seed::DEFAULT_CONFIG_TEMPLATE;
-    let keys = ["material_fields", "source_sensitivity"];
-    let uncommented = shipped
-        .lines()
-        .filter_map(|line| line.strip_prefix("# "))
-        .filter(|line| keys.iter().any(|key| line.starts_with(&format!("{key} "))))
-        .collect::<Vec<_>>();
-    assert_eq!(uncommented.len(), keys.len(), "{uncommented:?}");
-    let documented = load_config(&format!(
-        "[workflow.task_pilot_freshness]\n{}\n",
-        uncommented.join("\n")
-    ))
-    .expect("the documented freshness block must load");
-    let built_in = load_config("").expect("an empty config loads");
-    assert_eq!(
-        documented.snapshot.task_pilot_freshness(),
-        built_in.snapshot.task_pilot_freshness(),
-        "the commented freshness block in default-config.toml drifted from settings.rs"
-    );
-
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("config.toml");
-    let seed = crate::ConfigSeed::from_families(["claude"]);
-    assert!(crate::seed_default_config(&path, Some(&seed)).expect("seed"));
-    let effective = crate::load_effective_config(&crate::ConfigRoots::global_only(dir.path()))
-        .expect("seeded config loads");
-    for key in keys {
-        let key = format!("workflow.task_pilot_freshness.{key}");
-        let entry = effective
-            .values()
-            .iter()
-            .find(|entry| entry.key == key)
-            .unwrap_or_else(|| panic!("{key} is reported"));
-        assert_eq!(entry.state(), crate::ConfigValueState::Default, "{key}");
-    }
-    assert_eq!(
-        effective.value_for("workflow.default_crew"),
-        Some(serde_json::json!("opus"))
-    );
-}
-
-#[test]
-fn runtime_log_rotation_rejects_invalid_values() {
-    // [ORB-00415] Malformed rotation knobs must fail at config load with a
-    // clear, key-naming error.
-    let error = load_config("[runtime]\nlog_retention_days = 0\n")
-        .expect_err("zero retention must fail config load");
-    assert!(
-        error.to_string().contains("log_retention_days"),
-        "message: {error}"
-    );
-
-    let error = load_config("[runtime]\nlog_max_total_mb = 10\nlog_max_file_mb = 50\n")
-        .expect_err("per-file budget above total must fail config load");
-    assert!(
-        error.to_string().contains("log_max_file_mb"),
-        "message: {error}"
-    );
-}
-
-#[test]
-fn runtime_log_rotation_accepts_valid_values() {
-    load_config(
-        "[runtime]\nlog_retention_days = 14\nlog_max_total_mb = 200\nlog_max_file_mb = 20\n",
-    )
-    .expect("valid log rotation config should load");
 }
 
 /// [ORB-10877] Shipped job steps name `crew: system` directly. A config that
@@ -1054,4 +706,44 @@ provider = "codex"
             && message.contains("orbit config set crews.luna.enabled true"),
         "{message}"
     );
+}
+
+/// [ORB-12619] `workflow.*_complexity_crews` reads `:` as the weight
+/// separator, so a colon-named crew could be defined but never pooled — every
+/// command then failed with a malformed-weight error. The name is refused
+/// where the crew is defined instead, for every pool tier alike.
+#[test]
+fn colon_named_crews_are_refused_at_definition_not_at_every_pool() {
+    const CREW: &str = r#"[crews."gpt-5:codex"]
+model = "gpt-5.5"
+provider = "codex"
+"#;
+
+    let error = load_config(CREW).expect_err("a colon-named crew must not be admitted");
+    let message = error.to_string();
+    assert!(message.contains("[crews]"), "message: {message}");
+    assert!(message.contains("gpt-5:codex"), "message: {message}");
+    assert!(
+        message.contains("workflow.*_complexity_crews"),
+        "message: {message}"
+    );
+
+    for tier in ["low", "medium", "hard", "xhard"] {
+        let body = format!(
+            "{CREW}\n[workflow]\ndefault_crew = \"gpt-5:codex\"\n{tier}_complexity_crews = [\"gpt-5:codex\"]\n"
+        );
+        let error = load_config(&body)
+            .err()
+            .unwrap_or_else(|| panic!("{tier} pool must refuse the crew name"))
+            .to_string();
+        assert!(error.contains("[crews]"), "{tier}: {error}");
+        assert!(
+            error.contains("workflow.*_complexity_crews"),
+            "{tier}: {error}"
+        );
+        assert!(
+            !error.contains("must weigh a non-negative whole number"),
+            "{tier} must fail at the crew definition, not as a malformed weight: {error}"
+        );
+    }
 }

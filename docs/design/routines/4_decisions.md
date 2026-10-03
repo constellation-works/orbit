@@ -260,7 +260,7 @@ Migration: `hosts:` is accepted and ignored with a load warning for one release,
 ## Registration is the automation opt-in; there is no routine-source role
 
 **Recorded:** 2026-09-12 · [ORB-12236]
-**Code anchors:** `crates/orbit-config/src/{raw,resolved}.rs` (the `[routines] role` key, removed), `crates/orbit-core/src/application/routines/loader.rs`
+**Code anchors:** `crates/orbit-config/src/raw.rs`, `crates/orbit-config/src/resolved/compatibility.rs` (the `[routines] role` key, removed), `crates/orbit-core/src/application/routines/loader.rs`
 
 ### Context
 

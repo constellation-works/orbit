@@ -5,12 +5,9 @@ use orbit_common::OrbitError;
 use orbit_types::identity::{Crew, CrewAssignment, ReasoningEffort};
 use tempfile::tempdir;
 
-use super::{roots, write_config};
 use crate::registry::resolve_default_crew;
-use crate::resolved::{
-    RETIRED_DUEL_CONFIG_WARNING, RETIRED_ROUTINES_CONFIG_WARNING, default_crews,
-    retired_backend_override_check,
-};
+use crate::resolved::default_crews;
+use crate::tests::{roots, write_config};
 use crate::{ConfigSnapshot, ExecutionEnvPolicy, PersistenceConfig, ResolvedConfig};
 
 fn single_family_crew(name: &str) -> Crew {
@@ -35,5 +32,7 @@ fn load_config(body: &str) -> Result<ResolvedConfig, OrbitError> {
     ResolvedConfig::load(&roots(global.path(), workspace.path()))
 }
 
+mod compatibility;
+mod config;
 mod crew;
-mod environment;
+mod execution_env;

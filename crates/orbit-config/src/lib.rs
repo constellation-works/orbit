@@ -54,7 +54,9 @@
 //!   its one parser [ORB-12913].
 //! - `operation` — typed `[operation]` review preferences and their layered
 //!   resolution [ORB-11333].
-//! - `resolved` — the consumer-facing [`ResolvedConfig`] views.
+//! - `resolved` — the consumer-facing [`ResolvedConfig`] views, assembled in
+//!   `resolved/config.rs` with crew admission, compatibility checks and environment
+//!   projection in sibling named modules.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
 //! - `store` — comment-preserving [`ConfigStore`] edits and atomic save.

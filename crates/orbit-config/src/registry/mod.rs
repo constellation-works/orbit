@@ -38,7 +38,7 @@ const DEFAULT_WORKFLOW_CREW: &str = "opus";
 /// `workflow.system_crew`. Shipped job steps name this crew directly, and a
 /// seeded config defines no `[crews.system]` table — `orbit init` points
 /// `workflow.system_crew` at a real cheap-tier crew instead — so the name is
-/// resolved onto that crew at load; see `resolved::alias_system_crew`.
+/// resolved onto that crew at load; see `resolved::crew::alias_system_crew`.
 pub(crate) const DEFAULT_WORKFLOW_SYSTEM_CREW: &str = "system";
 /// The crew that carried the system lane before `system` existed. Still seeded
 /// in its own right; named here because a config written before ORB-10877
