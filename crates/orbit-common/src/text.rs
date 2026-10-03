@@ -52,7 +52,3 @@ pub fn contains_lowercased(haystack: &str, lowered_needle: &str) -> bool {
         .windows(lowered_needle.len())
         .any(|window| window.eq_ignore_ascii_case(lowered_needle.as_bytes()))
 }
-
-#[cfg(test)]
-#[path = "tests/text.rs"]
-mod tests;

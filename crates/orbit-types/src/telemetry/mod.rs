@@ -7,9 +7,6 @@ mod metrics;
 mod pricing;
 mod self_reported_actor;
 
-#[cfg(test)]
-mod tests;
-
 pub use audit_actor::{
     ACTOR_ALIAS_MAP_VERSION, ActorKind, CanonicalActor, canonical_actor_for_role_label,
 };

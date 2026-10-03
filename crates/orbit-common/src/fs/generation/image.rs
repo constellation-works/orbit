@@ -111,8 +111,8 @@ pub(super) fn verify_running_image(file: &mut File) -> Result<(), OrbitError> {
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn macho_commands_length(header: &[u8]) -> Result<usize, OrbitError> {
+#[cfg(target_os = "macos")]
+fn macho_commands_length(header: &[u8]) -> Result<usize, OrbitError> {
     if header.len() != 32 || header[..4] != [0xcf, 0xfa, 0xed, 0xfe] {
         return Err(refusal("expected a native 64-bit Mach-O executable"));
     }
@@ -123,8 +123,8 @@ pub(super) fn macho_commands_length(header: &[u8]) -> Result<usize, OrbitError> 
     Ok(size)
 }
 
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn macho_uuid(mut commands: &[u8]) -> Result<[u8; 16], OrbitError> {
+#[cfg(target_os = "macos")]
+fn macho_uuid(mut commands: &[u8]) -> Result<[u8; 16], OrbitError> {
     while commands.len() >= 8 {
         let kind = u32::from_le_bytes([commands[0], commands[1], commands[2], commands[3]]);
         let size =

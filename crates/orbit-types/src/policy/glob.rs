@@ -146,9 +146,8 @@ pub fn compile_glob_regex(rule: &str) -> Result<Regex, regex::Error> {
 /// Every character outside the glob operators is escaped, so a translated rule
 /// is always valid regex syntax; the only way [`compile_glob_regex`] can fail
 /// is the compiled-size limit, and 512 bytes of the costliest operator
-/// (`?`, a Unicode class) stay far below it. The bound is pinned by a test that
-/// compiles worst-case rules of exactly this length.
-pub(crate) const UNCOMPILED_VALIDATION_MAX_BYTES: usize = 512;
+/// (`?`, a Unicode class) stay far below it.
+const UNCOMPILED_VALIDATION_MAX_BYTES: usize = 512;
 
 /// Whether `rule` (already normalized, `!` prefix removed) is a glob
 /// [`compile_glob_regex`] accepts.

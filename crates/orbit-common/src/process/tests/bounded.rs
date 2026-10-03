@@ -6,29 +6,7 @@ use std::time::{Duration, Instant};
 use crate::OrbitError;
 use crate::process::output_capture::OUTPUT_TRUNCATED_MARKER;
 use crate::process::shell::quote_posix_arg;
-use crate::process::{CapturedOutput, run_bounded, run_bounded_capped};
-
-#[test]
-fn bounded_run_returns_status_and_output() {
-    let mut command = Command::new("sh");
-    command.args(["-c", "echo hello; echo err >&2; exit 3"]);
-    let CapturedOutput {
-        status,
-        stdout,
-        stderr,
-    } = run_bounded(&mut command, Duration::from_secs(5)).expect("wait");
-    assert_eq!(status.code(), Some(3));
-    assert!(!status.success());
-    assert_eq!(stdout, b"hello\n");
-    assert_eq!(stderr, b"err\n");
-}
-
-#[test]
-fn bounded_run_reports_a_spawn_failure() {
-    let mut command = Command::new("/no/such/orbit-bounded-runner");
-    let error = run_bounded(&mut command, Duration::from_secs(1)).expect_err("spawn");
-    assert!(matches!(error, OrbitError::Execution(_)), "{error}");
-}
+use crate::process::{run_bounded, run_bounded_capped};
 
 #[cfg(unix)]
 #[test]

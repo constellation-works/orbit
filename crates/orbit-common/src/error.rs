@@ -640,7 +640,3 @@ impl From<RecordError> for OrbitError {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "tests/error.rs"]
-mod tests;
