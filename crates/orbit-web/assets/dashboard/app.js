@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, positiveIntParam, getWorkspace, setWorkspace, isAggregateLinked, setMultiWorkspace, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, payloadHonorsWindow, withWorkspace } from './js/common.js';
 import { buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, hasCrewOptions, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch } from './js/tasks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, fetchAndRenderPolicy, getActiveAuditSubtab, navigateToAuditExecution, renderAuditSummary, setActiveAuditSubtabFromButton, setAuditSubtab, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { renderScoreboard } from './js/scoreboard.js';
@@ -691,14 +691,17 @@ function buildFrictionTagPicker(friction, detail) {
 }
 
 async function patchFriction(friction, patch, control, detail) {
+  const visit = captureWorkspaceVisit();
   if (!friction || !friction.id) return;
   if (control) control.disabled = true;
   for (const node of detail.querySelectorAll(".action-error")) node.remove();
   try {
-    const updated = await patchJson(`/api/frictions/${encodeURIComponent(friction.id)}`, patch);
+    const updated = await patchJson(visit.path(`/api/frictions/${encodeURIComponent(friction.id)}`), patch);
+    if (!visit.isCurrent()) return;
     activeFrictionId = updated.id || friction.id;
     await fetchAndRenderFrictions();
   } catch (e) {
+    if (!visit.isCurrent()) return;
     detail.prepend(el("div", { class: "action-error", text: e.message || "friction update failed" }));
     if (patch.status && control) control.value = friction.status || "open";
   } finally {
@@ -707,15 +710,18 @@ async function patchFriction(friction, patch, control, detail) {
 }
 
 async function resolveFriction(friction, btn, detail) {
+  const visit = captureWorkspaceVisit();
   const oldText = btn.textContent;
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>wait`;
   for (const node of detail.querySelectorAll(".action-error")) node.remove();
   try {
-    const updated = await postJson(`/api/frictions/${encodeURIComponent(friction.id)}/resolve`);
+    const updated = await postJson(visit.path(`/api/frictions/${encodeURIComponent(friction.id)}/resolve`));
+    if (!visit.isCurrent()) return;
     activeFrictionId = updated.id || friction.id;
     await fetchAndRenderFrictions();
   } catch (e) {
+    if (!visit.isCurrent()) return;
     detail.prepend(el("div", { class: "action-error", text: e.message || "resolve failed" }));
   } finally {
     btn.disabled = false;
