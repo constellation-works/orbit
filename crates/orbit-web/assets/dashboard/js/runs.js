@@ -11,7 +11,7 @@
 // callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
 // formatters) that the actions and render depend on. No direct import from app.js.
 
-import { panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeToggleRow } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -36,6 +36,8 @@ const resumedRunIdsBySource = new Map();
 // second live resume of a lineage; this keeps the button disabled even when
 // the row re-renders mid-request.
 const resumeRequestsInFlight = new Set();
+const cancelRequestsInFlight = new Set();
+const replayRequestsInFlight = new Set();
 let runFilter = (() => {
   const value = new URL(window.location.href).searchParams.get("run_state") || "all";
   return RUN_FILTERS.has(value) ? value : "all";
@@ -113,7 +115,7 @@ function buildCancelRunButton(run, host) {
     text: "cancel",
     title: `Cancel ${run.run_id}`,
   });
-  btn.disabled = !runIsCancellable(run);
+  btn.disabled = !runIsCancellable(run) || cancelRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Cancel", run));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -128,6 +130,7 @@ function buildReplayRunButton(run, host) {
     text: "Replay run",
     title: `Replay ${run.run_id}`,
   });
+  btn.disabled = replayRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Replay", run));
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -158,7 +161,7 @@ function runScopedPath(path, run) {
 }
 
 function runIdentity(run) {
-  return `${run && run.workspace_id ? run.workspace_id : ""}:${run && run.run_id ? run.run_id : ""}`;
+  return `${run && run.workspace_id ? run.workspace_id : getWorkspace() || ""}:${run && run.run_id ? run.run_id : ""}`;
 }
 
 // Jobs whose runs are drain coordinators: the local `auto` window and a
@@ -272,6 +275,10 @@ function clearRunActionError(host) {
 // The latest cancel's settlement report, kept across re-renders of the runs
 // table so the poll that follows a cancel does not wipe it before it is read.
 let cancelNotice = null;
+onWorkspaceChange(() => {
+  runActionError = null;
+  cancelNotice = null;
+});
 
 function cancelNoticeFor(run, result) {
   const settlements = describePullSettlements(result && result.pull_settlements);
@@ -300,11 +307,26 @@ function buildCancelNotice(notice, onDismiss) {
 }
 
 async function cancelRun(run, btn, host) {
+  if (!run || !run.run_id) return;
+  const key = runIdentity(run);
+  if (cancelRequestsInFlight.has(key)) return;
+  const visit = captureWorkspaceVisit();
+  cancelRequestsInFlight.add(key);
+  try {
+    await cancelRunInVisit(run, btn, host, visit);
+  } finally {
+    cancelRequestsInFlight.delete(key);
+  }
+}
+
+async function cancelRunInVisit(run, btn, host, visit) {
   const runId = run && run.run_id;
   if (!runId) return;
+  const requestPath = visit.path(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run));
   const old = btn.textContent;
   btn.disabled = true;
   const pullClaim = await resolvePullClaim(run);
+  if (!visit.isCurrent()) return;
   btn.disabled = !runIsCancellable(run);
   const reason = window.prompt(cancelPromptText({ ...run, pull_claim: pullClaim }), "");
   if (reason === null) return;
@@ -314,9 +336,10 @@ async function cancelRun(run, btn, host) {
   clearRunActionError(host);
   let notice = null;
   try {
-    const result = await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/cancel`, run),
+    const result = await postJson(requestPath,
       { reason: reason.trim() || null });
     cancelled = true;
+    if (!visit.isCurrent()) return;
     // The button must not offer a second cancel while the refresh is in flight.
     btn.textContent = "cancelled";
     notice = cancelNoticeFor(run, result);
@@ -324,6 +347,7 @@ async function cancelRun(run, btn, host) {
     // elsewhere (run detail) it is appended to the host once the view refreshes.
     if (notice && host && host.id === "runs-body") cancelNotice = notice;
   } catch (e) {
+    if (!visit.isCurrent()) return;
     showRunActionError(host, e.message || "cancel failed");
     console.error(e);
   } finally {
@@ -345,16 +369,30 @@ async function cancelRun(run, btn, host) {
       refreshActiveDetail ? doFetchAndRenderRunEvents() : Promise.resolve(),
     ]);
   } catch (e) {
+    if (!visit.isCurrent()) return;
     showRunActionError(host, `${runId} was cancelled, but the view could not refresh: ${e.message || e}. Use Refresh to update it.`);
     console.error(e);
   }
-  if (notice && host && host.id !== "runs-body") {
+  if (visit.isCurrent() && notice && host && host.id !== "runs-body") {
     const node = buildCancelNotice(notice, () => node.remove());
     host.appendChild(node);
   }
 }
 
 async function replayRun(run, btn, host) {
+  if (!run || !run.run_id) return;
+  const key = runIdentity(run);
+  if (replayRequestsInFlight.has(key)) return;
+  const visit = captureWorkspaceVisit();
+  replayRequestsInFlight.add(key);
+  try {
+    await replayRunInVisit(run, btn, host, visit);
+  } finally {
+    replayRequestsInFlight.delete(key);
+  }
+}
+
+async function replayRunInVisit(run, btn, host, visit) {
   const runId = run && run.run_id;
   if (!runId) return;
   if (run.state === "running" && !window.confirm(`Replay still-running run ${runId}?`)) return;
@@ -363,11 +401,13 @@ async function replayRun(run, btn, host) {
   btn.innerHTML = `<span class="spinner"></span>Replay run`;
   clearRunActionError(host);
   try {
-    const payload = await postJson(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/replay`, run));
+    const payload = await postJson(visit.path(runScopedPath(`/api/runs/${encodeURIComponent(runId)}/replay`, run)));
     if (!payload.run_id) throw new Error("replay response did not include run_id");
-    doNavigateToRun(payload.run_id, run.workspace_id);
+    if (!visit.isCurrent()) return;
+    doNavigateToRun(payload.run_id, run.workspace_id || visit.workspace);
     doFetchAndRenderRuns().catch(console.error);
   } catch (e) {
+    if (!visit.isCurrent()) return;
     showRunActionError(host, e.message || "replay failed");
     console.error(e);
   } finally {
@@ -399,6 +439,7 @@ function resumeErrorNode(error, run) {
 }
 
 async function resumeRun(run, btn, host) {
+  const visit = captureWorkspaceVisit();
   const runId = run && run.run_id;
   if (!runId) return;
   const key = runIdentity(run);
@@ -412,11 +453,13 @@ async function resumeRun(run, btn, host) {
   clearRunActionError(host);
   let resumed = false;
   try {
-    const payload = await postJson(runScopedPath(`/api/job-runs/${encodeURIComponent(runId)}/resume`, run));
+    const payload = await postJson(visit.path(runScopedPath(`/api/job-runs/${encodeURIComponent(runId)}/resume`, run)));
     if (!payload.run_id) throw new Error("resume response did not include run_id");
     resumedRunIdsBySource.set(key, payload.run_id);
     resumed = true;
+    if (!visit.isCurrent()) return;
   } catch (e) {
+    if (!visit.isCurrent()) return;
     showRunActionError(host, (e && e.message) || "resume failed", () => resumeErrorNode(e, run));
     console.error(e);
   } finally {
@@ -428,6 +471,7 @@ async function resumeRun(run, btn, host) {
   try {
     await doFetchAndRenderRuns();
   } catch (e) {
+    if (!visit.isCurrent()) return;
     // The resume was accepted; only the list is stale.
     showRunActionError(host, `${runId} was resumed, but the list could not refresh: ${(e && e.message) || e}. Use Refresh to update it.`);
     console.error(e);

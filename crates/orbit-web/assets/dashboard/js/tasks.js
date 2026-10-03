@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { getWorkspaceRevision, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, withWorkspace, makeToggleRow, makeCopyButton, copyText, copyWithFeedback } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { buildDistributedBlock, buildExecutionProvenance, claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
@@ -53,6 +53,8 @@ let restoredCommentHash = null;
 onWorkspaceChange(() => {
   invalidateDistributedConsole();
   pinnedExternalTask = null;
+  taskActionNotice = null;
+  quickActionState.clear();
   expandedTaskIds.clear();
   statusFeedback.clear();
   crewFeedback.clear();
@@ -74,6 +76,10 @@ let shipInFlightTaskIds = new Set();
 // Row shortcuts (Approve on a proposed task, Ship on a backlog one): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
+
+function taskDispatchIdentity(task) {
+  return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
+}
 
 // Groups read in the order a person has to act on them: tasks waiting on a
 // human decision first, then running work, then the queue. The chips keep the
@@ -1069,8 +1075,9 @@ function setDetailEditing(detail, field, open) {
 }
 
 function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
-  const revision = getWorkspaceRevision();
+  const visit = captureWorkspaceVisit();
   const spec = TASK_FIELD_EDITORS[field];
+  const mutationPath = visit.path(taskMutationPath(task));
   const mutable = canMutateTask(task);
   const editTitle = `Edit ${spec.label} for ${task.id}`;
   const wrap = el("div", { class: "field-editor-cell" });
@@ -1086,9 +1093,9 @@ function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
       editable: mutable,
       editTitle,
       disabledTitle: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
-      save: (text, options) => patchJson(taskMutationPath(task), spec.toPayload(text, options)),
+      save: (text, options) => patchJson(mutationPath, spec.toPayload(text, options)),
       onSaved: (updatedTask) => {
-        if (revision === getWorkspaceRevision()) completeFieldSave(task.id, field, updatedTask, context);
+        if (visit.isCurrent()) completeFieldSave(task.id, field, updatedTask, context);
       },
       onEditingChange: (open) => setDetailEditing(detail, field, open),
       editSlot,
@@ -1162,14 +1169,15 @@ function assessedComplexity(task) {
 }
 
 async function applyTaskComplexityChange(task, nextValue, context) {
-  const revision = getWorkspaceRevision();
+  const visit = captureWorkspaceVisit();
+  const mutationPath = visit.path(taskMutationPath(task));
   const previousValue = assessedComplexity(task);
   if (!nextValue || nextValue === previousValue || !canMutateTask(task)) return;
   complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
-    const updatedTask = await patchJson(taskMutationPath(task), { complexity: nextValue });
-    if (revision !== getWorkspaceRevision()) return;
+    const updatedTask = await patchJson(mutationPath, { complexity: nextValue });
+    if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
     complexityFeedback.set(task.id, {
       kind: "success",
@@ -1181,7 +1189,7 @@ async function applyTaskComplexityChange(task, nextValue, context) {
         : undefined,
     });
   } catch (error) {
-    if (revision !== getWorkspaceRevision()) return;
+    if (!visit.isCurrent()) return;
     complexityFeedback.set(task.id, {
       kind: "error",
       text: `complexity update failed: ${error.message || String(error)}`,
@@ -1947,7 +1955,7 @@ function buildActionsRow(task, detail, context) {
   const actions = el("div", { class: "actions" });
   const mutable = canMutateTask(task);
   if (SHIP_STATUSES.has(task.status)) {
-    const shipped = shipInFlightTaskIds.has(task.id);
+    const shipped = shipInFlightTaskIds.has(taskDispatchIdentity(task));
     const btn = el("button", {
       class: "action ship",
       text: shipped ? "shipping" : "ship",
@@ -2142,7 +2150,8 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   // A transition can first read the full record for its evidence requirement.
   // Leaving that workspace abandons the interaction before any write, and a
   // later mutation result must not be applied to another workspace visit.
-  const revision = getWorkspaceRevision();
+  const visit = captureWorkspaceVisit();
+  const mutationPath = visit.path(taskMutationPath(task));
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
   let transition = statusTransition(task, nextStatus);
   // A target the projection did not offer is an override, not a mistake: the
@@ -2160,7 +2169,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     try {
       detail = await loadTaskDetail(task, context);
     } catch (error) {
-      if (revision !== getWorkspaceRevision()) return;
+      if (!visit.isCurrent()) return;
       statusFeedback.set(task.id, {
         kind: "error",
         text: `status update failed: ${error.message || String(error)}`,
@@ -2168,7 +2177,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
       renderTasks(taskList(context), context);
       return;
     }
-    if (revision !== getWorkspaceRevision()) return;
+    if (!visit.isCurrent()) return;
     transition = detail.status === task.status ? statusTransition(detail, nextStatus) : null;
     if (!transition) {
       statusFeedback.set(task.id, {
@@ -2217,8 +2226,8 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
-    const updatedTask = await patchJson(taskMutationPath(task), payload);
-    if (revision !== getWorkspaceRevision()) return;
+    const updatedTask = await patchJson(mutationPath, payload);
+    if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
     const feedback = {
       kind: "success",
@@ -2231,7 +2240,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     statusFeedback.set(task.id, feedback);
     expandedTaskIds.delete(task.id);
   } catch (error) {
-    if (revision !== getWorkspaceRevision()) return;
+    if (!visit.isCurrent()) return;
     statusFeedback.set(task.id, {
       kind: "error",
       text: `status update failed: ${error.message || String(error)}`,
@@ -2270,14 +2279,15 @@ function statusTransitionEvidenceUnavailable(requiredField) {
 }
 
 async function applyTaskCrewChange(task, nextValue, context) {
-  const revision = getWorkspaceRevision();
+  const visit = captureWorkspaceVisit();
+  const mutationPath = visit.path(taskMutationPath(task));
   const previousValue = explicitCrewValue(task);
   if (nextValue === previousValue || !canMutateTask(task)) return;
   crewFeedback.set(task.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
-    const updatedTask = await patchJson(taskMutationPath(task), { crew: nextValue || null });
-    if (revision !== getWorkspaceRevision()) return;
+    const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
+    if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
     crewFeedback.set(task.id, {
       kind: "success",
@@ -2285,7 +2295,7 @@ async function applyTaskCrewChange(task, nextValue, context) {
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
-    if (revision !== getWorkspaceRevision()) return;
+    if (!visit.isCurrent()) return;
     crewFeedback.set(task.id, {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
@@ -2318,16 +2328,22 @@ function restoreActionFocus(actions, selector) {
    no PR/local toggle here. The resulting run id (or the server's error) is
    surfaced so the operator can see the click took effect. */
 async function shipTask(task, detail, btnNode, context) {
+  const visit = captureWorkspaceVisit();
+  const dispatchKey = taskDispatchIdentity(task);
+  const requestPath = visit.path(taskWorkspacePath(task, "/api/workflows/ship"));
   if (!canMutateTask(task)) return;
-  if (shipInFlightTaskIds.has(task.id)) return;
-  shipInFlightTaskIds.add(task.id);
+  if (shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
+  shipInFlightTaskIds.add(dispatchKey);
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
   for (const b of detail.querySelectorAll(".action")) b.disabled = true;
   const oldText = btnNode.textContent;
   btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  let dispatched = false;
   try {
-    const result = await postJson(taskWorkspacePath(task, "/api/workflows/ship"), { task_ids: [task.id] });
+    const result = await postJson(requestPath, { task_ids: [task.id] });
+    dispatched = true;
+    if (!visit.isCurrent()) return;
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
     taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
@@ -2336,10 +2352,17 @@ async function shipTask(task, detail, btnNode, context) {
   } catch (error) {
     // Only a failed dispatch releases the guard; a succeeded one stays held so
     // a second click cannot queue a duplicate run behind the first.
-    shipInFlightTaskIds.delete(task.id);
+    if (!dispatched) shipInFlightTaskIds.delete(dispatchKey);
+    if (!visit.isCurrent()) return;
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
     btnNode.textContent = oldText;
-    detail.prepend(actionErrorNode(`ship failed: ${error.message || String(error)}`));
+    if (dispatched) {
+      btnNode.disabled = true;
+      btnNode.textContent = "submitted";
+    }
+    detail.prepend(actionErrorNode(dispatched
+      ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
+      : `ship failed: ${error.message || String(error)}`));
   }
 }
 
@@ -2396,16 +2419,24 @@ function showCommentForm(task, detail, actions, context) {
     if (prior) prior.remove();
     submit.disabled = true;
     cancel.disabled = true;
+    const visit = captureWorkspaceVisit();
+    const requestPath = visit.path(taskMutationPath(task, "/comments"));
+    let posted = false;
     try {
-      await postJson(taskMutationPath(task, "/comments"), { message });
+      await postJson(requestPath, { message });
+      posted = true;
+      if (!visit.isCurrent()) return;
       // The draft is spent: let the next render rebuild the detail so the
       // posted comment appears.
       delete detail.dataset.draft;
       await refreshTasks(context);
     } catch (error) {
-      submit.disabled = false;
+      if (!visit.isCurrent()) return;
+      submit.disabled = posted;
       cancel.disabled = false;
-      detail.prepend(actionErrorNode(`comment failed: ${error.message || String(error)}`));
+      detail.prepend(actionErrorNode(posted
+        ? `Comment was posted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
+        : `comment failed: ${error.message || String(error)}`));
     }
   });
   cancel.addEventListener("click", (e) => {
@@ -2459,6 +2490,9 @@ function showRejectForm(task, detail, actions, context) {
 }
 
 async function runAction(task, kind, detail, body, btnNode, context, opts = {}) {
+  const visit = opts.visit || captureWorkspaceVisit();
+  if (!visit.isCurrent()) return;
+  const requestPath = visit.path(opts.path ? taskWorkspacePath(task, opts.path) : taskMutationPath(task, `/${kind}`));
   if (!canMutateTask(task)) return;
   // Disable action controls while in flight to prevent double-clicks.
   for (const b of detail.querySelectorAll(".action")) b.disabled = true;
@@ -2470,8 +2504,9 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
   // Clear any prior error
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
+  let accepted = false;
   try {
-    const res = await fetch(opts.path ? taskWorkspacePath(task, opts.path) : taskMutationPath(task, `/${kind}`), {
+    const res = await fetch(requestPath, {
       method: opts.method || "POST",
       headers: body ? { "content-type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
@@ -2491,14 +2526,19 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
       }
       throw Object.assign(new Error(msg), remedy ? { remedy } : {});
     }
+    accepted = true;
+    if (!visit.isCurrent()) return;
     if (opts.collapseOnSuccess !== false) expandedTaskIds.delete(task.id);
     if (opts.successNotice) taskActionNotice = opts.successNotice;
     await refreshTasks(context);
   } catch (err) {
-    for (const b of detail.querySelectorAll(".action")) b.disabled = false;
+    if (!visit.isCurrent()) return;
+    for (const b of detail.querySelectorAll(".action")) b.disabled = accepted;
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
-    if (opts.onFailure) opts.onFailure();
-    detail.prepend(actionErrorNode(String(err.message || err), err && err.remedy));
+    if (!accepted && opts.onFailure) opts.onFailure();
+    detail.prepend(actionErrorNode(accepted
+      ? `${kind} was accepted, but the view could not refresh: ${err.message || String(err)}. Use Refresh to update it.`
+      : String(err.message || err), err && err.remedy));
   }
 }
 
@@ -2507,8 +2547,8 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
 /// candidate and starts the owner's landing job; a plain status write would
 /// be refused while the claim protects the task.
 async function approveReviewTask(task, detail, btnNode, context) {
-  const revision = getWorkspaceRevision();
-  const admission = `${revision}:${task.id}`;
+  const visit = captureWorkspaceVisit();
+  const admission = `${visit.revision}:${task.id}`;
   if (reviewApprovalsInFlight.has(admission)) return;
   reviewApprovalsInFlight.add(admission);
   btnNode.disabled = true;
@@ -2523,8 +2563,8 @@ async function approveReviewTask(task, detail, btnNode, context) {
   }
   // Admission is asynchronous; a task detail from an earlier workspace visit
   // must not approve a same-named task through the new ambient workspace.
-  if (revision !== getWorkspaceRevision()) return;
-  if (!claimed) return runAction(task, "approve", detail, null, btnNode, context);
+  if (!visit.isCurrent()) return;
+  if (!claimed) return runAction(task, "approve", detail, null, btnNode, context, { visit });
   if (claimed.refusal) {
     const prior = detail.querySelector(".action-error");
     if (prior) prior.remove();
@@ -2534,6 +2574,7 @@ async function approveReviewTask(task, detail, btnNode, context) {
   const request = handoffApprovalRequest(claimed.claim);
   invalidateDistributedConsole();
   return runAction(task, "approve", detail, request.body, btnNode, context, {
+    visit,
     path: request.path,
     successNotice: `${task.id}: handoff approved; the owner landing job completes it`,
   });
@@ -2621,7 +2662,7 @@ function quickActionSignature(task) {
   const machine = task.job_run_machine;
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
-  return `${task.job_run_id || ""}-${navigable}-${host}-${shipInFlightTaskIds.has(task.id)}-${state ? `${state.kind}:${state.text}` : ""}`;
+  return `${task.job_run_id || ""}-${navigable}-${host}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
@@ -2675,7 +2716,7 @@ function buildQuickAction(task, context) {
     spec = { kind: "ship", text: "Ship", title: `Ship ${task.id}: dispatch it through the pipeline with its own crew` };
   }
   if (!spec) return cell;
-  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && shipInFlightTaskIds.has(task.id));
+  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && shipInFlightTaskIds.has(taskDispatchIdentity(task)));
   const btn = el("button", {
     class: `task-quick ${spec.kind}`,
     text: pending ? (spec.kind === "ship" ? "Shipping…" : "Approving…") : spec.text,
@@ -2721,20 +2762,28 @@ function buildQuickActionError(task) {
 }
 
 async function runQuickAction(task, kind, context) {
+  const visit = captureWorkspaceVisit();
+  const dispatchKey = taskDispatchIdentity(task);
+  const requestPath = visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));
   if (!canMutateTask(task)) return;
   if (quickActionState.get(task.id)?.kind === "pending") return;
-  if (kind === "ship" && shipInFlightTaskIds.has(task.id)) return;
+  if (kind === "ship" && shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
   quickActionState.set(task.id, { kind: "pending", text: kind });
-  if (kind === "ship") shipInFlightTaskIds.add(task.id);
+  if (kind === "ship") shipInFlightTaskIds.add(dispatchKey);
   renderTasks(taskList(context), context);
+  let dispatched = false;
   try {
     if (kind === "ship") {
-      const result = await postJson(taskWorkspacePath(task, "/api/workflows/ship"), { task_ids: [task.id] });
+      const result = await postJson(requestPath, { task_ids: [task.id] });
+      dispatched = true;
+      if (!visit.isCurrent()) return;
       const runId = result && result.run_id ? result.run_id : "(no run id)";
       const state = result && result.state ? result.state : "submitted";
       taskActionNotice = `${task.id}: ship run ${runId} ${state}`;
     } else {
-      await postJson(taskMutationPath(task, "/approve"), {});
+      await postJson(requestPath, {});
+      dispatched = true;
+      if (!visit.isCurrent()) return;
       taskActionNotice = `${task.id} approved and moved to backlog`;
     }
     quickActionState.delete(task.id);
@@ -2742,8 +2791,11 @@ async function runQuickAction(task, kind, context) {
   } catch (error) {
     // A failed ship releases the duplicate-dispatch guard; a succeeded one keeps
     // it, exactly as the detail's Ship does.
-    if (kind === "ship") shipInFlightTaskIds.delete(task.id);
-    quickActionState.set(task.id, { kind: "error", text: `${kind} failed: ${error.message || String(error)}` });
+    if (kind === "ship" && !dispatched) shipInFlightTaskIds.delete(dispatchKey);
+    if (!visit.isCurrent()) return;
+    quickActionState.set(task.id, { kind: "error", text: dispatched
+      ? `${kind === "ship" ? "Ship" : "Approval"} was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
+      : `${kind} failed: ${error.message || String(error)}` });
     renderTasks(taskList(context), context);
   }
 }
