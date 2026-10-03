@@ -62,7 +62,12 @@ window.OrbitPanelView = (() => {
     const list=node('dl',null,'property-list');
     for(const [key,v]of Object.entries(value)){
       if(v==null)continue;
-      list.append(node('dt',label(key)));const dd=node('dd');structured(dd,v,depth+1);list.append(dd);
+      list.append(node('dt',label(key)));const dd=node('dd');
+      if(typeof v==='string'&&/(_at|^ts$)/.test(key)&&Number.isFinite(Date.parse(v))){dd.textContent=time(v);dd.title=v;}
+      else if(key==='duration_ms'&&typeof v==='number')dd.textContent=duration(v);
+      else if((key==='state'||key==='status')&&typeof v==='string')dd.append(badge(v));
+      else structured(dd,v,depth+1);
+      list.append(dd);
     }
     target.append(list);
   }

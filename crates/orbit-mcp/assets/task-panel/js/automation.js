@@ -20,7 +20,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
     const item=items.find(i=>i.name===selected);if(!item){selected=null;return;}
     target.append(ui.node('h3',item.name));
     if(item.description)ui.markdown(target,item.description);
-    for(const [title,value] of [['Target',item.target],['Schedule',schedule(item.schedule)],['Next evaluation',item.next_due&&item.state==='scheduled'?ui.time(item.next_due):item.state?ui.label(item.state):null],['Deduplication',item.dedupe?ui.label(item.dedupe):null],['Paused on this host',item.paused_at?ui.time(item.paused_at):null],['Last fire',item.last_fire],['Parallel runs',item.max_active_runs],['Steps',item.steps],['Availability',item.skip_reason||item.run_reason]]){
+    for(const [title,value] of [['Target',item.target],['Schedule',schedule(item.schedule)],['Next evaluation',scope==='jobs'?null:item.next_due&&item.state==='scheduled'?ui.time(item.next_due):item.state?ui.label(item.state):null],['Deduplication',item.dedupe?ui.label(item.dedupe):null],['Paused on this host',item.paused_at?ui.time(item.paused_at):null],['Last fire',item.last_fire],['Parallel runs',item.max_active_runs],['Steps',item.steps],['Availability',item.skip_reason||item.run_reason]]){
       if(value!=null)ui.field(target,title,value);
     }
     if(item.last_run?.run_id){

@@ -1145,8 +1145,10 @@ test('canonical run projection displays separate timestamps and step truncation 
   });
   await flush();
   const fields=f.get('details').children;
-  const timestamps=fields.find(n=>n.children[0].textContent==='Timestamps').children[1].textContent;
-  for(const value of ['2026-10-03T00:59:00Z','2026-10-03T01:00:00Z','2026-10-03T01:01:00Z','2026-10-03T01:09:00Z'])assert.ok(timestamps.includes(value));
+  const timestamps=fields.find(n=>n.children[0].textContent==='Timestamps').children[1].querySelectorAll('dd');
+  assert.deepEqual(timestamps.map(n=>n.title),['2026-10-03T00:59:00Z','2026-10-03T01:00:00Z','2026-10-03T01:01:00Z','2026-10-03T01:09:00Z'],'full timestamps remain available as tooltips');
+  assert.ok(timestamps.every(n=>n.textContent && n.textContent!==n.title),'visible timestamps use readable local dates');
+  assert.equal(f.get('title').textContent,'ship');
   const coverage=fields.find(n=>n.children[0].textContent==='Step coverage').children[1].textContent;
   assert.ok(coverage.includes('50 steps shown of 70'));
   assert.ok(coverage.includes('Truncated'));

@@ -172,7 +172,7 @@
     el('projection-warning').textContent=(data.content_truncated||data.truncated_fields?.length)?`Detail projection truncated: ${(data.truncated_fields||[]).join(', ')||'large task fields'}. Editing/review may be unavailable until the complete evidence can be read.`:'';
     el('panel').hidden=false;
     el('panel').classList.remove('stale');
-    el('title').textContent=entity.title||selected.id;
+    el('title').textContent=entity.title||entity.job_id||selected.id;
     el('identity').textContent=`${selected.id} · Updated ${ui.time(entity.updated_at||data.observed_at)}`;
     el('identity').title=`${workspace} · revision ${data.revision||'unavailable'} · observed ${data.observed_at||'unavailable'}`;
     el('entity-status').replaceChildren(ui.badge(entity.status||entity.state));
