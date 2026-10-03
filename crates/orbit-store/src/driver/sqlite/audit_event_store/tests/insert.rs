@@ -111,6 +111,38 @@ fn audit_append_refuses_read_only_files_and_symlinks() {
 }
 
 #[test]
+fn audit_append_refuses_traversal_and_non_file_targets() {
+    let root = tempfile::tempdir().expect("fixture");
+    let path = root.path().join("orbit.db");
+    let store = Store::open(&path).expect("fixture store");
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).expect("fixture dir");
+    let traversal = nested.join("..").join("orbit.db");
+    Store::append_audit_event_at_path(
+        &traversal,
+        &sample_params(),
+        AuditInvocationFields::default(),
+    )
+    .expect_err("audit append must not resolve parent-directory traversal");
+    Store::append_audit_event_at_path(&nested, &sample_params(), AuditInvocationFields::default())
+        .expect_err("audit append must only write a regular database file");
+    let missing_parent = root.path().join("absent").join("orbit.db");
+    Store::append_audit_event_at_path(
+        &missing_parent,
+        &sample_params(),
+        AuditInvocationFields::default(),
+    )
+    .expect_err("audit append must not create a missing state directory");
+    assert!(!root.path().join("absent").exists());
+    assert!(
+        store
+            .list_audit_events(&AuditEventFilter::default())
+            .expect("rows")
+            .is_empty()
+    );
+}
+
+#[test]
 fn insert_then_read_round_trips_correlation_fields() {
     let store = Store::open_in_memory().expect("open store");
     let params = sample_params();
