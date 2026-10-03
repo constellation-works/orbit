@@ -104,10 +104,18 @@ def main():
                 or (data.get("mutation_applied") is False and data.get("refusal")),
                 f"expected refusal for {name}: {response}")
     def read(scope, **fields):
-        return call("orbit_desktop_read", {"workspace": str(work), "scope": scope, **fields})
+        name = {"tasks": "orbit_task_list", "task": "orbit_task_show", "runs": "orbit_workflow_run_list", "run": "orbit_workflow_run_show"}[scope]
+        return call(name, {"workspace": str(work), "view": "bounded", **fields})
+    def write_arguments(request_id, operation):
+        operation = dict(operation)
+        kind = operation.pop("kind")
+        if kind == "edit":
+            operation.update(operation.pop("fields"))
+        return ("orbit_task_add" if kind == "create" else "orbit_task_update",
+                {"workspace": str(work), "model": "codex", "request_id": request_id, **operation})
     def write(request_id, operation):
-        return call("orbit_desktop_task_write", {"workspace": str(work), "model": "codex",
-                   "request_id": request_id, "operation": operation})
+        name, args = write_arguments(request_id, operation)
+        return call(name, args)
     try:
         initialized = rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
             "clientInfo": {"name": "orbit-apps-probe", "version": "1"}})
@@ -122,9 +130,10 @@ def main():
             require(tool["_meta"]["ui"]["resourceUri"] == URI, f"wrong UI URI for {name}")
             require(tool["_meta"]["openai/ui"]["entrypoints"] == [{"type": entrypoint}], "entrypoint metadata mismatch")
             require(tool["annotations"]["readOnlyHint"] is True, "opening a panel must be read-only")
-        for name in ("orbit_task_show", "orbit_desktop_read", "orbit_desktop_task_snapshot", "orbit_desktop_task_write"):
+        for name in ("orbit_task_show", "orbit_task_list", "orbit_task_add", "orbit_task_update", "orbit_workflow_auto", "orbit_routine_control", "orbit_pipeline_invoke"):
             require(name in by_name, f"missing daily control-center tool {name}")
             require("ui" not in by_name[name].get("_meta", {}), "ordinary data tools acquired automatic widgets")
+        require(not any(name.startswith("orbit_desktop_") for name in by_name), "retired desktop wrappers are still advertised")
         resources = rpc("resources/list", {})["result"]["resources"]
         require(any(resource["uri"] == URI for resource in resources), "canonical resource not listed")
         contents = rpc("resources/read", {"uri": URI})["result"]["contents"][0]
@@ -145,8 +154,7 @@ def main():
         require(created["snapshot"]["task"]["status"] == "proposed", "create skipped proposed state")
         replay = write("probe-create", create)
         require(replay["replayed"] is True and replay["snapshot"]["task"]["id"] == task_key, "create retry duplicated a task")
-        refused("orbit_desktop_task_write", {"workspace": str(work), "model": "codex", "request_id": "probe-create",
-                "operation": {**create, "title": "conflicting retry"}})
+        refused(*write_arguments("probe-create", {**create, "title": "conflicting retry"}))
         listed = read("tasks", search="MCP Apps disposable task", status="proposed", limit=1)
         require(listed["total"] == 1 and listed["items"][0]["id"] == task_key, "filtered task list is inconsistent")
         require(listed["search_scope"] == "task key and title", "search scope missing")
@@ -155,7 +163,7 @@ def main():
         panel = call("orbit_ui_inspect", {"workspace": str(work), "id": task_key})
         require(panel["task"]["id"] == task_key and panel["workspace"] == str(work), "panel destination mismatch")
         require(call("orbit_task_show", {"workspace": str(work), "id": task_key})["title"] == panel["task"]["title"], "ordinary reader disagrees")
-        snapshot = call("orbit_desktop_task_snapshot", {"workspace": str(work), "id": task_key})
+        snapshot = call("orbit_task_show", {"workspace": str(work), "id": task_key, "snapshot": True})
         stale_revision = snapshot["revision"]
         edit = {"kind": "edit", "id": task_key, "expected_revision": stale_revision,
                 "fields": {"description": "Edited in disposable protocol fixture."}}
@@ -188,17 +196,16 @@ def main():
         accepted = write("probe-review-accept", accept)["snapshot"]
         require(accepted["task"]["status"] == "review", "record-only acceptance silently completed task")
         require(accepted["actions"]["complete"]["enabled"] is False, "unprivileged MCP claims completion authority")
-        refused("orbit_desktop_task_write", {"workspace": str(work), "model": "codex", "request_id": "probe-complete-refused",
-                "operation": {**accept, "expected_revision": accepted["revision"], "complete": True}})
+        refused(*write_arguments("probe-complete-refused", {**accept, "expected_revision": accepted["revision"], "complete": True}))
         after = read("task", id=task_key)
         require(after["revision"] == accepted["revision"], "refused completion left a partial mutation")
         require(read("tasks", status="review")["total"] == 1, "review queue does not show fixture")
-        refused("orbit_desktop_read", {"workspace": str(work), "scope": "runs"})
-        refused("orbit_desktop_read", {"workspace": str(work), "scope": "run", "id": "jrun-probe-unprivileged"})
+        refused("orbit_workflow_run_list", {"workspace": str(work), "view": "bounded"})
+        refused("orbit_workflow_run_show", {"workspace": str(work), "view": "bounded", "id": "jrun-probe-unprivileged"})
         refused("orbit_ui_inspect", {"id": task_key})
         refused("orbit_ui_inspect", {"workspace": "missing-disposable-workspace", "id": task_key})
-        refused("orbit_desktop_task_write", {"workspace": str(work), "model": "codex", "request_id": "probe-forged-authority",
-                "actor": "operator", "operation": {**accept, "expected_revision": after["revision"], "complete": True}})
+        forged_name, forged_args = write_arguments("probe-forged-authority", {**accept, "expected_revision": after["revision"], "complete": True})
+        refused(forged_name, {**forged_args, "actor": "operator"})
         # This reference is data only. Actual updateModelContext transport is tested by
         # the shipped-script harness and must still be observed in the desktop host.
         reference = {"workspace": after["workspace"], "kind": "task", "id": task_key,

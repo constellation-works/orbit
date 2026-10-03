@@ -282,6 +282,24 @@
         "name": "include_inactive_plugins",
         "param_type": "boolean",
         "required": false
+      },
+      {
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+        "name": "view",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded list offset",
+        "name": "offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Bounded page size",
+        "name": "limit",
+        "param_type": "integer",
+        "required": false
       }
     ],
     "status": "active"
@@ -298,6 +316,18 @@
         "name": "name",
         "param_type": "string",
         "required": true
+      },
+      {
+        "description": "Explicit workspace for acknowledged mint",
+        "name": "workspace",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "True acknowledges unconditional creation; requires operator authority",
+        "name": "acknowledge_unconditional",
+        "param_type": "boolean",
+        "required": false
       }
     ],
     "status": "active"
@@ -320,6 +350,18 @@
         "name": "enabled",
         "param_type": "boolean",
         "required": true
+      },
+      {
+        "description": "Explicit workspace for checked toggle",
+        "name": "workspace",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Observed enabled state checked atomically; requires operator authority",
+        "name": "expected_enabled",
+        "param_type": "boolean",
+        "required": false
       }
     ],
     "status": "active"
@@ -972,7 +1014,7 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Submit a durable pipeline run and return immediately with its run ID.",
+    "description": "Submit a durable pipeline run and return immediately with its run ID. Public submissions require an operator; managed runs may invoke only a host-authorized child pipeline admission.",
     "enabled": true,
     "name": "orbit.pipeline.invoke",
     "parameters": [
@@ -983,15 +1025,27 @@
         "required": true
       },
       {
-        "description": "JSON object forwarded as the run input payload.",
+        "description": "Required unless default_input:true: JSON object forwarded as the run input payload.",
         "name": "input",
         "param_type": "object",
-        "required": true
+        "required": false
       },
       {
         "description": "Optional queue priority (`low`, `medium`, `high`, or `critical`).",
         "name": "priority",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Explicit workspace required for default-input catalog submission",
+        "name": "workspace",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.",
+        "name": "default_input",
+        "param_type": "boolean",
         "required": false
       },
       {
@@ -1042,6 +1096,70 @@
       },
       {
         "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "List workspace routine status or toggle one definition using its observed enabled state and target. Requires trusted operator authority and explicit workspace. Never replay a toggle after a lost reply; observe authoritative state first.",
+    "enabled": true,
+    "name": "orbit.routine.control",
+    "parameters": [
+      {
+        "description": "Exact workspace selector from discovery",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "list or toggle",
+        "name": "action",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Required for toggle: exact routine name",
+        "name": "name",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Required for toggle: observed enabled state",
+        "name": "expected_enabled",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Required for toggle: desired enabled state",
+        "name": "enabled",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Required for toggle: observed routine target",
+        "name": "target",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "List offset; default 0",
+        "name": "offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "List size 1 through 50; default 25",
+        "name": "limit",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Diagnostic model attribution; never grants authority",
         "name": "model",
         "param_type": "string",
         "required": false
@@ -1175,10 +1293,10 @@
         "required": false
       },
       {
-        "description": "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
+        "description": "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "name": "complexity",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "description": "Optional task type",
@@ -1213,6 +1331,12 @@
       {
         "description": "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
         "name": "field",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
+        "name": "request_id",
         "param_type": "string",
         "required": false
       },
@@ -1361,6 +1485,30 @@
         "required": false
       },
       {
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+        "name": "view",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded view list offset",
+        "name": "offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Bounded view key/title substring",
+        "name": "search",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded view priority filter",
+        "name": "priority",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
         "param_type": "string",
@@ -1435,6 +1583,12 @@
         "required": true
       },
       {
+        "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
+        "name": "snapshot",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
         "name": "agent",
         "param_type": "string",
@@ -1462,6 +1616,36 @@
         "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",
         "name": "workspace",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+        "name": "view",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded detail page size",
+        "name": "limit",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Comment offset",
+        "name": "comments_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "History offset",
+        "name": "history_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Artifact metadata offset",
+        "name": "artifacts_offset",
+        "param_type": "integer",
         "required": false
       }
     ],
@@ -1637,6 +1821,82 @@
         "required": false
       },
       {
+        "description": "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot.",
+        "name": "request_id",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately.",
+        "name": "expected_revision",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Evidence-bound review verdict: decision (accept or changes_requested), rationale, criteria [{criterion,met,evidence}], evidence, expected_run_id and expected_head. Review requires request_id and expected_revision.",
+        "name": "verdict",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "description": "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
+        "name": "complete",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.",
+    "enabled": true,
+    "name": "orbit.workflow.auto",
+    "parameters": [
+      {
+        "description": "status, start or stop",
+        "name": "action",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Required for start: window length in seconds, 1 through 604800",
+        "name": "for_seconds",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Optional start worker limit, positive u32; omitted uses runtime default",
+        "name": "concurrency",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+        "name": "complete",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Workspace claim token when held by another operator",
+        "name": "claim_token",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
         "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
         "param_type": "string",
@@ -1697,6 +1957,30 @@
         "name": "since",
         "param_type": "string",
         "required": false
+      },
+      {
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+        "name": "view",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded list offset",
+        "name": "offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Bounded run state filter",
+        "name": "status",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs",
+        "name": "include_catalog",
+        "param_type": "boolean",
+        "required": false
       }
     ],
     "status": "active"
@@ -1735,6 +2019,24 @@
         "name": "id",
         "param_type": "string",
         "required": true
+      },
+      {
+        "description": "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+        "name": "view",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Bounded log record offset",
+        "name": "log_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Bounded detail page size",
+        "name": "limit",
+        "param_type": "integer",
+        "required": false
       }
     ],
     "status": "active"

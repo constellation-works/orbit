@@ -32,13 +32,32 @@ Resource lookup accepts only the two exact versioned URIs. It does not resolve
 paths, query strings or arbitrary artifact contents.
 
 The panel discovers workspaces and requires an explicit returned selector.
-The selected host/workspace/entity stays visible. `orbit_desktop_read` provides
-bounded task lists/details and run observations; `orbit_desktop_task_snapshot`
-returns an opaque revision plus server-computed actions. The separate
-`orbit_desktop_task_write` application operation supports proposed-task creation,
-allowed field edits, comments and evidence-bound review. Core retains validation,
-workspace routing, audit, lifecycle checks and capability enforcement. Opening a
-widget, a model-context message or a click grants no operator authority.
+The selected host/workspace/entity stays visible. Existing domain readers expose
+`view: "bounded"` on `orbit_task_list`, `orbit_task_show`,
+`orbit_workflow_run_list`, `orbit_workflow_run_show` and `orbit_auto_task_list`.
+Ordinary calls retain their existing full-record responses. `orbit_task_show`
+with `snapshot: true` returns an opaque revision plus server-computed actions.
+
+Task writes reuse the existing task verbs. `orbit_task_add` with `request_id`
+creates a proposed task from title, description, acceptance criteria, priority
+and optional crew; it requires an explicit workspace and acceptance criteria.
+Ordinary creation retains its required complexity. `orbit_task_update` with
+`request_id` and `expected_revision` accepts one field edit, one comment, or one
+`verdict` plus optional `complete`. A comment or review cannot mix with field
+edits. Review verdicts carry the same evidence, criterion outcomes and observed
+run/head as the guarded application contract. These modes return a versioned
+snapshot and preserve the durable retry receipts described below. Core retains
+validation, workspace routing, audit, lifecycle checks and capability enforcement.
+Opening a widget, a model-context message or a click grants no operator authority.
+
+The five `orbit_desktop_*` wrappers are no longer advertised. Existing callers
+can still use their canonical or sanitized names: the MCP adapter translates
+only the known contracts into domain calls. Federation negotiates the advertised
+peer surface before dispatch: new domain calls can reach the previous desktop
+contracts, and old desktop calls can reach new domain peers. A missing equivalent
+refuses rather than guessing. No error after dispatch triggers a retry. An older
+peer returns catalog metadata separately and explicitly marks the combined run
+view unavailable instead of inferring empty runs.
 
 Task list search is case-insensitive public task key/title search, applied
 before pagination. History search remains `orbit.search`. Pages contain totals,
@@ -77,30 +96,36 @@ actual model-context delivery still requires the desktop host.
 
 ## Auto-drain and Automation
 
-`orbit_desktop_read` adds operator-only `drain`, `routines`, `auto_tasks` and
-`jobs` scopes. They are observational and explicitly workspace-scoped. Automation
-lists use offset/limit pagination (up to 50 rows), disclose definition load errors,
-and preserve inactive-plugin states. Routine status and auto-task next slots use
-the shared scheduler owners. These are workspace definitions, not host service
-health: enabled does not imply that the separate host clock is running.
-
-`orbit_desktop_drain` starts a bounded window (1–604800 seconds, optional positive
-u32 concurrency) or stops admissions and settles recorded work through the same
+`orbit_workflow_auto` observes readiness with `action: "status"`, starts a
+bounded window with `action: "start"` (1–604800 seconds and optional positive
+u32 concurrency), or stops admissions with `action: "stop"`. It uses the same
 runtime as CLI/dashboard. Completion defaults to review. Selecting **Complete
 automatically** explicitly authorizes completion of every task admitted during the
-window. Stopping preserves admitted workers. Readiness is a sample of up to 50
-tasks; eligibility may change immediately.
+window. Stopping preserves admitted workers. Readiness samples up to 50 tasks;
+eligibility may change immediately.
 
-`orbit_desktop_automation` supports routine/auto-task toggles, explicit manual
-mint, and no-input catalog job submission. Toggle requests carry the observed
-enabled flag; routine requests also carry the observed target. The domain owner
-checks routine changes and auto-task compare-and-set occurs under the scheduler
-cursor lock. Manual mint requires an acknowledgement that schedule, enabled and
-dedupe are ignored; it creates a task without dispatching it. Job submissions
-share the dashboard's no-input submission policy and refuse delivery jobs,
-disabled jobs and subroutines. Definition controls refuse replica coordination
-writes. Both new write tools require an existing operator session and refuse
-managed-run callers; payloads cannot grant authority.
+`orbit_routine_control` lists workspace routine status or toggles a definition
+using its observed enabled state and target. Existing `orbit_auto_task_toggle`
+accepts an optional `expected_enabled` for an atomic checked toggle, and
+`orbit_auto_task_mint` accepts `acknowledge_unconditional: true` for an operator
+acknowledgement that schedule, enabled and dedupe are ignored. Mint creates a task
+without dispatch. The guarded modes require explicit workspace and trusted
+operator authority and refuse managed-run callers; their ordinary modes retain
+existing behavior.
+
+`orbit_workflow_run_list` with `view: "bounded", include_catalog: true` returns
+bounded `runs` and `catalog` observations. Existing `orbit_pipeline_invoke` is
+now advertised; ordinary calls require explicit job name and input. Its optional
+`default_input: true` submits an enabled no-input catalog job with defaults,
+requires an explicit workspace and trusted operator session, refuses managed
+runs, and cannot combine with input or priority. Catalog submission shares the
+dashboard policy and refuses delivery jobs, disabled jobs and subroutines.
+Definition controls refuse replica coordination writes.
+
+Automation lists use offset/limit pagination (up to 50 rows), disclose definition
+load errors and preserve inactive-plugin states. Routine status and auto-task
+next slots use the shared scheduler owners. These are workspace definitions,
+not host service health: enabled does not imply the separate host clock is running.
 
 Drain and automation actions do **not** have task-write retry receipts. The UI
 never replays them automatically. A lost or malformed reply is an unknown outcome:
@@ -242,7 +267,7 @@ is not a browser engine or desktop shell.
 | Local stdio | Accepting adapter | Real disposable protocol probe; native rendering remains NOT RUN. |
 | Direct SSH byte relay | Destination adapter | Destination must run this candidate. Real SSH/native validation requires an authorized disposable destination. |
 | Federated local | Accepting mux adapter | Static resource stays local; data and write tools use the qualified-selector route and existing grants. Native validation remains NOT RUN. |
-| Federated remote | Accepting mux adapter | Destination must advertise the required desktop contracts; missing tools, stale routes and offline/wrong destinations must refuse without fallback. Real remote/native checks remain NOT RUN. |
+| Federated remote | Accepting mux adapter | Destination must advertise the domain contracts or their explicitly mapped legacy equivalents; missing equivalents, stale routes and offline/wrong destinations refuse before dispatch. Real remote/native checks remain NOT RUN. |
 
 Record exact argv separately: `mcp serve`, `mcp serve --mode remote <fixture-host>`
 and `mcp serve --mode federated`. The staged launcher is local only. Prepare other
@@ -269,3 +294,7 @@ Metadata and bridge contracts follow the official
 [entrypoint guide](https://developers.openai.com/plugins/build/extensions) and
 [packaging guide](https://developers.openai.com/plugins/build/plugins).
 Those contracts do not establish availability in an installed client.
+
+Mixed-version discovery uses the initialize metadata `orbit.domain_contract:1` for modern federated muxes. A pre-contract client named `orbit-federated-mux` receives the five legacy desktop advertisements needed by its existing discovery check; calls still translate to domain operations with the same authorization. Ordinary clients keep the reduced domain surface. New muxes verify extension arguments against a destination's advertised schema or translate to a known legacy equivalent before dispatch, and refuse unsupported options. This is covered by an in-memory MCP wire handshake and federated routing fixtures; an installed historical binary against a real remote host remains untested.
+
+Public `orbit.pipeline.invoke` submissions require operator capability. Managed runs may use the explicit-input path only with child admission recorded in host-owned reservation context; the application validates that admission. Default-input catalog submission always refuses managed runs.

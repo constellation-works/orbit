@@ -92,6 +92,7 @@ pub(super) struct ScriptedProbe {
     outcomes: HashMap<String, Result<DestinationSnapshot, OrbitError>>,
     route_snapshots: HashMap<String, DestinationSnapshot>,
     tools: HashMap<String, Vec<String>>,
+    legacy_schema: std::collections::HashSet<String>,
     calls: HashMap<String, HashMap<String, ScriptedToolResult>>,
     call_log: Arc<Mutex<Vec<RoutedCall>>>,
     probe_calls: Arc<AtomicUsize>,
@@ -103,6 +104,7 @@ impl ScriptedProbe {
             outcomes: HashMap::new(),
             route_snapshots: HashMap::new(),
             tools: HashMap::new(),
+            legacy_schema: Default::default(),
             calls: HashMap::new(),
             call_log: Arc::new(Mutex::new(Vec::new())),
             probe_calls: Arc::new(AtomicUsize::new(0)),
@@ -135,6 +137,11 @@ impl ScriptedProbe {
             machine_id.to_string(),
             tools.iter().map(|tool| (*tool).to_string()).collect(),
         );
+        self
+    }
+
+    pub(super) fn without_domain_extensions(mut self, machine_id: &str) -> Self {
+        self.legacy_schema.insert(machine_id.to_owned());
         self
     }
 
@@ -190,6 +197,7 @@ impl DestinationProbe for ScriptedProbe {
                     .unwrap_or_else(|| listed.clone());
                 Ok(Box::new(ScriptedRoute {
                     machine_id: destination.machine_id.clone(),
+                    legacy_schema: self.legacy_schema.contains(&destination.machine_id),
                     snapshot,
                     tools: self
                         .tools
@@ -209,6 +217,7 @@ impl DestinationProbe for ScriptedProbe {
 }
 
 struct ScriptedRoute {
+    legacy_schema: bool,
     machine_id: String,
     snapshot: DestinationSnapshot,
     tools: Vec<String>,
@@ -225,6 +234,29 @@ impl RoutedSession for ScriptedRoute {
         Ok(self.tools.clone())
     }
 
+    fn supports_tool_argument(&mut self, name: &str, argument: &str) -> Result<bool, OrbitError> {
+        if self.legacy_schema {
+            return Ok(false);
+        }
+        if !self
+            .tools
+            .iter()
+            .any(|tool| mcp_advertised_tool_name(tool) == mcp_advertised_tool_name(name))
+        {
+            return Ok(false);
+        }
+        Ok(crate::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?
+            .iter()
+            .any(|definition| {
+                definition.schema.name == name
+                    && definition
+                        .schema
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name == argument)
+            }))
+    }
     fn call_tool(
         &mut self,
         name: &str,

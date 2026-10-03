@@ -67,7 +67,11 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
     const workspace=current(), expectedScope=scope, g=++revision;
     fresh=false;renderDetail();
     try{
-      const data=await tool('orbit_desktop_read',{workspace,scope,offset,limit:25});
+      const data=scope==='routines'
+        ?await tool('orbit_routine_control',{workspace,action:'list',offset,limit:25})
+        :scope==='auto_tasks'
+          ?await tool('orbit_auto_task_list',{workspace,view:'bounded',offset,limit:25})
+          :(await tool('orbit_workflow_run_list',{workspace,view:'bounded',include_catalog:true,offset,limit:25})).catalog;
       if(g!==revision||workspace!==current()||expectedScope!==scope)return;
       if(data.schema_version!==1||data.workspace!==workspace||data.scope!==scope||!Array.isArray(data.items)||data.controls_authorized!==true)throw new Error('Incompatible automation projection');
       fresh=true;render(data);feedback(uncertain.get(key())||'');
@@ -89,7 +93,15 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
     if(action==='mint')args.acknowledge_unconditional=true;
     confirmation=null;busy=true;renderDetail();feedback('Applying action…');
     try{
-      const result=await tool('orbit_desktop_automation',args);
+      let name,arguments_={...args};
+      if(args.kind==='routine'){
+        name='orbit_routine_control';delete arguments_.kind;
+      }else if(args.kind==='auto_task'){
+        name=args.action==='toggle'?'orbit_auto_task_toggle':'orbit_auto_task_mint';delete arguments_.kind;delete arguments_.action;
+      }else{
+        name='orbit_pipeline_invoke';arguments_={workspace:args.workspace,job_name:args.name,default_input:true};
+      }
+      const result=await tool(name,arguments_);
       if(result.schema_version!==1||result.workspace!==workspace||result.name!==item.name||result.action!==action||result.kind!==args.kind||(action==='toggle'&&result.enabled!==args.enabled)||(action==='mint'&&typeof result.task_id!=='string')||(action==='run'&&(typeof result.run_id!=='string'||!['queued','submitted'].includes(result.state))))throw new Error('Unrecognized action receipt');
       if(g===revision&&workspace===current()&&scopeAtStart===scope){
         const refreshedRevision=revision+1;await refresh();if(refreshedRevision!==revision||workspace!==current()||scopeAtStart!==scope)return;feedback(action==='toggle'?`${item.name} ${result.enabled?'enabled':'disabled'}.`:action==='mint'?`Created ${result.task_id}. No delivery was started.`:`${result.run_id} ${result.state}.`);

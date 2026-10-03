@@ -370,6 +370,24 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
+        id: "orbit.pipeline.invoke",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator, McpCapability::Runner],
+        rationale: "public pipeline submission requires an operator; sanctioned runners retain only their host-authorized child admission path",
+    },
+    GovernedOperation {
+        id: "orbit.workflow.auto",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "auto-drain observation and controls require an operator session",
+    },
+    GovernedOperation {
+        id: "orbit.routine.control",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "routine observation and controls require an operator session",
+    },
+    GovernedOperation {
         id: "orbit.desktop.automation",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

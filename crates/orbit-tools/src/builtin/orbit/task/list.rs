@@ -78,6 +78,11 @@ impl Tool for OrbitTaskListTool {
                 required: false,
             },
         ];
+        parameters.extend(super::super::domain_control::bounded_params(&[
+            ("offset", "integer", "Bounded view list offset"),
+            ("search", "string", "Bounded view key/title substring"),
+            ("priority", "string", "Bounded view priority filter"),
+        ]));
         parameters.extend(super::super::identity_params());
         ToolSchema {
             name: "orbit.task.list".to_string(),
@@ -90,6 +95,23 @@ impl Tool for OrbitTaskListTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::super::domain_control::bounded(&input)? {
+            return super::super::domain_control::bounded_read(
+                ctx,
+                input,
+                "tasks",
+                &[
+                    "workspace",
+                    "view",
+                    "offset",
+                    "limit",
+                    "search",
+                    "status",
+                    "priority",
+                    "model",
+                ],
+            );
+        }
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskList)
     }
 }

@@ -240,13 +240,13 @@
   const automation=window.OrbitAutomation({el,ui,tool,open,current:()=>workspace});
   async function loadList(g){
     const args={
-      workspace,scope:view==='runs'?'runs':'tasks',offset,limit:50
+      workspace,view:'bounded',offset,limit:50
     };
     if(view==='review')args.status='review';
     else if(appliedFilters.status)args.status=appliedFilters.status;
     if(appliedFilters.priority&&view!=='runs')args.priority=appliedFilters.priority;
     if(view!=='runs'&&appliedFilters.search)args.search=appliedFilters.search;
-    const data=await tool('orbit_desktop_read',args);
+    const data=await tool(view==='runs'?'orbit_workflow_run_list':'orbit_task_list',args);
     if(g!==generation)return;
     renderList(data);
   }
@@ -255,8 +255,8 @@
     const selection={
       ...selected
     };
-    const data=await tool('orbit_desktop_read',{
-      workspace,scope:selection.kind,id:selection.id,comments_offset:selection.kind==='task'?commentsOffset:undefined,history_offset:selection.kind==='task'?historyOffset:undefined,artifacts_offset:selection.kind==='task'?artifactsOffset:undefined,log_offset:selection.kind==='run'?logsOffset:undefined,limit:50
+    const data=await tool(selection.kind==='task'?'orbit_task_show':'orbit_workflow_run_show',{
+      workspace,view:'bounded',id:selection.id,comments_offset:selection.kind==='task'?commentsOffset:undefined,history_offset:selection.kind==='task'?historyOffset:undefined,artifacts_offset:selection.kind==='task'?artifactsOffset:undefined,log_offset:selection.kind==='run'?logsOffset:undefined,limit:50
     });
     if(g!==generation)return;
     renderDetail(data);
@@ -394,7 +394,16 @@
     busy=true;
     controls();
     try{
-      const result=await tool('orbit_desktop_task_write',payload);
+      const op=payload.operation;
+      const args={workspace:payload.workspace,request_id:payload.request_id};
+      if(op.kind==='create')Object.assign(args,{title:op.title,description:op.description,acceptance_criteria:op.acceptance_criteria,priority:op.priority,crew:op.crew});
+      else{
+        Object.assign(args,{id:op.id,expected_revision:op.expected_revision});
+        if(op.kind==='edit')Object.assign(args,op.fields);
+        else if(op.kind==='comment')args.comment=op.comment;
+        else if(op.kind==='review')Object.assign(args,{verdict:op.verdict,complete:op.complete});
+      }
+      const result=await tool(op.kind==='create'?'orbit_task_add':'orbit_task_update',args);
       if(result.accepted===true&&!result.snapshot){
         acceptedReceipt={
           workspace:payload.workspace,task_id:result.task_id||operation.id

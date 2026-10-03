@@ -2,6 +2,7 @@ pub mod agent;
 pub mod auto_task;
 pub mod command;
 pub mod desktop;
+mod domain_control;
 pub mod drain;
 pub mod friction;
 pub mod operation;

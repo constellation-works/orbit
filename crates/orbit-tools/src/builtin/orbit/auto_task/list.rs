@@ -22,7 +22,13 @@ impl Tool for OrbitAutoTaskListTool {
                     .to_string(),
                 param_type: "boolean".to_string(),
                 required: false,
-            }],
+            }]
+            .into_iter()
+            .chain(super::super::domain_control::bounded_params(&[
+                ("offset", "integer", "Bounded list offset"),
+                ("limit", "integer", "Bounded page size"),
+            ]))
+            .collect(),
             builtin: true,
         }
     }
@@ -32,6 +38,14 @@ impl Tool for OrbitAutoTaskListTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        if super::super::domain_control::bounded(&input)? {
+            return super::super::domain_control::bounded_read(
+                ctx,
+                input,
+                "auto_tasks",
+                &["workspace", "view", "offset", "limit", "model"],
+            );
+        }
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::AutoTaskList)
     }
 }
