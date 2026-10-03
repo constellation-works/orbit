@@ -104,6 +104,12 @@ flowchart BT
 
 The dependency-direction script enforces these arrows too.
 
+Job catalog listings fetch the latest run for all selected jobs through the
+store's batched `latest_job_runs` contract. The SQLite backend probes the
+per-job creation index in bounded groups and hydrates steps in batches, so a
+catalog refresh does not issue separate run and step queries for each job or
+decode older run history. Empty catalogs require no run-store reads.
+
 ## Stability tiers
 
 Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.toml`. [`scripts/check-stability.sh`](scripts/check-stability.sh) fails if the marker is missing or invalid. There is no automated API diff; the tier signals refactor scope to reviewers.

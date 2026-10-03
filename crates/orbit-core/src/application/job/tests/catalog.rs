@@ -2102,6 +2102,80 @@ fn workspace_job_overrides_global_default_in_catalog_listing() {
 }
 
 #[test]
+fn catalog_latest_runs_preserve_filtering_and_unrun_jobs() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &catalog_latest_runs_preserve_filtering_and_unrun_jobs,
+    )) {
+        return;
+    }
+    let (_root, runtime, _global_root, workspace_root) = test_runtime();
+    let jobs = workspace_root.join("resources/jobs");
+    for name in ["catalog-a", "catalog-b", "catalog-disabled"] {
+        write_job(&jobs.join(format!("{name}.yaml")), name, "marker", 1);
+    }
+    let disabled_path = jobs.join("catalog-disabled.yaml");
+    let yaml = std::fs::read_to_string(&disabled_path).unwrap();
+    std::fs::write(
+        &disabled_path,
+        yaml.replace("state: enabled", "state: disabled"),
+    )
+    .unwrap();
+    let store = runtime.stores().jobs();
+    let at = Utc::now();
+    store
+        .insert_job_run("catalog-a", 1, at, None, None)
+        .unwrap();
+    let latest = store
+        .insert_job_run("catalog-a", 1, at, Some(json!({"latest": true})), None)
+        .unwrap();
+    store
+        .insert_job_run("catalog-disabled", 1, at, None, None)
+        .unwrap();
+    store
+        .insert_job_run("uncatalogued", 1, at, None, None)
+        .unwrap();
+
+    let listed = runtime
+        .list_job_catalog_with_last_run(false, JobCatalogFilter::WorkflowsOnly)
+        .unwrap();
+    let names = listed
+        .iter()
+        .map(|(entry, _)| entry.job_id.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!names.contains(&"catalog-disabled"));
+    assert!(!names.contains(&"uncatalogued"));
+    assert_eq!(
+        listed
+            .iter()
+            .find(|(entry, _)| entry.job_id == "catalog-a")
+            .unwrap()
+            .1
+            .as_ref(),
+        Some(&latest)
+    );
+    assert!(
+        listed
+            .iter()
+            .find(|(entry, _)| entry.job_id == "catalog-b")
+            .unwrap()
+            .1
+            .is_none()
+    );
+    let including_disabled = runtime
+        .list_job_catalog_with_last_run(true, JobCatalogFilter::All)
+        .unwrap();
+    assert!(
+        including_disabled
+            .iter()
+            .find(|(entry, _)| entry.job_id == "catalog-disabled")
+            .unwrap()
+            .1
+            .is_some()
+    );
+}
+
+#[test]
 fn job_listing_prefers_workspace_over_global() {
     if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
         &job_listing_prefers_workspace_over_global,

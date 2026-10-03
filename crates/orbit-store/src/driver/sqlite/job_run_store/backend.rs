@@ -305,6 +305,11 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             .list_job_runs_for_workspace(&self.workspace_id, query)
     }
 
+    fn latest_job_runs(&self, job_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        self.store
+            .latest_job_runs_for_workspace(&self.workspace_id, job_ids)
+    }
+
     fn count_job_runs_filtered(&self, query: &JobRunQuery) -> Result<u64, OrbitError> {
         self.store
             .count_job_runs_for_workspace(&self.workspace_id, query)
