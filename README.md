@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/orbit-demo.gif" alt="Animated walkthrough of an illustrative session: an agent files task ORB-1042 with orbit.task.add, you approve it, orbit.workflow.ship runs it in an isolated worktree with file locks through plan, execute, and review, a pull request opens for you to merge, a parallel drain queues overlapping work behind file locks, and orbit task show traces the commit back to its task." width="880" />
+  <img src="docs/assets/orbit-demo.gif" alt="Animated tour of the real Orbit dashboard on a live workspace: proposed tasks waiting for your approval, an auto-drain running tasks in parallel while overlapping work waits on file locks, a task's durable record, the run list, a pull-request pipeline run stepping from isolated worktree through implement, commit, review gate, and push to pr_open, the audit log of every tool call, and a scoreboard comparing Codex, Claude, Grok, and Gemini." width="880" />
 </p>
 
 Orbit is a local-first runtime for coding agents. You keep using Claude Code, Codex, Cursor, Copilot, or any of the other supported CLIs. Orbit gives them a durable task queue, isolated sandboxed worktrees, file-level locks for parallel runs, a gated pipeline that ends in a pull request, and an audit log of every step.
