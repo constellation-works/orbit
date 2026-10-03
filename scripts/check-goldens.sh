@@ -5,6 +5,7 @@ set -euo pipefail
 # description goldens without running the workspace test suite.
 #
 # Covers:
+#   - builtin MCP definition and annotation conformance
 #   - CLI long-help text under crates/orbit-cli/src/command/tests/
 #   - crates/orbit-cli/tests/output_goldens/ (including tool_list.json)
 #   - crates/orbit-cli/tests/snapshots/mcp_tools_list.json
@@ -35,6 +36,7 @@ fi
 
 cargo="${CARGO:-cargo}"
 
+"$cargo" test -p orbit-tools --test mcp_definitions
 "$cargo" test -p orbit-cli --bin orbit help_matches_the_shipped_surface
 "$cargo" test -p orbit-cli --test output_goldens
 "$cargo" test -p orbit-cli --test mcp_roundtrip \
