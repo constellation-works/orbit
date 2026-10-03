@@ -157,6 +157,7 @@ pub(super) fn execute(
             submission_trigger(session_context),
         ),
         OrbitBuiltinAction::WorkflowRunShow => super::workflow_tools::show(runtime, input),
+        OrbitBuiltinAction::WorkflowRunDelivery => super::workflow_tools::delivery(runtime, input),
         OrbitBuiltinAction::WorkflowRunList => super::workflow_tools::list(runtime, input),
         OrbitBuiltinAction::WorkflowRunResume => {
             super::workflow_tools::resume(runtime, input, agent, model)

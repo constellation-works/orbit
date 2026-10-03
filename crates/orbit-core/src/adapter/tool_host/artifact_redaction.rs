@@ -336,6 +336,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::TaskLocksRelease
         | OrbitBuiltinAction::TaskLocksReserve
         | OrbitBuiltinAction::TaskShow
+        | OrbitBuiltinAction::WorkflowRunDelivery
         | OrbitBuiltinAction::WorkflowRunList
         | OrbitBuiltinAction::WorkflowRunResume
         | OrbitBuiltinAction::WorkflowRunShow

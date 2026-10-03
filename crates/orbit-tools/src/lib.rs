@@ -167,6 +167,7 @@ pub enum OrbitBuiltinAction {
     TaskReject,
     TaskShow,
     TaskUpdate,
+    WorkflowRunDelivery,
     WorkflowRunList,
     WorkflowRunResume,
     WorkflowRunShow,

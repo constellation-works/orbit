@@ -9,6 +9,7 @@ pub mod handoff;
 mod job;
 mod review;
 mod routine;
+mod run_delivery;
 mod run_id;
 mod run_state;
 mod ship;
@@ -70,6 +71,11 @@ pub use review::{
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
     RoutineRetries, RoutineTarget, RoutineTrigger,
+};
+pub use run_delivery::{
+    CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, DeliveryEvidenceProvenance,
+    LandingMethod, LandingObservation, LandingObservationStatus, RUN_DELIVERY_EVIDENCE_SOURCE,
+    RUN_DELIVERY_SCHEMA_VERSION, RunDeliveryObservation, RunDeliveryStatus,
 };
 pub use run_id::{RunIdRole, run_id_candidate, run_id_minute_stem, run_id_role};
 pub use run_state::{

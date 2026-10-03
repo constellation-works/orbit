@@ -42,6 +42,7 @@ records in a second store merely to get past a connection error.
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume/workers` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; job replay/resume |
+| Delivery evidence | `orbit_workflow_run_delivery` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Full run details stay on operator-only `orbit_workflow_run_show` |
 | Auto-tasks | `orbit_auto_task_add/list/update/toggle/delete/mint` | Those six are also CLI commands. `show`, `restore`, `recover`, and `reset` are CLI-only (`orbit auto-task`) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |

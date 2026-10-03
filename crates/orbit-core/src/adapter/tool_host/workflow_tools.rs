@@ -73,6 +73,17 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     Ok(value)
 }
 
+/// [ORB-13744] The bounded public delivery observation: typed host evidence
+/// only, so it carries nothing to redact and nothing an agent wrote.
+pub(super) fn delivery(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+    let run_id =
+        orbit_common::protocol::tool_input::required_string(&input, &["run_id"], "run_id")?;
+    let task_id =
+        orbit_common::protocol::tool_input::required_string(&input, &["task_id"], "task_id")?;
+    let observation = runtime.observe_run_delivery(&run_id, &task_id)?;
+    serde_json::to_value(observation).map_err(serialize_error("serialize run delivery"))
+}
+
 /// [ORB-11752] What the run is doing right now, for the reader that asked
 /// about exactly one run.
 ///

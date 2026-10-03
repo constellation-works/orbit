@@ -6,6 +6,7 @@ use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind};
 
 pub struct OrbitWorkflowShipTool;
 pub struct OrbitWorkflowRunShowTool;
+pub struct OrbitWorkflowRunDeliveryTool;
 pub struct OrbitWorkflowRunListTool;
 pub struct OrbitWorkflowRunResumeTool;
 pub struct OrbitWorkflowRunWorkersTool;
@@ -112,6 +113,43 @@ impl Tool for OrbitWorkflowRunShowTool {
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
         execute(ctx, input, OrbitBuiltinAction::WorkflowRunShow)
+    }
+}
+
+impl Tool for OrbitWorkflowRunDeliveryTool {
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "orbit.workflow.run.delivery".to_string(),
+            description: "Report what one task delivery run committed and landed for one task \
+                 of this workspace, from the host's own commit and merge step records. Returns \
+                 typed status, base/head and landed commit SHAs, PR number, timestamps and \
+                 provenance only; missing or inconsistent evidence is reported as unavailable, \
+                 never inferred. Full run details stay on the operator-only `run.show`."
+                .to_string(),
+            parameters: vec![
+                ToolParam {
+                    name: "run_id".to_string(),
+                    description: "Job run ID that delivered the task.".to_string(),
+                    param_type: "string".to_string(),
+                    required: true,
+                },
+                ToolParam {
+                    name: "task_id".to_string(),
+                    description: "Task the run was submitted with, in this workspace.".to_string(),
+                    param_type: "string".to_string(),
+                    required: true,
+                },
+            ],
+            builtin: true,
+        }
+    }
+
+    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        execute(ctx, input, OrbitBuiltinAction::WorkflowRunDelivery)
     }
 }
 

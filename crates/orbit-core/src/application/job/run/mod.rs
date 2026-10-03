@@ -5,6 +5,7 @@
 //! - `query` — list/show/history entry points plus backend queries.
 //! - `reconcile` — stale-run reconciliation, terminal timing repair, audit parsing.
 //! - `owner` — process signalling, owner identity classification, liveness probes (Unix + shims).
+//! - `delivery` — the bounded public commit/landing observation for one task.
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
@@ -14,6 +15,7 @@
 mod actions;
 mod admissions_stop;
 mod conflict;
+mod delivery;
 mod owner;
 mod projection;
 mod query;

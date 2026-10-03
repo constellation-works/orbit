@@ -299,3 +299,29 @@ fn the_agent_reachable_friction_reads_stay_ungoverned() {
         );
     }
 }
+
+#[test]
+fn the_public_delivery_read_stays_ungoverned_while_the_run_view_stays_operator_only() {
+    // [ORB-13744] Plugins and agent sessions read delivery evidence through the
+    // narrow projection; the whole-run view keeps its operator gate. Governing
+    // the projection would refuse the plugin callback it exists for, and
+    // relaxing the run view would hand out prompts and step outputs.
+    use orbit_common::governance::authorization::governed_tool;
+
+    assert!(
+        governed_tool("orbit.workflow.run.delivery").is_none(),
+        "the delivery projection became governed, which refuses ordinary workspace and plugin \
+         callers the read it exists to give them"
+    );
+    assert!(
+        advertised_tool_names(&builtin_registry()).contains("orbit.workflow.run.delivery"),
+        "the delivery projection must stay on the workspace MCP surface"
+    );
+    let run_show =
+        governed_tool("orbit.workflow.run.show").expect("the full run view must stay governed");
+    assert_eq!(
+        run_show.allowed,
+        &[McpCapability::Operator],
+        "the full run view must stay operator-only"
+    );
+}

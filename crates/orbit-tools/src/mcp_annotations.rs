@@ -33,6 +33,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.task.artifact.get"
         | "orbit.task.list"
         | "orbit.task.show"
+        | "orbit.workflow.run.delivery"
         | "orbit.workflow.run.list"
         | "orbit.workflow.run.show" => A::READ_ONLY,
 

@@ -693,6 +693,7 @@ a read a refused command offered requests the serving tool instead:
 | --- | --- | --- | --- |
 | `orbit workspace list` | `orbit.workspace.list` | MCP `tools/call` only — workspace discovery is owned by the MCP server ([federated-mcp](../federated-mcp/1_overview.md)) | — |
 | `orbit run show <id>` | `orbit.workflow.run.show` | `orbit tool run` or MCP | the `operator` capability |
+| a run's commit and landing for one task | `orbit.workflow.run.delivery` | `orbit tool run` or MCP | — (bounded host evidence; no `operator`) |
 
 Reaching another machine through a federated destination still needs a `network` grant and
 `ssh` in `requires.programs`.
