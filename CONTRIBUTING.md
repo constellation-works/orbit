@@ -30,7 +30,7 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
 
 1. **Branch from `agent-main`,** and target your PR at `agent-main`. `main` is reserved for releases.
 2. **Keep it scoped.** One change per PR, with no unrelated refactors.
-3. **Follow the code rules** in [CLAUDE.md](CLAUDE.md#code). Lints are enforced, unit tests go in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
+3. **Follow the code rules** in [CLAUDE.md](CLAUDE.md#code). Lints are enforced, behaviour is tested at the boundary first (integration, golden, e2e) with unit tests only by exception ([test_strategy.md](docs/design-patterns/test_strategy.md)) in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
 4. **Update docs in the same PR.** That includes the affected pages in `docs/design/` and `website/`, and `make goldens UPDATE=1` if you changed CLI help or the MCP surface. Leave `CHANGELOG.md` alone, because it's compiled at release.
 5. **Run the gates** before opening the PR:
 
