@@ -57,8 +57,6 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.workflow.run.resume", Placement::Advertised),
     ("orbit.workflow.run.show", Placement::Advertised),
     ("orbit.workflow.run.workers", Placement::Advertised),
-    ("orbit.desktop.drain", Placement::Unadvertised),
-    ("orbit.desktop.automation", Placement::Unadvertised),
     ("orbit.workflow.ship", Placement::Advertised),
     ("orbit.workflow.auto", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),

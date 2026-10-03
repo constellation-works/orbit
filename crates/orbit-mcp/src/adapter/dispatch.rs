@@ -224,18 +224,10 @@ impl OrbitToolServer {
 
     pub(super) fn canonical_name(&self, advertised: &str) -> Result<String, McpError> {
         let map = self.name_map()?;
-        let legacy = match advertised {
-            "orbit_desktop_read" => Some("orbit.desktop.read"),
-            "orbit_desktop_drain" => Some("orbit.desktop.drain"),
-            "orbit_desktop_automation" => Some("orbit.desktop.automation"),
-            "orbit_desktop_task_snapshot" => Some("orbit.desktop.task.snapshot"),
-            "orbit_desktop_task_write" => Some("orbit.desktop.task.write"),
-            _ => None,
-        };
         Ok(map
             .get(advertised)
             .cloned()
-            .unwrap_or_else(|| legacy.unwrap_or(advertised).to_string()))
+            .unwrap_or_else(|| advertised.to_string()))
     }
 
     #[cfg(test)]
@@ -258,33 +250,11 @@ impl OrbitToolServer {
             });
         }
         let mut call_context = self.context_for_tool_call();
-        let mut canonical = self.canonical_name(request.name.as_ref())?;
+        let canonical = self.canonical_name(request.name.as_ref())?;
         let mut input = request
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(Map::new()));
-
-        let compatibility =
-            match crate::federated::compatibility::to_domain(&canonical, input.clone()) {
-                Ok(translation) => translation,
-                Err(error) => return Ok(tool_error_result(&error)),
-            };
-        if let Some(translation) = &compatibility {
-            canonical = translation.name.to_string();
-            input = translation.input.clone();
-        }
-
-        if compatibility.is_some()
-            && self
-                .host
-                .hidden_tool_names(&call_context)
-                .contains(&canonical)
-        {
-            return Ok(tool_error_result(&OrbitError::not_found(
-                orbit_common::NotFoundKind::Tool,
-                canonical,
-            )));
-        }
 
         if self
             .load_tool_definitions()
@@ -327,23 +297,15 @@ impl OrbitToolServer {
             "orbit.workflow.auto" | "orbit.routine.control" => true,
             _ => false,
         };
-        let desktop_selector = (domain_extension
-            || matches!(
-                canonical.as_str(),
-                "orbit.desktop.read"
-                    | "orbit.desktop.task.snapshot"
-                    | "orbit.desktop.task.write"
-                    | "orbit.desktop.drain"
-                    | "orbit.desktop.automation"
-            ))
-        .then(|| {
-            input
-                .get("workspace")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .flatten();
-        if (domain_extension || canonical.starts_with("orbit.desktop."))
+        let desktop_selector = domain_extension
+            .then(|| {
+                input
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .flatten();
+        if domain_extension
             && desktop_selector
                 .as_deref()
                 .is_none_or(|selector| selector.trim().is_empty())
@@ -360,11 +322,7 @@ impl OrbitToolServer {
         .await;
 
         match result {
-            Ok(Ok(value)) => {
-                let mut value = match &compatibility {
-                    Some(translation) => translation.response(value),
-                    None => value,
-                };
+            Ok(Ok(mut value)) => {
                 if let (Some(selector), Some(object)) = (desktop_selector, value.as_object_mut()) {
                     object.insert("workspace".into(), Value::String(selector.clone()));
                     for key in ["catalog", "runs"] {
@@ -431,12 +389,7 @@ impl OrbitToolServer {
                         .iter()
                         .any(|parameter| parameter.name == "view")
             });
-        let legacy_run = run_selection
-            && !hidden.contains("orbit.desktop.read")
-            && definitions
-                .iter()
-                .any(|definition| definition.schema.name == "orbit.desktop.read");
-        if run_selection && !bounded_run && !legacy_run {
+        if run_selection && !bounded_run {
             return Err(OrbitError::InvalidInput(
                 "run presentation unavailable on this host".into(),
             ));
@@ -444,9 +397,6 @@ impl OrbitToolServer {
         let task = tokio::task::spawn_blocking(move || {
             if bounded_run {
                 return host.call_tool("orbit.workflow.run.show", serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25}), context);
-            }
-            if run_selection {
-                return host.call_tool("orbit.desktop.read", serde_json::json!({"workspace":selector,"scope":"run","id":task_key,"limit":25}), context);
             }
             host.call_tool(
                 "orbit.task.show",
@@ -524,14 +474,6 @@ impl OrbitToolServer {
                 .remove(&orbit_types::tool::McpCapability::Operator);
             self.replace_session_context(session);
         }
-        let legacy_mux = request.client_info.name == "orbit-federated-mux"
-            && metadata
-                .get("orbit")
-                .and_then(|orbit| orbit.get("domain_contract"))
-                .and_then(Value::as_u64)
-                != Some(1);
-        self.legacy_mux
-            .store(legacy_mux, std::sync::atomic::Ordering::Release);
         self.adopt_announced_session(session_context_from_initialize(request, transport_meta));
         Ok(())
     }
@@ -572,8 +514,7 @@ impl ServerHandler for OrbitToolServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let advertisement = self.selector_advertisement();
-        let legacy_mux = self.legacy_mux.load(std::sync::atomic::Ordering::Acquire);
-        let cache_key = (advertisement, self.session_context().workspace, legacy_mux);
+        let cache_key = (advertisement, self.session_context().workspace);
         if let Ok(cache) = self.list_tools_cache.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
@@ -589,44 +530,6 @@ impl ServerHandler for OrbitToolServer {
             .map_err(invalid_definitions_mcp_error)?
             .as_ref()
             .clone();
-        if legacy_mux {
-            // An old mux checks tools/list before it can deliver a cached alias.
-            // Keep those advertisements only for the known pre-contract mux
-            // handshake. This changes listing, never execution authority.
-            use orbit_tools::DesktopTool;
-            use orbit_tools::Tool;
-            use orbit_types::tool::{McpToolAnnotations, McpToolScope};
-            for (tool, domain) in [
-                (DesktopTool::Read, "orbit.task.list"),
-                (DesktopTool::Snapshot, "orbit.task.show"),
-                (DesktopTool::Write, "orbit.task.update"),
-                (DesktopTool::Drain, "orbit.workflow.auto"),
-                (DesktopTool::Automation, "orbit.routine.control"),
-            ] {
-                let schema = tool.schema();
-                if definitions
-                    .iter()
-                    .any(|definition| definition.schema.name == domain)
-                    && !definitions
-                        .iter()
-                        .any(|definition| definition.schema.name == schema.name)
-                {
-                    let read = matches!(tool, DesktopTool::Read | DesktopTool::Snapshot);
-                    let annotations = if read {
-                        McpToolAnnotations::READ_ONLY
-                    } else if matches!(tool, DesktopTool::Write) {
-                        McpToolAnnotations::additive(false)
-                    } else {
-                        McpToolAnnotations::OPEN_WORLD
-                    };
-                    definitions.push(
-                        McpToolDefinition::new(schema, McpToolScope::WorkspaceRequired)
-                            .with_input_schema(tool.input_schema())
-                            .with_annotations(Some(annotations)),
-                    );
-                }
-            }
-        }
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         // Prose names other tools by their canonical dotted id; the client can
         // only call the advertised alias, so say that in what it reads.

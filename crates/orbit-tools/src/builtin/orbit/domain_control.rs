@@ -34,15 +34,46 @@ impl Tool for WorkflowAutoTool {
         ToolExecutionKind::Mutating
     }
     fn schema(&self) -> ToolSchema {
-        let mut schema = super::desktop::DesktopTool::Drain.schema();
-        schema.name = "orbit.workflow.auto".into();
-        schema.description = "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into();
-        schema
-            .parameters
-            .iter_mut()
-            .filter(|p| p.name == "action")
-            .for_each(|p| p.description = "status, start or stop".into());
-        schema
+        let mut parameters = vec![
+            parameter("action", "string", true, "status, start or stop"),
+            parameter(
+                "for_seconds",
+                "integer",
+                false,
+                "Required for start: window length in seconds, 1 through 604800",
+            ),
+            parameter(
+                "concurrency",
+                "integer",
+                false,
+                "Optional start worker limit, positive u32; omitted uses runtime default",
+            ),
+            parameter(
+                "complete",
+                "boolean",
+                false,
+                "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+            ),
+            parameter(
+                "claim_token",
+                "string",
+                false,
+                "Workspace claim token when held by another operator",
+            ),
+            parameter(
+                "workspace",
+                "string",
+                true,
+                "Exact selector returned by workspace discovery. No implicit destination.",
+            ),
+        ];
+        parameters.extend(super::model_identity_params());
+        ToolSchema {
+            name: "orbit.workflow.auto".into(),
+            description: "Observe workspace auto-drain readiness, start a bounded window, or stop admissions while preserving admitted workers. Requires trusted operator authority and an explicit workspace. Start is not retry-safe: reconcile readiness and runs after a lost reply before another submission.".into(),
+            parameters,
+            builtin: true,
+        }
     }
     fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
         ensure_operator_leaf(ctx)?;

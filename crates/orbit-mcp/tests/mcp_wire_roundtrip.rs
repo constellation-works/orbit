@@ -571,16 +571,6 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
         .await
         .unwrap();
     assert_eq!(hidden.is_error, Some(true));
-    let hidden_alias = client
-        .peer()
-        .call_tool(call(
-            "orbit_desktop_task_snapshot",
-            json!({"workspace":"selected","id":"TST-1"}),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(hidden_alias.is_error, Some(true));
-
     assert_eq!(
         host.calls.lock().unwrap().len(),
         3,
@@ -842,8 +832,7 @@ impl McpHost for CanonicalContractHost {
 }
 
 #[tokio::test]
-async fn old_mux_handshake_preserves_discovery_and_domain_dispatch_without_modern_advertisement_growth()
- {
+async fn client_handshake_does_not_advertise_retired_desktop_tools() {
     for legacy in [true, false] {
         let server = OrbitToolServer::new(Arc::new(CanonicalContractHost));
         let (client_io, server_io) = duplex(128 * 1024);
@@ -868,13 +857,13 @@ async fn old_mux_handshake_preserves_discovery_and_domain_dispatch_without_moder
                 .iter()
                 .filter(|tool| tool.name.starts_with("orbit_desktop_"))
                 .count(),
-            if legacy { 5 } else { 0 }
+            0
         );
         let call = client
             .peer()
             .call_tool(
-                CallToolRequestParams::new("orbit_desktop_task_snapshot").with_arguments(
-                    json!({"workspace":"ws_fixture","id":"TST-1"})
+                CallToolRequestParams::new("orbit_task_show").with_arguments(
+                    json!({"workspace":"ws_fixture","id":"TST-1","snapshot":true})
                         .as_object()
                         .unwrap()
                         .clone(),

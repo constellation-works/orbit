@@ -176,49 +176,26 @@ impl FederatedMcpHost {
         let advertised = session
             .advertised_tools()
             .map_err(|error| delivery_unreachable(destination, error))?;
-        // An older peer advertises the retired desktop contracts; a newer peer
-        // advertises domain tools. Translate only a known equivalent contract,
-        // before sending anything. No failure after dispatch causes a replay.
-        let legacy = super::compatibility::to_legacy(name, input.clone())?
-            .filter(|translation| tool_on_surface(&advertised, translation.name));
-        let translated = if legacy.is_some() {
-            legacy
-        } else if !tool_on_surface(&advertised, name) {
-            super::compatibility::to_domain(name, input.clone())?
-                .filter(|translation| tool_on_surface(&advertised, translation.name))
-        } else {
-            None
-        };
-        if translated.is_none() {
-            for argument in [
-                "view",
-                "snapshot",
-                "request_id",
-                "expected_revision",
-                "verdict",
-                "complete",
-                "expected_enabled",
-                "acknowledge_unconditional",
-                "default_input",
-                "include_catalog",
-            ] {
-                if input.get(argument).is_some()
-                    && !session.supports_tool_argument(name, argument)?
-                {
-                    return Err(OrbitError::ToolNotOnThisHost(format!(
-                        "'{name}' argument '{argument}' is unsupported on '{}'",
-                        destination.machine_id
-                    )));
-                }
+        for argument in [
+            "view",
+            "snapshot",
+            "request_id",
+            "expected_revision",
+            "verdict",
+            "complete",
+            "expected_enabled",
+            "acknowledge_unconditional",
+            "default_input",
+            "include_catalog",
+        ] {
+            if input.get(argument).is_some() && !session.supports_tool_argument(name, argument)? {
+                return Err(OrbitError::ToolNotOnThisHost(format!(
+                    "'{name}' argument '{argument}' is unsupported on '{}'",
+                    destination.machine_id
+                )));
             }
         }
-        let execution_name = translated
-            .as_ref()
-            .map_or(name, |translation| translation.name);
-        let execution_input = translated
-            .as_ref()
-            .map_or_else(|| input.clone(), |translation| translation.input.clone());
-        if !tool_on_surface(&advertised, execution_name) {
+        if !tool_on_surface(&advertised, name) {
             return Err(OrbitError::ToolNotOnThisHost(format!(
                 "'{name}' is not advertised on '{}'",
                 destination.machine_id
@@ -235,15 +212,11 @@ impl FederatedMcpHost {
         // reaches the destination, so its failure is the destination's answer
         // (`RemoteTool`) or a post-dispatch ambiguity (`OutcomeUnknown`) —
         // never a delivery miss the caller should retry [ORB-11023].
-        let response = session.call_tool(
-            execution_name,
-            destination_arguments(execution_input, parsed.workspace_id()),
+        session.call_tool(
+            name,
+            destination_arguments(input, parsed.workspace_id()),
             session_context,
-        )?;
-        Ok(match translated {
-            Some(translation) => translation.response(response),
-            None => response,
-        })
+        )
     }
 }
 
