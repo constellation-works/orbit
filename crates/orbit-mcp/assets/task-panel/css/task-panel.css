@@ -134,10 +134,11 @@ main:has(#panel:not([hidden])) { grid-template-columns: minmax(230px,.85fr) minm
 summary { cursor: pointer; font-weight: 500; }
 .technical[open] summary { margin-bottom: 12px; }
 .value-list { padding-left: 20px; margin: 0; }
-.value-list li + li { margin-top: 8px; }
-.property-list { display: grid; grid-template-columns: minmax(70px,.4fr) minmax(0,1fr); gap: 6px 12px; margin: 0; }
-.property-list dt { color: var(--muted); font-size: 11px; }
-.property-list dd { margin: 0; min-width: 0; }
+.value-list li + li { margin-top: 5px; }
+.property-list { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 3px 8px; margin: 0; min-width: 0; }
+.property-list dt { color: var(--muted); font-size: 11px; max-width: 10ch; overflow-wrap: anywhere; }
+.property-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.property-list dd.markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 10px; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4 { font-size: 14px; margin: 16px 0 8px; }
 .markdown h1:first-child, .markdown h2:first-child { margin-top: 0; }
@@ -247,8 +248,6 @@ body:has(#editor:not([hidden])) { overflow: hidden; }
   #filters select { width: 100%; }
   #panel { padding: 16px; }
   #editor { padding: 20px; }
-  .property-list { grid-template-columns: 1fr; }
-  .property-list dd { margin-bottom: 8px; }
   .drain-card { padding: 16px; }
   .drain-stats { grid-template-columns: 1fr 1fr; }
   .drain-card form { grid-template-columns: 1fr; }
