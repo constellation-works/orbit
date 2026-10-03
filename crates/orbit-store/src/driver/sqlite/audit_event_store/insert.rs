@@ -4,7 +4,7 @@
 use orbit_common::OrbitError;
 use orbit_types::telemetry::canonical_actor_for_role_label;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
@@ -22,11 +22,12 @@ impl Store {
         params: &AuditEventInsertParams,
         invocation: AuditInvocationFields<'_>,
     ) -> Result<(), OrbitError> {
-        if std::fs::metadata(path)?.permissions().readonly() {
+        let path = validated_audit_append_path(path)?;
+        if std::fs::metadata(&path)?.permissions().readonly() {
             return Err(OrbitError::Store("audit database is read-only".into()));
         }
         let mut conn = Connection::open_with_flags(
-            path,
+            &path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | OpenFlags::SQLITE_OPEN_NOFOLLOW,
@@ -79,6 +80,68 @@ impl Store {
 
         insert_audit_event_record_on_connection(&conn, params, invocation)
     }
+}
+
+/// Resolve the configured audit database through its existing parent and
+/// require it to already be a regular file.
+///
+/// The database may live in a caller-selected state root, so the root stays
+/// caller-owned; traversal and symlink redirection are not part of that
+/// contract. Nothing is created here — appending never creates a store — and
+/// the open below still uses `SQLITE_OPEN_NOFOLLOW`, so the check and the open
+/// cannot be raced into a different file.
+fn validated_audit_append_path(path: &Path) -> Result<PathBuf, OrbitError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database path '{}' must not contain parent-directory traversal",
+            path.display()
+        )));
+    }
+    let file_name = path.file_name().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "audit database path '{}' must name a database file",
+            path.display()
+        ))
+    })?;
+    let parent = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+        OrbitError::Store(format!(
+            "resolve audit database directory '{}': {error}",
+            parent.display()
+        ))
+    })?;
+    let canonical_path = canonical_parent.join(file_name);
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database path '{}' escapes its parent directory",
+            path.display()
+        )));
+    }
+    let metadata = std::fs::symlink_metadata(&canonical_path).map_err(|error| {
+        OrbitError::Store(format!(
+            "inspect audit database '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database must not be a symlink: {}",
+            path.display()
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(OrbitError::InvalidInput(format!(
+            "audit database must be a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(canonical_path)
 }
 
 impl StoreTx<'_> {
