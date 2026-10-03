@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+const oldTimeout=globalThis.setTimeout;
+globalThis.setTimeout=(fn,ms,...args)=>{const h=oldTimeout(fn,ms,...args);if(ms>=1000)h.unref?.();return h;};
+const tick=()=>new Promise(r=>oldTimeout(r,0));
+const flush=async()=>{for(let i=0;i<8;i++)await tick();};
+location.hash='#knowledge/frictions';
+let finishWrite;const reads=[];
+const json=p=>({ok:true,status:200,json:async()=>p,text:async()=>JSON.stringify(p)});
+globalThis.fetch=async(path,opts={})=>{const u=new URL(path,'http://dashboard.test');if(opts.method&&opts.method!=='GET')return new Promise(r=>finishWrite=r);if(u.pathname==='/api/workspaces')return json([{id:'A',name:'A',status:'active',is_default:true},{id:'B',name:'B',status:'active'}]);if(u.pathname==='/api/frictions'){reads.push(u.searchParams.get('workspace'));return json({items:[{id:'FR-1',title:'friction',status:'open',tags:['bug']}],tags:['bug']});}if(u.pathname==='/api/frictions/stats')return json({open:1});return json([]);};
+await import('./app.js');await flush();
+const descend=n=>[n,...(n.children||[]).flatMap(descend)];
+const detail=document.getElementById('friction-detail');
+const resolve=descend(detail).find(n=>n.title==='Resolve FR-1');
+assert.ok(resolve,'resolve control exists');resolve.listeners.click();
+const {setWorkspace}=await import('./js/common.js');setWorkspace('B');
+const before=reads.length;
+finishWrite(json({id:'FR-1',status:'resolved'}));await flush();
+assert.equal(reads.length,before,'a late friction resolve must not initiate a list refresh in B');
+
+setWorkspace('A');document.getElementById('refresh-btn').listeners.click();await flush();
+const status=descend(detail).find(n=>n.className==='action status-update');
+assert.ok(status,'status control exists');status.value='triaged';status.listeners.change({target:status});
+setWorkspace('B');const beforePatch=reads.length;
+finishWrite(json({id:'FR-1',status:'triaged'}));await flush();
+assert.equal(reads.length,beforePatch,'a late friction patch must not refresh B');

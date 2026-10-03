@@ -3521,6 +3521,15 @@ fn dashboard_task_actions_stay_in_their_workspace_visit() {
 }
 
 #[test]
+fn dashboard_friction_mutations_stay_in_their_workspace_visit() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_friction_scope.mjs")
+    ));
+}
+
+#[test]
 fn dashboard_run_cancel_admission_stays_in_its_workspace_visit() {
     run_dashboard_javascript_test(&format!(
         "{}\n{}",
