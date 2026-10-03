@@ -1,6 +1,97 @@
 use super::*;
 
 #[test]
+fn desktop_task_status_sets_compose_with_search_priority_and_pagination() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let mut client = workspace.serve();
+    for (index, (status, title, priority)) in [
+        ("in-progress", "Needle running", "medium"),
+        ("review", "Needle review", "medium"),
+        ("blocked", "Needle blocked", "medium"),
+        ("backlog", "Needle queued", "medium"),
+        ("proposed", "Needle proposed", "medium"),
+        ("done", "Needle completed", "medium"),
+        ("backlog", "Other title", "medium"),
+        ("blocked", "Needle urgent", "high"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let created = client.call_tool_ok(
+            "orbit_task_add",
+            json!({"workspace":selector,"model":"codex","request_id":format!("filter-{index}"),"title":title,"description":"Filter fixture","acceptance_criteria":["Visible when included"],"priority":priority}),
+        );
+        let id = created["snapshot"]["task"]["id"].as_str().unwrap();
+        if status != "proposed" {
+            // Human override seeds lifecycle states only in the disposable
+            // child-process fixture; no task is dispatched or completed by MCP.
+            orbit_ok(
+                McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                    .args(["task", "update", id, "--status", status, "--force"]),
+            );
+        }
+    }
+    let mut input = json!({"workspace":selector,"view":"bounded","status":"in-progress,review,blocked,backlog","search":"nEeDlE","priority":"medium","limit":2});
+    let first = client.call_tool_ok("orbit_task_list", input.clone());
+    assert_eq!(first["total"], 4);
+    assert_eq!(first["pagination"]["next_offset"], 2);
+    let mut ids = BTreeSet::new();
+    for offset in [0, 2] {
+        input["offset"] = json!(offset);
+        let page = client.call_tool_ok("orbit_task_list", input.clone());
+        assert_eq!(page["total"], 4);
+        assert_eq!(page["items"].as_array().unwrap().len(), 2);
+        for task in page["items"].as_array().unwrap() {
+            let status = task["status"].as_str().unwrap().replace('_', "-");
+            assert!(
+                ["in-progress", "review", "blocked", "backlog"].contains(&status.as_str()),
+                "only included lifecycle states appear: {task}"
+            );
+            assert!(ids.insert(task["id"].as_str().unwrap().to_string()));
+        }
+        if offset == 2 {
+            assert!(page["pagination"]["next_offset"].is_null());
+        }
+    }
+    input["offset"] = json!(0);
+    input["status"] = json!(["proposed", "done"]);
+    let expanded = client.call_tool_ok("orbit_task_list", input.clone());
+    assert_eq!(expanded["total"], 2);
+    let statuses: BTreeSet<_> = expanded["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, BTreeSet::from(["proposed", "done"]));
+    input["status"] = json!("review");
+    assert_eq!(
+        client.call_tool_ok("orbit_task_list", input.clone())["total"],
+        1
+    );
+    input["status"] = json!("review,not-a-status");
+    assert_eq!(
+        client.call_tool_err("orbit_task_list", input.clone())["code"],
+        "invalid_input"
+    );
+    input.as_object_mut().unwrap().remove("status");
+    assert_eq!(
+        client.call_tool_ok("orbit_task_list", input.clone())["total"],
+        6
+    );
+    input["status"] = Value::Null;
+    assert_eq!(
+        client.call_tool_ok("orbit_task_list", input.clone())["total"],
+        6,
+        "a null status retains the bounded reader's unfiltered contract"
+    );
+    input.as_object_mut().unwrap().remove("status");
+    input["priority"] = json!("high");
+    assert_eq!(client.call_tool_ok("orbit_task_list", input)["total"], 1);
+}
+
+#[test]
 fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();

@@ -3,7 +3,9 @@ use std::str::FromStr;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{optional_string, required_string};
+use orbit_common::protocol::tool_input::{
+    optional_csv_or_string_list_alias, optional_string, required_string,
+};
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::{JobRunQuery, TaskListFilter};
 use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus};
@@ -59,11 +61,21 @@ pub(super) fn read(
 
 fn tasks(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, OrbitError> {
     let offset = number(input, "offset", 0)?;
+    let statuses = match input.get("status") {
+        None | Some(Value::Null) => None,
+        _ => optional_csv_or_string_list_alias(input, &["status"])?,
+    };
     let mut filter = TaskListFilter {
         search: optional_string(input, "search")?,
-        statuses: optional_string(input, "status")?
-            .map(|v| TaskStatus::from_str(&v).map(|s| vec![s]).map_err(invalid))
-            .transpose()?,
+        statuses: statuses
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| TaskStatus::from_str(&value).map_err(invalid))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .filter(|values| !values.is_empty()),
         priority: optional_string(input, "priority")?
             .map(|v| TaskPriority::from_str(&v).map_err(invalid))
             .transpose()?,

@@ -8,10 +8,15 @@
   'use strict';
   const el = id => document.getElementById(id);
   const ui=window.OrbitPanelView;
+  const activeStatuses=['in-progress','review','blocked','backlog'];
+  const taskStatuses=['proposed','backlog','in-progress','review','blocked','done','rejected','archived','someday'];
+  const groupOrder=['proposed','review','blocked','in-progress','backlog','someday','done','rejected','archived'];
+  const groupLabels={proposed:'Awaiting approval',review:'Ready for review',blocked:'Blocked','in-progress':'In progress',backlog:'Backlog',someday:'Someday',done:'Done',rejected:'Rejected',archived:'Archived',other:'Other'};
+  let taskStatusFilter=activeStatuses.join(',');
   const pending = new Map(), drafts = new Map(), annotations = new Map(), destinations = new Set();
   let rpcId=0, generation=0, ready=false, disposed=false, capabilities={
   }, workspace='', view='tasks', offset=0, selected=null, snapshot=null, fresh=false, poll=null, failures=0, sentContext=false, acceptedReceipt=null, uncertain=null, busy=false, editMode=false, editorRevision=null, editorTarget=null, restoredOutcomes=new Map(), appliedFilters={
-    search:'',status:'',priority:''
+    search:'',status:taskStatusFilter,priority:''
   }, nextListOffset=null, reviewRevision=null, reviewHead=null, commentsOffset=0, logsOffset=0, historyOffset=0, artifactsOffset=0;
   const bound = (v,n=16000) => typeof v === 'string' ? v.slice(0,n) : '';
   const pretty = v => typeof v === 'string' ? v : JSON.stringify(v,null,2) ?? 'Unavailable';
@@ -116,25 +121,92 @@
   function rows(data){
     return data.items||data.tasks||data.runs||data.data?.items||[];
   }
+  function statusControls(){
+    el('task-status-filter').hidden=view!=='tasks';
+    el('status-filter').hidden=view==='tasks';
+    el('status').replaceChildren();
+    for(const value of (view==='runs'?['','pending','running','success','failed','timeout','retrying','cancelled','interrupted']:['review'])){
+      const option=document.createElement('option');
+      option.value=value;
+      option.textContent=value?value[0].toUpperCase()+value.slice(1).replaceAll('_',' '):'All';
+      el('status').append(option);
+    }
+    el('status').value=view==='review'?'review':'';
+    el('status').disabled=view==='review';
+    el('task-status-options').replaceChildren();
+    for(const value of taskStatuses){
+      const label=document.createElement('label');
+      const checkbox=document.createElement('input');
+      checkbox.type='checkbox';
+      checkbox.value=value;
+      checkbox.addEventListener('change',()=>{
+        const statuses=[...el('task-status-options').querySelectorAll('input')].filter(input=>input.checked).map(input=>input.value);
+        // Keep an explicit nonempty selection: an empty server filter means All.
+        if(!statuses.length){checkbox.checked=true;return;}
+        setTaskStatuses(statuses.length===taskStatuses.length?'':statuses.join(','));
+      });
+      const name=document.createElement('span');
+      name.textContent=value==='proposed'?'Proposed':value==='review'?'Review':groupLabels[value];
+      label.append(checkbox,name);
+      el('task-status-options').append(label);
+    }
+    syncTaskStatuses();
+  }
+  function syncTaskStatuses(){
+    const statuses=taskStatusFilter?taskStatusFilter.split(','):taskStatuses;
+    for(const input of el('task-status-options').querySelectorAll('input'))input.checked=statuses.includes(input.value);
+    el('active-statuses').setAttribute('aria-pressed',String(statuses.length===activeStatuses.length&&activeStatuses.every(status=>statuses.includes(status))));
+    el('all-statuses').setAttribute('aria-pressed',String(!taskStatusFilter));
+  }
+  function setTaskStatuses(status){
+    taskStatusFilter=status;
+    appliedFilters.status=status;
+    syncTaskStatuses();
+    offset=0;
+    void refresh();
+  }
   function renderList(data){
     if(data.schema_version!==1||data.workspace!==workspace)throw new Error('Incompatible list or destination identity');
     const focusedEntity=document.activeElement?.dataset?.entityKey;
     el('list').replaceChildren();
     const items=rows(data).slice(0,50);
+    const groups=new Map();
     for(const row of items){
-      const id=publicId(row);
-      if(typeof id!=='string')continue;
-      const b=document.createElement('button');
-      b.type='button';
-      b.dataset.entityKey=id;
-      b.setAttribute('aria-controls','panel');
-      b.setAttribute('aria-expanded',String(selected?.id===id));
-      const kind=view==='runs'?'run':'task';
-      ui.row(b,row,kind,id);
-      b.className='entity-row';
-      b.addEventListener('click',()=>void open(kind,id));
-      el('list').append(b);
-      if(focusedEntity===id)b.focus();
+      const status=view==='tasks'?(row.status||'other').replaceAll('_','-'):'';
+      if(!groups.has(status))groups.set(status,[]);
+      groups.get(status).push(row);
+    }
+    const ordered=view==='tasks'?groupOrder.filter(status=>groups.has(status)).concat([...groups.keys()].filter(status=>!groupOrder.includes(status)).sort()):[''];
+    for(const status of ordered){
+      const group=groups.get(status)||[];
+      if(view==='tasks'){
+        const heading=document.createElement('h3');
+        heading.className='task-group-heading';
+        heading.dataset.status=status;
+        const label=document.createElement('span');
+        label.textContent=groupLabels[status]||status;
+        const count=document.createElement('span');
+        count.className='task-group-count';
+        count.textContent=String(group.length);
+        count.setAttribute('aria-label',`${group.length} tasks on this page`);
+        heading.append(label,count);
+        el('list').append(heading);
+      }
+      for(const row of group){
+        const id=publicId(row);
+        if(typeof id!=='string')continue;
+        const b=document.createElement('button');
+        b.type='button';
+        b.dataset.entityKey=id;
+        b.setAttribute('aria-controls','panel');
+        b.setAttribute('aria-expanded',String(selected?.id===id));
+        const kind=view==='runs'?'run':'task';
+        ui.row(b,row,kind,id);
+        b.className='entity-row';
+        b.addEventListener('click',()=>void open(kind,id));
+        el('list').append(b);
+        if(focusedEntity===id)b.focus();
+      }
     }
     if(!items.length)fieldList(view==='review'?'Nothing waiting for review.':appliedFilters.search||appliedFilters.status||appliedFilters.priority?'No matches. Try changing the filters.':view==='runs'?'No runs yet.':'No tasks yet. Create a task to get started.');
     const p=data.pagination||{
@@ -588,20 +660,12 @@
     el('query').parentElement.hidden=view==='runs';
     el('priority').parentElement.hidden=view==='runs';
     offset=0;
-    el('status').replaceChildren();
-    for(const value of (view==='runs'?['','pending','running','success','failed','timeout','retrying','cancelled','interrupted']:['','proposed','backlog','in_progress','review','blocked','done','rejected','archived','someday'])){
-      const option=document.createElement('option');
-      option.value=value;
-      option.textContent=value?value[0].toUpperCase()+value.slice(1).replaceAll('_',' '):'All';
-      el('status').append(option);
-    }
-    el('status').value=view==='review'?'review':'';
-    el('status').disabled=view==='review';
+    statusControls();
     el('priority').disabled=view==='runs';
     el('query').disabled=view==='runs';
     el('history').disabled=view==='runs';
     appliedFilters={
-      search:el('query').value,status:el('status').value,priority:el('priority').value
+      search:el('query').value,status:view==='tasks'?taskStatusFilter:el('status').value,priority:el('priority').value
     };
     for(const name of ['tasks','runs','review','drain','automation'])el(name).setAttribute('aria-pressed',String(name===view));
     el('list-title').textContent=tab==='drain'?'Auto-drain':tab[0].toUpperCase()+tab.slice(1);
@@ -610,11 +674,13 @@
   el('filters').addEventListener('submit',e=>{
     e.preventDefault();
     appliedFilters={
-      search:el('query').value,status:el('status').value,priority:el('priority').value
+      search:el('query').value,status:view==='tasks'?taskStatusFilter:el('status').value,priority:el('priority').value
     };
     offset=0;
     void refresh();
   });
+  el('active-statuses').addEventListener('click',()=>setTaskStatuses(activeStatuses.join(',')));
+  el('all-statuses').addEventListener('click',()=>setTaskStatuses(''));
   el('previous').addEventListener('click',()=>{
     offset=Math.max(0,offset-50);
     void refresh();
@@ -840,6 +906,7 @@
     if(el('workspace').value!==workspace)throw new Error('Selected destination was not rediscovered');
     await refresh();
   }
+  statusControls();
   request('ui/initialize',{
     appInfo:{
       name:'orbit-control-center',version:'1'

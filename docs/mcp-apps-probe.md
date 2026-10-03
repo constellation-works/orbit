@@ -60,7 +60,17 @@ peer returns catalog metadata separately and explicitly marks the combined run
 view unavailable instead of inferring empty runs.
 
 Task list search is case-insensitive public task key/title search, applied
-before pagination. History search remains `orbit.search`. Pages contain totals,
+before pagination. Tasks opens with exactly In progress, Review, Blocked and
+Backlog included. The status checkboxes immediately change the included set;
+Active work restores that default and All includes every lifecycle status.
+At least one status remains selected. Status selection survives ordinary
+refresh, pagination and visits to the other views. Search and priority use
+Apply, composing with the selected statuses on the server before pagination.
+Each returned Tasks page groups rows in dashboard order: Awaiting approval,
+Ready for review, Blocked, In progress, Backlog, Someday, Done, Rejected,
+Archived. Heading counts describe the current page; the footer total describes
+all server matches. Review retains its review-only list and Runs its own state
+filter. History search remains `orbit.search`. Pages contain totals,
 offset/limit, explicit truncation and a next offset. Task details independently
 page comments, history and artifact metadata; they do not return artifact file
 contents. Runs use observed state without reconciliation, keep provider input
