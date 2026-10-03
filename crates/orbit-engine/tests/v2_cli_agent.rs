@@ -11,7 +11,8 @@
 //!
 //! Exercises the agent dispatch path, the §7.6 envelope events, the §6
 //! harness-delegated allowlist advisory, the [ORB-10801] retired-declaration
-//! rejections, argv redaction, and wall-clock timeout.
+//! rejections, argv redaction, and wall-clock timeout, plus the load-time
+//! tool-policy refusals for crafted workspace activity assets.
 //!
 //! The smoke substitutes the real `claude` CLI with tempdir shell scripts
 //! named `claude` so `AgentConfig::from_cli_config` resolves them to the
@@ -28,7 +29,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
-use orbit_engine::activity_job::load_activity_asset;
+use orbit_engine::activity_job::{
+    AssetLoadError, CatalogError, V2ActivityCatalog, load_activity_asset,
+};
 use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
     dispatch_v2_activity,
@@ -37,7 +40,8 @@ use orbit_store::{Store, V2AuditEventFilter};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2Spec, AgentLoopSpec, JobKind, JobV2, JobV2Step, JobV2StepBody, LoopBlock, OnDenial,
-    Provider, RetiredFeatureError, TargetStep, V2AuditEvent, validate_job_retired_sessions,
+    Provider, RetiredFeatureError, TargetStep, ToolAllowlistError, V2AuditEvent,
+    validate_job_retired_sessions,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -395,6 +399,154 @@ fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::
         "the managed binary override must follow the injected MCP default so the later Codex config wins"
     );
     Ok(())
+}
+
+/// A crafted workspace activity whose tool policy breaks a load-time rule is
+/// refused by the catalog loader Core uses for workspace activity
+/// directories, and the refusal names the offending asset. Each refused shape
+/// is paired with the nearest permitted shape so the test shows the loader
+/// draws the line at the rule, not at the YAML around it.
+#[test]
+fn workspace_catalog_refuses_crafted_tool_policy_violations() {
+    struct Case {
+        name: &'static str,
+        policy: &'static str,
+        expected: Option<&'static str>,
+    }
+    let cases = [
+        Case {
+            name: "root_wildcard",
+            policy: "  tools:\n    - orbit.*\n",
+            expected: Some("wildcard_root_not_permitted"),
+        },
+        Case {
+            name: "task_wildcard",
+            policy: "  tools:\n    - orbit.task.*\n",
+            expected: None,
+        },
+        Case {
+            name: "root_wildcard_disallow",
+            policy: "  tool_disallow_list:\n    - orbit.*\n  proc_allowed_programs: []\n",
+            expected: Some("disallow_list"),
+        },
+        Case {
+            name: "both_tool_lists",
+            policy: "  tools:\n    - orbit.task.show\n  tool_disallow_list:\n    - orbit.search\n",
+            expected: Some("tools_and_disallow_list_both_set"),
+        },
+        Case {
+            name: "spawn_without_program_policy",
+            policy: "  tools:\n    - proc.spawn\n",
+            expected: Some("proc_spawn_without_program_allowlist"),
+        },
+        Case {
+            name: "spawn_deny_all_programs",
+            policy: "  tools:\n    - proc.spawn\n  proc_allowed_programs: []\n",
+            expected: None,
+        },
+        Case {
+            name: "disallow_leaves_spawn_unbounded",
+            policy: "  tool_disallow_list:\n    - orbit.search\n",
+            expected: Some("proc_spawn_not_disallowed_without_program_allowlist"),
+        },
+        Case {
+            name: "disallow_includes_spawn",
+            policy: "  tool_disallow_list:\n    - proc.*\n",
+            expected: None,
+        },
+        Case {
+            name: "both_program_lists",
+            policy: "  tools:\n    - proc.spawn\n  proc_allowed_programs: []\n  proc_disallowed_programs: []\n",
+            expected: Some("both_program_lists_set"),
+        },
+        Case {
+            name: "agent_implement",
+            policy: "  trustedHostExecution: true\n  tools:\n    - orbit.task.show\n",
+            expected: Some("trusted_host_activity"),
+        },
+        Case {
+            name: "agent_invoke",
+            policy: "  trustedHostExecution: true\n  tools:\n    - orbit.task.show\n",
+            expected: None,
+        },
+    ];
+
+    for case in cases {
+        let dir = TempDir::new().expect("activity dir");
+        let path = dir.path().join(format!("{}.yaml", case.name));
+        fs::write(
+            &path,
+            format!(
+                "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: {}\nspec:\n  type: agent_loop\n  description: Crafted policy fixture.\n  instruction: Test.\n{}",
+                case.name, case.policy
+            ),
+        )
+        .expect("write crafted activity");
+
+        let mut catalog = V2ActivityCatalog::new();
+        let loaded = catalog.load_dir_skipping_retired_prefer_existing(dir.path());
+
+        match (case.expected, loaded) {
+            (None, Ok(_)) => assert!(
+                catalog.get(case.name).is_some(),
+                "{}: permitted shape must reach the catalog",
+                case.name
+            ),
+            (None, Err(error)) => panic!("{}: permitted shape refused: {error}", case.name),
+            (Some(expected), Ok(_)) => panic!(
+                "{}: expected a {expected} refusal, but the asset loaded",
+                case.name
+            ),
+            (Some(expected), Err(error)) => {
+                let CatalogError::Parse {
+                    path: refused,
+                    source,
+                } = &error
+                else {
+                    panic!("{}: expected an asset refusal, got {error:?}", case.name);
+                };
+                assert_eq!(refused, &path, "{}: refusal names the file", case.name);
+                let (activity, refusal) = policy_refusal(source);
+                assert_eq!(refusal, expected, "{}: {error}", case.name);
+                assert_eq!(activity, case.name, "refusal names the activity: {error}");
+                assert!(
+                    catalog.get(case.name).is_none(),
+                    "{}: refused asset must not reach the catalog",
+                    case.name
+                );
+            }
+        }
+    }
+}
+
+/// The activity a load refusal names, and which tool-policy rule refused it.
+fn policy_refusal(error: &AssetLoadError) -> (&str, &'static str) {
+    match error {
+        AssetLoadError::ToolAllowlist { activity, source } => {
+            let rule = match source {
+                ToolAllowlistError::WildcardRootNotPermitted { .. } => {
+                    "wildcard_root_not_permitted"
+                }
+                ToolAllowlistError::DisallowList { .. } => "disallow_list",
+                ToolAllowlistError::ToolsAndDisallowListBothSet => {
+                    "tools_and_disallow_list_both_set"
+                }
+                ToolAllowlistError::ProcSpawnWithoutProgramAllowlist { .. } => {
+                    "proc_spawn_without_program_allowlist"
+                }
+                ToolAllowlistError::ProcSpawnNotDisallowedWithoutProgramAllowlist => {
+                    "proc_spawn_not_disallowed_without_program_allowlist"
+                }
+                ToolAllowlistError::BothProgramListsSet => "both_program_lists_set",
+                other => panic!("unexpected allowlist refusal: {other:?}"),
+            };
+            (activity, rule)
+        }
+        AssetLoadError::TrustedHostActivity(refusal) => {
+            (&refusal.activity, "trusted_host_activity")
+        }
+        other => panic!("expected a tool-policy refusal, got {other:?}"),
+    }
 }
 
 fn repo_root() -> PathBuf {
