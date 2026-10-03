@@ -8,4 +8,4 @@ Run a v2 activity or job to completion: template resolution, dispatch to a provi
 - `DispatchError`/`CatalogError` translators stay in this crate (`scripts/check-error-translation.sh`).
 - No local `fn redact_*` in `cli_runner` (`scripts/check-artifact-redaction-guardrail.sh`); child environments are composed via `orbit_common::security::child_env` over a cleared env, never inherited.
 - Step results are durable: any `job_executor` accounting change needs resume/recovery test coverage, not just the happy path.
-- Crate-root `tests/` holds end-to-end runtime/CLI-agent/name-resolution/worktree-lifecycle integration tests; `examples/` holds runnable smoke programs.
+- Crate-root `tests/` holds end-to-end runtime/CLI-agent/name-resolution/worktree-lifecycle/PR-landing integration tests; `examples/` holds runnable smoke programs. `pr_landing.rs` leaves `run_private_vcs_operation` at its default, so the real provider adapter runs against a substitute `gh` backed by a bare Git remote.
