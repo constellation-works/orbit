@@ -295,6 +295,125 @@ fn implementer_dispatch_without_task_crew_uses_default_crew() {
     assert_eq!(config.provider, Some(Provider::Codex));
 }
 
+/// The leaf input a follower creates for a task it pulled from the owner: the
+/// task is absent from this host's store, and its crew arrives only on the
+/// owner's `claimed_task` snapshot.
+fn pulled_leaf_input(task_id: &str, owner_crew: Option<&str>) -> serde_json::Value {
+    json!({
+        "task_ids": [task_id],
+        "base_branch": "main",
+        "base_sync": "remote",
+        "claimed_task": { "id": task_id, "crew": owner_crew },
+    })
+}
+
+/// A pulled task id this host's store has never seen.
+const PULLED_TASK: &str = "ORB-99001";
+
+#[test]
+fn pulled_leaf_resolves_and_dispatches_the_owner_task_crew() {
+    let (_root, runtime) = runtime_with_named_crews();
+    assert!(
+        runtime
+            .stores()
+            .tasks()
+            .get_task(PULLED_TASK)
+            .expect("read")
+            .is_none(),
+        "the pulled task must be absent locally, as on a follower"
+    );
+    let input = pulled_leaf_input(PULLED_TASK, Some("beta"));
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_claimed_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .expect("insert leaf run");
+
+    let crew = runtime
+        .record_run_crew_from_input(&run.run_id, &input)
+        .expect("record leaf crew");
+    assert_eq!(crew.name, "beta", "the owner's crew, not default_crew");
+    let stored = runtime.show_job_run(&run.run_id).expect("show leaf run");
+    let projection = crate::application::job::job_run_to_json(&stored, None);
+    assert_eq!(projection["resolved_crew"], "beta");
+    assert_eq!(projection["resolved_run_crew"]["crew"], "beta");
+    assert_eq!(projection["resolved_run_crew"]["model"], "beta-model");
+
+    // implement_one names no crew, so dispatch re-resolves from the run input.
+    let config = RuntimeHost::agent_crew_config_for_input(&runtime, &input)
+        .expect("implementer dispatch")
+        .expect("crew config");
+    assert_eq!(config.model.as_deref(), Some("beta-model"));
+    assert_eq!(config.provider, Some(Provider::Codex));
+}
+
+#[test]
+fn pulled_leaf_without_an_owner_crew_uses_the_follower_default_crew() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let crew = runtime
+        .resolve_crew_for_run_input(&pulled_leaf_input(PULLED_TASK, None))
+        .expect("resolve crew");
+    assert_eq!(crew.name, "primary");
+}
+
+#[test]
+fn pulled_leaf_naming_a_crew_this_host_lacks_fails_without_falling_back() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let input = pulled_leaf_input(PULLED_TASK, Some("sol"));
+
+    let error = runtime
+        .resolve_crew_for_run_input(&input)
+        .expect_err("an unconfigured owner crew must not resolve to default_crew")
+        .to_string();
+    assert!(error.contains("`sol`"), "names the crew: {error}");
+    assert!(error.contains(PULLED_TASK), "names the task: {error}");
+
+    let dispatch = RuntimeHost::agent_crew_config_for_input(&runtime, &input)
+        .expect_err("dispatch refuses the leaf too")
+        .to_string();
+    assert!(dispatch.contains("`sol`"), "{dispatch}");
+}
+
+#[test]
+fn pulled_leaf_snapshot_wins_over_a_same_id_local_task() {
+    let (_root, runtime) = runtime_with_named_crews();
+    // A follower's own store can hold an unrelated task under the same id.
+    let local = add_task_with_crew(&runtime, "gamma");
+    let crew = runtime
+        .resolve_crew_for_run_input(&pulled_leaf_input(&local, Some("beta")))
+        .expect("resolve crew");
+    assert_eq!(crew.name, "beta");
+}
+
+#[test]
+fn explicit_crew_still_overrides_a_pulled_leaf_owner_crew() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let mut input = pulled_leaf_input(PULLED_TASK, Some("beta"));
+    input["crew"] = json!("gamma");
+    let crew = runtime
+        .resolve_crew_for_run_input(&input)
+        .expect("resolve crew");
+    assert_eq!(crew.name, "gamma");
+}
+
+#[test]
+fn malformed_claimed_task_snapshot_fails_closed() {
+    let (_root, runtime) = runtime_with_named_crews();
+    let error = runtime
+        .resolve_crew_for_run_input(&json!({
+            "task_ids": [PULLED_TASK],
+            "claimed_task": "beta",
+        }))
+        .expect_err("a malformed snapshot must not resolve default_crew");
+    assert!(error.to_string().contains("claimed_task"), "{error}");
+}
+
 /// Table-driven proof of the crew-selection precedence (ORB-10091, contract §3)
 /// and of the environment-default tier. Each row fixes the higher tiers and
 /// varies the `env` column (`CONSTELLATION_DEFAULT_PROVIDER`): a row that has an

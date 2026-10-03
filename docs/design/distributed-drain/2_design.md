@@ -128,6 +128,15 @@ no origin or PR credentials.
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable
   settlement any later settle-only pass or refill retries idempotently ([ORB-13663]).
 
+**Claimed-leaf crew.** The claimed task lives in the owner's store, so the leaf's run input carries
+the owner's snapshot of it (`claimed_task: {id, crew}`, from the receipt's task summary). Crew
+resolution reads the crew from that snapshot instead of the executor's local store, which lacks
+the task or holds an unrelated record under the same id. Precedence matches a local run: an
+explicit run `crew`, then the task's crew, then the executor's `workflow.default_crew` only when
+the task names none. A task crew the executor does not configure, or has disabled, fails the leaf
+at run start with an error naming the crew, before `implement_one`. It never falls back to the
+default crew. System-crew activities such as the recovery hooks keep `workflow.system_crew`.
+
 **Claimed-mode implementation** ([ORB-13642]). The implementer writes no owner task state. Both
 claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 

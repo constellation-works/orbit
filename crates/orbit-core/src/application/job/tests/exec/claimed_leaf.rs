@@ -32,6 +32,8 @@ use crate::adapter::engine_host::v2_host::pull::drain::{PullDrain, PullLauncher,
 use crate::application::distributed::owner_binary_version;
 use crate::application::task::TaskAddParams;
 
+mod crew;
+
 const BASE_BRANCH: &str = "agent-main";
 const MACHINE: &str = "owner-machine";
 const VALIDATION: &str = "echo claimed-candidate-validated";

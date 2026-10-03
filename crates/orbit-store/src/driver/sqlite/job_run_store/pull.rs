@@ -549,7 +549,13 @@ pub(super) fn mutate(
                 let now = Utc::now();
                 let run_id = next_run_id_conn(conn, workspace, RunIdRole::Child, now)?;
                 let job = pipeline(&record.request)?;
-                let input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}});
+                // The claimed task lives in the owner's store, not this one, so
+                // the leaf carries the owner's snapshot of it. Crew resolution
+                // (`orbit-core` `task_crew_from_run_input`) reads `claimed_task`
+                // in place of a local task lookup, so the leaf runs on the
+                // owner task's crew rather than this host's `default_crew`.
+                let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
+                let input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
                 let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
                 let state = PipelineState::new(run_id.clone(), job.into(), input);
                 upsert_job_run_for_workspace_conn(conn, workspace, &run, Some(&state))?;
