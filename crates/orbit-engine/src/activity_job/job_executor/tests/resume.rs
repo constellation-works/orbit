@@ -22,6 +22,8 @@ struct CheckpointHost {
     checkpoints: StdMutex<Vec<Checkpoint>>,
     inputs: StdMutex<Vec<(String, Value)>>,
     fail_checkpoints: bool,
+    /// Optional dispatch order for the item-bound fan-in regression's workers.
+    worker_order: Option<(StdMutex<VecDeque<u64>>, std::sync::Condvar)>,
 }
 
 impl CheckpointHost {
@@ -31,6 +33,7 @@ impl CheckpointHost {
             checkpoints: StdMutex::new(Vec::new()),
             inputs: StdMutex::new(Vec::new()),
             fail_checkpoints: false,
+            worker_order: None,
         }
     }
 
@@ -87,12 +90,36 @@ impl RuntimeHost for CheckpointHost {
         input: &Value,
         tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
+        // Gate action execution, rather than relying on thread spawn order or
+        // semaphore fairness. Both workers must have a permit in this fixture.
+        let mut worker_order =
+            self.worker_order
+                .as_ref()
+                .filter(|_| action == "w")
+                .map(|(order, ready)| {
+                    let item = input["n"].as_u64().expect("numeric worker item");
+                    let (order, _) = ready
+                        .wait_timeout_while(
+                            order.lock().expect("worker order"),
+                            Duration::from_secs(5),
+                            |order| order.front() != Some(&item),
+                        )
+                        .expect("worker order wait");
+                    assert_eq!(order.front(), Some(&item), "worker dispatch order stalled");
+                    order
+                });
         self.inputs
             .lock()
             .expect("inputs")
             .push((action.to_string(), input.clone()));
-        self.inner
-            .run_deterministic(action, config, input, tool_context)
+        let result = self
+            .inner
+            .run_deterministic(action, config, input, tool_context);
+        if let (Some(order), Some((_, ready))) = (worker_order.as_mut(), &self.worker_order) {
+            order.pop_front();
+            ready.notify_all();
+        }
+        result
     }
 
     fn resolve_cli_executor(
@@ -612,16 +639,14 @@ fn transient(action: &str) -> Action {
 }
 
 /// Run `job` three times: `consume` fails in the first run, `finish` fails
-/// in the first resume, and the second resume completes. `scripted` builds
+/// in the first resume, and the second resume completes. `host_for` builds
 /// each attempt's host from the `consume` and `finish` outcomes. Returns the
 /// three hosts so a test can compare what each attempt rendered and re-ran.
 fn run_through_two_resumes(
     job: &JobV2,
     input: Value,
-    scripted: impl Fn(Action, Action) -> ScriptedHost,
+    host_for: impl Fn(Action, Action) -> CheckpointHost,
 ) -> [CheckpointHost; 3] {
-    let host_for = |consume, finish| CheckpointHost::new(scripted(consume, finish));
-
     let first = host_for(transient("consume"), Action::Ok(json!({"unreached": true})));
     let failed = execute_job_with_resume(
         job,
@@ -670,14 +695,13 @@ fn run_through_two_resumes(
 fn resume_restores_fan_in_alias_without_rerunning_workers() {
     let refs = [("results", "{{ steps.results.output }}")];
     let job = job_with_steps(vec![
-        // One worker at a time: the scripted `w` outputs are a FIFO shared by
-        // every item, so parallel workers would race for which item gets
-        // `{"n": 1}` and the expected order would be nondeterministic.
+        // Each worker echoes its own typed item; shared FIFO responses must
+        // never decide which item gets which value, even with one permit.
         fanout_step(
             "workers",
             "{{ input.items }}",
-            1,
-            target_step("worker", "w"),
+            2,
+            reading_step("worker", "w", &[("n", "{{ input.item }}")]),
             JoinMode::All,
             Some("results"),
         ),
@@ -685,22 +709,39 @@ fn resume_restores_fan_in_alias_without_rerunning_workers() {
         reading_step("finish", "finish", &refs),
     ]);
 
-    for (items, expected) in [
-        (json!([1, 2]), json!([{"n": 1}, {"n": 2}])),
-        (json!([]), json!([])),
+    let expected = json!([
+        {"n": 1, "run_id": "jrun-compound-0", "step_id": "worker"},
+        {"n": 2, "run_id": "jrun-compound-0", "step_id": "worker"},
+    ]);
+    for (items, expected, worker_order) in [
+        (json!([1, 2]), expected.clone(), None),
+        (json!([1, 2]), expected, Some(VecDeque::from([2, 1]))),
+        (json!([]), json!([]), None),
     ] {
         let hosts = run_through_two_resumes(&job, json!({"items": items}), |consume, finish| {
-            ScriptedHost::new([
-                (
-                    "w",
-                    vec![Action::Ok(json!({"n": 1})), Action::Ok(json!({"n": 2}))],
-                ),
+            let mut host = CheckpointHost::new(ScriptedHost::new([
+                ("w", vec![Action::EchoInput, Action::EchoInput]),
                 ("consume", vec![consume]),
                 ("finish", vec![finish]),
-            ])
+            ]));
+            host.worker_order = worker_order
+                .clone()
+                .map(|order| (StdMutex::new(order), std::sync::Condvar::new()));
+            host
         });
         let [first, second, third] = &hosts;
 
+        assert_eq!(
+            first.inner.call_count("w"),
+            items.as_array().expect("item array").len(),
+        );
+        if worker_order.is_some() {
+            assert_eq!(
+                rendered_refs(first, "w"),
+                vec![json!({"n": 2}), json!({"n": 1})],
+                "the fixture executes worker actions in reverse item order",
+            );
+        }
         let uninterrupted = rendered_refs(first, "consume");
         assert_eq!(uninterrupted, vec![json!({"results": expected})]);
         assert_eq!(
@@ -747,7 +788,7 @@ fn resume_restores_parallel_child_and_loop_body_outputs() {
     ]);
 
     let hosts = run_through_two_resumes(&job, Value::Null, |consume, finish| {
-        ScriptedHost::new([
+        CheckpointHost::new(ScriptedHost::new([
             ("l", vec![Action::Ok(json!({"side": "left"}))]),
             ("r", vec![Action::Ok(json!({"side": "right"}))]),
             (
@@ -756,7 +797,7 @@ fn resume_restores_parallel_child_and_loop_body_outputs() {
             ),
             ("consume", vec![consume]),
             ("finish", vec![finish]),
-        ])
+        ]))
     });
     let [first, second, third] = &hosts;
 
