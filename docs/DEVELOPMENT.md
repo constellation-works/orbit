@@ -15,6 +15,26 @@ for the versioned Control Center, operator controls, isolated rendered preview,
 routing boundaries and evidence template.
 Automated protocol/bridge results and native desktop results are recorded separately.
 
+## Dashboard HTTP integration fixtures
+
+`cargo test -p orbit-web --test http_api` drives the public dashboard server
+over loopback HTTP. All cases share one integration binary; helpers and cases
+live under `crates/orbit-web/tests/http_api/`. Each mutable fixture re-executes
+its exact test with inherited authority cleared, then launches the public
+`serve_from_env` entry point against a disposable registry and workspace.
+Child tests have a 60-second deadline, server readiness has a 10-second
+deadline, and HTTP requests (including SSE reads) have a 5-second timeout.
+Process guards kill and reap servers even after an assertion fails.
+
+The security table discovers literal paths from API router registrations and
+uses HTTP `Allow` responses to enumerate their mutating methods. It checks
+origin/Host protection on every mutation and operator admission on governed
+actions. Existing ordinary writes have explicit method/path exceptions;
+new mutating routes default to operator-only. The auto launch probe requests
+completion authority, which is governed separately from a normal launch.
+This is source-assisted discovery followed by behavioral HTTP assertions,
+not a source-text snapshot. No private router API is exposed for testing.
+
 ## Safe Mutable CLI Fixtures
 
 Test fixtures and manual reproductions that mutate Orbit task, run, workspace,

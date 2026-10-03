@@ -2114,6 +2114,7 @@ dependencies = [
  "orbit-core",
  "orbit-registry",
  "orbit-types",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
@@ -2122,6 +2123,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wait-timeout",
  "yaml_serde",
 ]
 
