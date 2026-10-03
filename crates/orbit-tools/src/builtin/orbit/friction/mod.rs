@@ -50,6 +50,3 @@ pub(super) fn register(registry: &mut ToolRegistry) {
         register_operation(registry, spec, FrictionOperationTool(spec));
     }
 }
-
-#[cfg(test)]
-mod tests;

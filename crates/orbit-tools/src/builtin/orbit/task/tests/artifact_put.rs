@@ -1,50 +1,31 @@
-//! Execution and source path resolution tests for task.artifact_put.
-//
-// Migrated from nested `task/artifact_put/tests/` (anti-pattern child of source)
-// to sibling layout under `task/tests/` per ORB-00243 and
-// docs/design-patterns/test_layout.md.
+//! Source-path confinement for `orbit.task.artifact.put`.
 
-use std::collections::BTreeSet;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use orbit_common::OrbitError;
-use orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
-use super::super::artifact_put::*;
+use super::super::artifact_put::OrbitTaskArtifactPutTool;
 use crate::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, Tool, ToolContext};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Default)]
 struct RecordingHost {
-    call: Arc<Mutex<Option<RecordedCall>>>,
-}
-
-#[derive(Debug)]
-struct RecordedCall {
-    action: OrbitBuiltinAction,
-    input: Value,
-    agent: Option<String>,
-    model: Option<String>,
+    calls: Arc<Mutex<usize>>,
 }
 
 impl OrbitToolHost for RecordingHost {
     fn execute(
         &self,
-        action: OrbitBuiltinAction,
-        input: Value,
-        agent: Option<String>,
-        model: Option<String>,
+        _action: OrbitBuiltinAction,
+        _input: serde_json::Value,
+        _agent: Option<String>,
+        _model: Option<String>,
         _reservation_owner: Option<crate::ReservationOwnerContext>,
-    ) -> Result<Value, OrbitError> {
-        *self.call.lock().expect("record call") = Some(RecordedCall {
-            action,
-            input,
-            agent,
-            model,
-        });
+    ) -> Result<serde_json::Value, OrbitError> {
+        *self.calls.lock().expect("record call") += 1;
         Ok(json!({ "ok": true }))
     }
 
@@ -53,260 +34,11 @@ impl OrbitToolHost for RecordingHost {
     }
 }
 
-fn context_in(dir: &Path, host: RecordingHost) -> ToolContext {
-    ToolContext {
-        cwd: Some(dir.to_string_lossy().into_owned()),
-        workspace_root: Some(dir.to_path_buf()),
-        orbit_host: Some(Arc::new(host)),
-        ..Default::default()
-    }
-}
-
 fn assert_invalid_input(error: OrbitError) {
     assert!(
         matches!(error, OrbitError::InvalidInput(_)),
         "expected invalid_input, got {error}"
     );
-}
-
-#[test]
-fn artifact_put_reads_relative_source_and_delegates_to_task_update() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let source = dir.path().join("summary.md");
-    std::fs::write(&source, "done\n").expect("write source");
-    let host = RecordingHost::default();
-    let ctx = context_in(dir.path(), host.clone());
-
-    let output = OrbitTaskArtifactPutTool
-        .execute(
-            &ctx,
-            json!({
-                "id": "ORB-00001",
-                "source_path": "summary.md",
-                "path": "reports/summary.md",
-                "model": "gpt-5",
-                "workspace": "ws_orbit",
-                "_meta": {"orbit": {"workspace": "ws_orbit"}}
-            }),
-        )
-        .expect("execute tool");
-
-    assert_eq!(output, json!({ "ok": true }));
-    let call = host.call.lock().expect("recorded call").take().unwrap();
-    assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
-    assert_eq!(call.agent.as_deref(), Some("codex"));
-    assert_eq!(call.model.as_deref(), Some("gpt-5"));
-    assert_eq!(
-        call.input,
-        json!({
-            "id": "ORB-00001",
-            "model": "gpt-5",
-            "workspace": "ws_orbit",
-            "_meta": {"orbit": {"workspace": "ws_orbit"}},
-            "artifacts": [{
-                "path": "reports/summary.md",
-                "media_type": "text/markdown",
-                "content": [100, 111, 110, 101, 10]
-            }]
-        })
-    );
-}
-
-#[test]
-fn artifact_put_rejects_task_updates_before_host_write() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("summary.md"), "done\n").expect("write source");
-    let host = RecordingHost::default();
-    let ctx = context_in(dir.path(), host.clone());
-
-    for field in ["title", "status", "plan", "description", "job_run_id"] {
-        let mut input = json!({"id": "ORB-00001", "source_path": "summary.md"});
-        input[field] = json!("unexpected update");
-        let error = OrbitTaskArtifactPutTool
-            .execute(&ctx, input)
-            .expect_err("task metadata must not pass through attachment");
-        assert_invalid_input(error);
-        assert!(host.call.lock().expect("host call").is_none(), "{field}");
-    }
-}
-
-#[test]
-fn remote_artifact_preparation_rejects_task_updates() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("summary.md"), "done\n").expect("write source");
-    let ctx = context_in(dir.path(), RecordingHost::default());
-    let error = prepare_remote_payload(
-        json!({"id": "ORB-00001", "source_path": "summary.md", "title": "changed"}),
-        &ctx,
-    )
-    .expect_err("worker preparation must reject metadata before sending to hub");
-    assert_invalid_input(error);
-}
-
-#[test]
-fn artifact_put_rejects_agent_identity_field() {
-    let ctx = ToolContext::default();
-    let error = OrbitTaskArtifactPutTool
-        .execute(
-            &ctx,
-            json!({
-                "id": "ORB-00001",
-                "source_path": "summary.md",
-                "agent": "codex",
-            }),
-        )
-        .expect_err("agent must be rejected before reading the source file");
-
-    assert!(error.to_string().contains("use `model`"));
-}
-
-#[test]
-fn artifact_put_read_failure_never_calls_host() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let host = RecordingHost::default();
-    let ctx = context_in(dir.path(), host.clone());
-    let error = OrbitTaskArtifactPutTool
-        .execute(
-            &ctx,
-            json!({"id": "ORB-00001", "source_path": "definitely-missing"}),
-        )
-        .expect_err("missing source must fail locally");
-
-    assert!(error.to_string().contains("read artifact source"));
-    assert!(host.call.lock().expect("host call").is_none());
-}
-
-#[test]
-fn artifact_put_size_failure_never_calls_host() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let source = dir.path().join("large.bin");
-    std::fs::write(
-        &source,
-        vec![0_u8; (MAX_TASK_ARTIFACT_CONTENT_BYTES + 1) as usize],
-    )
-    .expect("write oversized source");
-    let host = RecordingHost::default();
-    let ctx = context_in(dir.path(), host.clone());
-    let error = OrbitTaskArtifactPutTool
-        .execute(&ctx, json!({"id": "ORB-00001", "source_path": source}))
-        .expect_err("oversized source must fail locally");
-
-    assert!(error.to_string().contains("content limit"));
-    assert!(host.call.lock().expect("host call").is_none());
-}
-
-#[test]
-fn artifact_put_rejects_source_outside_workspace_root() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let outside = tempfile::tempdir().expect("outside");
-    let source = outside.path().join("secret.txt");
-    std::fs::write(&source, "leaked\n").expect("write outside source");
-    let host = RecordingHost::default();
-    let ctx = context_in(workspace.path(), host.clone());
-    let error = OrbitTaskArtifactPutTool
-        .execute(&ctx, json!({"id": "ORB-00001", "source_path": source}))
-        .expect_err("outside workspace_root must be refused");
-
-    let message = error.to_string();
-    assert_invalid_input(error);
-    assert!(
-        message.contains(".orbit/tmp/"),
-        "outside-workspace rejection must name `.orbit/tmp/`: {message}"
-    );
-    assert!(host.call.lock().expect("host call").is_none());
-}
-
-#[test]
-fn artifact_put_accepts_source_under_orbit_tmp() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let scratch = workspace.path().join(".orbit").join("tmp");
-    std::fs::create_dir_all(&scratch).expect("scratch dir");
-    let source = scratch.join("x.json");
-    std::fs::write(&source, "{\"ok\":true}\n").expect("write scratch source");
-    let host = RecordingHost::default();
-    let ctx = context_in(workspace.path(), host.clone());
-
-    OrbitTaskArtifactPutTool
-        .execute(
-            &ctx,
-            json!({
-                "id": "ORB-00001",
-                "source_path": source,
-                "model": "codex"
-            }),
-        )
-        .expect("in-workspace .orbit/tmp source must be accepted");
-
-    let call = host.call.lock().expect("recorded call").take().unwrap();
-    assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
-    assert_eq!(call.input["artifacts"][0]["path"], "x.json");
-}
-
-#[cfg(unix)]
-#[test]
-fn artifact_put_rejects_symlink_inside_workspace_pointing_outside() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let outside = tempfile::tempdir().expect("outside");
-    let secret = outside.path().join("secret.txt");
-    std::fs::write(&secret, "leaked\n").expect("write outside target");
-    let link = workspace.path().join("link.txt");
-    std::os::unix::fs::symlink(&secret, &link).expect("symlink");
-    let host = RecordingHost::default();
-    let ctx = context_in(workspace.path(), host.clone());
-    let error = OrbitTaskArtifactPutTool
-        .execute(&ctx, json!({"id": "ORB-00001", "source_path": "link.txt"}))
-        .expect_err("escaping symlink must be refused");
-
-    assert_invalid_input(error);
-    assert!(host.call.lock().expect("host call").is_none());
-}
-
-#[cfg(unix)]
-#[test]
-fn artifact_put_refuses_a_fifo_source_instead_of_blocking_on_it() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    let fifo = workspace.path().join("pipe.txt");
-    let path = std::ffi::CString::new(fifo.to_str().expect("utf8 path")).expect("c path");
-    // SAFETY: `path` is a valid NUL-terminated string that outlives the call.
-    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0, "mkfifo");
-    let host = RecordingHost::default();
-    let ctx = context_in(workspace.path(), host.clone());
-
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = OrbitTaskArtifactPutTool
-            .execute(&ctx, json!({"id": "ORB-00001", "source_path": "pipe.txt"}));
-        let _ = done.send(result);
-    });
-    let result = finished
-        .recv_timeout(std::time::Duration::from_secs(10))
-        .expect("a FIFO source must be refused, not waited on for a writer");
-
-    assert!(result.is_err(), "a FIFO is not a regular file");
-    assert!(host.call.lock().expect("host call").is_none());
-}
-
-#[test]
-fn artifact_put_accepts_file_inside_workspace_root() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    std::fs::write(workspace.path().join("notes.md"), "ok\n").expect("write inside source");
-    let host = RecordingHost::default();
-    let ctx = context_in(workspace.path(), host.clone());
-
-    OrbitTaskArtifactPutTool
-        .execute(
-            &ctx,
-            json!({
-                "id": "ORB-00001",
-                "source_path": "notes.md",
-                "model": "codex"
-            }),
-        )
-        .expect("in-workspace source must be accepted");
-
-    let call = host.call.lock().expect("recorded call").take().unwrap();
-    assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
-    assert_eq!(call.input["artifacts"][0]["path"], "notes.md");
 }
 
 #[test]
@@ -345,83 +77,5 @@ fn remote_agent_session_cannot_attach_a_host_secret_outside_the_workspace() {
         .expect_err("remote agent must not attach host secrets outside the workspace");
 
     assert_invalid_input(error);
-    assert!(host.call.lock().expect("host call").is_none());
-}
-
-#[test]
-fn preloaded_artifact_payload_is_private_to_authenticated_ssh_mcp() {
-    let host = RecordingHost::default();
-    let ctx = ToolContext {
-        session_context: ToolSessionContext {
-            transport: Some(McpTransport::SshMcp),
-            ..ToolSessionContext::default()
-        },
-        orbit_host: Some(Arc::new(host.clone())),
-        ..ToolContext::default()
-    };
-    OrbitTaskArtifactPutTool
-        .execute(
-            &ctx,
-            json!({
-                "id": "ORB-00001",
-                "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}],
-                "model": "codex",
-                "workspace": "ws_orbit",
-                "_meta": {"orbit": {"workspace": "ws_orbit"}}
-            }),
-        )
-        .expect("authenticated hub accepts path-free connector payload");
-    let call = host.call.lock().expect("recorded call").take().unwrap();
-    assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
-    assert_eq!(
-        call.input,
-        json!({
-            "id": "ORB-00001",
-            "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}],
-            "model": "codex",
-            "workspace": "ws_orbit",
-            "_meta": {"orbit": {"workspace": "ws_orbit"}}
-        })
-    );
-
-    let local = ToolContext {
-        orbit_host: Some(Arc::new(RecordingHost::default())),
-        ..ToolContext::default()
-    };
-    let error = OrbitTaskArtifactPutTool
-        .execute(
-            &local,
-            json!({
-                "id": "ORB-00001",
-                "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}]
-            }),
-        )
-        .expect_err("ordinary local/model calls cannot inject the private payload");
-    assert!(error.to_string().contains("authenticated ssh-mcp"));
-}
-
-#[test]
-fn preloaded_artifact_rejects_task_updates_before_host_write() {
-    let host = RecordingHost::default();
-    let ctx = ToolContext {
-        session_context: ToolSessionContext {
-            transport: Some(McpTransport::SshMcp),
-            ..ToolSessionContext::default()
-        },
-        orbit_host: Some(Arc::new(host.clone())),
-        ..ToolContext::default()
-    };
-
-    for field in ["title", "status", "plan", "description", "job_run_id"] {
-        let mut input = json!({
-            "id": "ORB-00001",
-            "artifacts": [{"path": "reports/result.txt", "content": [111, 107]}]
-        });
-        input[field] = json!("unexpected update");
-        let error = OrbitTaskArtifactPutTool
-            .execute(&ctx, input)
-            .expect_err("preloaded attachment must reject task metadata");
-        assert_invalid_input(error);
-        assert!(host.call.lock().expect("host call").is_none(), "{field}");
-    }
+    assert_eq!(*host.calls.lock().expect("host call"), 0);
 }

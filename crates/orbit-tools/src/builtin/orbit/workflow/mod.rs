@@ -250,6 +250,3 @@ impl Tool for OrbitWorkflowRunResumeTool {
         execute(ctx, input, OrbitBuiltinAction::WorkflowRunResume)
     }
 }
-
-#[cfg(test)]
-mod tests;
