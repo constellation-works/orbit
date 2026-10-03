@@ -65,7 +65,8 @@ pub struct TaskUpdateArgs {
     /// Named crew responsible for orchestration attribution (empty string clears)
     #[arg(long)]
     pub orchestrator: Option<String>,
-    /// Replacement task context selectors. Repeat or comma-separate for multiple selectors (empty string clears).
+    /// Replace the whole task context list. Omit to preserve it; an empty string clears it.
+    /// To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors.
     /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
     /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long = "context", alias = "context-files", action = ArgAction::Append, value_delimiter = ',')]

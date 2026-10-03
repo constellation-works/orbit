@@ -123,9 +123,37 @@ rerun validation before attaching the evidence.
 
 **Keep `context_files` current.** Declare newly identified modification targets
 through the task tools before editing, within the approved scope and activity
-rules. A declaration does not acquire a lock or expand an already frozen claim
-footprint. If the admitted boundary cannot cover the change, request coordinated
-re-preparation; do not bypass the conflict or claim guard.
+rules. `orbit.task.update` replaces the whole context list when `context_files`
+or the legacy `context` alias is supplied. Omitting both preserves the list;
+use `context_files: []` to clear it. A comma-only string such as `","` also
+clears the list through either field. An empty string is rejected by the tool
+(the human CLI's `--context ""` clears it). The string `"[]"` is treated as a
+selector, not an empty list.
+
+To extend scope, first read the current durable `context_files` with
+`orbit.task.show`. Send the deduplicated union of **all existing selectors and
+the additions**, never just the additions. For example, if the current list is
+`["file:src/existing.rs", "dir:tests"]` and the task creates `src/new.rs`:
+
+```bash
+orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["context_files"]}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","model":"<agent-family>","context_files":["file:src/existing.rs","dir:tests","file:src/new.rs"],"allow_missing_context":true}'
+orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["context_files"]}'
+```
+
+Re-read after every context update and verify that every prior selector and
+every addition is present. Include an exact `file:` selector for each intended
+new file, even when a `dir:` selector covers it; after creation, ensure that
+exact selector is declared. If it is absent, repeat the read → full-union
+update → verify sequence. Use `allow_missing_context: true` to declare files
+before creation.
+
+In claimed mode, use the injected list and report additions in
+`context_files_added`; they are recorded for the owner without changing the
+frozen footprint. A declaration does not acquire a lock or expand an already
+frozen claim footprint. If the admitted
+boundary cannot cover the change, request coordinated re-preparation; do not
+bypass the conflict or claim guard.
 
 **In a linked pipeline worktree, never use positional `git stash` /
 `git stash pop`.** Refs and the stash list are repository-global, so a positional

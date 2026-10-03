@@ -110,11 +110,19 @@ spec:
 
     4. Implement only scoped work. Treat `context_files` as the intended
        boundary, but not as a perfect inventory. Before changing an unlisted
-       file, append its canonical in-workspace `file:`, `dir:`, or `symbol:`
-       selector via `orbit.task.update` only for an acceptance criterion or to
+       file, read the current durable `context_files` with `orbit.task.show`,
+       then send the deduplicated union of ALL existing selectors and its
+       canonical in-workspace `file:`, `dir:`, or `symbol:` selector via
+       `orbit.task.update` only for an acceptance criterion or to
        keep directly affected materials and consumers
        consistent; record why in the execution summary and make the smallest
-       compatible change. For files this task creates, pass
+       compatible change. A supplied `context_files` list REPLACES the whole
+       list; omission preserves it, and `[]` clears it. Never send only the
+       additions. Re-read after the update and verify every prior selector
+       and every addition remains present. In claimed mode, use the injected
+       list and report additions as `context_files_added` instead of calling
+       the unavailable task tools. For files this task creates, include the
+       exact `file:` selector in the full union and pass
        `allow_missing_context: true` on that update (calls from its run
        worktree automatically relax this task's existence check
        and report those selectors as `context_files_unverified`). Declaring a
@@ -175,9 +183,12 @@ spec:
         `git status --short` and `git diff --check`: staged, unstaged, and
         untracked, including deletions and both sides of every rename. Account
         for every entry against the item 3 baseline. Re-read the durable
-        `context_files` after any authorized update and confirm a selector
-        covers each intended delivery path. After creating an intended new
-        file, append its exact `file:` selector through `orbit.task.update`; a
+        `context_files` after any authorized update and verify every prior
+        selector is preserved and each intended delivery path is covered.
+        After creating an intended new file, ensure its exact `file:` selector
+        is declared. If absent, read the current list and send the full
+        deduplicated union of existing selectors and that exact selector
+        through `orbit.task.update`, then re-read to verify preservation; a
         containing directory selector is not new-file intent. Tracked changes
         need no declaration beyond existing task scope. Repeat the inventory
         after any cleanup. If run-owned output outside `.orbit/tmp/` remains
