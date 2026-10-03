@@ -544,3 +544,40 @@ fn persisted_single_member_attempt_deserializes_and_completes() {
         "an assessment the host cannot vouch for is assessed again"
     );
 }
+
+/// Frozen parent (7275eaf^) identities guard typed field order as well as
+/// nested JSON order. Exercise admission and receipt persistence together.
+#[test]
+fn member_identities_keep_pre_preserve_order_bytes() {
+    for raw in [
+        r#"{"z":0,"a":[{"z":1,"a":2},3]}"#,
+        r#"{"a":[{"a":2,"z":1},3],"z":0}"#,
+    ] {
+        let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+        let mut member = state_member("task", &["task"], 0);
+        member.evidence = serde_json::from_str(raw).unwrap();
+        let host = SchedulerHost::new(vec![member]);
+        preparation_tick(store.as_ref(), &host, 0, false);
+        let fired = preparation_tick(store.as_ref(), &host, 2, false);
+        let attempt = fired.state.unwrap().members.unwrap().active.unwrap();
+        assert_eq!(
+            attempt.id,
+            "447a1ea35d6d52e56e9c4c219db5d541930eb836c7a8413d782186846f9cf5ce"
+        );
+        *host.settled.borrow_mut() = Some(MemberBatchEvidence {
+            action_id: attempt.action_id.clone().unwrap(),
+            attempt_id: attempt.id.clone(),
+            applied: vec![evidence_for(&attempt, "task", "assessed")],
+            failed: BTreeMap::new(),
+        });
+        preparation_tick(store.as_ref(), &host, 3, false);
+        let receipt = store
+            .automation_receipt("host/ws/routine/pilot", &attempt.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            receipt.input_digest,
+            "53373c740b93b15807795f262350471dd39231ddbffe8375cb7fc21a01211d2a"
+        );
+    }
+}

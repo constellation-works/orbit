@@ -16,6 +16,7 @@ pub mod stall;
 mod tests;
 mod waiver;
 
+pub(crate) use digest::json_definition_epoch;
 pub use digest::{definition_epoch, digest, input_digest};
 pub use evaluate::evaluate;
 pub use waiver::waive;

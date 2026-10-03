@@ -110,7 +110,7 @@ pub(super) fn validate(
         let active = old.active.as_ref().ok_or_else(invalid)?;
         let evidence: MemberBatchEvidence =
             serde_json::from_slice(&receipt.evidence).map_err(|_| invalid())?;
-        let bytes = serde_json::to_vec(active).map_err(|_| invalid())?;
+        let bytes = active.identity_bytes().map_err(|_| invalid())?;
 
         if receipt.batch_id != active.id
             || active.action_id.as_ref() != Some(&receipt.action_id)

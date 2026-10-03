@@ -376,6 +376,16 @@ pub struct StateMember {
     pub crew: Option<String>,
 }
 
+impl StateMember {
+    /// Copy for identity hashing: struct fields keep declaration order, while
+    /// JSON evidence keeps the key order used before insertion-ordered panels.
+    pub fn identity(&self) -> Self {
+        let mut identity = self.clone();
+        identity.evidence.sort_all_objects();
+        identity
+    }
+}
+
 /// Trimmed non-empty `task.crew`, or `None` when unset. Matches the identity
 /// `resolve_crew_for_run_input` requires to be unanimous across a bundle.
 pub fn bundle_crew(crew: Option<&str>) -> Option<String> {
@@ -406,6 +416,15 @@ pub struct MemberAttempt {
 }
 
 impl MemberAttempt {
+    /// Stable receipt input bytes, shared by the producer and Store verifier.
+    /// Preserve both legacy single-member and batched wire shapes.
+    pub fn identity_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let mut identity = self.clone();
+        identity.member = self.member.identity();
+        identity.members = self.members.iter().map(StateMember::identity).collect();
+        serde_json::to_vec(&identity)
+    }
+
     /// Every member of the batch, first member first.
     pub fn members(&self) -> &[StateMember] {
         if self.members.is_empty() {

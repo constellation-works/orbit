@@ -5,7 +5,7 @@ use super::evaluate::member_state;
 use super::{MemberAdmission, MemberHost, MemberOutcome};
 use crate::AutomationError;
 use crate::checkpoint::commit;
-use crate::delivery::{definition_epoch, digest};
+use crate::delivery::digest;
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
@@ -130,7 +130,11 @@ pub(super) fn reconcile(
 
             // One receipt certifies every member the run applied; members it
             // did not apply are failed at their fingerprint beside it.
-            let input_digest = definition_epoch(active)?;
+            let input_digest = digest(
+                &active
+                    .identity_bytes()
+                    .map_err(|e| AutomationError::Evidence(e.to_string()))?,
+            );
             let receipt = (!evidence.applied.is_empty()).then(|| AcceptedCoverage {
                 batch_id: active.id.clone(),
                 action_id: evidence.action_id.clone(),

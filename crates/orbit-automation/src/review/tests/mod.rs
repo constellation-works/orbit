@@ -120,6 +120,11 @@ fn facts() -> LandingFacts {
 fn task_meaning_digest_ignores_audit_writes_but_not_criteria() {
     let base = task();
     let digest = task_meaning_digest(&base).unwrap();
+    // Frozen from 7275eaf^: existing review certificates must survive upgrades.
+    assert_eq!(
+        digest,
+        "6b2d9f9e45ceb61d556bef7d686fd49dc24b649fef51f312f10598253a2df4cd"
+    );
 
     let mut commented = base.clone();
     commented.execution_summary = "Outcome: success".into();
@@ -143,6 +148,10 @@ fn task_meaning_digest_ignores_audit_writes_but_not_criteria() {
         combined_task_meaning_digest(&[("ORB-1".into(), "x".into()), ("ORB-2".into(), "y".into())])
             .unwrap();
     assert_eq!(combined, reordered);
+    assert_eq!(
+        combined,
+        "391b9baed83e8f56060b4be7004a4585651ce0ca14e7ee6c512254e5e4d3160d"
+    );
 }
 
 #[test]

@@ -287,12 +287,14 @@ fn resulting_fingerprint(
 }
 
 pub(super) fn task_operation_id(prepared: &Value, task_id: &str, assessment: &Value) -> String {
-    let identity = json!({
+    let mut identity = json!({
         "task_id": task_id,
         "source": prepared.get("source"),
         "prepared_tasks": prepared.get("tasks"),
         "assessment": assessment,
     });
+    // Replay receipts predate insertion-ordered plugin JSON.
+    identity.sort_all_objects();
     let encoded = serde_json::to_vec(&identity).unwrap_or_default();
     sha256_hex(&encoded)
 }

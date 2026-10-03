@@ -1,6 +1,6 @@
 //! One material fingerprint used by scheduling, apply and readiness consumers.
 
-use crate::{AutomationError, delivery::definition_epoch};
+use crate::{AutomationError, delivery::json_definition_epoch};
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::members::{
     MaterialField, PreparationEligibility, PreparationPolicy, SourceSensitivity,
@@ -93,7 +93,7 @@ pub fn fingerprint(
             .map_err(|error| AutomationError::Evidence(error.to_string()))?;
     }
 
-    definition_epoch(&material)
+    json_definition_epoch(material)
 }
 
 /// Companion to the material fingerprint for a task-pilot's bounded status
@@ -144,7 +144,7 @@ pub fn legacy_fingerprint(
             .map_err(|error| AutomationError::Evidence(error.to_string()))?;
     }
 
-    definition_epoch(&material)
+    json_definition_epoch(material)
 }
 
 /// Order-insensitive collections are normalized so an equivalent task
