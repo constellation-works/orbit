@@ -14,10 +14,12 @@ use crate::contracts::{
     StateComponent,
 };
 
+use super::marker::{upgrade_lock_path, write_marker};
+use super::registry::{LAYOUT_MIGRATIONS, LayoutMigration};
+use super::upgrade::{pending_with, upgrade_with};
 use super::{
-    LAYOUT_MIGRATIONS, LayoutMigration, SUPPORTED_LAYOUT_VERSION, current_layout_version,
-    layout_forward_compatible_open, pending_layout_migrations, pending_with, upgrade_lock_path,
-    upgrade_with, upgrade_workspace_layout,
+    SUPPORTED_LAYOUT_VERSION, current_layout_version, layout_forward_compatible_open,
+    pending_layout_migrations, upgrade_workspace_layout,
 };
 use crate::driver::file::task_bundle::read_bundle_at;
 use crate::fs::lock::read_lock_holder;
@@ -134,7 +136,7 @@ fn layout_marker_parent_is_private_under_permissive_umask() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let orbit_dir = temp.path().join("workspace/.orbit");
-    super::write_marker(&orbit_dir, 1).expect("write layout marker");
+    write_marker(&orbit_dir, 1).expect("write layout marker");
 
     let state = orbit_dir.join("state");
     for directory in [&orbit_dir, &state] {

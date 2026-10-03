@@ -1,7 +1,12 @@
 // Migrated from file/skill_store.rs per ORB-00231
+use std::fs;
+use std::path::Path;
+
+use orbit_common::OrbitError;
 use tempfile::tempdir;
 
 use super::super::*;
+use crate::scope::{ScopeStrategy, ScopedStore};
 
 #[test]
 fn layered_catalog_uses_merge_by_key_precedence() {

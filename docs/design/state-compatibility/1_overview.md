@@ -67,7 +67,7 @@ answers in advance, and the older binary reads that answer.
 | Concern | File | Task |
 | --- | --- | --- |
 | Compatibility types and the decision | `crates/orbit-store/src/contracts/compat.rs` | [ORB-12434] |
-| Layout registry, marker, and `layout.compat` | `crates/orbit-store/src/workflow/layout/mod.rs` | [ORB-10012], [ORB-12434] |
+| Layout registry, marker, and `layout.compat` | `crates/orbit-store/src/workflow/layout/registry.rs`, `crates/orbit-store/src/workflow/layout/marker.rs` | [ORB-10012], [ORB-12434] |
 | Schema ledger and the `migration.compat` row | `crates/orbit-store/src/driver/sqlite/migration/ledger.rs` | [ORB-10003], [ORB-12434] |
 | Read-only enforcement on the store handle | `crates/orbit-store/src/driver/sqlite/connection.rs` | [ORB-12434] |
 | Operator reporting (`orbit migrate`) | `crates/orbit-cmd/src/migrate.rs`, `crates/orbit-cli/src/command/migrate.rs` | [ORB-10012], [ORB-12434] |
