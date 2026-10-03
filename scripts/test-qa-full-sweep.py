@@ -9,42 +9,144 @@ import json
 import os
 import platform
 import re
+import select
+import signal
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-def run(argv, *, cwd, env, timeout=180, input_text=None):
-    def tail(value):
-        if isinstance(value, bytes):
-            value = value.decode(errors="replace")
-        return (value or "")[-1_048_576:]
+# The supervisor retains process-group ownership after the command exits. We
+# sweep its group before reaping it, avoiding a PID/group reuse window (STD-03 R14).
+_PROCESS_SUPERVISOR = """import os, signal, subprocess, sys, threading
+fd = int(sys.argv[1])
+owner_fd = int(sys.argv[2])
+signal.signal(signal.SIGTERM, lambda *_: None)
+def watch_owner():
+    os.read(owner_fd, 1)
+    os.killpg(os.getpgrp(), signal.SIGKILL)
+threading.Thread(target=watch_owner, daemon=True).start()
+try:
+    code = subprocess.call(sys.argv[3:])
+except OSError as error:
+    print(str(error), file=sys.stderr, flush=True)
+    code = 127
+os.write(fd, str(code).encode())
+os.close(fd)
+while True:
+    signal.pause()
+"""
+_OUTPUT_LIMIT = 1_048_576
 
+
+def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
+    evidence = {"command": argv, "started_at": started, "exit_code": None,
+                "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False}
+    if os.name != "posix":
+        evidence["stderr"] = "QA process-group supervision requires a POSIX host"
+        return evidence
+    read_fd, write_fd = os.pipe()
+    owner_read_fd, owner_write_fd = os.pipe()
+    process = None
+    threads = []
+    tails = {"stdout": bytearray(), "stderr": bytearray()}
+    truncated = {"stdout": False, "stderr": False}
+
+    def drain(stream, name):
+        try:
+            while chunk := stream.read(65_536):
+                tails[name].extend(chunk)
+                if len(tails[name]) > _OUTPUT_LIMIT:
+                    del tails[name][:-_OUTPUT_LIMIT]
+                    truncated[name] = True
+        finally:
+            stream.close()
+
+    def send_input(stream):
+        try:
+            stream.write(input_text.encode())
+        except BrokenPipeError:
+            pass
+        finally:
+            try:
+                stream.close()
+            except BrokenPipeError:
+                pass
+
     try:
-        completed = subprocess.run(argv, cwd=cwd, env=env, text=True,
-                                   capture_output=True, timeout=timeout, check=False,
-                                   input=input_text)
-    except subprocess.TimeoutExpired as error:
-        return {
-            "command": argv, "started_at": started, "exit_code": None,
-            "stdout": tail(error.stdout),
-            "stderr": tail(error.stderr) + f"\ntimeout after {timeout}s",
-            "outcome": "FAIL", "output_truncated": True,
-        }
-    stdout = completed.stdout[-1_048_576:]
-    stderr = completed.stderr[-1_048_576:]
-    return {
-        "command": argv, "started_at": started, "exit_code": completed.returncode,
-        "stdout": stdout, "stderr": stderr,
-        "outcome": "PASS" if completed.returncode == 0 else "FAIL",
-        "output_truncated": len(stdout) != len(completed.stdout) or len(stderr) != len(completed.stderr),
-    }
+        process = subprocess.Popen(
+            [sys.executable, "-c", _PROCESS_SUPERVISOR, str(write_fd), str(owner_read_fd), *argv],
+            cwd=cwd, env=env, start_new_session=True, pass_fds=(write_fd, owner_read_fd),
+            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(write_fd)
+        write_fd = None
+        os.close(owner_read_fd)
+        owner_read_fd = None
+        for name in tails:
+            thread = threading.Thread(target=drain, args=(getattr(process, name), name), daemon=True)
+            thread.start()
+            threads.append(thread)
+        if input_text is not None:
+            thread = threading.Thread(target=send_input, args=(process.stdin,), daemon=True)
+            thread.start()
+            threads.append(thread)
+        ready, _, _ = select.select([read_fd], [], [], timeout)
+        if ready:
+            code = os.read(read_fd, 64)
+            if code:
+                evidence["exit_code"] = int(code)
+            else:
+                evidence["stderr"] = "QA supervisor exited without a command result"
+        else:
+            evidence["stderr"] = f"timeout after {timeout}s"
+            # Do not wait/reap before signalling: the live or zombie supervisor
+            # reserves its own process-group identity throughout cleanup.
+            os.killpg(process.pid, signal.SIGTERM)
+            time.sleep(.25)
+    except (OSError, ValueError) as error:
+        evidence["stderr"] = str(error)
+    finally:
+        if write_fd is not None:
+            os.close(write_fd)
+        if owner_read_fd is not None:
+            os.close(owner_read_fd)
+        os.close(read_fd)
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                evidence["exit_code"] = None
+                evidence["stderr"] += f"\nprocess-group cleanup failed: {error}"
+                # Closing the owner pipe also asks the supervisor to sweep its
+                # own group, if the host refuses the outer process's signal.
+                os.close(owner_write_fd)
+                owner_write_fd = None
+                process.kill()
+            process.wait()
+        if owner_write_fd is not None:
+            os.close(owner_write_fd)
+        for thread in threads:
+            thread.join(timeout=2)
+        if any(thread.is_alive() for thread in threads):
+            evidence["exit_code"] = None
+            evidence["stderr"] += "\ncommand descendant retained an output pipe after group cleanup"
+        evidence["stdout"] = tails["stdout"].decode(errors="replace")
+        captured_stderr = tails["stderr"].decode(errors="replace")
+        evidence["stderr"] = captured_stderr + ("\n" if captured_stderr and evidence["stderr"] else "") + evidence["stderr"]
+        evidence["output_truncated"] = any(truncated.values())
+    evidence["outcome"] = "PASS" if evidence["exit_code"] == 0 else "FAIL"
+    return evidence
 
 
 def source_contracts(repo: Path):
@@ -954,7 +1056,84 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
         raise ValueError("hosted evidence source identity does not match the checkout")
 
 
+def process_self_test():
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-process-self-test-") as directory:
+        temp = Path(directory)
+        env = isolated_environment(temp)
+        success = run([sys.executable, "-c", "import sys; print('done'); sys.stderr.write('diagnostic')"],
+                      cwd=temp, env=env)
+        if success["exit_code"] != 0 or success["stdout"] != "done\n" or success["stderr"] != "diagnostic":
+            raise AssertionError(f"supervised success lost output/status: {success}")
+        failed = run([sys.executable, "-c", "raise SystemExit(7)"], cwd=temp, env=env)
+        if failed["exit_code"] != 7 or failed["outcome"] != "FAIL":
+            raise AssertionError("supervised failure was reported as success")
+        lost = run([sys.executable, "-c",
+                    "import os,signal,time; os.kill(os.getppid(),signal.SIGKILL); time.sleep(10)"],
+                   cwd=temp, env=env, timeout=3)
+        if lost["outcome"] != "FAIL" or lost["exit_code"] is not None:
+            raise AssertionError("lost supervisor was reported as success")
+        missing = run([str(temp / "missing-command")], cwd=temp, env=env)
+        if missing["outcome"] != "FAIL" or not missing["stderr"]:
+            raise AssertionError("failed command start was reported as success")
+        stdin = run([sys.executable, "-c", "import sys; print(sys.stdin.read())"],
+                    cwd=temp, env=env, input_text="wire input")
+        if stdin["stdout"] != "wire input\n":
+            raise AssertionError("supervisor did not preserve command stdin")
+        blocked_input = run([sys.executable, "-c", "import time; time.sleep(10)"],
+                            cwd=temp, env=env, input_text="x" * 2_000_000, timeout=.2)
+        if blocked_input["exit_code"] is not None or blocked_input["outcome"] != "FAIL":
+            raise AssertionError("blocked stdin escaped the command timeout")
+        large = run([sys.executable, "-c",
+                     "import sys; sys.stdout.write('界'*700000+'終'); sys.stderr.write('e'*2000000)"],
+                    cwd=temp, env=env)
+        if (large["exit_code"] != 0 or not large["output_truncated"]
+                or not large["stdout"].endswith("終") or len(large["stderr"]) != _OUTPUT_LIMIT
+                or len(large["stdout"]) > _OUTPUT_LIMIT):
+            raise AssertionError("streamed output was not bounded or lost its Unicode tail")
+        marker = temp / "grandchild-survived"
+        child = "import time; from pathlib import Path; time.sleep(2); Path(" + repr(str(marker)) + ").write_text('survived')"
+        parent = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(child) + "]); print('spawned',flush=True); time.sleep(20)"
+        timed_out = run([sys.executable, "-c", parent], cwd=temp, env=env, timeout=1)
+        if timed_out["exit_code"] is not None or timed_out["outcome"] != "FAIL" or "spawned" not in timed_out["stdout"]:
+            raise AssertionError("timeout cleanup fixture did not start or was reported as success")
+        # A clean parent exit must sweep inherited-pipe descendants too.
+        completed_parent = parent.replace("time.sleep(20)", "raise SystemExit(0)")
+        clean = run([sys.executable, "-c", completed_parent], cwd=temp, env=env, timeout=3)
+        if clean["exit_code"] != 0:
+            raise AssertionError("clean parent with pipe-inheriting descendant did not complete")
+        time.sleep(2.1)
+        if marker.exists():
+            raise AssertionError("supervised command left a grandchild after timeout or clean exit")
+
+        started = temp / "owner-started"
+        crashed_marker = temp / "owner-crash-grandchild"
+        crash_child = "from pathlib import Path; import time; Path(" + repr(str(started)) + ").write_text('started'); time.sleep(2); Path(" + repr(str(crashed_marker)) + ").write_text('survived')"
+        crash_parent = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(crash_child) + "]); time.sleep(20)"
+        launcher = ("import importlib.util; from pathlib import Path; "
+                    "s=importlib.util.spec_from_file_location('qa'," + repr(str(Path(__file__).resolve())) + "); "
+                    "q=importlib.util.module_from_spec(s); s.loader.exec_module(q); "
+                    "q.run([" + repr(sys.executable) + ",'-c'," + repr(crash_parent) + "],cwd=Path(" + repr(str(temp)) + "),env=q.isolated_environment(Path(" + repr(str(temp)) + ")),timeout=20)")
+        owner = subprocess.Popen([sys.executable, "-c", launcher], env=env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 5
+            while not started.exists() and owner.poll() is None and time.monotonic() < deadline:
+                time.sleep(.02)
+            if not started.exists():
+                raise AssertionError("owner-crash fixture did not start")
+            owner.kill()
+            owner.wait(timeout=5)
+            time.sleep(2.1)
+            if crashed_marker.exists():
+                raise AssertionError("QA owner's death left a command running")
+        finally:
+            if owner.poll() is None:
+                owner.kill()
+                owner.wait(timeout=5)
+
+
 def self_test():
+    process_self_test()
     grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
     if cli_help_children(grouped) != ["add", "recheck-blocked"]:
         raise AssertionError("grouped CLI help omitted commands or admitted examples")

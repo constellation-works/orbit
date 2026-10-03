@@ -161,6 +161,11 @@ makes the decision `INCOMPLETE`. Cargo test scenarios also require completed
 test-suite summaries with at least one passing test; a renamed filter that
 selects zero tests cannot earn the scenario's assertions. The report retains
 passing, failing, ignored, and suite counts for these checks.
+The command harness requires a POSIX host. It drains stdout and stderr while
+retaining at most one MiB per stream and marks truncated output. A disposable
+supervisor owns each command's process group until cleanup finishes. Timeout,
+normal command completion, and loss of the QA parent all terminate surviving
+descendants before fixture disposal; timeout and lost-supervisor outcomes fail.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
