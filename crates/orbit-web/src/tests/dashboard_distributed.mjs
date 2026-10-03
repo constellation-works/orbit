@@ -1006,6 +1006,26 @@ const mount = async (taskId = "ORB-2", options = {}) => {
   assert.ok(text.includes("pull request") && !text.includes("#"), `a missing pull request number is not shown as #undefined: ${text}`);
 }
 
+
+// An acknowledged owner decision cannot refresh or announce into a later
+// workspace visit, even if that visit has the same task ID.
+{
+  workspaceConsoles = null; consoleBody = console_([claim()]); nextAction = null;
+  setWorkspace("decision-a");
+  let changed = 0;
+  const oldBlock = await mount("ORB-2", { onTaskChanged: () => { changed++; } });
+  let release;
+  holdPost = new Promise(resolve => { release = resolve; });
+  press(button(oldBlock, "Approve handoff")); await settle();
+  setWorkspace("decision-b");
+  const newBlock = await mount();
+  const readsBefore = consoleReads.length;
+  holdPost = null; release(); await settle();
+  assert.equal(consoleReads.length, readsBefore, "a late decision cannot reread B claim state");
+  assert.equal(changed, 0, "a late decision cannot refresh B tasks");
+  assert.ok(!newBlock.textContent.includes("decision recorded"), "B does not carry A outcome");
+}
+
 if (mounted) mounted.remove();
 globalThis.distributedTestsPassed = true;
 console.log("dashboard distributed claim provenance and owner handoff actions");
