@@ -20,8 +20,7 @@ on:
       - "crates/orbit-tools/tests/proc_spawn_lockdown.rs"
       # [ORB-11055] Child-runtime write-root inventory lives in orbit-core and
       # is compiled into the SBPL profile the macOS sandbox job enforces.
-      - "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox.rs"
-      - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/sandbox.rs"
+      - "crates/orbit-core/src/adapter/engine_host/v2_host/sandbox/**"
       - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/sandbox_nested.rs"
       # [ORB-10009] SBPL profiles are compiled from resolved policy rules, so
       # policy-evaluation changes can alter what the macOS sandbox enforces.

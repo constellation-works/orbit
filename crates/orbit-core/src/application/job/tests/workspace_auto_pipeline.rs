@@ -4,7 +4,7 @@
 //! `RuntimeHost`, so what they pin is the wiring: how many times the loop
 //! re-lists, what it dispatches, and which failures stop it. The classifier's
 //! own decisions are tested where it lives, in
-//! `adapter::engine_host::v2_host::tests::workspace_auto`.
+//! `adapter::engine_host::v2_host::workspace_auto::tests`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
