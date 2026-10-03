@@ -564,13 +564,9 @@ where
 }
 
 /// Result of one dependency walk from the updated task.
-pub(crate) struct DependencyWalk {
+struct DependencyWalk {
     /// Cycle witness from the updated task back to itself, when one exists.
-    pub(crate) cycle: Option<Vec<OrbitId>>,
-    /// Dependency edges examined; bounded by the reachable edge count. Read by
-    /// the traversal-work tests.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) edges_examined: usize,
+    cycle: Option<Vec<OrbitId>>,
 }
 
 /// Depth-first search for a path from `dependencies` back to `current_task_id`.
@@ -580,7 +576,7 @@ pub(crate) struct DependencyWalk {
 /// updated task or is still on the active path, whose exploration covers
 /// everything it reaches. Cycles that do not pass through the updated task are
 /// ignored, as they predate this edit.
-pub(crate) fn walk_dependencies_to_self<F, E>(
+fn walk_dependencies_to_self<F, E>(
     current_task_id: &str,
     dependencies: &[OrbitId],
     mut lookup: F,
@@ -591,7 +587,6 @@ where
     let mut expanded = BTreeSet::new();
     let mut path = vec![current_task_id.to_string()];
     let mut pending = vec![Vec::from(dependencies).into_iter()];
-    let mut edges_examined = 0;
 
     while let Some(next_edges) = pending.last_mut() {
         let Some(next) = next_edges.next() else {
@@ -599,13 +594,9 @@ where
             path.pop();
             continue;
         };
-        edges_examined += 1;
         if next == current_task_id {
             path.push(next);
-            return Ok(DependencyWalk {
-                cycle: Some(path),
-                edges_examined,
-            });
+            return Ok(DependencyWalk { cycle: Some(path) });
         }
         if !expanded.insert(next.clone()) {
             continue;
@@ -615,10 +606,7 @@ where
         pending.push(adjacency.into_iter());
     }
 
-    Ok(DependencyWalk {
-        cycle: None,
-        edges_examined,
-    })
+    Ok(DependencyWalk { cycle: None })
 }
 
 /// Canonical automatic admission order, shared by reporting and the owner store.

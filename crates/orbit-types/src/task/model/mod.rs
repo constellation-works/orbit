@@ -53,8 +53,6 @@ pub use support::{
     push_external_ref_if_missing,
 };
 
-#[cfg(test)]
-pub(crate) use task::walk_dependencies_to_self;
 pub use task::{
     DELIVERY_JOB_TAG_PREFIX, ExecutionLocation, Task, TaskReferenceIndex,
     archived_task_completed_before_archive, automatic_dispatch_cmp, delivery_job_selection,

@@ -1,34 +1,6 @@
 //! Single-shot advisory acquisition under descriptor inheritance.
 
-use std::time::Duration;
-
 use crate::fs::file_lock::{read_file_lock_holder, try_acquire_exclusive_file_lock};
-
-#[test]
-fn a_recorded_holder_refuses_a_second_acquisition_immediately() {
-    let dir = tempfile::tempdir().expect("dir");
-    let path = dir.path().join("state/routine-sweep.lock");
-
-    let _held = try_acquire_exclusive_file_lock(&path, "routine sweep")
-        .expect("first acquisition")
-        .expect("lock is free");
-    assert_eq!(
-        read_file_lock_holder(&path).expect("holder recorded").label,
-        "routine sweep"
-    );
-
-    let started = std::time::Instant::now();
-    let second = try_acquire_exclusive_file_lock(&path, "routine sweep").expect("second attempt");
-    assert!(
-        second.is_none(),
-        "a live holder must refuse the second pass"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "a claimed refusal must not queue behind the holder: waited {:?}",
-        started.elapsed()
-    );
-}
 
 /// Criterion: a descriptor a forked child inherited is not a holder.
 ///

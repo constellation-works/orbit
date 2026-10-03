@@ -181,7 +181,7 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
 /// no sidecars at all, and refusing it would make such a deployment unreadable
 /// rather than stale. Every caller is handed the currency it got, and
 /// [`open_observational`] warns when the degraded read is in use.
-pub(super) fn open_private_read_only(
+fn open_private_read_only(
     path: &Path,
     filesystem_read_only: bool,
 ) -> Result<OpenedConnection, OrbitError> {
@@ -609,7 +609,7 @@ pub fn open_observational(
 /// [`ObservationCurrency::MainFileOnly`] read is offered to
 /// [`ObservationRequirement::PublishedMainFile`] and refused to
 /// [`ObservationRequirement::CurrentState`].
-pub(super) fn observation_currency(
+fn observation_currency(
     path: &Path,
     requirement: ObservationRequirement,
 ) -> Result<ObservationCurrency, OrbitError> {

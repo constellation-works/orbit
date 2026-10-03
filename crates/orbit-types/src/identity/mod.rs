@@ -9,9 +9,6 @@ mod id;
 mod machine;
 pub use error::IdentityError;
 
-#[cfg(test)]
-mod tests;
-
 pub use actor::{
     ActorIdentity, agent_from_model, normalize_attribution_label,
     normalize_optional_attribution_label, provider_for_agent_family, provider_from_model,

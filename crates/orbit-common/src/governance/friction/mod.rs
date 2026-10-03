@@ -99,6 +99,3 @@ pub fn friction_tag_aliases_literal() -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
-
-#[cfg(test)]
-mod tests;

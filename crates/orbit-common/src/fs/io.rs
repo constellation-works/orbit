@@ -220,14 +220,6 @@ impl StagedTextFile {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn stage_with_for_test<F>(target_path: &Path, write: F) -> io::Result<Self>
-    where
-        F: FnOnce(&mut File) -> io::Result<()>,
-    {
-        Self::stage_with(target_path, true, true, write)
-    }
-
     pub fn commit(&mut self) -> io::Result<()> {
         fs::rename(&self.temp_path, &self.target_path)?;
         self.committed = true;

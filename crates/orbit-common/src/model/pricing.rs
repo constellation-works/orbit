@@ -15,7 +15,7 @@ struct PriceTableFile {
 }
 
 // The table is embedded at build time, so a parse failure is a build defect
-// the pricing tests catch, never a runtime condition.
+// rather than a runtime data condition.
 #[allow(clippy::expect_used)]
 fn price_table() -> &'static [PriceRow] {
     static TABLE: OnceLock<Vec<PriceRow>> = OnceLock::new();
@@ -36,9 +36,4 @@ pub fn normalize_token_usage(
     usage: &TokenUsage,
 ) -> Option<TokenUsage> {
     normalize_token_usage_from_rows(price_table(), model, at, usage)
-}
-
-#[cfg(test)]
-pub(crate) fn shipped_price_table() -> &'static [PriceRow] {
-    price_table()
 }

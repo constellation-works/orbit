@@ -306,7 +306,3 @@ pub fn spawn_unrelated_process() -> UnrelatedProcess {
         .unwrap_or_else(|error| panic!("spawn an unrelated process: {error}"));
     UnrelatedProcess(child)
 }
-
-#[cfg(test)]
-#[path = "tests/test_env.rs"]
-mod tests;

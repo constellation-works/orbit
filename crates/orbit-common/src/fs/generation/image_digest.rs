@@ -27,43 +27,38 @@ use crate::OrbitError;
 const SETTLE: Duration = Duration::from_secs(2);
 /// Distinct images remembered (installed binary, staged candidate, checkout
 /// builds); the oldest entries fall off.
-// Parent visibility lets sibling tests verify the cache bound.
-pub(super) const MAX_ENTRIES: usize = 8;
+const MAX_ENTRIES: usize = 8;
 /// The record is small JSON; anything larger is not ours.
 const MAX_CACHE_BYTES: u64 = 16 * 1024;
 const VERSION: u32 = 1;
 
 /// The kernel's identity for one version of one file's bytes.
-// The type and fields are visible to sibling tests for synthetic image identities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct ImageKey {
-    pub(super) dev: u64,
-    pub(super) ino: u64,
-    pub(super) size: u64,
-    pub(super) mtime_sec: i64,
-    pub(super) mtime_nsec: i64,
-    pub(super) ctime_sec: i64,
-    pub(super) ctime_nsec: i64,
+struct ImageKey {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+    ctime_sec: i64,
+    ctime_nsec: i64,
 }
 
-// The type and key are visible to sibling tests to inspect eviction order.
 #[derive(Serialize, Deserialize)]
-pub(super) struct Entry {
+struct Entry {
     #[serde(flatten)]
-    pub(super) key: ImageKey,
+    key: ImageKey,
     sha256: String,
 }
 
-// The type and entries are visible to sibling tests to inspect cache bounds.
 #[derive(Serialize, Deserialize)]
-pub(super) struct Cache {
+struct Cache {
     version: u32,
-    pub(super) entries: Vec<Entry>,
+    entries: Vec<Entry>,
 }
 
-// Parent visibility lets sibling tests seed a settled entry for a real image.
 #[cfg(unix)]
-pub(super) fn key_of(file: &File) -> Option<ImageKey> {
+fn key_of(file: &File) -> Option<ImageKey> {
     use std::os::unix::fs::MetadataExt;
     let meta = file.metadata().ok()?;
     Some(ImageKey {
@@ -77,9 +72,8 @@ pub(super) fn key_of(file: &File) -> Option<ImageKey> {
     })
 }
 
-// Match the test-access seam on Unix; unsupported platforms have no image key.
 #[cfg(not(unix))]
-pub(super) fn key_of(_file: &File) -> Option<ImageKey> {
+fn key_of(_file: &File) -> Option<ImageKey> {
     None
 }
 
@@ -87,8 +81,7 @@ fn is_sha256_hex(digest: &str) -> bool {
     digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-// Parent visibility lets sibling tests inspect the persisted cache.
-pub(super) fn load(path: &Path) -> Option<Cache> {
+fn load(path: &Path) -> Option<Cache> {
     let mut raw = String::new();
     File::open(path)
         .ok()?
@@ -110,8 +103,7 @@ fn settled(key: &ImageKey, now: SystemTime) -> bool {
     now.duration_since(changed).is_ok_and(|age| age >= SETTLE)
 }
 
-// Parent visibility lets sibling tests seed entries with a controlled clock.
-pub(super) fn store(path: &Path, key: ImageKey, digest: &str, now: SystemTime) {
+fn store(path: &Path, key: ImageKey, digest: &str, now: SystemTime) {
     if !settled(&key, now) || !path.parent().is_some_and(Path::is_dir) {
         return;
     }

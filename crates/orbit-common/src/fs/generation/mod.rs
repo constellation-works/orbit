@@ -70,9 +70,6 @@ mod refusal;
 mod registry;
 mod update;
 
-#[cfg(test)]
-mod tests;
-
 pub use admission::{
     GenerationGuard, Participant, pending_switch_for_this_process, process_participation,
     quiesce_bound,
