@@ -257,8 +257,15 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   }
   let top;
   if (head === "runs" && segments[1]) {
+    let nextRunId;
+    try {
+      nextRunId = decodeURIComponent(segments[1]);
+    } catch {
+      // Bookmarks and pasted hashes are untrusted input. A malformed escape
+      // must not interrupt initialization or strand the navigation listener.
+      return setActiveTabImpl(ctx, "diagnostics/runs", { ...opts, repairRoute: true });
+    }
     top = "run-detail";
-    const nextRunId = decodeURIComponent(segments[1]);
     if (ctx.getRunId() !== nextRunId) {
       ctx.setRunLogs([]);
       const esi = ctx.getExpandedSteps();
@@ -383,7 +390,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // A bookmarked legacy hash is rewritten in place so the address bar and any
   // copied link name the current route, without a second hashchange — and so
   // Back does not land on the legacy hash and redirect forward again.
-  const rewriteInPlace = hashChanged && legacyRoute && typeof window.history?.replaceState === "function";
+  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
     window.history.replaceState(null, "", hash);
   } else if (hashChanged && shouldUpdateHash) {
