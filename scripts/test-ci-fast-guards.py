@@ -232,13 +232,14 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-dependency-direction.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_goldens_runs_only_the_orbit_cli_snapshot_tests(self):
+    def test_goldens_runs_mcp_conformance_and_cli_snapshot_tests(self):
         result = self.run_guard("check-goldens.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(
             calls,
             [
+                ["test", "-p", "orbit-tools", "--test", "mcp_definitions"],
                 ["test", "-p", "orbit-cli", "--bin", "orbit", "help_matches_the_shipped_surface"],
                 ["test", "-p", "orbit-cli", "--test", "output_goldens"],
                 [
@@ -271,7 +272,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")
