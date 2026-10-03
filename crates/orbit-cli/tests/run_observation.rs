@@ -522,3 +522,90 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     assert_eq!(cancelled["provider_processes_stopped"], 0);
     assert_eq!(fixture.run_state(run_id), "success");
 }
+
+/// Worker-limit adjustment only writes a drain control record. The fixture's
+/// live test PID prevents orphan reconciliation; this record is never passed
+/// to cancellation or any process-control command.
+#[test]
+fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
+    let fixture = Fixture::init();
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &fixture.home.join(".orbit"),
+        &fixture.work.join(".orbit"),
+    )
+    .unwrap();
+    let id = "jrun-cli-workers";
+    let input = serde_json::json!({"max_active_leaf_runs": 2});
+    let now = chrono::Utc::now().to_rfc3339();
+    fixture.db().execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running',?3,?4,?4,?4,?5)",
+        params![id,fixture.workspace_id(),input.to_string(),now,std::process::id()],
+    ).unwrap();
+    runtime
+        .write_run_state(
+            id,
+            &orbit_types::workflow::PipelineState::new(
+                id.into(),
+                "workspace_auto_pipeline".into(),
+                input.clone(),
+            ),
+        )
+        .unwrap();
+    let changed = fixture.json(&[
+        "run",
+        "concurrency",
+        id,
+        "--set",
+        "3",
+        "--if-revision",
+        "0",
+        "--reason",
+        "CLI fixture",
+        "--json",
+    ]);
+    assert_eq!(changed["outcome"], "updated");
+    assert_eq!(changed["previous_concurrency"], 2);
+    assert_eq!(changed["concurrency"], 3);
+    assert_eq!(changed["revision"], 1);
+    let shown = fixture.json(&["run", "show", id, "--no-reconcile", "--json"]);
+    assert_eq!(shown["run"]["state"], "running");
+    let before = runtime.read_run_state(id).unwrap().unwrap();
+    let limit = before
+        .drain_worker_limit
+        .as_ref()
+        .expect("persisted CLI worker limit");
+    assert_eq!(limit.max_active_leaf_runs, 3);
+    assert_eq!(limit.previous_max_active_leaf_runs, 2);
+    assert_eq!(limit.revision, 1);
+    assert_eq!(limit.actor, "cli");
+    assert_eq!(limit.reason.as_deref(), Some("CLI fixture"));
+    let unchanged = fixture.json(&[
+        "run",
+        "concurrency",
+        id,
+        "--set",
+        "3",
+        "--if-revision",
+        "1",
+        "--json",
+    ]);
+    assert_eq!(unchanged["outcome"], "unchanged");
+    assert_eq!(unchanged["revision"], 1);
+    let error = fixture.failure(&[
+        "run",
+        "concurrency",
+        id,
+        "--set",
+        "4",
+        "--if-revision",
+        "0",
+        "--json",
+    ]);
+    assert!(
+        error["error"].as_str().unwrap().contains("revision"),
+        "{error}"
+    );
+    assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
+    assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
+    assert_eq!(fixture.run_state(id), "running");
+}
