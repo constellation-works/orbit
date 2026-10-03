@@ -246,6 +246,12 @@ def validate_inventory(repo: Path, inventory: dict):
     for scenario in inventory["scenarios"]:
         if not scenario.get("assertions"):
             errors.append(f"scenario {scenario['id']} has no concrete assertions")
+        if "required_tests" in scenario:
+            tests = scenario["required_tests"]
+            if (not isinstance(tests, list) or not tests
+                    or any(not isinstance(name, str) or not name.strip() for name in tests)
+                    or len(tests) != len(set(tests))):
+                errors.append(f"scenario {scenario['id']} has invalid required behavioral cases")
         for surface in scenario.get("surfaces", []):
             claims.setdefault(surface, []).append(scenario["id"])
     for surface, reason in gaps.items():
@@ -271,7 +277,8 @@ def validate_inventory(repo: Path, inventory: dict):
 
 def cli_help_children(help_text):
     help_body = help_text.split("\nOptions:", 1)[0]
-    if not re.search(r"^Usage: .*<COMMAND>", help_body, re.MULTILINE):
+    usage = re.search(r"^Usage: [^\n]*(?:\n[ \t]+[^\n]*)*", help_body, re.MULTILINE)
+    if not usage or not re.search(r"(?:<COMMAND>|\[COMMAND\])", usage.group(0)):
         return []
     children = []
     for line in help_body.splitlines():
@@ -352,7 +359,7 @@ def parse_json(evidence, description):
         raise ValueError(f"{description} returned invalid JSON: {error}") from error
 
 
-def validate_cargo_test_evidence(command, evidence):
+def validate_cargo_test_evidence(command, evidence, required_tests=()):
     """Require completed, non-vacuous Rust tests, including command-kind suites."""
     if len(command) < 2 or Path(command[0]).name != "cargo" or command[1] != "test":
         return
@@ -366,10 +373,17 @@ def validate_cargo_test_evidence(command, evidence):
     evidence["test_counts"] = {"passed": passed, "failed": failed,
                                "ignored": sum(int(row[3]) for row in summaries),
                                "suites": len(summaries)}
+    passing_tests = sorted(set(re.findall(
+        r"^test (\S+) \.\.\. ok$",
+        evidence.get("stdout", "") + "\n" + evidence.get("stderr", ""), re.MULTILINE)))
+    evidence["passing_tests"] = passing_tests
     if failed or any(row[0] != "ok" for row in summaries):
         raise ValueError("cargo test reported failing tests")
     if passed == 0:
         raise ValueError("cargo test executed zero passing tests; check the selection")
+    missing = set(required_tests) - set(passing_tests)
+    if missing:
+        raise ValueError(f"cargo test did not pass the required behavioral cases: {sorted(missing)}")
 
 
 def scenario_decision(inventory, results, candidate_id):
@@ -1191,6 +1205,12 @@ def self_test():
     grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
     if cli_help_children(grouped) != ["add", "recheck-blocked"]:
         raise AssertionError("grouped CLI help omitted commands or admitted examples")
+    optional = "Usage: orbit doctor [OPTIONS] [COMMAND]\nCommands:\n  providers  Diagnose providers\n  fs-access  Inspect filesystem boundary\n"
+    if cli_help_children(optional) != ["providers", "fs-access"]:
+        raise AssertionError("optional CLI subcommands were omitted from discovery")
+    continued = optional.replace("Usage: orbit doctor [OPTIONS] [COMMAND]", "Usage: orbit doctor [OPTIONS]\n       orbit doctor <COMMAND>")
+    if cli_help_children(continued) != ["providers", "fs-access"]:
+        raise AssertionError("continued CLI usage omitted focused doctor commands")
     if cli_help_children("Usage: orbit task show <ID>\nArguments:\n  id  Task ID\n"):
         raise AssertionError("leaf CLI arguments were mistaken for commands")
     command = ["cargo", "test", "--lib", "renamed_filter"]
@@ -1208,6 +1228,19 @@ def self_test():
     validate_cargo_test_evidence(command, completed_tests)
     if completed_tests["test_counts"] != {"passed": 3, "failed": 0, "ignored": 1, "suites": 2}:
         raise AssertionError("completed Rust test counts were not retained")
+    unrelated = {"stdout": "test unrelated ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;",
+                 "stderr": ""}
+    try:
+        validate_cargo_test_evidence(command, unrelated, ["required_behavior"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unrelated passing test earned the scenario's assertions")
+    named = {"stdout": "test required_behavior ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;",
+             "stderr": ""}
+    validate_cargo_test_evidence(command, named, ["required_behavior"])
+    if named["passing_tests"] != ["required_behavior"]:
+        raise AssertionError("named behavioral evidence was not retained")
     inventory = {"scenarios": [{"id":"required", "required":True,
                                 "assertions":["exact-json", "persisted-effect"]}],
                  "required_capability_gaps": {}}
@@ -1512,7 +1545,7 @@ def main():
                 unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
                 failure = None if unchanged else "source candidate changed while the scenario ran"
                 try:
-                    validate_cargo_test_evidence(command, evidence)
+                    validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []))
                 except ValueError as error:
                     failure = str(error) if failure is None else failure + "; " + str(error)
                 result = {"scenario":scenario["id"],
