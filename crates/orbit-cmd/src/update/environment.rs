@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use orbit_common::OrbitError;
-use orbit_common::security::release::{TRUSTED_RELEASE_KEYS, TrustedReleaseKey};
+use orbit_common::security::release::TrustedReleaseKey;
 
 use super::admission::admission_authorities;
 use super::channel::{self, InstallChannel};
@@ -34,7 +34,8 @@ pub struct UpdateEnvironment {
     pub install_channel: InstallChannel,
     /// Where release artifacts are read from.
     pub source: Box<dyn ReleaseSource>,
-    /// Release signing keys to accept.
+    /// Release signing keys to accept. The compiled set, unless
+    /// `ORBIT_RELEASE_TRUSTED_KEYS_FILE` is set and acknowledged.
     pub trusted_keys: &'static [TrustedReleaseKey],
     /// Today's date, for signing-key expiry.
     pub today: NaiveDate,
@@ -81,7 +82,7 @@ impl UpdateEnvironment {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             target_triple: channel::release_target_triple()?.to_string(),
             source: release_source_from_env(),
-            trusted_keys: TRUSTED_RELEASE_KEYS,
+            trusted_keys: super::trust::trusted_keys_from_env()?,
             today: chrono::Utc::now().date_naive(),
             workspace,
         })

@@ -4,12 +4,9 @@
 
 //! Binary-level coverage for `orbit update`.
 //!
-//! The deep replacement/rollback/convergence paths are unit-tested in
-//! `orbit-cmd` against a fake installation. What can only be checked here is
-//! the wiring: that the command is reachable, documents both version
-//! selections, reports through the shared payload machinery, and refuses to
-//! rewrite a binary a package manager owns — which is exactly the shape this
-//! test binary itself has, since it lives in `target/`.
+//! Routing, `--check`, and admission are exercised below. Integrity — checksums,
+//! signatures, archive shape, rollback, downgrade, the install lock, and a
+//! stale writer — is exercised through the same binary in the `integrity` module.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +16,12 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
+
+// Integration-test crate roots resolve modules beside `tests/`, not in a
+// directory named after the test file, so the path is explicit.
+#[cfg(unix)]
+#[path = "update/integrity.rs"]
+mod integrity;
 
 fn orbit(cwd: &Path, home: &Path, mirror: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");

@@ -320,7 +320,9 @@ Installer trust overrides are explicit trust-boundary changes.
 `ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE=1`.
 `ORBIT_RELEASE_PUBLIC_KEY_FILE` is a deprecated single-key override and
 requires its matching acknowledgement variable. The two overrides cannot be
-used together.
+used together. `orbit update` honors `ORBIT_RELEASE_TRUSTED_KEYS_FILE` with the
+same acknowledgement and record format, and does not honor
+`ORBIT_RELEASE_PUBLIC_KEY_FILE` on its own. Setting both is an error there too.
 
 ## What `make release-check` enforces
 
