@@ -5529,3 +5529,6 @@ fn mcp_apps_presentation_reads_explicit_tasks_without_authority_or_workspace_fal
 
 #[path = "mcp_roundtrip/desktop.rs"]
 mod desktop;
+
+#[path = "mcp_roundtrip/transport_operations.rs"]
+mod transport_operations;
