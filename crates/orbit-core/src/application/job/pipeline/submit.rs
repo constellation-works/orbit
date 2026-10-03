@@ -454,7 +454,9 @@ impl OrbitRuntime {
         trigger: JobRunTrigger,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         let entry = self.show_job_catalog_entry(job_id)?;
-        if !entry.supports_no_input_submission() {
+        if entry.kind() != orbit_types::workflow::JobKind::Subroutine
+            && !entry.supports_no_input_submission()
+        {
             return Err(OrbitError::InvalidInput(format!(
                 "job '{job_id}' requires task input or a delivery window, or is disabled/subroutine; use Ship or Drain for delivery"
             )));
