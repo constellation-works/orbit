@@ -106,7 +106,8 @@ fn fixture_orbit(work: &Path, home: &Path) -> Command {
         .env("USERPROFILE", home)
         .env("ORBIT_SKIP_HOST_PREREQUISITES", "1")
         .env_remove("ORBIT_FORMAT")
-        .env_remove("NO_COLOR");
+        .env_remove("NO_COLOR")
+        .timeout(std::time::Duration::from_secs(120));
     command
 }
 
@@ -189,6 +190,66 @@ fn config_path_and_set_print_json_documents() {
         "json",
     ]);
     assert_eq!(value["value"], 45);
+}
+
+/// `config set` validates before it writes: an invalid value, an unknown key
+/// and a bad crew field each fail and leave both the workspace and the global
+/// config byte-identical. A valid edit in the same fixture still lands.
+#[test]
+fn config_set_rejections_leave_config_files_byte_identical() {
+    let fixture = Fixture::new();
+    fixture.init_machine_and_workspace();
+    let workspace_config = fixture.work.join(".orbit/config.toml");
+    fs::write(
+        &workspace_config,
+        "# operator comment\n[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"gpt-test\"\n\n[execution.codex]\nsandbox = \"workspace-write\"\n",
+    )
+    .expect("write workspace config");
+    let global_config = fixture.home.join(".orbit/config.toml");
+    let snapshot = || {
+        (
+            fs::read(&workspace_config).expect("read workspace config"),
+            fs::read(&global_config).expect("read global config"),
+        )
+    };
+    let before = snapshot();
+
+    for (label, args) in [
+        (
+            "invalid sandbox mode",
+            &["execution.codex.sandbox", "not-a-real-mode"][..],
+        ),
+        ("unknown key", &["workflow.not_a_real_key", "value"]),
+        ("misspelled crew field", &["crews.sol.effrot", "high"]),
+        ("invalid crew effort", &["crews.sol.effort", "medium-low"]),
+        ("non-bool crew flag", &["crews.sol.enabled", "maybe"]),
+        (
+            "invalid global value",
+            &["--global", "automation.stall_window_minutes", "soon"],
+        ),
+    ] {
+        fixture
+            .orbit()
+            .args(["config", "set"])
+            .args(args)
+            .assert()
+            .failure();
+        assert!(
+            snapshot() == before,
+            "{label}: a rejected `config set` must not write either config file"
+        );
+    }
+
+    fixture
+        .orbit()
+        .args(["config", "set", "crews.sol.effort", "high"])
+        .assert()
+        .success();
+    assert_ne!(
+        fs::read(&workspace_config).expect("read workspace config"),
+        before.0,
+        "a valid edit still writes the workspace config"
+    );
 }
 
 #[test]

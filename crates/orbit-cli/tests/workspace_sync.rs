@@ -2,7 +2,8 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! Binary-level coverage for explicit workspace managed-artifact convergence.
+//! Binary-level coverage for workspace managed-artifact convergence through
+//! `workspace sync` and `workspace init`.
 
 use std::path::{Path, PathBuf};
 
@@ -454,4 +455,173 @@ fn workspace_sync_reports_a_denied_manifest_write_without_claiming_convergence()
     assert!(stdout.contains("not fully converged"), "{stdout}");
     assert!(!stdout.contains("managed artifacts converged"), "{stdout}");
     assert!(!stdout.contains("already converged"), "{stdout}");
+}
+
+/// [ORB-10726, ORB-12718] `workspace init` replaces a legacy bare `.orbit`
+/// ignore line, and lines retired from older managed blocks, with one ignore
+/// of the whole `.orbit/` directory while keeping the operator's own lines. A
+/// forced re-init then leaves every checkout file byte-identical.
+#[test]
+fn workspace_init_migrates_legacy_gitignore_and_reinit_is_byte_idempotent() {
+    let home = tempdir().expect("home tempdir");
+    let repo = home.path().join("workspace");
+    std::fs::create_dir_all(&repo).expect("create workspace repo");
+    git(&repo, &["init", "--quiet"]);
+    write_machine_identity(home.path());
+    let gitignore = repo.join(".gitignore");
+    std::fs::write(
+        &gitignore,
+        "target/\n/.orbit/\n.orbit/*\n!.orbit/config.toml\n",
+    )
+    .expect("write legacy .gitignore");
+
+    orbit(&repo, home.path())
+        .args(["workspace", "init", "--name", "gitignore-migration"])
+        .assert()
+        .success();
+
+    let migrated = std::fs::read_to_string(&gitignore).expect("read migrated .gitignore");
+    let lines = migrated.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.first(),
+        Some(&"target/"),
+        "operator lines keep their place: {migrated}"
+    );
+    for legacy in ["/.orbit/", ".orbit/*", "!.orbit/config.toml"] {
+        assert!(
+            !lines.contains(&legacy),
+            "legacy line `{legacy}` must be replaced: {migrated}"
+        );
+    }
+    assert_eq!(
+        lines.iter().filter(|line| **line == ".orbit/").count(),
+        1,
+        "exactly one `.orbit/` ignore: {migrated}"
+    );
+    for path in [".orbit/config.toml", ".orbit/config.yaml"] {
+        let ignored = std::process::Command::new("git")
+            .args(["check-ignore", "--quiet", path])
+            .current_dir(&repo)
+            .status()
+            .expect("run git check-ignore");
+        assert!(ignored.success(), "{path} must be ignored: {migrated}");
+    }
+
+    let before = checkout_files(&repo);
+    assert!(
+        before.contains_key(Path::new(".gitignore")) && before.len() > 1,
+        "the snapshot covers the checkout's managed files: {:?}",
+        before.keys().collect::<Vec<_>>()
+    );
+    orbit(&repo, home.path())
+        .args([
+            "workspace",
+            "init",
+            "--name",
+            "gitignore-migration",
+            "--force",
+        ])
+        .assert()
+        .success();
+    let after = checkout_files(&repo);
+    let changed = before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        changed.is_empty(),
+        "re-init must leave every checkout file byte-identical; changed: {changed:?}"
+    );
+}
+
+/// [ORB-12107] Without `--force`, `workspace init` refuses a second name for
+/// an initialized checkout and an existing name for a second checkout. Neither
+/// refusal writes the registry or a checkout identity.
+#[test]
+fn workspace_init_refuses_checkout_and_name_collisions_without_writing() {
+    let home = tempdir().expect("home tempdir");
+    let first = home.path().join("first");
+    let second = home.path().join("second");
+    for repo in [&first, &second] {
+        std::fs::create_dir_all(repo).expect("create repo");
+        git(repo, &["init", "--quiet"]);
+    }
+    write_machine_identity(home.path());
+    orbit(&first, home.path())
+        .args(["workspace", "init", "--name", "shared-name"])
+        .assert()
+        .success();
+
+    let registry = home.path().join(".orbit/workspaces.json");
+    let identity = first.join(".orbit/config.yaml");
+    let registry_before = read(&registry);
+    let identity_before = read(&identity);
+
+    orbit(&first, home.path())
+        .args(["workspace", "init", "--name", "another-name"])
+        .assert()
+        .failure();
+    assert_eq!(
+        read(&registry),
+        registry_before,
+        "a renamed checkout collision must preserve the registry"
+    );
+    assert_eq!(
+        read(&identity),
+        identity_before,
+        "a renamed checkout collision must preserve its identity"
+    );
+
+    orbit(&second, home.path())
+        .args(["workspace", "init", "--name", "shared-name"])
+        .assert()
+        .failure();
+    assert_eq!(
+        read(&registry),
+        registry_before,
+        "a durable-name collision must preserve the registry"
+    );
+    assert!(
+        !second.join(".orbit").exists(),
+        "a durable-name collision must not initialize the second checkout"
+    );
+}
+
+fn git(repo: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .status()
+        .expect("run git");
+    assert!(
+        status.success(),
+        "git {args:?} failed in {}",
+        repo.display()
+    );
+}
+
+/// Every file in a checkout, outside `.git` and the runtime's own
+/// `.orbit/state`, mapped to its bytes.
+fn checkout_files(repo: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![repo.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read checkout directory") {
+            let path = entry.expect("checkout entry").path();
+            let relative = path
+                .strip_prefix(repo)
+                .expect("inside checkout")
+                .to_path_buf();
+            if relative == Path::new(".git") || relative == Path::new(".orbit/state") {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.insert(relative, read(&path));
+            }
+        }
+    }
+    files
 }

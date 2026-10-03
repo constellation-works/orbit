@@ -901,6 +901,385 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
     );
 }
 
+/// [ORB-12131, ORB-12143] `--fix-orphan-task-stores` deletes task data. It
+/// refuses without `--confirm`. Once confirmed it removes only an empty
+/// partition and a populated one whose checkout is confirmed absent. The
+/// partitions of a live checkout, of a checkout that fails to stat for any
+/// reason other than absence, and with no binding at all keep their bundles.
+#[test]
+fn doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    write_machine_identity(&home);
+    let partitions = home.join(".orbit/tasks/workspaces");
+    let deleted_volume = temp.path().join("deleted-volume");
+    let file_volume = temp.path().join("file-volume");
+
+    let mut partition_of = std::collections::BTreeMap::new();
+    for (name, repo) in [
+        ("live", temp.path().join("live")),
+        ("gone", deleted_volume.join("gone")),
+        ("unreachable", file_volume.join("unreachable")),
+    ] {
+        fs::create_dir_all(&repo).expect("create checkout");
+        init_git_repo(&repo);
+        let before = task_store_partitions(&partitions);
+        run_orbit_success(&repo, &home, &["workspace", "init", "--name", name], None);
+        run_orbit_success(
+            &repo,
+            &home,
+            &[
+                "task",
+                "add",
+                "--title",
+                &format!("{name} task"),
+                "--description",
+                "seed a task bundle",
+                "--complexity",
+                "low",
+            ],
+            None,
+        );
+        let created = task_store_partitions(&partitions)
+            .into_keys()
+            .filter(|partition| !before.contains_key(partition))
+            .collect::<Vec<_>>();
+        let [partition] = created.as_slice() else {
+            panic!("{name} must create exactly one partition: {created:?}");
+        };
+        partition_of.insert(name, partition.clone());
+    }
+    fs::create_dir_all(partitions.join("ws_residue")).expect("create empty partition");
+    fs::create_dir_all(partitions.join("ws_unowned/ORB-00077")).expect("create unowned bundle");
+
+    // Confirmed absent: the readable parent answers that the checkout is gone.
+    fs::remove_dir_all(&deleted_volume).expect("delete checkout");
+    // Not absence: resolving the checkout fails with ENOTDIR.
+    fs::remove_dir_all(&file_volume).expect("remove volume");
+    fs::write(&file_volume, b"not a directory").expect("replace volume with a file");
+
+    let before = task_store_partitions(&partitions);
+    for name in ["live", "gone", "unreachable"] {
+        assert_eq!(
+            before[&partition_of[name]].len(),
+            1,
+            "{name} partition holds its bundle: {before:?}"
+        );
+    }
+
+    let refused = run_orbit_output(
+        &temp.path().join("live"),
+        &home,
+        &["doctor", "--fix-orphan-task-stores", "--json"],
+        None,
+    );
+    assert!(
+        !refused.status.success(),
+        "an unconfirmed repair must refuse: {}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    assert_eq!(
+        task_store_partitions(&partitions),
+        before,
+        "an unconfirmed repair must not delete anything"
+    );
+
+    let repaired = run_orbit_json(
+        &temp.path().join("live"),
+        &home,
+        &["doctor", "--fix-orphan-task-stores", "--confirm", "--json"],
+        None,
+    );
+    assert!(
+        repaired
+            .as_array()
+            .expect("doctor rows")
+            .iter()
+            .any(|row| row["check"] == "fix-orphan-task-stores" && row["status"] == "ok"),
+        "the confirmed repair reports its outcome: {repaired}"
+    );
+    let mut expected = before;
+    expected.remove(&partition_of["gone"]);
+    expected.remove("ws_residue");
+    assert_eq!(
+        task_store_partitions(&partitions),
+        expected,
+        "only the empty partition and the confirmed-absent checkout's partition may go"
+    );
+}
+
+/// `--fix-stale-locks` removes a lock whose recorded holder is dead. It keeps
+/// a lock whose recorded holder is alive, and one a live process holds through
+/// the OS lock even though the recorded holder is dead.
+#[cfg(unix)]
+#[test]
+fn doctor_stale_lock_repair_keeps_locks_a_live_process_holds() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_git_repo(&repo);
+    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+
+    let state_dir = repo.join(".orbit/state");
+    let dead_pid = reaped_child_pid();
+    let dead_lock = state_dir.join(".crashed-op.lock");
+    let live_lock = state_dir.join(".live-op.lock");
+    let held_lock = state_dir.join(".held-op.lock");
+    write_lock_holder(&dead_lock, dead_pid, "crashed op");
+    write_lock_holder(&live_lock, std::process::id(), "live op");
+    write_lock_holder(&held_lock, dead_pid, "stale metadata");
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&held_lock)
+        .expect("open held lock");
+    held.lock().expect("hold the lock");
+
+    let rows = run_orbit_json(
+        &repo,
+        &home,
+        &["doctor", "--fix-stale-locks", "--json"],
+        None,
+    );
+    held.unlock().expect("release the lock");
+
+    assert!(
+        rows.as_array()
+            .expect("doctor rows")
+            .iter()
+            .any(|row| row["check"] == "fix-stale-locks" && row["status"] == "ok"),
+        "the repair reports its outcome: {rows}"
+    );
+    assert!(!dead_lock.exists(), "a dead holder's lock is removed");
+    assert!(live_lock.exists(), "a live holder's lock must remain");
+    assert!(
+        held_lock.exists(),
+        "a lock a live process holds must remain whatever its metadata says"
+    );
+}
+
+/// `--remove-graph` unlinks a symlinked graph location instead of deleting
+/// through it, and refuses to walk through a symlinked `knowledge` ancestor.
+/// Files outside the Orbit root survive both.
+#[cfg(unix)]
+#[test]
+fn doctor_graph_cleanup_never_deletes_through_symlinks() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).expect("create repo");
+    init_git_repo(&repo);
+    run_orbit_success(&repo, &home, &["workspace", "init"], None);
+    let orbit_dir = repo.join(".orbit");
+
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside).expect("create outside");
+    let outside_marker = outside.join("keep.db");
+    fs::write(&outside_marker, b"keep").expect("write outside marker");
+    let graph_link = orbit_dir.join("graph");
+    std::os::unix::fs::symlink(&outside, &graph_link).expect("link graph outside the root");
+
+    run_orbit_json(&repo, &home, &["doctor", "--remove-graph", "--json"], None);
+    assert!(
+        outside_marker.is_file(),
+        "cleanup must not follow a graph symlink"
+    );
+    assert!(
+        fs::symlink_metadata(&graph_link).is_err(),
+        "the graph link itself is removed"
+    );
+
+    let external_graph = outside.join("graph");
+    fs::create_dir_all(&external_graph).expect("create external graph");
+    let external_graph_marker = external_graph.join("keep.db");
+    fs::write(&external_graph_marker, b"keep").expect("write external graph marker");
+    let knowledge_link = orbit_dir.join("knowledge");
+    if knowledge_link.exists() {
+        fs::remove_dir_all(&knowledge_link).expect("clear knowledge directory");
+    }
+    std::os::unix::fs::symlink(&outside, &knowledge_link).expect("link knowledge outside");
+
+    let refused = run_orbit_output(&repo, &home, &["doctor", "--remove-graph", "--json"], None);
+    assert!(
+        !refused.status.success(),
+        "a symlinked ancestor is refused: {}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    assert!(
+        external_graph_marker.is_file(),
+        "cleanup must not delete through a symlinked ancestor"
+    );
+    assert!(outside_marker.is_file());
+    assert!(
+        fs::symlink_metadata(&knowledge_link)
+            .expect("knowledge link")
+            .file_type()
+            .is_symlink(),
+        "the ancestor link itself stays"
+    );
+}
+
+/// Root-resolution precedence observed through `config show --json`: an
+/// explicit `--root` beats `ORBIT_ROOT`, which beats linked-worktree
+/// discovery, which beats walking up from a subdirectory. `--workspace`
+/// selects a registered checkout from outside any repository. An explicit
+/// root that is not an initialized workspace is refused, not adopted.
+#[test]
+fn root_resolution_precedence() {
+    struct Case<'a> {
+        name: &'a str,
+        cwd: &'a Path,
+        root_flag: Option<&'a Path>,
+        env_root: Option<&'a Path>,
+        workspace: Option<&'a str>,
+        /// `(shared_root, local_root)`, or `None` when resolution must fail.
+        expected: Option<(&'a Path, &'a Path)>,
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let base = fs::canonicalize(temp.path()).expect("canonical tempdir");
+    let home = base.join("home");
+    let main_repo = base.join("main");
+    let other_repo = base.join("other");
+    let linked = base.join("main-linked");
+    let outside = base.join("outside");
+    let uninitialized = base.join("uninitialized");
+    for dir in [&home, &main_repo, &other_repo, &outside, &uninitialized] {
+        fs::create_dir_all(dir).expect("create fixture directory");
+    }
+    init_git_repo(&main_repo);
+    init_git_repo(&other_repo);
+    run_git(
+        &main_repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "root-precedence",
+            linked.to_str().expect("utf8 worktree path"),
+        ],
+    );
+    run_orbit_success(
+        &main_repo,
+        &home,
+        &["workspace", "init", "--name", "main"],
+        None,
+    );
+    run_orbit_success(
+        &other_repo,
+        &home,
+        &["workspace", "init", "--name", "other"],
+        None,
+    );
+    let subdirectory = main_repo.join("src/nested");
+    fs::create_dir_all(&subdirectory).expect("create subdirectory");
+
+    let main_orbit = main_repo.join(".orbit");
+    let other_orbit = other_repo.join(".orbit");
+    let linked_orbit = linked.join(".orbit");
+    let cases = [
+        Case {
+            name: "--root beats ORBIT_ROOT and the linked worktree",
+            cwd: &linked,
+            root_flag: Some(&main_orbit),
+            env_root: Some(&other_orbit),
+            workspace: None,
+            expected: Some((&main_orbit, &main_orbit)),
+        },
+        Case {
+            name: "ORBIT_ROOT beats the linked worktree",
+            cwd: &linked,
+            root_flag: None,
+            env_root: Some(&other_orbit),
+            workspace: None,
+            expected: Some((&other_orbit, &other_orbit)),
+        },
+        Case {
+            name: "a linked worktree shares the main root and keeps its own local root",
+            cwd: &linked,
+            root_flag: None,
+            env_root: None,
+            workspace: None,
+            expected: Some((&main_orbit, &linked_orbit)),
+        },
+        Case {
+            name: "a subdirectory walks up to its checkout",
+            cwd: &subdirectory,
+            root_flag: None,
+            env_root: None,
+            workspace: None,
+            expected: Some((&main_orbit, &main_orbit)),
+        },
+        Case {
+            name: "--workspace selects a registered checkout from outside any repository",
+            cwd: &outside,
+            root_flag: None,
+            env_root: None,
+            workspace: Some("other"),
+            expected: Some((&other_orbit, &other_orbit)),
+        },
+        Case {
+            name: "--root must name an initialized workspace",
+            cwd: &main_repo,
+            root_flag: Some(&uninitialized),
+            env_root: None,
+            workspace: None,
+            expected: None,
+        },
+        Case {
+            name: "ORBIT_ROOT must name an initialized workspace",
+            cwd: &main_repo,
+            root_flag: None,
+            env_root: Some(&uninitialized),
+            workspace: None,
+            expected: None,
+        },
+    ];
+
+    for case in cases {
+        let mut args: Vec<String> = Vec::new();
+        if let Some(root) = case.root_flag {
+            args.extend(["--root".to_string(), root.to_string_lossy().into_owned()]);
+        }
+        if let Some(workspace) = case.workspace {
+            args.extend(["--workspace".to_string(), workspace.to_string()]);
+        }
+        args.extend(["config", "show", "--json"].map(String::from));
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let output = run_orbit_output(case.cwd, &home, &args, case.env_root);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        match case.expected {
+            Some((shared_root, local_root)) => {
+                assert!(
+                    output.status.success(),
+                    "{}: {stdout}\n{}",
+                    case.name,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let value: Value = serde_json::from_slice(&output.stdout).expect("config json");
+                assert_eq!(
+                    (
+                        string_field(&value, "shared_root"),
+                        string_field(&value, "local_root")
+                    ),
+                    (
+                        shared_root.to_string_lossy().as_ref(),
+                        local_root.to_string_lossy().as_ref()
+                    ),
+                    "{}",
+                    case.name
+                );
+            }
+            None => assert!(!output.status.success(), "{}: {stdout}", case.name),
+        }
+    }
+    assert!(
+        !linked_orbit.exists(),
+        "resolution must not materialize a linked-worktree .orbit directory"
+    );
+}
+
 /// ORB-10668: the operator path the tool surface could not serve — an ADR
 /// authored inside a job worktree, carried proposed -> accepted with `orbit adr`
 /// alone from that worktree, while the same command run from the hub still
@@ -1005,7 +1384,16 @@ fn string_field<'a>(value: &'a Value, field: &str) -> &'a str {
         .unwrap_or_else(|| panic!("expected string field `{field}` in {value}"))
 }
 
-fn run_orbit_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) {
+/// Upper bound on one `orbit` child, so a wedged command fails the test
+/// instead of hanging it.
+const ORBIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn orbit_command(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    orbit_root: Option<&Path>,
+) -> AssertCommand {
     let mut command = cargo_bin_cmd!("orbit");
     command
         .current_dir(cwd)
@@ -1015,32 +1403,96 @@ fn run_orbit_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<
         )
         .env("HOME", home)
         .env("USERPROFILE", home)
+        .timeout(ORBIT_COMMAND_TIMEOUT)
         .args(args);
     clear_inherited_authority_env(&mut command);
     set_orbit_root_env(&mut command, orbit_root);
-    command.assert().success();
+    command
+}
+
+fn run_orbit_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) {
+    orbit_command(cwd, home, args, orbit_root)
+        .assert()
+        .success();
 }
 
 fn run_orbit_json(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -> Value {
-    let mut command = cargo_bin_cmd!("orbit");
-    command
-        .current_dir(cwd)
-        .env(
-            "PATH",
-            stub_first_path(&plant_agent_cli_stub(home, "codex")),
-        )
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .args(args);
-    clear_inherited_authority_env(&mut command);
-    set_orbit_root_env(&mut command, orbit_root);
-    let assert = command.assert().success();
+    let assert = orbit_command(cwd, home, args, orbit_root)
+        .assert()
+        .success();
     serde_json::from_slice(&assert.get_output().stdout).expect("orbit json output")
 }
 
+/// Run `orbit` and return its output whatever the exit status, for cases
+/// that assert a refusal.
+fn run_orbit_output(
+    cwd: &Path,
+    home: &Path,
+    args: &[&str],
+    orbit_root: Option<&Path>,
+) -> std::process::Output {
+    orbit_command(cwd, home, args, orbit_root)
+        .output()
+        .expect("run orbit")
+}
+
+fn write_machine_identity(home: &Path) {
+    fs::create_dir_all(home.join(".orbit")).expect("create global root");
+    fs::write(
+        home.join(".orbit/config.toml"),
+        "[machine]\nid = \"hm_worktree_resolution\"\nname = \"worktree-resolution\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("write machine identity");
+}
+
+/// Every task-store partition under `partitions`, mapped to the task bundles
+/// (subdirectories) it holds.
+fn task_store_partitions(
+    partitions: &Path,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let directory_names = |dir: &Path| {
+        fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    directory_names(partitions)
+        .into_iter()
+        .map(|partition| {
+            let bundles = directory_names(&partitions.join(&partition));
+            (partition, bundles)
+        })
+        .collect()
+}
+
+/// PID of a child that has already exited and been reaped: a holder that is
+/// certainly dead.
+#[cfg(unix)]
+fn reaped_child_pid() -> u32 {
+    let mut child = StdCommand::new("true").spawn().expect("spawn child");
+    let pid = child.id();
+    child.wait().expect("reap child");
+    pid
+}
+
+/// Write the holder record an Orbit file lock carries.
+#[cfg(unix)]
+fn write_lock_holder(path: &Path, pid: u32, label: &str) {
+    fs::create_dir_all(path.parent().expect("lock parent")).expect("create lock parent");
+    let holder = serde_json::json!({
+        "pid": pid,
+        "acquired_at": "2026-10-03T00:00:00Z",
+        "label": label,
+    });
+    fs::write(path, holder.to_string()).expect("write lock holder");
+}
+
 /// Prevent ambient managed-run authority from changing child command
-/// behavior — or, worse, routing its writes (ORB-11300). Both runners below
-/// apply this before `set_orbit_root_env`, so an explicit fixture root still
+/// behavior — or, worse, routing its writes (ORB-11300). `orbit_command`
+/// applies this before `set_orbit_root_env`, so an explicit fixture root still
 /// wins.
 fn clear_inherited_authority_env(command: &mut AssertCommand) {
     test_env::clear_inherited_authority(|name| {
