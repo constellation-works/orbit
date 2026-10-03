@@ -47,6 +47,47 @@ fn blocked_pr_with_running_checks_and_no_required_review_is_pending() {
     assert!(matches!(classify_pr_state(&status), PrMergeState::Pending));
 }
 
+/// [ORB-13759] GraphQL reports "no review decision" as null and
+/// `gh pr view --json` as an empty string; both only permit waiting on checks
+/// that are in flight. An absent or unrecognized decision is not that answer.
+#[test]
+fn blocked_pr_review_decision_shapes_are_handled_deliberately() {
+    let running = json!([{"name": "linux", "status": "IN_PROGRESS", "conclusion": ""}]);
+    let settled = json!([{"name": "linux", "status": "COMPLETED", "conclusion": "SUCCESS"}]);
+    for decision in [Value::Null, json!(""), json!("APPROVED")] {
+        let status = blocked_state(running.clone(), decision.clone());
+        assert!(
+            matches!(classify_pr_state(&status), PrMergeState::Pending),
+            "{decision} with running checks waits"
+        );
+        let status = blocked_state(settled.clone(), decision.clone());
+        assert!(
+            matches!(classify_pr_state(&status), PrMergeState::Blocked(_)),
+            "{decision} with settled checks is a real block"
+        );
+    }
+
+    let mut absent = blocked_state(running.clone(), Value::Null);
+    absent
+        .as_object_mut()
+        .expect("object")
+        .remove("reviewDecision");
+    for status in [
+        absent,
+        blocked_state(running.clone(), json!(" ")),
+        blocked_state(running.clone(), json!("DISMISSED")),
+        blocked_state(running, json!(false)),
+    ] {
+        let PrMergeState::Blocked(reason) = classify_pr_state(&status) else {
+            panic!("an unavailable review decision must refuse: {status}");
+        };
+        assert!(
+            reason.contains("review decision is unavailable"),
+            "{reason}"
+        );
+    }
+}
+
 #[test]
 fn blocked_pr_names_a_failed_check_even_when_another_check_is_running() {
     let status = blocked_state(
