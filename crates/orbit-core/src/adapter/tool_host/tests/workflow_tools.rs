@@ -1413,3 +1413,53 @@ fn mcp_run_list_keeps_per_run_recovery_attribution_with_uneven_histories() {
             .all(|item| item["run_id"] == json!(busy_id))
     );
 }
+
+/// [ORB-13744] The public delivery read is judged on its own inputs, not on
+/// operator authority: an agent session reaches the domain answer, while the
+/// run view it would otherwise need stays denied.
+#[test]
+fn an_agent_session_reaches_the_delivery_read_but_not_the_run_view() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .expect("insert run");
+    let agent = || ToolContext {
+        session_context: ToolSessionContext {
+            effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+            ..ToolSessionContext::default()
+        },
+        ..ToolContext::default()
+    };
+
+    let unknown_task = runtime.run_tool_with_context_and_role(
+        "orbit.workflow.run.delivery",
+        json!({"run_id": run.run_id, "task_id": "TST-00404"}),
+        Role::Admin,
+        agent(),
+    );
+    assert!(
+        matches!(unknown_task, Err(OrbitError::NotFound { .. })),
+        "{unknown_task:?}"
+    );
+
+    let missing_task = runtime.run_tool_with_context_and_role(
+        "orbit.workflow.run.delivery",
+        json!({"run_id": run.run_id}),
+        Role::Admin,
+        agent(),
+    );
+    assert!(
+        matches!(missing_task, Err(OrbitError::InvalidInput(_))),
+        "{missing_task:?}"
+    );
+
+    let run_view = runtime.run_tool_with_context_and_role(
+        "orbit.workflow.run.show",
+        json!({"id": run.run_id}),
+        Role::Admin,
+        agent(),
+    );
+    capability_denial(run_view);
+}

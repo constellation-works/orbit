@@ -77,6 +77,9 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         // `orbit.command.exec` is Execute [ORB-11354].
         "orbit_agent_invoke"
         | "orbit_command_exec"
+        // [ORB-13744] Delivery evidence is the run's own checkpoint, held
+        // by the host that executed it, like the run view it narrows.
+        | "orbit_workflow_run_delivery"
         | "orbit_workflow_run_list"
         | "orbit_workflow_run_show"
         | "orbit_workflow_run_resume"

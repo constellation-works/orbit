@@ -661,6 +661,191 @@ fn mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session() {
     assert!(!marker.exists(), "denied command reached domain execution");
 }
 
+/// Index of `step_id` in a shipped job, read from the job asset itself so the
+/// fixture checkpoints the step the host would.
+fn shipped_step_index(job_id: &str, step_id: &str) -> u32 {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../orbit-core/assets/jobs")
+        .join(format!("{job_id}.yaml"));
+    let job: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).expect("read shipped job"))
+            .expect("parse shipped job");
+    job["spec"]["steps"]
+        .as_sequence()
+        .expect("job steps")
+        .iter()
+        .position(|step| step["id"].as_str() == Some(step_id))
+        .and_then(|index| u32::try_from(index).ok())
+        .unwrap_or_else(|| panic!("{job_id} has step {step_id}"))
+}
+
+/// [ORB-13744] An ordinary, non-operator MCP session reads the bounded delivery
+/// observation of a PR run — host commit and merge checkpoints only — while
+/// the full run view stays operator-only. The call is audited, and nothing the
+/// run was submitted with reaches the wire.
+#[test]
+fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
+    const SECRET: &str = "sk-live-delivery-roundtrip-must-not-echo";
+    const BASE: &str = "1111111111111111111111111111111111111111";
+    const HEAD: &str = "2222222222222222222222222222222222222222";
+    const LANDED: &str = "3333333333333333333333333333333333333333";
+    const RUN_ID: &str = "jrun-20261003-0000-dl";
+
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Deliver over MCP",
+            "description": "Observed through the public delivery read.",
+            "complexity": "low",
+            "model": "codex",
+        }),
+    );
+    let task_id = task["id"].as_str().expect("task id").to_string();
+
+    // The run row and its checkpoints, written against the fixture's own
+    // disposable roots exactly as the host's pipeline worker leaves them.
+    let runtime = orbit_core::OrbitRuntime::from_roots(
+        &workspace.home.join(".orbit"),
+        &workspace.work.join(".orbit"),
+    )
+    .expect("fixture runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace identity");
+    Connection::open(workspace.home.join(".orbit/orbit.db"))
+        .expect("open fixture store")
+        .execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                 scheduled_at, started_at, finished_at, duration_ms, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'success', ?3,
+                 '2026-10-03T01:00:00+00:00', '2026-10-03T01:00:01+00:00',
+                 '2026-10-03T01:30:00+00:00', 1799000, '2026-10-03T01:00:00+00:00')",
+            rusqlite::params![
+                RUN_ID,
+                workspace_id,
+                json!({ "task_ids": [task_id], "prompt": SECRET }).to_string(),
+            ],
+        )
+        .expect("seed delivery run");
+    let mut state = orbit_types::workflow::PipelineState::new(
+        RUN_ID.to_string(),
+        "task_pr_pipeline".to_string(),
+        json!({}),
+    );
+    for (step_id, output) in [
+        (
+            "commit",
+            json!({
+                "phase": "commit", "decision": "performed", "committed": true,
+                "commit_sha": HEAD, "base_sha": BASE, "job_run_id": RUN_ID,
+                "task_id": task_id,
+            }),
+        ),
+        (
+            "complete_pr",
+            json!({
+                "phase": "complete",
+                "merge": {
+                    "merged": true, "pr_number": "4242", "landed_commit": LANDED,
+                    "delivery_evidence": { "token": SECRET },
+                },
+            }),
+        ),
+    ] {
+        let index = shipped_step_index("task_pr_pipeline", step_id);
+        state.record_step(
+            index,
+            orbit_types::workflow::JobRunState::Success,
+            Some(output.clone()),
+            None,
+        );
+        state.record_pipeline_output(step_id, output);
+    }
+    runtime
+        .write_run_state(RUN_ID, &state)
+        .expect("write run checkpoints");
+
+    let observed = client.call_tool_ok(
+        "orbit_workflow_run_delivery",
+        json!({ "run_id": RUN_ID, "task_id": task_id }),
+    );
+    assert_eq!(observed["delivery_status"], "landed", "{observed}");
+    assert_eq!(observed["workspace_id"], json!(workspace_id));
+    assert_eq!(observed["commit"]["status"], "committed");
+    assert_eq!(observed["commit"]["base_sha"], BASE);
+    assert_eq!(observed["commit"]["head_sha"], HEAD);
+    assert_eq!(observed["commit"]["provenance"]["activity"], "git_commit");
+    assert_eq!(observed["landing"]["status"], "merged");
+    assert_eq!(observed["landing"]["method"], "pull_request");
+    assert_eq!(observed["landing"]["landed_commit"], LANDED);
+    assert_eq!(observed["landing"]["pr_number"], 4242);
+    assert_eq!(
+        observed
+            .as_object()
+            .expect("observation object")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "schema_version",
+            "workspace_id",
+            "repository",
+            "task_id",
+            "run_id",
+            "job_id",
+            "run_state",
+            "run_finished_at",
+            "delivery_status",
+            "commit",
+            "landing",
+        ]),
+        "the observation is a closed, bounded shape"
+    );
+    assert!(
+        !observed.to_string().contains(SECRET),
+        "run input or step output leaked: {observed}"
+    );
+
+    // A task the run was not submitted with is refused, not answered.
+    let foreign = client.call_tool_err(
+        "orbit_workflow_run_delivery",
+        json!({ "run_id": RUN_ID, "task_id": "TST-99999" }),
+    );
+    assert_ne!(foreign["code"], "capability_denied", "{foreign}");
+
+    // The full run view is still the operator's.
+    let denied = client.call_tool_err("orbit_workflow_run_show", json!({ "id": RUN_ID }));
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+    drop(client);
+
+    let output = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "audit",
+            "list",
+            "--tool",
+            "orbit.workflow.run.delivery",
+            "--json",
+        ]),
+    );
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("parse audit rows");
+    let statuses = rows
+        .as_array()
+        .expect("audit row array")
+        .iter()
+        .map(|row| row["status"].as_str().expect("audit status"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == "success")
+            .count(),
+        1,
+        "the answered read is audited once: {rows}"
+    );
+    assert_eq!(statuses.len(), 2, "the refused read is audited too: {rows}");
+    assert!(!rows.to_string().contains(SECRET), "audit leaked run input");
+}
+
 /// A replica checkout is an execution binding, not the control plane. Over the
 /// real v1 MCP transport, a coordination write is refused with the named
 /// catalog-role code — not `invalid_input`, which would make a refusal

@@ -123,6 +123,14 @@ pub fn register(registry: &mut ToolRegistry) {
         workflow::OrbitWorkflowRunShowTool,
         McpToolScope::WorkspaceRequired,
     );
+    // [ORB-13744] The narrow public delivery read beside the operator-only
+    // run view. Deliberately ungoverned, like `orbit.task.show`: it answers
+    // only typed host evidence for a task of this workspace, and a plugin
+    // still needs it in `permissions.orbit_tools`.
+    registry.register_mcp(
+        workflow::OrbitWorkflowRunDeliveryTool,
+        McpToolScope::WorkspaceRequired,
+    );
     registry.register_mcp(
         workflow::OrbitWorkflowRunListTool,
         McpToolScope::WorkspaceRequired,

@@ -38,6 +38,7 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.task.pull", McpToolClass::ControlPlane),
     ("orbit.task.show", McpToolClass::ControlPlane),
     ("orbit.task.update", McpToolClass::ControlPlane),
+    ("orbit.workflow.run.delivery", McpToolClass::Execute),
     ("orbit.workflow.run.list", McpToolClass::Execute),
     ("orbit.workflow.run.resume", McpToolClass::Execute),
     ("orbit.workflow.run.show", McpToolClass::Execute),

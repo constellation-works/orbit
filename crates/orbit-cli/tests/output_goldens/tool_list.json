@@ -1382,6 +1382,28 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Report what one task delivery run committed and landed for one task of this workspace, from the host's own commit and merge step records. Returns typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only; missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `run.show`.",
+    "enabled": true,
+    "name": "orbit.workflow.run.delivery",
+    "parameters": [
+      {
+        "description": "Job run ID that delivered the task.",
+        "name": "run_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Task the run was submitted with, in this workspace.",
+        "name": "task_id",
+        "param_type": "string",
+        "required": true
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "List durable workflow runs newest-first with optional bounded filters.",
     "enabled": true,
     "name": "orbit.workflow.run.list",

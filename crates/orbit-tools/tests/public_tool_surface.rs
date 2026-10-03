@@ -217,6 +217,7 @@ fn workflow_critical_tools_remain_registered() {
         "orbit.search",
         "orbit.workflow.ship",
         "orbit.workflow.run.show",
+        "orbit.workflow.run.delivery",
         "orbit.workflow.run.list",
         "orbit.workflow.run.resume",
         "orbit.workflow.run.workers",

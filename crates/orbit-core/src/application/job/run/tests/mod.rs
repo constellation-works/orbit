@@ -6,6 +6,7 @@ mod actions;
 mod admissions_stop;
 mod cancellation_race;
 mod conflict;
+mod delivery;
 mod owner;
 mod projection;
 mod query;

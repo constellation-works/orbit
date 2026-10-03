@@ -1675,6 +1675,36 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
+    "description": "Report what one task delivery run committed and landed for one task of this workspace, from the host's own commit and merge step records. Returns typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only; missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `run.show`.",
+    "inputSchema": {
+      "additionalProperties": true,
+      "properties": {
+        "run_id": {
+          "description": "Job run ID that delivered the task.",
+          "type": "string"
+        },
+        "task_id": {
+          "description": "Task the run was submitted with, in this workspace.",
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_workflow_run_delivery"
+  },
+  {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
     "description": "List durable workflow runs newest-first with optional bounded filters.",
     "inputSchema": {
       "additionalProperties": true,
