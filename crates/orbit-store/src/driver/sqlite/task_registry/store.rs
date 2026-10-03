@@ -83,6 +83,14 @@ impl TaskRegistryStore {
         })
     }
 
+    pub(crate) fn is_read_only(&self) -> Result<bool, OrbitError> {
+        self.conn
+            .lock()
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+            .is_readonly(rusqlite::DatabaseName::Main)
+            .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
     /// Open an existing registry without creating files, applying schema, or
     /// taking a writer connection. Used by a differing-generation read-only join.
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {

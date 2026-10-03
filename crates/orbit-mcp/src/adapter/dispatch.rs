@@ -275,6 +275,29 @@ impl OrbitToolServer {
             call_context.workspace = Some(selector);
         }
 
+        // The host resolves a selector into its checkout (and a federated mux
+        // may translate it again). Return the exact accepted client route token,
+        // never the destination's local path or a guessed workspace name.
+        let desktop_selector = matches!(
+            canonical.as_str(),
+            "orbit.desktop.read" | "orbit.desktop.task.snapshot" | "orbit.desktop.task.write"
+        )
+        .then(|| {
+            input
+                .get("workspace")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
+        if canonical.starts_with("orbit.desktop.")
+            && desktop_selector
+                .as_deref()
+                .is_none_or(|selector| selector.trim().is_empty())
+        {
+            return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
+                "tool '{canonical}' requires an explicit workspace selector from discovery"
+            ))));
+        }
         let host = Arc::clone(&self.host);
         let execution_name = canonical.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -283,7 +306,12 @@ impl OrbitToolServer {
         .await;
 
         match result {
-            Ok(Ok(value)) => Ok(mcp_tool_call_result(value)),
+            Ok(Ok(mut value)) => {
+                if let (Some(selector), Some(object)) = (desktop_selector, value.as_object_mut()) {
+                    object.insert("workspace".into(), Value::String(selector));
+                }
+                Ok(mcp_tool_call_result(value))
+            }
             Ok(Err(error)) => Ok(tool_error_result(&error)),
             Err(join_error) => {
                 let error = OrbitError::Execution(format!(
@@ -310,8 +338,17 @@ impl OrbitToolServer {
             ));
         }
         let input = Value::Object(request.arguments.unwrap_or_default());
-        let Some((workspace, id)) = presentation::selection(request.name.as_ref(), &input)? else {
+        let Some(selection) = presentation::selection(request.name.as_ref(), &input)? else {
             return Ok(presentation::empty_panel());
+        };
+        let presentation::Selection {
+            workspace,
+            id,
+            kind,
+        } = selection;
+        let Some(id) = id else {
+            // The UI must rediscover this selector before issuing any data read.
+            return Ok(serde_json::json!({"schema_version":1,"workspace":workspace,"task":null}));
         };
         let host = Arc::clone(&self.host);
         let context = self.context_for_tool_call();
@@ -319,7 +356,24 @@ impl OrbitToolServer {
         let selector = workspace.clone();
         // The explicit filter reaches the same host operation, audit and policy
         // checks as an ordinary data call. Client metadata never enters context.
+        let run_selection = kind == "run";
+        if run_selection
+            && (self
+                .host
+                .hidden_tool_names(&self.session_context())
+                .contains("orbit.desktop.read")
+                || !definitions
+                    .iter()
+                    .any(|definition| definition.schema.name == "orbit.desktop.read"))
+        {
+            return Err(OrbitError::InvalidInput(
+                "run presentation unavailable on this host".into(),
+            ));
+        }
         let task = tokio::task::spawn_blocking(move || {
+            if run_selection {
+                return host.call_tool("orbit.desktop.read", serde_json::json!({"workspace":selector,"scope":"run","id":task_key,"limit":25}), context);
+            }
             host.call_tool(
                 "orbit.task.show",
                 serde_json::json!({
@@ -330,7 +384,23 @@ impl OrbitToolServer {
         })
         .await
         .map_err(|error| OrbitError::Execution(format!("task read worker failed: {error}")))??;
-        presentation::panel(workspace, &id, task)
+        if run_selection {
+            if task["run"]["id"]
+                .as_str()
+                .or_else(|| task["run"]["run_id"].as_str())
+                != Some(id.as_str())
+            {
+                return Err(OrbitError::InvalidInput(
+                    "incompatible run read response".into(),
+                ));
+            }
+            let mut result = task;
+            result["workspace"] = Value::String(workspace);
+            result["kind"] = Value::String("run".into());
+            Ok(result)
+        } else {
+            presentation::panel(workspace, &id, task)
+        }
     }
 }
 
@@ -493,14 +563,16 @@ impl ServerHandler for OrbitToolServer {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
-        if request.uri != presentation::RESOURCE_URI {
+        if request.uri != presentation::RESOURCE_URI
+            && request.uri != presentation::LEGACY_RESOURCE_URI
+        {
             return Err(McpError::resource_not_found(
                 "unknown UI resource",
                 Some(serde_json::json!({ "code": "resource_not_found" })),
             ));
         }
         Ok(ReadResourceResult::new(vec![
-            presentation::resource_content(),
+            presentation::resource_content(&request.uri),
         ]))
     }
 

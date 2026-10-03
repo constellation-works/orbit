@@ -121,10 +121,20 @@ impl OrbitRuntime {
 
     pub(crate) fn add_task_admitted(
         &self,
+        params: TaskAddParams,
+        agent: Option<String>,
+        model: Option<String>,
+        action_key: Option<&str>,
+    ) -> Result<Task, OrbitError> {
+        self.add_task_admitted_guarded(params, agent, model, action_key, None)
+    }
+    pub(crate) fn add_task_admitted_guarded(
+        &self,
         mut params: TaskAddParams,
         agent: Option<String>,
         model: Option<String>,
         action_key: Option<&str>,
+        digest: Option<&str>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.validate_required_tools(&params.required_tools)?;
@@ -196,7 +206,7 @@ impl OrbitRuntime {
         )?;
 
         let task = self.with_mutation(|| {
-            let task = self.stores().task_records().create_with_key(
+            let (task, replayed) = self.stores().task_records().create_guarded(
                 StoreTaskCreateParams {
                     actor: create_label.clone(),
                     parent_id: params.parent_id.clone(),
@@ -225,19 +235,33 @@ impl OrbitRuntime {
                     comments: comments.clone(),
                 },
                 action_key,
+                digest,
             )?;
             // The create contract carries no history, so the provenance entry
             // is a second write inside the same mutation as the insert.
             let task = match &crew_assignment {
-                Some(assignment) => self.stores().task_records().update(
-                    &task.id,
-                    StoreTaskUpdateParams {
-                        actor: SYSTEM_ACTOR_LABEL.to_string(),
-                        append_history: vec![crew_assigned_history(assignment)],
-                        ..Default::default()
-                    },
-                )?,
-                None => task,
+                Some(assignment) if !replayed => self
+                    .stores()
+                    .task_records()
+                    .update(
+                        &task.id,
+                        StoreTaskUpdateParams {
+                            actor: SYSTEM_ACTOR_LABEL.to_string(),
+                            append_history: vec![crew_assigned_history(assignment)],
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|error| {
+                        if digest.is_some() {
+                            OrbitError::DesktopWriteAccepted {
+                                task_id: task.id.clone(),
+                                reason: format!("creation provenance refresh failed: {error}"),
+                            }
+                        } else {
+                            error
+                        }
+                    })?,
+                _ => task,
             };
             Ok((
                 task.clone(),

@@ -407,6 +407,156 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Read a bounded desktop view in one explicit workspace. Task search matches public key/title only; history search uses orbit.search. Run reads require the same operator authority as workflow run observation. This never reconciles or starts execution.",
+    "enabled": true,
+    "name": "orbit.desktop.read",
+    "parameters": [
+      {
+        "description": "tasks, task, runs or run",
+        "name": "scope",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Public task key or run ID for detail scope",
+        "name": "id",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Zero-based list offset; default 0",
+        "name": "offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Page size, 1 through 50; default 25",
+        "name": "limit",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Case-insensitive public task key/title substring",
+        "name": "search",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Task status or run state filter",
+        "name": "status",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Task priority filter",
+        "name": "priority",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Comment page offset",
+        "name": "comments_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Task history page offset",
+        "name": "history_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Artifact metadata page offset",
+        "name": "artifacts_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Run log record offset",
+        "name": "log_offset",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Read a versioned task snapshot with opaque revision and server-computed available actions. A snapshot grants no authority.",
+    "enabled": true,
+    "name": "orbit.desktop.task.snapshot",
+    "parameters": [
+      {
+        "description": "Public task key",
+        "name": "id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Apply one revision-guarded, retry-safe proposed-task create, field edit, comment or evidence-bound review. Reuse request_id with identical payload to reconcile a lost response. Changes requested stays in review. Completion requires existing trusted operator authority; it never merges, publishes or dispatches work.",
+    "enabled": true,
+    "name": "orbit.desktop.task.write",
+    "parameters": [
+      {
+        "description": "Unique request identity; retain until outcome is reconciled",
+        "name": "request_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Typed create, edit, comment or review operation",
+        "name": "operation",
+        "param_type": "object",
+        "required": true
+      },
+      {
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
     "enabled": true,
     "name": "orbit.drain.claim.bind",

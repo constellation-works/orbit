@@ -3,6 +3,7 @@
 mod add;
 mod contention;
 mod context_repair;
+mod desktop;
 mod lifecycle;
 mod lint;
 mod params;

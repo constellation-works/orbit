@@ -565,3 +565,26 @@ pub enum LocalPullMutation {
     /// settles locally with the refusal, and its slot is released.
     SettleObsolete(String),
 }
+
+/// Desktop-only allowlisted mutation, committed with a payload-bound request receipt.
+#[derive(Debug, Clone)]
+pub struct DesktopTaskMutationParams {
+    pub actor: String,
+    pub request_id: String,
+    pub payload_digest: String,
+    pub expected_revision: String,
+    pub fields: orbit_types::desktop::DesktopTaskFields,
+    pub comment: Option<String>,
+    pub status: Option<TaskStatus>,
+}
+
+/// One coherent desktop task read under the ordinary shared bundle read lock.
+#[derive(Debug, Clone)]
+pub struct DesktopTaskRead {
+    pub write_disabled_reason: Option<String>,
+    pub task: orbit_types::task::Task,
+    pub revision: String,
+    pub comments: Vec<TaskComment>,
+    pub history: Vec<TaskHistoryEntry>,
+    pub artifacts: Vec<orbit_types::task::ArtifactManifestFileV2>,
+}

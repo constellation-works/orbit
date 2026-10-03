@@ -3,6 +3,7 @@
 mod add;
 pub(crate) mod contention;
 mod context_repair;
+mod desktop;
 mod helpers;
 mod lifecycle;
 mod lint;

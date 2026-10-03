@@ -11,13 +11,41 @@ impl TaskV2Store {
         params: TaskCreateParams,
         key: Option<&str>,
     ) -> Result<Task, OrbitError> {
-        self.in_boundary(|| self.create_task_locked(params, key))
+        self.in_boundary(|| self.create_task_locked(params, key, None))
+    }
+
+    pub(crate) fn lookup_desktop_creation(
+        &self,
+        key: &str,
+        digest: &str,
+    ) -> Result<Option<Task>, OrbitError> {
+        self.in_boundary(
+            || match self.registry.task_action(&self.workspace_id, key, digest)? {
+                Some(id) => self.get_task(&id),
+                None => Ok(None),
+            },
+        )
+    }
+    pub(crate) fn create_desktop_task(
+        &self,
+        params: TaskCreateParams,
+        key: &str,
+        digest: &str,
+    ) -> Result<(Task, bool), OrbitError> {
+        self.in_boundary(|| {
+            if let Some(task) = self.lookup_desktop_creation(key, digest)? {
+                return Ok((task, true));
+            }
+            self.create_task_locked(params, Some(key), Some(digest))
+                .map(|task| (task, false))
+        })
     }
 
     fn create_task_locked(
         &self,
         params: TaskCreateParams,
         key: Option<&str>,
+        digest: Option<&str>,
     ) -> Result<Task, OrbitError> {
         if params.title.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -40,8 +68,11 @@ impl TaskV2Store {
         let id = if let Some(key) = key {
             let bytes =
                 serde_json::to_vec(&params).map_err(|e| OrbitError::Store(e.to_string()))?;
-            self.registry
-                .reserve_task_action(&self.workspace_id, key, &sha256_hex(&bytes))?
+            self.registry.reserve_task_action(
+                &self.workspace_id,
+                key,
+                digest.unwrap_or(&sha256_hex(&bytes)),
+            )?
         } else {
             self.registry.allocate_task_id(&self.workspace_id)?
         };

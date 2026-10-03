@@ -42,7 +42,10 @@ impl McpToolClass {
 /// `tool_not_on_this_host`, which precedes `capability_refused`.
 pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
     match mcp_advertised_tool_name(tool_name).as_str() {
-        "orbit_task_add"
+        "orbit_desktop_read"
+        | "orbit_desktop_task_snapshot"
+        | "orbit_desktop_task_write"
+        | "orbit_task_add"
         | "orbit_task_update"
         | "orbit_task_list"
         | "orbit_task_show"

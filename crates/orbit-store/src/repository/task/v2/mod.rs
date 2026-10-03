@@ -41,6 +41,7 @@ mod acceptance;
 mod artifact_paths;
 mod artifacts;
 mod crud;
+mod desktop;
 mod envelope_cache;
 mod index;
 mod listing;

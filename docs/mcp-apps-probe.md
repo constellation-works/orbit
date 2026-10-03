@@ -1,164 +1,212 @@
-# MCP Apps compatibility prototype
+# Orbit desktop control-center validation
 
-This candidate serves `ui://orbit/task-panel/v1/index.html` as
-`text/html;profile=mcp-app`. `orbit_ui_open` advertises a global entrypoint;
-`orbit_ui_inspect` advertises a thread entrypoint. Both are read-only. An empty
-open shows the selection form; a selected open or inspect requires both an
-explicit workspace selector and public task key. The panel refreshes through
-`orbit_task_show`, never through dashboard HTTP. Existing data tools have no
-widget metadata and retain their schemas and dispatch behavior.
+The candidate adds Tasks, Runs and Review views to the existing Orbit plugin.
+It serves `ui://orbit/control-center/v1/index.html` as
+`text/html;profile=mcp-app`; the old `ui://orbit/task-panel/v1/index.html` remains
+readable so an already-open panel can reload. `orbit_ui_open` advertises a
+global entrypoint and `orbit_ui_inspect` a thread entrypoint. Opening either
+only reads. Existing data tools have no automatic widget metadata.
 
-The adapter owns resource discovery, a static bundle, and presentation
-metadata. It requires the host to expose the annotated read-only task reader,
-then delegates selected reads to that host's `orbit.task.show`, including the
-explicit workspace filter and a six-field projection. Core still owns policy,
-validation, audit and workspace resolution (STD-02 §R2, STD-05 §R1). No shared
-contract or dependency edge was added. The manifest requires rmcp 2.1.0; the
-current lockfile resolves 2.2.0 and supplies the necessary hooks.
+**Actual desktop validation is NOT RUN and is deferred.**
+Daniel archived ORB-13715; its evidence and handoff remain available without
+reactivating that task.
+The user authorized implementing the product while that host check is pending.
+A passing protocol or DOM test does not prove the installed desktop build can
+load a local stdio UI plugin, render the sidebar/thread panel or deliver model
+context. Record native refusal as UNSUPPORTED only after observing it; lack of
+access is NOT RUN. No live installation, public server or release is part of
+this probe.
 
-The checked-in panel sources follow the dashboard asset layout under
-`crates/orbit-mcp/assets/task-panel/`: `index.html`, `css/task-panel.css` and
-`js/task-panel.js`. `crates/orbit-mcp/src/adapter/presentation.rs` embeds them
-and inlines the stylesheet and script into the single resource. There is no
-frontend build step or separate asset route; the JavaScript behavior harness
-remains in `crates/orbit-mcp/src/adapter/tests/task-panel.mjs`.
+## Application and resource contract
 
-Task text is displayed with `textContent`, including Markdown as plain text.
-The bundle has no external assets, fetches, frames, artifact execution or
-navigation. Both resource CSP metadata and a restrictive HTML CSP limit it.
-Resource reads accept only the exact versioned URI, without query parameters,
-path normalization or remote forwarding. Titles, description and criteria are
-bounded in the display; a context reference includes only identity, observed
-read time, returned task update time and a bounded title. Update time is an
-observation, not an atomic revision token. The resource URI must change for a
-breaking bundle change.
+The adapter embeds `crates/orbit-mcp/assets/task-panel/{index.html,css/task-panel.css,js/task-panel.js}`
+into one static resource. The frontend uses plain JavaScript with JSDoc, matching
+the existing dashboard asset workflow without a TypeScript build dependency.
+No frontend build or separate asset endpoint is needed. The bundle uses text sinks for task content, restricts external assets,
+connections and frames, and never interpolates task text into executable HTML.
+Resource lookup accepts only the two exact versioned URIs. It does not resolve
+paths, query strings or arbitrary artifact contents.
 
-The bridge negotiates MCP Apps `2026-01-26`, then requires `serverTools`.
-Unsupported initialization disables reads. `updateModelContext` is detected
-before the explicit **Send context to chat** action; absent or refused support
-leaves a selectable copy reference. It never sends context automatically.
-Failed reads, changed selections, mismatched responses, timeouts and teardown
-invalidate context; late responses cannot retarget a selection. Last displayed
-text remains visibly stale on failure. Context remains untrusted discussion
-material: the consumer must reread state before any action. No actor claim,
-UI metadata or click supplies operator capability. This prototype has no task
-writes, dispatch buttons or completion controls.
+The panel discovers workspaces and requires an explicit returned selector.
+The selected host/workspace/entity stays visible. `orbit_desktop_read` provides
+bounded task lists/details and run observations; `orbit_desktop_task_snapshot`
+returns an opaque revision plus server-computed actions. The separate
+`orbit_desktop_task_write` application operation supports proposed-task creation,
+allowed field edits, comments and evidence-bound review. Core retains validation,
+workspace routing, audit, lifecycle checks and capability enforcement. Opening a
+widget, a model-context message or a click grants no operator authority.
+
+Task list search is case-insensitive public task key/title search, applied
+before pagination. History search remains `orbit.search`. Pages contain totals,
+offset/limit, explicit truncation and a next offset. Task details independently
+page comments, history and artifact metadata; they do not return artifact file
+contents. Runs use observed state without reconciliation, keep provider input
+and response payloads out of the projection, and expose audited log excerpts.
+Run reads retain the canonical operator run-read gate. Usage is explicitly
+unavailable rather than zero when no usable measurement exists.
+
+Proven precommit validation failures return `mutation_applied: false` with a
+`refusal` object, allowing the preserved draft to be corrected. Generic server
+errors do not prove that a write failed; retain the request for reconciliation.
+A confirmed commit whose refresh fails returns `accepted: true`, `task_id` and
+`refresh_error`; the panel keeps reporting success and reconciles the same request
+until a fresh snapshot is available.
+Stale task revisions return a typed `revision_conflict` with a fresh snapshot;
+they do not overwrite the task or report a completed write. Review records criterion outcomes, current evidence references, task revision
+and current run/PR-head binding where applicable. Changes requested stays in
+review. Record-only acceptance also stays in review. Completion requires fresh
+eligible state and existing trusted operator authority. It never merges,
+publishes or dispatches. Missing/stale evidence or unavailable PR-head validation
+refuses the affected action; the UI preserves the draft for reconciliation.
+Existing gate certificates and open findings are projected from canonical review
+evidence when available. A manual desktop verdict is a separate recorded review;
+it does not rewrite a workflow certificate or bypass PR merge checks.
+
+The bridge negotiates MCP Apps `2026-01-26` and requires `serverTools`. The
+explicit **Send context to chat** action uses `updateModelContext` when supported;
+otherwise it offers a bounded copy reference. References contain destination,
+entity identity, observed revision/time and a short title, not full logs or
+history. They are untrusted discussion context: reread before acting. Selection
+changes, failed reads, timeout and teardown invalidate context. Late responses
+cannot retarget another selection. The script harness exercises these cases;
+actual model-context delivery still requires the desktop host.
+
+## Retry receipts and their lifetime
+
+Retain the exact request ID and payload when reconciling a timed-out write.
+A matching retry returns `replayed: true` and a fresh snapshot; it does not
+repeat the mutation. Reusing an ID with changed content is refused. Task edit,
+comment and review IDs are scoped to that task. Creation IDs are scoped to the
+workspace and reserve a stable task identity.
+
+Creation receipts live in the allocation registry's `task_action_keys` mapping;
+other receipts are `desktop_mutation` history records committed with the task
+bundle. They survive process restart and have **no TTL**. The guarantee depends
+on retaining that registry and task history: destructive store reset or deletion
+of a task's history removes the corresponding evidence. This desktop surface
+has no deletion operation. Receipts are not a cross-host or cross-workspace
+request cache, and a fresh request ID is a new requested operation. Revision
+checks include body documents, comments, history and artifact metadata, so a
+concurrent comment/evidence change can invalidate an editor's older revision.
 
 ## Automated reproduction
 
-Use the run's existing build directory. Before allocating a new build directory
-or checkout, run `df --output=pcent <parent-directory>` and stop at 80% usage.
-No installation, release or global configuration changes are needed:
+Use an existing candidate build directory. Before allocating any new build
+directory or checkout, run `df --output=pcent <parent-directory>` and stop at
+80% usage. The probe also checks disk usage before creating its fixture.
 
 ```sh
+./scripts/build-budget.py -- cargo test -p orbit-core -p orbit-store desktop
 ./scripts/build-budget.py -- cargo test -p orbit-mcp --test mcp_wire_roundtrip
-./scripts/build-budget.py -- cargo test -p orbit-cli --test mcp_roundtrip mcp_apps_
+./scripts/build-budget.py -- cargo test -p orbit-cli --test mcp_roundtrip desktop
 node --test crates/orbit-mcp/src/adapter/tests/task-panel.mjs
-make ci-fast
-make ci-lint
-make goldens
 python3 scripts/probe-mcp-apps.py --binary target/debug/orbit
 ORBIT_PANEL_RESOURCE=.orbit/tmp/mcp-apps-probe/task-panel.html node --test crates/orbit-mcp/src/adapter/tests/task-panel.mjs
 ```
 
-The wire fixtures run the real MCP server and the production stdio dispatcher
-against isolated state. The JavaScript fixture executes the shipped script in
-a deterministic host/DOM harness, proving text sinks, bridge calls, freshness
-and refusal behavior. It does not exercise a browser engine or desktop shell.
-Node is needed for this explicit bridge check; it is not a Rust runtime dependency.
-The probe requires Python 3.9+, Git and an already-built candidate binary.
-It uses a cleared child environment with a disposable HOME, verifies checkout
-routing before task creation, captures JSON-RPC, and stages a minimal
-`orbit-probe` package whose launcher addresses that exact fixture and binary.
-It never installs that package. A failing probe exits nonzero; inspect its
-transcript rather than accepting partially written evidence. Repeating it
-requires a fresh `--output .orbit/tmp/<unique-name>` directory. Keep probe data
-until the native handoff is complete.
+Use the actual centrally built candidate path with `--binary`; the example
+assumes the existing default target directory. The probe needs Python 3.9+, Git
+and that already-built binary. It creates a private HOME and repository beneath
+this checkout's `.orbit/tmp`, clears inherited managed-run authority and checks
+checkout routing before writing any fixture task. It never changes the normal
+HOME, installs a plugin, invokes a provider, starts a workflow or changes release
+versions. A local no-op provider stub satisfies disposable initialization only.
 
-## Native desktop handoff
+The production stdio probe checks:
 
-**Native checks are NOT RUN on the Linux execution host.** An automated PASS
-means only the named protocol or JavaScript check passed. The main-build gate
-remains `PENDING_ACTUAL_HOST_PROOF`; this prototype can be reviewed before that
-gate. Absence of desktop access does not establish unsupported behavior.
+- Resource discovery, MIME/CSP metadata, global/thread entrypoints, the old URI
+  alias, arbitrary-resource refusal and ordinary-client data tools.
+- Proposed creation and matching retry, conflicting request-ID refusal,
+  filtering/pagination, a fresh edit and stale-revision refusal without overwrite.
+- A comment and retry without duplicate evidence; independent detail page inputs.
+- Evidence-bound changes requested and record-only acceptance, both staying in
+  review; unprivileged completion and run-read refusal; forged authority refusal.
+- Explicit destination identity and wrong/missing destination refusal. It emits
+  `context-reference.json` from returned state without claiming to deliver it to
+  a desktop conversation.
 
-1. On the actual desktop host, check out this candidate and build using its
-   existing build location. Run the reproduction commands, then the probe.
-   Keep the emitted workspace, public task key, plugin path and evidence path.
-   Use the emitted candidate HEAD and content digest, which includes untracked
-   delivery files, to identify an uncommitted candidate.
-   Copy `evidence.json` for the native observations using the fields in
-   [the evidence template](mcp-apps-evidence-template.json).
-2. Record the exact desktop product/build/OS, backend binary/version, candidate
-   revision, plugin source and installed path, selected registration and its
-   command/args. Inventory both manual `mcp_servers.orbit` and `orbit@orbit`
-   plugin registrations. They may coexist; do not assume precedence. Use the
-   distinct `orbit-probe` candidate for the test and confirm the observed server
-   launch points to `serve-candidate.py`. A production registration that resolves
-   to `npx @orbit-tools/cli@0.25.1` is not this candidate.
-3. In a disposable desktop profile, open the emitted fixture workspace. It
-   contains a repo marketplace at `.agents/plugins/marketplace.json` with
-   `orbit-probe` marked AVAILABLE. Restart the desktop app, find the local
-   candidate in its Plugins directory and install/select it for that profile.
-   The probe stages this marketplace; it never performs installation or enablement.
-   Record the actual installed copy and confirm its launcher matches the source.
-   If the client cannot load local stdio UI packages, record the exact observed
-   refusal/build and leave subsequent scenarios NOT RUN. Do not change the
-   user's normal registrations or expose a public HTTP service. The loading
-   control is client-specific; lack of one is evidence to record, not a reason
-   to guess a configuration key.
-4. Open the global sidebar entry, enter the emitted workspace and task key,
-   and read. Record resource discovery, rendering and the exact displayed
-   identity. Open the same entity via `orbit_ui_inspect` in a conversation and
-   record thread-panel behavior independently. Confirm the malicious-looking
-   fixture title remains literal text and no script or external request runs.
-5. Click **Send context to chat**, inspect what the conversation receives, and
-   record supported bridge behavior or the copy-reference fallback. Change the
-   workspace/key or force a read failure; confirm context is disabled and the
-   old display says stale. Verify a governed action remains refused in this
-   unprivileged fixture. Never treat host context as proof of human authority.
-6. Repeat each authorized connection mode separately using disposable state on
-   each accepting host. Record the selected registration/argv, backend version,
-   opaque returned workspace selector and result. Preserve same-named workspace
-   distinctions. An unknown/offline/wrong selector must refuse, with no local
-   fallback. Capture the visible error and the authoritative destination's log.
-7. Fill every native outcome with PASS, FAIL, UNSUPPORTED (only after an observed
-   refusal) or NOT RUN plus the reason. Attach screenshots/recording and the
-   exact server transcript. Obtain the separate actual-host go decision before
-   beginning the main product build. Loading or inspecting this candidate is
-   not permission to merge, release or replace a live binary.
+Review fixture setup uses an explicit CLI `task update --force --status review`
+inside the disposable repository, with a synthetic execution summary. This is
+fixture preparation, not a product review shortcut or a dispatched run. The
+probe does not grant MCP operator capability, so run-detail contents and allowed
+completion are covered by the isolated Rust tests rather than bypassing the
+production gate in the probe.
 
-## Connection-mode boundaries
+A failing MCP check exits nonzero and writes its transcript; never accept
+partially written evidence as PASS. Successful output includes `evidence.json`,
+`protocol-transcript.json`, the emitted resource, fixture identity and a staged
+`orbit-probe` package. The evidence records candidate HEAD and a digest including
+untracked delivery files. Use a new `--output .orbit/tmp/<unique-name>` directory
+for each run. Keep evidence until native handoff is complete. The JavaScript
+harness executes the shipped script with deterministic DOM/bridge behavior; it
+is not a browser engine or desktop shell.
 
-| Mode | Resource owner | Data routing and current evidence boundary |
+## Deferred native desktop handoff — archived ORB-13715
+
+1. On the actual desktop host, prepare this candidate using its existing build
+   location and run the probe. Retain candidate HEAD/digest, binary/version,
+   emitted workspace/task key and package/evidence paths. Copy observations into
+   [the evidence template](mcp-apps-evidence-template.json), adding named write,
+   retry, run-authority and review scenarios as needed.
+2. Record exact desktop product/build/OS, plugin source and installed path,
+   selected registration and command/args. Inventory manual `mcp_servers.orbit`
+   and `orbit@orbit` plugin registrations; do not assume precedence. The distinct
+   `orbit-probe` registration must launch the emitted `serve-candidate.py`.
+3. With separate authorization for installing into a disposable desktop profile,
+   open the emitted fixture repository and select its staged local marketplace
+   candidate. The probe stages an AVAILABLE package only; it does not install or
+   enable it. Record the actual installed copy/launcher. If loading fails, record
+   the exact refusal and leave dependent scenarios NOT RUN. Do not alter normal
+   registrations or create a public HTTP endpoint to circumvent that result.
+4. Exercise Tasks, Runs and Review in the sidebar, and the selected entity in a
+   conversation panel. Confirm explicit host/workspace identity, literal rendering
+   of the script-looking fixture title, filter/page controls, stale display after
+   failure, preserved edit drafts and clearly disabled unavailable actions.
+   In the unprivileged fixture Runs and completion must refuse; separately
+   authorized operator-mode checks require their own recorded fixture/session.
+5. Create/edit/comment and record review decisions only in disposable state.
+   Confirm previewed effect, successful refresh, stale-edit refusal and retry
+   reconciliation. Changes requested and record-only acceptance must stay in
+   review. Confirm selection changes never dispatch or mutate an entity.
+6. Exercise **Send context to chat** and the copy fallback. Record exactly what
+   arrives, bridge refusal/absence, stale-context disabling and conversation-local
+   selection. Do not interpret a host message as human/operator authority.
+7. Record PASS, FAIL, UNSUPPORTED (observed refusal only) or NOT RUN with a reason
+   for each scenario. Attach recordings/screenshots and the exact server transcript.
+   Native support remains unproven until those observations exist. Installation,
+   merging and releases are separate operations with their own authorization.
+
+## Connection modes and remaining limits
+
+| Mode | Resource owner | Evidence boundary |
 | --- | --- | --- |
-| Local stdio | Accepting adapter | Production isolated fixture; explicit filter enforced. Native rendering requires the desktop probe. |
-| Direct SSH byte relay | Destination adapter | Existing non-PTY proxy inherits stdio without translating resources. The destination must run this candidate to advertise its UI; an older destination's absence/refusal must be recorded. Native and real SSH checks require prepared hosts. |
-| Federated local | Accepting mux adapter | Static resources stay local; task reads use the existing qualified-selector route. Covered by the production fixture. |
-| Federated remote | Accepting mux adapter | Only `orbit.task.show` is forwarded, with existing identity pinning and advertised-tool checks. The destination needs that data contract, not resource forwarding. Missing tool, stale route, offline or wrong-host selection retains the mux error. Native and real remote checks require prepared hosts. |
+| Local stdio | Accepting adapter | Real disposable protocol probe; native rendering remains NOT RUN. |
+| Direct SSH byte relay | Destination adapter | Destination must run this candidate. Real SSH/native validation requires an authorized disposable destination. |
+| Federated local | Accepting mux adapter | Static resource stays local; data and write tools use the qualified-selector route and existing grants. Native validation remains NOT RUN. |
+| Federated remote | Accepting mux adapter | Destination must advertise the required desktop contracts; missing tools, stale routes and offline/wrong destinations must refuse without fallback. Real remote/native checks remain NOT RUN. |
 
-For connection-mode probes, record these candidate argv separately:
-`mcp serve` for local, `mcp serve --mode remote <fixture-ssh-host>` for direct
-SSH, and `mcp serve --mode federated` for the mux. The staged launcher is local;
-prepare separate disposable launchers for other modes and retain their exact
-argv/environment in the evidence. The direct relay invokes `orbit` on the
-SSH destination's PATH, so an authorized disposable destination must resolve
-that name to the candidate without replacing a production binary. A local
-candidate cannot add resource support to an older remote adapter. For federation,
-configure only the accepting fixture's `.orbit/mcp-destinations.toml`, pin each
-destination machine identity, and copy the returned qualified selector. Never
-modify the normal HOME's destination catalog for this probe. Real remote modes
-remain NOT RUN until such destinations are available.
+Record exact argv separately: `mcp serve`, `mcp serve --mode remote <fixture-host>`
+and `mcp serve --mode federated`. The staged launcher is local only. Prepare other
+modes exclusively in separately authorized disposable state. Direct SSH invokes
+`orbit` on the destination PATH; do not replace a production binary for a probe.
+For federation, use only the fixture's `.orbit/mcp-destinations.toml`, pin the
+machine identity and copy the opaque returned selector. Never edit the normal
+HOME's destination catalog for validation.
 
-The spike does not prove long-lived upgrade handling, a production control
-center, secure human-action provenance, or a full browser accessibility pass.
-The existing proxy/mux tests supply routing evidence; protocol feasibility is
-not an actual-host compatibility claim.
+Current limits are explicit: pages max 50; task list titles max 512 bytes and
+crew labels max 128 bytes after shared redaction, with explicit truncation flags;
+relation lists max 50 (oversized identities are omitted rather than retargeted); run listing exposes at most the first
+10,000 matching runs; audited logs expose at most the first 200 invocations and
+4,096 bytes per stream excerpt; step details expose 50 with a truncation flag.
+Totals and truncation remain visible when a cap is reached. No arbitrary artifact
+reader, dispatch/retry/cancel, bulk action, merge, release, scheduler editor or
+operator-authority acquisition is provided. The candidate does not establish a
+full browser accessibility pass, real remote compatibility or long-lived upgrade
+compatibility. The old resource alias preserves one concrete reload contract;
+it is not proof of every live-client migration scenario.
 
-Implementation metadata and bridge methods follow the official
+Metadata and bridge contracts follow the official
 [UI guide](https://developers.openai.com/plugins/build/chatgpt-ui),
-[quickstart](https://developers.openai.com/plugins/build/app-quickstart) and
-[entrypoint guide](https://developers.openai.com/plugins/build/extensions).
-The [packaging guide](https://developers.openai.com/plugins/build/plugins)
-describes local/repository development packages. Those contracts inform this
-candidate; they do not prove feature availability in an installed client.
+[entrypoint guide](https://developers.openai.com/plugins/build/extensions) and
+[packaging guide](https://developers.openai.com/plugins/build/plugins).
+Those contracts do not establish availability in an installed client.

@@ -307,6 +307,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::AutoTaskMint
         | OrbitBuiltinAction::AutoTaskShow
         | OrbitBuiltinAction::AutoTaskToggle
+        | OrbitBuiltinAction::DesktopRead
+        | OrbitBuiltinAction::DesktopTaskSnapshot
+        // Desktop writes redact at their transactional persistence boundary.
+        | OrbitBuiltinAction::DesktopTaskWrite
         | OrbitBuiltinAction::CommandExec
         | OrbitBuiltinAction::Friction(FrictionVerb::List)
         | OrbitBuiltinAction::Friction(FrictionVerb::Show)
