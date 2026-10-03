@@ -717,7 +717,11 @@ respects the authoring rule that selectors name existing paths and also works
 in managed workers whose Git metadata is read-only. An explicitly staged path
 remains accepted for callers with a writable index, but staging is not required
 of managed workers. Directory selectors are ownership boundaries, not
-new-file intent. Before staging anything, `git_commit` compares all untracked
+new-file intent. The one exception is a claimed leaf, which can neither append
+selectors nor stage. Its frozen footprint, `dir:` selectors included, is its
+new-path intent (distributed-drain design §3, [ORB-13756]). Untracked scratch
+under `.orbit/tmp/` is never a candidate. Before staging anything,
+`git_commit` compares all untracked
 paths with those explicit signals and refuses every unknown path by exact name.
 It therefore cannot be bypassed by a persuasive summary, empty selectors, or
 one legitimate file already in the index, and refusal preserves the prior
@@ -1270,5 +1274,6 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-10603]** — Derive the durable `execution_summary` from the delivered change when the implementing agent persisted none, leaving the delivery gate itself unchanged ([Derive the delivery execution summary from the change, not from the agent](./4_decisions.md#derive-the-delivery-execution-summary-from-the-change-not-from-the-agent)).
 - **[ORB-10644]** — Refuse to open or promote a PR against a base branch that is gone from `origin` or has already landed on the declared landing branch ([Delivery fails closed against a base branch that can no longer carry work to the landing branch](./4_decisions.md#delivery-fails-closed-against-a-base-branch-that-can-no-longer-carry-work-to-the-landing-branch)).
 - **[ORB-10604]** — Reconcile local-pipeline merges against the current in-session base while retaining the remote-mode divergence refusal.
+- **[ORB-13756]** — Accept a claimed leaf's frozen footprint, `dir:` selectors included, as new-path delivery intent, and never deliver `.orbit/tmp/` scratch.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
