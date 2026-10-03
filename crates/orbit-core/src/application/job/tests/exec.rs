@@ -13,6 +13,7 @@ mod completion;
 mod local_ship;
 mod review_gate;
 mod task_auto;
+mod workspace_ship;
 
 use chrono::Utc;
 use orbit_engine::{
