@@ -13,7 +13,7 @@ use tempfile::TempDir;
 
 use crate::ToolContext;
 use crate::builtin::github::logs::{LogReadBounds, RunLogRead, RunLogRequests, read_run_log};
-use crate::builtin::github::run_logs::GithubRunLogsTool;
+use crate::builtin::github::run::logs::GithubRunLogsTool;
 
 const RUN_ID: &str = "34060485218";
 const FAILED_JOB_ID: u64 = 101560010340;

@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::logs::{LogReadBounds, RunLogRequests, read_run_log};
+use super::super::logs::{LogReadBounds, RunLogRequests, read_run_log};
 
 /// Default excerpt size. Small enough that a routine failed-step read costs an
 /// executing agent a few thousand tokens rather than its whole context.
@@ -23,7 +23,7 @@ impl GithubRunLogsTool {
         input: &Value,
     ) -> Result<RunLogRequests, OrbitError> {
         let requests = RunLogRequests::from_input(input)?;
-        Ok(match super::tool_workspace_dir(ctx) {
+        Ok(match super::super::tool_workspace_dir(ctx) {
             Some(dir) => requests.in_directory(&dir),
             None => requests,
         })
@@ -32,30 +32,30 @@ impl GithubRunLogsTool {
 
 impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
-        super::gh_schema(
+        super::super::gh_schema(
             "github.run.logs",
             "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output, or GitHub says the parent run is still in progress, the excerpt can be recovered from the log API of a verified completed job belonging to that run; failed scope is restricted to unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other errors remain errors.",
             vec![
-                super::tool_param("run", "Numeric workflow-run ID", "string", true),
-                super::tool_param(
+                super::super::tool_param("run", "Numeric workflow-run ID", "string", true),
+                super::super::tool_param(
                     "job",
                     "Numeric job ID to narrow the log to one job",
                     "string",
                     false,
                 ),
-                super::tool_param(
+                super::super::tool_param(
                     "scope",
                     "\"failed\" (default) for failed-step logs, or \"all\" for the full run log — use \"all\" to evidence the checked-out commit, since the checkout step usually succeeds",
                     "string",
                     false,
                 ),
-                super::tool_param(
+                super::super::tool_param(
                     "max_bytes",
                     "Maximum display excerpt bytes (default 16384, capped at 262144), plus an omission marker. The separate complete diagnostic_unit is capped at 262144 bytes.",
                     "integer",
                     false,
                 ),
-                super::tool_param(
+                super::super::tool_param(
                     "repo",
                     "Repository in owner/name format (uses current directory if omitted)",
                     "string",
@@ -68,7 +68,8 @@ impl crate::Tool for GithubRunLogsTool {
     fn execute(&self, ctx: &crate::ToolContext, input: Value) -> Result<Value, OrbitError> {
         let requests = self.requests(ctx, &input)?;
         let max_bytes =
-            super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)? as usize;
+            super::super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)?
+                as usize;
         let scope = requests.scope;
         let read = read_run_log(&requests, LogReadBounds::new(max_bytes), None)?;
         let log = read.log;

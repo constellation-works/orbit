@@ -19,6 +19,6 @@ impl Tool for OrbitTaskLocksTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskLocks)
+        super::super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskLocks)
     }
 }

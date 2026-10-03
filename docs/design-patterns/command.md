@@ -44,7 +44,7 @@ impl Tool for OrbitPipelineInvokeTool {
 }
 ```
 
-`execute_host_action` (`orbit/mod.rs:273`) resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
+`execute_host_action` (`orbit/dispatch.rs:33`) resolves the caller's identity, requires a host on the context, and forwards the action, input, identity, and reservation metadata into the runtime.
 
 Patterns to copy:
 

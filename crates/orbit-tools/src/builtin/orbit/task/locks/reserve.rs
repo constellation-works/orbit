@@ -31,7 +31,7 @@ impl Tool for OrbitTaskLocksReserveTool {
                 required: false,
             },
         ];
-        parameters.extend(super::super::identity_params());
+        parameters.extend(super::super::super::identity_params());
 
         ToolSchema {
             name: "orbit.task.locks.reserve".to_string(),
@@ -46,6 +46,6 @@ impl Tool for OrbitTaskLocksReserveTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskLocksReserve)
+        super::super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskLocksReserve)
     }
 }

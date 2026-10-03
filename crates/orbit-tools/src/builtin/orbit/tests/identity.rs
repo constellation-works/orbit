@@ -3,7 +3,8 @@
 use orbit_common::test_fixtures::TEST_CLAUDE_MODEL;
 use serde_json::json;
 
-use super::super::*;
+use super::super::identity::resolve_identity;
+use crate::ToolContext;
 
 #[test]
 fn runtime_identity_overwrites_self_reported_model_at_tool_boundary() {

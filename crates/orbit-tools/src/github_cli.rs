@@ -38,8 +38,8 @@ pub use crate::builtin::github::pr_list::{
 pub use crate::builtin::github::repo::{
     build_exec_request as repo_view_request, project_repo_view,
 };
-pub use crate::builtin::github::run_list::{build_exec_request as run_list_request, project_run};
-pub use crate::builtin::github::run_view::{
+pub use crate::builtin::github::run::list::{build_exec_request as run_list_request, project_run};
+pub use crate::builtin::github::run::view::{
     build_exec_request as run_view_request, project_run_view,
 };
 pub use crate::builtin::github::{
