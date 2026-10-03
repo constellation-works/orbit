@@ -2,15 +2,10 @@
 
 mod add;
 mod contention;
-mod context_repair;
 mod desktop;
 mod lifecycle;
-mod lint;
-mod params;
 mod paths;
-mod records;
 mod transitions;
-mod update;
 
 use std::process::Command;
 
@@ -106,5 +101,3 @@ backend = "cli"
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
     (root, runtime)
 }
-
-mod listing;

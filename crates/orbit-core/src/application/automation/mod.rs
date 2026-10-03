@@ -20,8 +20,6 @@ mod reset;
 pub(crate) mod source;
 pub(crate) mod stall;
 mod task;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{

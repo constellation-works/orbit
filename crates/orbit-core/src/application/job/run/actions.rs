@@ -100,22 +100,6 @@ impl OrbitRuntime {
             .collect()
     }
 
-    /// Internal cancellation seam so tests can model a failed post-signal
-    /// liveness check without signalling a process they do not own.
-    #[cfg(test)]
-    pub(super) fn cancel_job_run_with_signaller<F>(
-        &self,
-        run_id: &str,
-        actor: &str,
-        source: &str,
-        signal: F,
-    ) -> Result<JobRunCancelResult, OrbitError>
-    where
-        F: FnOnce(&JobRun) -> Result<String, OrbitError>,
-    {
-        self.cancel_job_run_cascading(run_id, actor, source, None, signal, 0)
-    }
-
     fn cancel_job_run_cascading<F>(
         &self,
         run_id: &str,
@@ -491,17 +475,6 @@ impl OrbitRuntime {
             }),
             error.map(str::to_string),
         )
-    }
-
-    /// The newest cancellation request still outstanding for `run_id`, read
-    /// through this runtime's audit store. Worker supervision answers the same
-    /// question through [`active_cancellation_request`] directly.
-    #[cfg(all(test, unix))]
-    pub(crate) fn active_job_run_cancellation_request(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<String>, OrbitError> {
-        active_cancellation_request(self.stores().audit_events(), run_id)
     }
 
     pub fn archive_job_run(&self, run_id: &str) -> Result<(), OrbitError> {

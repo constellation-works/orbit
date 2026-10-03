@@ -12,21 +12,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(test)]
-thread_local! {
-    static LS_TREE_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(super) fn reset_ls_tree_invocations() {
-    LS_TREE_INVOCATIONS.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-pub(super) fn ls_tree_invocations() -> usize {
-    LS_TREE_INVOCATIONS.with(std::cell::Cell::get)
-}
-
 pub(crate) struct Source<'a> {
     root: &'a Path,
     started: Instant,
@@ -46,11 +31,6 @@ impl<'a> Source<'a> {
     /// its stderr, so an operator reading a sweep row or `auto-task show`
     /// learns which ref git could not resolve instead of a bare token.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
-        #[cfg(test)]
-        if program == "git" && args.first() == Some(&"ls-tree") {
-            LS_TREE_INVOCATIONS.with(|count| count.set(count.get() + 1));
-        }
-
         if self.started.elapsed() > Duration::from_secs(30) {
             return Err(AutomationError::Deferred("source_deadline".into()));
         }

@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -277,4 +278,140 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         .assert()
         .failure();
     assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
+}
+
+/// The auto-task defaults seeded into every workspace stay inert, declare a
+/// complexity, render the workspace's own base branch, and instruct only tool
+/// calls and run reads an agent can make without side effects.
+#[test]
+fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = Fixture {
+        home: temp.path().join("home"),
+        repo: temp.path().join("repo"),
+        root: temp.path().join("state"),
+        _temp: temp,
+    };
+    fs::create_dir_all(&fixture.home).unwrap();
+    fs::create_dir_all(&fixture.repo).unwrap();
+    let output = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&fixture.repo)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    fixture
+        .command(&[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "shipped-qa",
+            "--task-prefix",
+            "SQ",
+        ])
+        .assert()
+        .success();
+    // A base branch no shipped asset could name by accident.
+    fixture
+        .command(&[
+            "workspace",
+            "init",
+            "--name",
+            "shipped-qa",
+            "--base-branch",
+            "trunk",
+        ])
+        .assert()
+        .success();
+
+    let tools: BTreeSet<String> = fixture
+        .json(&["tool", "list", "--json"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_string())
+        .collect();
+    let listed = fixture.json(&["auto-task", "list", "--format", "json"]);
+    let names: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|definition| definition["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.is_empty(), "workspace init must seed the defaults");
+
+    let (mut deliveries, mut preconditions, mut tool_calls, mut run_reads) = (0, 0, 0, 0);
+    for name in names {
+        let definition = fixture.json(&["auto-task", "show", name, "--json"]);
+        assert_eq!(
+            definition["enabled"], false,
+            "[ORB-10549] seeding must not opt the workspace into {name}"
+        );
+        assert!(
+            definition["template"]["complexity"].is_string(),
+            "[ORB-12463] {name} must declare an explicit complexity"
+        );
+        if let Some(delivery) = definition["schedule"].get("deliveries_landed") {
+            assert_eq!(
+                delivery["branch"], "trunk",
+                "{name} watches the base branch"
+            );
+            deliveries += 1;
+        }
+        if let Some(precondition) = definition
+            .get("skip_if_unchanged")
+            .filter(|value| !value.is_null())
+        {
+            assert_eq!(
+                precondition["ref"], "trunk",
+                "[ORB-12698] {name} compares the workspace's own base branch"
+            );
+            preconditions += 1;
+        }
+
+        let yaml =
+            fs::read_to_string(definition["definition_source"]["path"].as_str().unwrap()).unwrap();
+        for tool in tool_run_mentions(&yaml) {
+            assert!(
+                tools.contains(&tool),
+                "[ORB-12248] {name} instructs `orbit tool run {tool}`, which `orbit tool list` \
+                 does not offer"
+            );
+            tool_calls += 1;
+        }
+        for command in yaml.split('`').skip(1).step_by(2) {
+            let mut words = command.split_whitespace();
+            if words.next() == Some("orbit")
+                && words.next() == Some("run")
+                && matches!(words.next(), Some("history" | "show" | "logs" | "events"))
+            {
+                assert!(
+                    words.any(|arg| arg == "--no-reconcile"),
+                    "[ORB-12943] {name} names a run read that can reconcile stale runs: {command}"
+                );
+                run_reads += 1;
+            }
+        }
+    }
+    assert!(
+        deliveries > 0 && preconditions > 0 && tool_calls > 0 && run_reads > 0,
+        "the seeded defaults must exercise every check: {deliveries} deliveries, \
+         {preconditions} preconditions, {tool_calls} tool calls, {run_reads} run reads"
+    );
+}
+
+/// Every tool name immediately following an `orbit tool run ` mention.
+fn tool_run_mentions(text: &str) -> Vec<String> {
+    const MARKER: &str = "orbit tool run ";
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(index) = rest.find(MARKER) {
+        let after = &rest[index + MARKER.len()..];
+        let end = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+            .unwrap_or(after.len());
+        names.push(after[..end].to_string());
+        rest = &after[end..];
+    }
+    names
 }

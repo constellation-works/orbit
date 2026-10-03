@@ -23,15 +23,11 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-#[cfg(test)]
-use orbit_store::contracts::{AdmissionIdentity, ClaimInvocation, ClaimRun};
 use orbit_store::contracts::{
     AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimMutation, ExecutionClaim,
     LocalPullAdmission, PullDestination,
 };
 use orbit_tools::DrainOwnerTransport;
-#[cfg(test)]
-use orbit_types::task::ExecutionLocation;
 use orbit_types::tool::WorkerInvocation;
 use serde_json::{Value, json};
 
@@ -49,167 +45,6 @@ fn admitted_claim(admission: &LocalPullAdmission) -> Result<ExecutionClaim, Orbi
         .as_ref()
         .and_then(|receipt| receipt.claim.clone())
         .ok_or_else(|| refused("this admission holds no claim to act on"))
-}
-
-/// The owner half of the pull protocol, served from this process.
-///
-/// Test-only: `orbit run auto --pull` is a replica entry point and always
-/// reaches its owner through [`RoutedPullPeer`]. This owner-local variant
-/// exists so the lifecycle fixtures can drive the protocol end to end.
-#[cfg(test)]
-pub(crate) struct OwnerPullPeer<'a> {
-    pub(crate) runtime: &'a OrbitRuntime,
-}
-
-#[cfg(test)]
-impl OwnerPullPeer<'_> {
-    /// Confirm this process may serve `destination` at all.
-    ///
-    /// Only an owner-local destination is served here. The check is against
-    /// the runtime's own registered machine and workspace, so a destination
-    /// record naming this machine does not make a foreign owner local. A
-    /// remote owner is [`RoutedPullPeer`]'s, never this adapter's.
-    fn ensure_owner_local(&self, destination: &PullDestination) -> Result<(), OrbitError> {
-        let machine = self.runtime.automation_machine_identity().ok_or_else(|| {
-            refused("this host has no registered machine identity; it cannot serve an admission")
-        })?;
-        if destination.owner_machine_id != machine || destination.execution_machine_id != machine {
-            return Err(refused(format!(
-                "destination owner '{}' / executor '{}' is not this machine '{machine}'; the \
-                 owner-local adapter serves only its own machine",
-                destination.owner_machine_id, destination.execution_machine_id
-            )));
-        }
-        if destination.owner_workspace_id != self.runtime.workspace_id()? {
-            return Err(refused(format!(
-                "destination workspace '{}' is not this owner's workspace",
-                destination.owner_workspace_id
-            )));
-        }
-        Ok(())
-    }
-
-    fn identity(destination: &PullDestination) -> AdmissionIdentity {
-        AdmissionIdentity::trusted_local(ExecutionLocation {
-            machine_id: destination.execution_machine_id.clone(),
-            machine_name: None,
-        })
-    }
-
-    /// The claim an admission record is settling, with the destination checks
-    /// already applied.
-    fn claim(&self, admission: &LocalPullAdmission) -> Result<ExecutionClaim, OrbitError> {
-        self.ensure_owner_local(&admission.destination)?;
-        admitted_claim(admission)
-    }
-
-    /// Trusted worker context for one claim mutation. The drain speaks for the
-    /// executor it launched, never as an operator: recovery and approval stay
-    /// out of reach of every automatic path.
-    fn context(&self, claim: &ExecutionClaim, run: Option<ClaimRun>) -> ClaimInvocation {
-        ClaimInvocation::trusted_worker(
-            claim.task_id.clone(),
-            claim.claim_id.clone(),
-            claim.executed_on.machine_id.clone(),
-            run,
-        )
-    }
-}
-
-#[cfg(test)]
-impl PullPeer for OwnerPullPeer<'_> {
-    fn request(
-        &self,
-        destination: &PullDestination,
-        request: &AdmissionRequest,
-    ) -> Result<AdmissionReceipt, OrbitError> {
-        self.ensure_owner_local(destination)?;
-        let boundary = self.runtime.admission_boundary()?;
-        match self
-            .runtime
-            .admit_pull_request(&boundary, &Self::identity(destination), request)?
-        {
-            AdmissionLookup::Found { receipt, .. } => Ok(*receipt),
-            AdmissionLookup::Expired => Err(OrbitError::InvalidInput("request_expired".into())),
-            AdmissionLookup::NotFound => Err(OrbitError::Store(
-                "admission committed no receipt for this request".into(),
-            )),
-        }
-    }
-
-    fn bind(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
-        let claim = self.claim(admission)?;
-        let run_id = admission
-            .leaf_run_id
-            .clone()
-            .ok_or_else(|| refused("binding requires a created leaf run"))?;
-        let run = ClaimRun {
-            machine_id: claim.executed_on.machine_id.clone(),
-            run_id,
-        };
-        // Idempotent by construction: the mutation id is the claim's, so a
-        // replayed bind returns its recorded outcome and can never substitute
-        // a different run for the same claim. The invocation carries no run
-        // yet — binding is what creates that association, so asserting it
-        // beforehand would fence the very mutation being made.
-        self.runtime.mutate_execution_claim(
-            Some(&self.context(&claim, None)),
-            &format!("pull-bind:{}", claim.claim_id),
-            &ClaimMutation::Bind {
-                run,
-                ship: admission.request.ship.clone(),
-            },
-        )?;
-        Ok(())
-    }
-
-    fn settle(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
-        let claim = self.claim(admission)?;
-        let settlement = admission
-            .settlement
-            .clone()
-            .ok_or_else(|| refused("settlement was not persisted before the owner call"))?;
-        let run = admission.leaf_run_id.clone().map(|run_id| ClaimRun {
-            machine_id: claim.executed_on.machine_id.clone(),
-            run_id,
-        });
-        let context = self.context(&claim, run);
-        match settlement {
-            ClaimMutation::Fail(evidence) => {
-                self.runtime.mutate_execution_claim(
-                    Some(&context),
-                    &format!("pull-fail:{}", claim.claim_id),
-                    &ClaimMutation::Fail(evidence),
-                )?;
-            }
-            ClaimMutation::AcceptHandoff(handoff) => {
-                let observation = self.runtime.observe_claim_handoff(&handoff, false)?;
-                self.runtime.accept_task_handoff(
-                    &context,
-                    &format!("pull-handoff:{}", claim.claim_id),
-                    handoff,
-                    observation,
-                )?;
-            }
-            _ => {
-                return Err(refused(
-                    "only a typed handoff or a failure settles a claimed leaf",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn lookup(
-        &self,
-        destination: &PullDestination,
-        request_id: &str,
-    ) -> Result<AdmissionLookup, OrbitError> {
-        self.ensure_owner_local(destination)?;
-        self.runtime
-            .admission_boundary()?
-            .lookup_admission(&Self::identity(destination), request_id)
-    }
 }
 
 /// The follower half of the pull protocol: every call is delivered to the

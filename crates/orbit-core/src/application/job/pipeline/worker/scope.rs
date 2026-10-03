@@ -23,9 +23,7 @@
 //! `--strict-worker-containment` refuses an unavailable scope before spawning
 //! the worker. Strict mode requires `machine.worker_containment=true`.
 
-#[cfg(test)]
-use std::cell::RefCell;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -48,36 +46,6 @@ const SYSTEMD_RUN: &str = "systemd-run";
 /// Inherited by a coordinator's child workers so one CLI invocation keeps its
 /// containment policy for every leaf it admits.
 pub(crate) const STRICT_WORKER_CONTAINMENT_ENV: &str = "ORBIT_WORKER_CONTAINMENT_STRICT";
-
-#[cfg(test)]
-thread_local! {
-    static TEST_SCOPE_AVAILABILITY: RefCell<Option<Result<(), String>>> = const { RefCell::new(None) };
-}
-
-/// Override the manager probe on this test thread only; production never has
-/// this hook. Drop restores the probe for the next test on the thread.
-#[cfg(test)]
-pub(crate) struct TestScopeAvailability;
-
-#[cfg(test)]
-impl TestScopeAvailability {
-    pub(crate) fn available() -> Self {
-        TEST_SCOPE_AVAILABILITY.with(|slot| *slot.borrow_mut() = Some(Ok(())));
-        Self
-    }
-
-    pub(crate) fn unavailable(reason: &str) -> Self {
-        TEST_SCOPE_AVAILABILITY.with(|slot| *slot.borrow_mut() = Some(Err(reason.to_string())));
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestScopeAvailability {
-    fn drop(&mut self) {
-        TEST_SCOPE_AVAILABILITY.with(|slot| *slot.borrow_mut() = None);
-    }
-}
 
 /// The limits applied to one worker scope, admitted from `machine.worker_*`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,21 +202,12 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
 fn user_scope_availability() -> Result<(), String> {
     use std::sync::OnceLock;
 
-    #[cfg(test)]
-    if let Some(result) = TEST_SCOPE_AVAILABILITY.with(|slot| slot.borrow().clone()) {
-        return result;
-    }
-
     static PROBE: OnceLock<Result<(), String>> = OnceLock::new();
     PROBE.get_or_init(probe_user_scope).clone()
 }
 
 #[cfg(not(target_os = "linux"))]
 fn user_scope_availability() -> Result<(), String> {
-    #[cfg(test)]
-    if let Some(result) = TEST_SCOPE_AVAILABILITY.with(|slot| slot.borrow().clone()) {
-        return result;
-    }
     Err("worker scopes need Linux with a systemd user manager".to_string())
 }
 
@@ -331,12 +290,6 @@ impl WorkerScopeCgroup {
         Self::read(&format!("/proc/{pid}/cgroup"))
     }
 
-    /// The scope's cgroup directory.
-    #[cfg(test)]
-    pub(crate) fn directory(&self) -> &Path {
-        &self.directory
-    }
-
     /// The worker scope this process runs in, if it runs in one.
     pub(crate) fn of_current_process() -> Option<Self> {
         Self::read("/proc/self/cgroup")
@@ -355,10 +308,7 @@ impl WorkerScopeCgroup {
 
     /// Parse `/proc/<pid>/cgroup` (cgroup v2 `0::<path>` line) and keep it
     /// only when its leaf is a worker scope.
-    ///
-    /// Its only production caller is [`Self::read`]'s Linux arm, but unit
-    /// tests exercise it directly on every platform the suite runs on.
-    #[cfg(any(target_os = "linux", test))]
+    #[cfg(target_os = "linux")]
     pub(crate) fn from_proc_cgroup(content: &str, cgroup_root: &Path) -> Option<Self> {
         let path = content.lines().find_map(|line| line.strip_prefix("0::"))?;
         let unit = path.rsplit('/').next()?;

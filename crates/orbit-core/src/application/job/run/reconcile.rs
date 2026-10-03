@@ -132,8 +132,6 @@ impl OrbitRuntime {
         job_id: Option<&str>,
         pass: &mut ReconcilePass,
     ) -> Result<usize, OrbitError> {
-        #[cfg(test)]
-        reconcile_pass_counter::record(self);
         let runs = if let Some(job_id) = job_id {
             self.stores()
                 .jobs()
@@ -215,45 +213,6 @@ impl OrbitRuntime {
 
         before_revalidation();
         self.finalize_orphaned_job_run_with_provider_probe(&run.run_id, &provider_probe)
-    }
-
-    /// Deterministic seam for reproducing a terminal writer winning after the
-    /// stale snapshot was classified but before reconciliation revalidates it.
-    #[cfg(test)]
-    pub(super) fn reconcile_stale_job_run_after_classification<F>(
-        &self,
-        run: &JobRun,
-        concurrent_completion: F,
-    ) -> Result<bool, OrbitError>
-    where
-        F: FnOnce(),
-    {
-        self.reconcile_stale_job_run_before_revalidation(
-            run,
-            &mut ReconcilePass::default(),
-            concurrent_completion,
-        )
-    }
-
-    /// Deterministic seam for provider evidence changing after the candidate
-    /// snapshot is classified but before the final write-boundary reread.
-    #[cfg(test)]
-    pub(super) fn reconcile_stale_job_run_with_provider_probe_after_classification<F, P>(
-        &self,
-        run: &JobRun,
-        provider_probe: P,
-        concurrent_provider_change: F,
-    ) -> Result<bool, OrbitError>
-    where
-        F: FnOnce(),
-        P: Fn(u32, Option<&str>) -> ProcessLiveness,
-    {
-        self.reconcile_stale_job_run_before_revalidation_with_provider_probe(
-            run,
-            &mut ReconcilePass::default(),
-            provider_probe,
-            concurrent_provider_change,
-        )
     }
 
     /// [ORB-10002] Orphaned runs (owner process conclusively gone) become
@@ -544,67 +503,4 @@ fn stale_job_run_diagnostic(run: &JobRun) -> Option<(String, String)> {
 fn terminal_run_timing_is_incomplete(run: &JobRun) -> bool {
     run.state.is_terminal()
         && (run.finished_at.is_none() || (run.duration_ms.is_none() && run.started_at.is_some()))
-}
-
-/// Counts `reconcile_stale_job_runs_with_pass` so tests can prove pipeline
-/// wait opens one pass per poll tick, not one per awaited run.
-#[cfg(test)]
-pub(crate) mod reconcile_pass_counter {
-    use std::collections::HashMap;
-    use std::sync::{LazyLock, Mutex};
-
-    use orbit_store::contracts::JobRunStoreBackend;
-
-    use crate::OrbitRuntime;
-
-    type StoreKey = usize;
-
-    static COUNTS: LazyLock<Mutex<HashMap<StoreKey, usize>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    pub(crate) struct Counter {
-        key: StoreKey,
-    }
-
-    fn key(runs: &dyn JobRunStoreBackend) -> StoreKey {
-        runs as *const dyn JobRunStoreBackend as *const () as usize
-    }
-
-    pub(crate) fn track(runtime: &OrbitRuntime) -> Counter {
-        let key = key(runtime.stores().jobs());
-        COUNTS
-            .lock()
-            .expect("test reconcile-pass counters are not poisoned")
-            .insert(key, 0);
-        Counter { key }
-    }
-
-    pub(crate) fn record(runtime: &OrbitRuntime) {
-        if let Some(count) = COUNTS
-            .lock()
-            .expect("test reconcile-pass counters are not poisoned")
-            .get_mut(&key(runtime.stores().jobs()))
-        {
-            *count += 1;
-        }
-    }
-
-    impl Counter {
-        pub(crate) fn passes(&self) -> usize {
-            *COUNTS
-                .lock()
-                .expect("test reconcile-pass counters are not poisoned")
-                .get(&self.key)
-                .expect("tracked reconcile-pass counter exists")
-        }
-    }
-
-    impl Drop for Counter {
-        fn drop(&mut self) {
-            COUNTS
-                .lock()
-                .expect("test reconcile-pass counters are not poisoned")
-                .remove(&self.key);
-        }
-    }
 }

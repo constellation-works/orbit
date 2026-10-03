@@ -244,8 +244,6 @@ impl PipelineWorkerSupervisor {
         // alive: once every process in it is gone the cgroup goes with it.
         let mut scope = None;
         loop {
-            #[cfg(test)]
-            worker_observer_read_counter::record_in(self.runs.as_ref(), run_id);
             let run = self
                 .runs
                 .get_job_run(run_id)?
@@ -301,8 +299,6 @@ impl PipelineWorkerSupervisor {
                 // observation. Exit handling must use fresh state so duplicate
                 // ownership, cancellation, and terminal outcomes stay
                 // authoritative.
-                #[cfg(test)]
-                worker_observer_read_counter::record_in(self.runs.as_ref(), run_id);
                 let run = self.runs.get_job_run(run_id)?.ok_or_else(|| {
                     OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
                 })?;
@@ -634,79 +630,5 @@ fn worker_cancellation_signal_name(signal: i32) -> &'static str {
         libc::SIGTERM => "SIGTERM",
         libc::SIGKILL => "SIGKILL",
         _ => "unknown",
-    }
-}
-
-/// Counts the run-store reads the startup observer performs, so a test can
-/// prove a claimed worker stops polling.
-///
-/// Keyed by the run store the observer reads through — shared by a runtime,
-/// its clones, and the supervisors they build, while independent temporary
-/// databases stay isolated — paired with the run ID.
-#[cfg(test)]
-pub(crate) mod worker_observer_read_counter {
-    use std::collections::HashMap;
-    use std::sync::{LazyLock, Mutex};
-
-    use orbit_store::contracts::JobRunStoreBackend;
-
-    use crate::OrbitRuntime;
-
-    type StoreRun = (usize, String);
-
-    static COUNTS: LazyLock<Mutex<HashMap<StoreRun, usize>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    pub(crate) struct Counter {
-        key: StoreRun,
-    }
-
-    fn key(runs: &dyn JobRunStoreBackend, run_id: &str) -> StoreRun {
-        (
-            runs as *const dyn JobRunStoreBackend as *const () as usize,
-            run_id.to_string(),
-        )
-    }
-
-    pub(crate) fn track(runtime: &OrbitRuntime, run_id: &str) -> Counter {
-        let key = key(runtime.stores().jobs(), run_id);
-        COUNTS
-            .lock()
-            .expect("test observer counters are not poisoned")
-            .insert(key.clone(), 0);
-        Counter { key }
-    }
-
-    pub(crate) fn record(runtime: &OrbitRuntime, run_id: &str) {
-        record_in(runtime.stores().jobs(), run_id);
-    }
-
-    pub(crate) fn record_in(runs: &dyn JobRunStoreBackend, run_id: &str) {
-        if let Some(count) = COUNTS
-            .lock()
-            .expect("test observer counters are not poisoned")
-            .get_mut(&key(runs, run_id))
-        {
-            *count += 1;
-        }
-    }
-
-    impl Counter {
-        pub(crate) fn reads(&self) -> usize {
-            *COUNTS
-                .lock()
-                .expect("test observer counters are not poisoned")
-                .get(&self.key)
-                .expect("tracked observer counter exists")
-        }
-    }
-
-    impl Drop for Counter {
-        fn drop(&mut self) {
-            COUNTS
-                .lock()
-                .expect("test observer counters are not poisoned")
-                .remove(&self.key);
-        }
     }
 }

@@ -131,56 +131,6 @@ enum Settled {
     Blocked { certificate: Box<ReviewCertificate> },
 }
 
-/// The durable steps of one settlement, in order. A restart may interrupt
-/// settlement after any of them; replay resumes from what persisted instead
-/// of repeating a repair, charging the ledger twice, or trapping the attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Checkpoint {
-    /// The reviewer's repairs are committed under the reviewer's identity.
-    RepairCommitted,
-    /// The ledger recorded the verdict and charged the attempt.
-    LedgerSettled,
-    /// The immutable certificate is stored.
-    CertificateRecorded,
-    /// One task carries the certificate artifact and verdict comment.
-    TaskPublished,
-}
-
-#[cfg(test)]
-thread_local! {
-    static INTERRUPT: std::cell::Cell<Option<(Checkpoint, usize)>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// Fail the settlement right after the `occurrence`-th (one-based) time it
-/// passes `checkpoint`, the way a crash or write error there would.
-#[cfg(test)]
-pub(super) fn interrupt_after(checkpoint: Checkpoint, occurrence: usize) {
-    INTERRUPT.with(|slot| slot.set(Some((checkpoint, occurrence))));
-}
-
-fn reached(checkpoint: Checkpoint) -> Result<(), OrbitError> {
-    #[cfg(test)]
-    {
-        let fire = INTERRUPT.with(|slot| match slot.get() {
-            Some((pending, remaining)) if pending == checkpoint => {
-                let fire = remaining <= 1;
-                slot.set((!fire).then(|| (pending, remaining.saturating_sub(1))));
-                fire
-            }
-            _ => false,
-        });
-        if fire {
-            return Err(OrbitError::Execution(format!(
-                "injected settlement interruption after {checkpoint:?}"
-            )));
-        }
-    }
-    #[cfg(not(test))]
-    let _ = checkpoint;
-    Ok(())
-}
-
 fn settle(
     runtime: &OrbitRuntime,
     context: &mut GateContext,
@@ -277,13 +227,7 @@ fn settle(
         }
         // A settled ledger never charged a repair that was not committed.
         None if recorded.is_some() => None,
-        None => {
-            let commit = judgement.commit_repairs(runtime, context, &reviewer, &attempt)?;
-            if commit.is_some() {
-                reached(Checkpoint::RepairCommitted)?;
-            }
-            commit
-        }
+        None => judgement.commit_repairs(runtime, context, &reviewer, &attempt)?,
     };
     let repair_cycles = u32::from(repair.is_some());
 
@@ -322,21 +266,17 @@ fn settle(
             }
             ledger.as_of(attempt_id).unwrap_or(ledger)
         }
-        None => {
-            let settled = store.review_settle(
-                &context.workspace_id,
-                &ReviewSettlement {
-                    lineage_key: &lineage_key,
-                    attempt_id,
-                    verdict: judgement.verdict,
-                    repair_cycles,
-                    elapsed_seconds,
-                    now,
-                },
-            )?;
-            reached(Checkpoint::LedgerSettled)?;
-            settled
-        }
+        None => store.review_settle(
+            &context.workspace_id,
+            &ReviewSettlement {
+                lineage_key: &lineage_key,
+                attempt_id,
+                verdict: judgement.verdict,
+                repair_cycles,
+                elapsed_seconds,
+                now,
+            },
+        )?,
     };
 
     let final_candidate = match &repair {
@@ -371,7 +311,6 @@ fn settle(
         issued_at: now,
     };
     store.review_certificate_record(&context.workspace_id, &certificate)?;
-    reached(Checkpoint::CertificateRecorded)?;
     publish_certificate(runtime, context, &certificate)?;
     Ok(settled_outcome(certificate))
 }
@@ -453,7 +392,6 @@ fn publish_certificate(
                 },
             )?;
         }
-        reached(Checkpoint::TaskPublished)?;
     }
     Ok(())
 }

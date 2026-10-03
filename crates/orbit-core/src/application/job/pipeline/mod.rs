@@ -62,27 +62,17 @@ pub(crate) use admission::input_hash;
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
-pub(crate) use wait::{PIPELINE_WAIT_MAX_TIMEOUT_SECONDS, PipelineWaitClock};
+pub(crate) use wait::PIPELINE_WAIT_MAX_TIMEOUT_SECONDS;
 pub use wait::{PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_success};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use worker::command::worker_command_override;
-#[cfg(test)]
-pub(crate) use worker::command::{
-    configure_pipeline_worker_command, orbit_worker_command, orbit_worker_command_with_permission,
-    pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable,
-};
 pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
 #[cfg(test)]
 pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
 #[cfg(all(test, unix))]
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
-#[cfg(test)]
-pub(crate) use worker::scope::TestScopeAvailability;
-#[cfg(test)]
-pub(crate) use worker::supervisor::worker_observer_read_counter;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineInvokeResult {

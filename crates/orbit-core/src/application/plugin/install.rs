@@ -306,7 +306,6 @@ fn install_plugin_inner(
     }
     let mut staged = StagedInstall::begin(&global_root, &name, &version)?;
     copy_tree(&source_root, staged.staging())?;
-    namespace_step(NamespaceStep::InstallStaged);
     staged.publish()?;
 
     let enabled =
@@ -364,7 +363,6 @@ fn install_plugin_inner(
             },
         ))
     })?;
-    namespace_step(NamespaceStep::InstallRowWritten);
     // The row names the new tree from here on, so the replaced one may go and
     // the staged swap must not roll back. Anything that fails below leaves an
     // install that landed, which is what the row says.
@@ -827,7 +825,6 @@ pub(super) fn lock_plugin_namespace(
     let path = plugin_namespace_lock_path(global_root, name);
     let lock_error =
         |error: std::io::Error| OrbitError::Io(format!("lock {}: {error}", path.display()));
-    namespace_step(NamespaceStep::Locking);
     if let Some(guard) = try_acquire_exclusive_file_lock(&path, LABEL).map_err(lock_error)? {
         return Ok(guard);
     }
@@ -836,7 +833,6 @@ pub(super) fn lock_plugin_namespace(
         plugin = %name,
         "waiting for another add, upgrade or remove of this plugin to finish",
     );
-    namespace_step(NamespaceStep::Contended);
     acquire_exclusive_file_lock(&path, LABEL, FileLockOptions::default()).map_err(lock_error)
 }
 
@@ -844,48 +840,6 @@ pub(super) fn lock_plugin_namespace(
 /// witness's reserved leaf, so it never becomes a path component.
 fn plugin_namespace_lock_path(global_root: &Path, name: &str) -> PathBuf {
     plugin_grant_witness_path(global_root, name).with_extension("lock")
-}
-
-/// Points inside a namespace transition where a concurrency test can park the
-/// operation on its own thread; production does nothing at them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NamespaceStep {
-    /// About to take the namespace lock.
-    Locking,
-    /// Found the namespace lock held by another operation; about to wait.
-    Contended,
-    /// An install copied its staging tree and has not published it.
-    InstallStaged,
-    /// An install wrote its row and has not pruned the namespace.
-    InstallRowWritten,
-    /// A removal deleted its row and has not deleted the namespace directory.
-    RemoveRowDeleted,
-}
-
-#[cfg(test)]
-type NamespaceStepHook = Box<dyn Fn(NamespaceStep)>;
-
-#[cfg(test)]
-thread_local! {
-    static NAMESPACE_STEP_HOOK: std::cell::RefCell<Option<NamespaceStepHook>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Run `hook` at every [`NamespaceStep`] this thread reaches.
-#[cfg(test)]
-pub(super) fn set_namespace_step_hook(hook: Option<NamespaceStepHook>) {
-    NAMESPACE_STEP_HOOK.with(|cell| *cell.borrow_mut() = hook);
-}
-
-pub(super) fn namespace_step(step: NamespaceStep) {
-    #[cfg(test)]
-    NAMESPACE_STEP_HOOK.with(|cell| {
-        if let Some(hook) = cell.borrow().as_ref() {
-            hook(step);
-        }
-    });
-    #[cfg(not(test))]
-    let _ = step;
 }
 
 /// Delete everything in the namespace install directory except the tree the

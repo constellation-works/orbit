@@ -305,11 +305,6 @@ impl IncidentSession {
         Self::default()
     }
 
-    #[cfg(test)]
-    pub(crate) fn stats(&self) -> IncidentWorkStats {
-        self.stats.clone()
-    }
-
     pub(crate) fn inventory(
         &mut self,
         runtime: &OrbitRuntime,

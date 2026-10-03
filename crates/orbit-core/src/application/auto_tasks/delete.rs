@@ -10,9 +10,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(test)]
-use std::sync::{Arc, Barrier};
-
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
@@ -95,8 +92,6 @@ impl OrbitRuntime {
         let actor = self.actor().resolve_write_label(None, None)?;
         let now = Utc::now();
 
-        #[cfg(test)]
-        wait_before_delete_lock();
         // Scheduler admission, including delivery evaluation, and manual mint
         // hold this lock across their definition check and task creation.
         // Check refusals here so a task minted by a preceding pass or an
@@ -301,24 +296,5 @@ fn restore_after_failure(path: &std::path::Path, original: &str, error: OrbitErr
             "{error}; restoring auto-task definition {} also failed: {restore_error}",
             path.display()
         )),
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static DELETE_BEFORE_LOCK_BARRIER: std::cell::RefCell<Option<Arc<Barrier>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-pub(crate) fn set_delete_before_lock_barrier(barrier: Option<Arc<Barrier>>) {
-    DELETE_BEFORE_LOCK_BARRIER.with(|cell| *cell.borrow_mut() = barrier);
-}
-
-#[cfg(test)]
-fn wait_before_delete_lock() {
-    let barrier = DELETE_BEFORE_LOCK_BARRIER.with(|cell| cell.borrow().clone());
-    if let Some(barrier) = barrier {
-        barrier.wait();
     }
 }

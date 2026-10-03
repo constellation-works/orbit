@@ -179,21 +179,6 @@ impl OrbitRuntime {
             .spawn(run_id, actor)
     }
 
-    /// Spawn an already-built worker command. Production spawns go through
-    /// [`PipelineWorkerSupervisor::spawn`]; this is the runtime-shaped entry
-    /// point in-crate tests use to launch a worker fixture.
-    #[cfg(test)]
-    pub(crate) fn spawn_pipeline_worker_process(
-        &self,
-        run_id: &str,
-        actor: Option<&str>,
-        command: Command,
-        worker_log: PipelineWorkerLog,
-    ) -> Result<u32, OrbitError> {
-        self.pipeline_worker_supervisor(false)
-            .spawn_process(run_id, actor, command, worker_log)
-    }
-
     pub(in crate::application::job::pipeline) fn finalize_pipeline_worker_startup_failure(
         &self,
         run: &JobRun,

@@ -18,9 +18,6 @@
 
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(test)]
-use std::sync::{Arc, Barrier};
-
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_types::task::{Task, normalize_required_tools};
@@ -287,9 +284,6 @@ impl OrbitRuntime {
         // concurrent delete can remove the file before the lock is held.
         let preloaded = self.require_auto_task(name)?;
         self.validate_required_tools(&preloaded.template.required_tools)?;
-        #[cfg(test)]
-        wait_after_manual_mint_preload();
-
         // Same sidecar lock as `with_cursor_lock` and `auto_task_delete`.
         // Do not load or save the cursor: bytes stay unchanged, and a
         // malformed cursor must not block an explicit mint.
@@ -298,8 +292,6 @@ impl OrbitRuntime {
             let definition = self.require_auto_task(name)?;
             self.validate_required_tools(&definition.template.required_tools)?;
             let task = mint_task(self, &definition)?;
-            #[cfg(test)]
-            wait_after_manual_mint_admission();
             Ok(task)
         })
     }
@@ -494,49 +486,5 @@ impl OrbitRuntime {
                 path.display()
             ))
         })
-    }
-}
-
-#[cfg(test)]
-thread_local! {
-    static MINT_AFTER_PRELOAD: std::cell::RefCell<Option<(Arc<Barrier>, Arc<Barrier>)>> =
-        const { std::cell::RefCell::new(None) };
-    static MINT_AFTER_ADMISSION: std::cell::RefCell<Option<(Arc<Barrier>, Arc<Barrier>)>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Pause a manual mint after it has loaded the definition and before it takes
-/// the cursor lock. The pair is `(loaded, resume)`.
-#[cfg(test)]
-pub(crate) fn set_manual_mint_after_preload_barriers(
-    barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
-) {
-    MINT_AFTER_PRELOAD.with(|cell| *cell.borrow_mut() = barriers);
-}
-
-/// Pause a manual mint after the task exists and while the cursor lock is
-/// still held. The pair is `(admitted, resume)`.
-#[cfg(test)]
-pub(crate) fn set_manual_mint_after_admission_barriers(
-    barriers: Option<(Arc<Barrier>, Arc<Barrier>)>,
-) {
-    MINT_AFTER_ADMISSION.with(|cell| *cell.borrow_mut() = barriers);
-}
-
-#[cfg(test)]
-fn wait_after_manual_mint_preload() {
-    let barriers = MINT_AFTER_PRELOAD.with(|cell| cell.borrow().clone());
-    if let Some((loaded, resume)) = barriers {
-        loaded.wait();
-        resume.wait();
-    }
-}
-
-#[cfg(test)]
-fn wait_after_manual_mint_admission() {
-    let barriers = MINT_AFTER_ADMISSION.with(|cell| cell.borrow().clone());
-    if let Some((admitted, resume)) = barriers {
-        admitted.wait();
-        resume.wait();
     }
 }

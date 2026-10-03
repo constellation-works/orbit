@@ -1,16 +1,7 @@
 mod conformance;
 mod definition_fixture;
-mod definitions;
-mod delivery;
 mod fixture;
-mod grants;
-mod inspect;
 mod install;
 mod lifecycle;
-mod panels;
-mod plugin_config;
 mod secrets;
-mod seed;
 mod skills;
-mod visibility;
-mod workspace_toggle;

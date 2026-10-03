@@ -506,13 +506,6 @@ pub(crate) struct PipelineWorkerLog {
     pub(super) reader: File,
 }
 
-impl PipelineWorkerLog {
-    #[cfg(test)]
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
 fn write_pipeline_worker_spawn_banner(file: &mut File, command: &Command) {
     let args = command
         .get_args()

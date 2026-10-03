@@ -27,6 +27,7 @@ pub(crate) fn mark_process_as_pipeline_worker_binary() {
 /// `/installed/path (deleted)`. That pseudo-path cannot be executed, but after
 /// an atomic upgrade the original installed path names the replacement binary.
 /// Preserve ordinary paths, including real filenames ending in ` (deleted)`.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn resolve_pipeline_worker_executable(current_exe: PathBuf) -> PathBuf {
     // L-0084: deleted Linux executable paths must resolve through the installed replacement.
     #[cfg(target_os = "linux")]
@@ -61,6 +62,7 @@ pub(crate) fn pipeline_worker_root_override(paths: &WorkspacePaths) -> Option<&P
     (paths.global_dir == paths.orbit_dir).then_some(paths.global_dir.as_path())
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn configure_pipeline_worker_command(
     command: &mut Command,
     workspace: &Path,
@@ -276,6 +278,7 @@ pub(crate) fn worker_substituted_process_wide() -> bool {
 /// Re-executing a libtest harness at the worker argv can select the spawning
 /// test again and fork without bound (2026-09-23 outage). Its `main` never sets
 /// the marker. A test that submits runs must use the `test-support` override.
+#[cfg_attr(test, allow(dead_code))]
 fn require_pipeline_worker_entry_point(enabled: bool) -> Result<(), OrbitError> {
     if enabled {
         Ok(())
@@ -291,6 +294,7 @@ fn require_pipeline_worker_entry_point(enabled: bool) -> Result<(), OrbitError> 
 
 /// The production worker command: `current_exe` resolved to its launchable
 /// path, after the production entry-point check, at the hidden worker subcommand.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn orbit_worker_command(
     current_exe: PathBuf,
     workspace: &Path,
@@ -306,6 +310,7 @@ pub(crate) fn orbit_worker_command(
     )
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn orbit_worker_command_with_permission(
     enabled: bool,
     current_exe: PathBuf,
