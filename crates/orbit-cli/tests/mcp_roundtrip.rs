@@ -5532,3 +5532,6 @@ mod desktop;
 
 #[path = "mcp_roundtrip/transport_operations.rs"]
 mod transport_operations;
+
+#[path = "mcp_roundtrip/internal_drain.rs"]
+mod internal_drain;

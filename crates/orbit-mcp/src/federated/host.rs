@@ -121,6 +121,7 @@ impl FederatedMcpHost {
         name: &str,
         input: Value,
         session_context: ToolSessionContext,
+        internal: bool,
     ) -> Result<Value, OrbitError> {
         let token = workspace_selector(&input, &session_context).ok_or_else(|| {
             OrbitError::InvalidInput(format!(
@@ -147,10 +148,12 @@ impl FederatedMcpHost {
             .find(|destination| destination.machine_id == parsed.machine_id())
             .ok_or_else(|| OrbitError::UnknownSelector(token.to_string()))?;
 
-        let mut session = self
-            .probe
-            .open_worker_route(destination, &session_context)
-            .map_err(|error| delivery_unreachable(destination, error))?;
+        let mut session = if internal {
+            self.probe.open_internal_drain_route(destination)
+        } else {
+            self.probe.open_worker_route(destination, &session_context)
+        }
+        .map_err(|error| delivery_unreachable(destination, error))?;
         let snapshot = session
             .snapshot()
             .map_err(|error| delivery_unreachable(destination, error))?;
@@ -173,33 +176,43 @@ impl FederatedMcpHost {
             return Err(OrbitError::UnhealthyCheckout(token.to_string()));
         }
 
-        let advertised = session
-            .advertised_tools()
-            .map_err(|error| delivery_unreachable(destination, error))?;
-        for argument in [
-            "view",
-            "snapshot",
-            "request_id",
-            "expected_revision",
-            "verdict",
-            "complete",
-            "expected_enabled",
-            "acknowledge_unconditional",
-            "default_input",
-            "include_catalog",
-        ] {
-            if input.get(argument).is_some() && !session.supports_tool_argument(name, argument)? {
+        if internal {
+            if !session.internal_drain_protocol()? {
+                return Err(OrbitError::ToolNotOnThisHost(
+                    "destination does not support the internal drain protocol".into(),
+                ));
+            }
+        } else {
+            let advertised = session
+                .advertised_tools()
+                .map_err(|error| delivery_unreachable(destination, error))?;
+            for argument in [
+                "view",
+                "snapshot",
+                "request_id",
+                "expected_revision",
+                "verdict",
+                "complete",
+                "expected_enabled",
+                "acknowledge_unconditional",
+                "default_input",
+                "include_catalog",
+            ] {
+                if input.get(argument).is_some()
+                    && !session.supports_tool_argument(name, argument)?
+                {
+                    return Err(OrbitError::ToolNotOnThisHost(format!(
+                        "'{name}' argument '{argument}' is unsupported on '{}'",
+                        destination.machine_id
+                    )));
+                }
+            }
+            if !tool_on_surface(&advertised, name) {
                 return Err(OrbitError::ToolNotOnThisHost(format!(
-                    "'{name}' argument '{argument}' is unsupported on '{}'",
+                    "'{name}' is not advertised on '{}'",
                     destination.machine_id
                 )));
             }
-        }
-        if !tool_on_surface(&advertised, name) {
-            return Err(OrbitError::ToolNotOnThisHost(format!(
-                "'{name}' is not advertised on '{}'",
-                destination.machine_id
-            )));
         }
 
         tracing::info!(
@@ -212,11 +225,27 @@ impl FederatedMcpHost {
         // reaches the destination, so its failure is the destination's answer
         // (`RemoteTool`) or a post-dispatch ambiguity (`OutcomeUnknown`) —
         // never a delivery miss the caller should retry [ORB-11023].
-        session.call_tool(
-            name,
-            destination_arguments(input, parsed.workspace_id()),
-            session_context,
-        )
+        let arguments = destination_arguments(input, parsed.workspace_id());
+        if internal {
+            session.call_internal_drain(name, arguments, session_context)
+        } else {
+            session.call_tool(name, arguments, session_context)
+        }
+    }
+
+    /// Owner/follower route, independent of public tools/list and tools/call.
+    pub fn call_internal_drain(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        if session.worker_invocation.is_some() {
+            return Err(crate::internal_drain::refusal());
+        }
+        let canonical =
+            crate::internal_drain_name(name).ok_or_else(crate::internal_drain::refusal)?;
+        self.route_workspace_call(canonical, input, session, true)
     }
 }
 
@@ -238,10 +267,22 @@ impl crate::McpHost for FederatedMcpHost {
         input: Value,
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if let Some(canonical) = crate::internal_drain_name(name) {
+            return self.refuse_internal_drain(canonical, input, session_context);
+        }
         if name == FEDERATED_WORKSPACE_LIST_TOOL {
             return Ok(self.list_workspaces());
         }
-        self.route_workspace_call(name, input, session_context)
+        self.route_workspace_call(name, input, session_context, false)
+    }
+
+    fn refuse_internal_drain(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.probe.refuse_internal_drain(name, input, context)
     }
 
     fn federated_workspace_selectors(&self) -> bool {
@@ -261,7 +302,7 @@ impl orbit_tools::OwnerCoordinator for FederatedMcpHost {
                 "owner route requires worker binding".into(),
             ));
         }
-        self.route_workspace_call(name, input, session)
+        self.route_workspace_call(name, input, session, false)
     }
 }
 

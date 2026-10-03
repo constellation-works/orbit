@@ -5,11 +5,16 @@ each replica. Use this when the user wants a second machine to execute the same
 logical workspace, or when a claimed attempt needs inspection. Installing
 matching binaries is not a rollout; starting `orbit run auto --pull` is.
 
-The owner serves `orbit.task.pull`, `orbit.drain.claim.bind` and
-`orbit.drain.claim.settle` to a follower's drain. Handoff approval, revocation
-and claim recovery are **not** tools: they are owner-operator actions on the
-owner's dashboard. Do not invent tools for them, write a callers file, or
-start a second owner store.
+The owner serves probe, receipt lookup, task admission, bind and settlement
+through a deterministic internal RPC selected by Orbit's runtime SSH launch.
+These five operations are absent from ordinary MCP discovery and refused by
+public `tools/call`, including their formerly advertised spellings. Client names
+and initialize metadata grant no internal access. Both endpoints must support
+the internal protocol; preflight fails closed without a public fallback. A
+replica runs `orbit run auto --pull <selector>` to use that route. Supported
+operator diagnostics remain owner-side CLI commands; approval, revocation and
+recovery remain owner-dashboard actions. Do not invent tools for them, write a
+callers file, or start a second owner store.
 
 Owner/replica registration lives in
 [multi-host.md](../../../orbit-setup/references/multi-host.md). SSH federation

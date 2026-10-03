@@ -33,12 +33,12 @@ impl McpToolClass {
     }
 }
 
-/// Classify one advertised MCP tool by behavior.
+/// Classify public tools and internal drain operations by behavior.
 ///
 /// Accepts either the canonical (`orbit.task.add`) or advertised
 /// (`orbit_task_add`) spelling. Task reads are `control_plane` because the
 /// coordination store is owner-authoritative. A name this host does not
-/// advertise is unclassified here; routing rejects it earlier with
+/// advertise or serve internally is unclassified here; public routing rejects it with
 /// `tool_not_on_this_host`, which precedes `capability_refused`.
 pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
     match mcp_advertised_tool_name(tool_name).as_str() {
@@ -59,7 +59,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_auto_task_toggle"
         | "orbit_auto_task_delete"
         | "orbit_search"
-        // The distributed drain's read-only surface answers for the owner's
+        // The internal distributed drain answers for the owner's
         // coordination store — receipts, claims, and the ship contract
         // admission would resolve — so a replica must refuse it rather than
         // answer about itself [ORB-12495].

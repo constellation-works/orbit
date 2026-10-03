@@ -41,36 +41,14 @@ pub fn register(registry: &mut ToolRegistry) {
         auto_task::delete::OrbitAutoTaskDeleteTool,
         McpToolScope::WorkspaceRequired,
     );
-    // The distributed drain. The probe, receipt lookup, pull, bind and settle
-    // are advertised because a follower's drain reaches each of them over
-    // federated MCP [ORB-13625]. Claim inspection is registered active but
-    // unadvertised: it is an operator surface, and the operator reaches it
-    // with `orbit tool run orbit.drain.claims` rather than through a dedicated
-    // subcommand, so `register_inactive` would leave it with no entry point at
-    // all [ORB-12581]. What keeps it operator-only is its `GOVERNED_OPERATIONS`
-    // row, which refuses an agent on every surface. Approval, revocation and
-    // recovery are deliberately absent: they are owner-operator dashboard
-    // actions, not something an executor's session may reach.
-    registry.register_mcp(
-        drain::probe::OrbitDrainProbeTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        drain::receipt_lookup::OrbitDrainReceiptLookupTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        drain::pull::OrbitTaskPullTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        drain::claim_bind::OrbitDrainClaimBindTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        drain::claim_settle::OrbitDrainClaimSettleTool,
-        McpToolScope::WorkspaceRequired,
-    );
+    // Deterministic owner/follower operations remain active for runtime and
+    // operator diagnostics, but have no public MCP schemas. The internal
+    // transport selects their existing guarded handlers explicitly.
+    registry.register(drain::probe::OrbitDrainProbeTool);
+    registry.register(drain::receipt_lookup::OrbitDrainReceiptLookupTool);
+    registry.register(drain::pull::OrbitTaskPullTool);
+    registry.register(drain::claim_bind::OrbitDrainClaimBindTool);
+    registry.register(drain::claim_settle::OrbitDrainClaimSettleTool);
     registry.register(drain::claims::OrbitDrainClaimsTool);
     // Friction schemas and MCP exposure are declared once in the shared
     // operation registry and registered from there.

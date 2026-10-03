@@ -9,9 +9,10 @@ use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
-    InitializeResult, ListResourcesResult, ListToolsResult, Meta, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
+    CallToolRequestParams, CallToolResult, CustomRequest, CustomResult, Implementation,
+    InitializeRequestParams, InitializeResult, ListResourcesResult, ListToolsResult, Meta,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
+    ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
@@ -43,7 +44,9 @@ impl OrbitToolServer {
             return Ok(Arc::clone(definitions));
         }
 
-        let definitions = self.host.list_mcp_tool_definitions()?;
+        let mut definitions = self.host.list_mcp_tool_definitions()?;
+        definitions
+            .retain(|definition| crate::internal_drain_name(&definition.schema.name).is_none());
         if definitions.iter().any(|definition| {
             presentation::is_presentation(&super::name_map::sanitize_tool_name(
                 &definition.schema.name,
@@ -244,6 +247,20 @@ impl OrbitToolServer {
     ) -> Result<CallToolResult, McpError> {
         if presentation::is_presentation(request.name.as_ref()) {
             let result = self.dispatch_presentation(request).await;
+            return Ok(match result {
+                Ok(value) => mcp_tool_call_result(value),
+                Err(error) => tool_error_result(&error),
+            });
+        }
+        if let Some(canonical) = crate::internal_drain_name(request.name.as_ref()) {
+            let host = Arc::clone(&self.host);
+            let context = self.context_for_tool_call();
+            let input = Value::Object(request.arguments.unwrap_or_default());
+            let result = tokio::task::spawn_blocking(move || {
+                host.refuse_internal_drain(canonical, input, context)
+            })
+            .await
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
                 Err(error) => tool_error_result(&error),
@@ -480,6 +497,56 @@ impl OrbitToolServer {
 }
 
 impl ServerHandler for OrbitToolServer {
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, McpError> {
+        if request.method == crate::internal_drain::PREFLIGHT_METHOD && self.internal_drain {
+            return Ok(CustomResult(
+                serde_json::json!({"protocol": crate::INTERNAL_DRAIN_PROTOCOL}),
+            ));
+        }
+        if request.method != crate::internal_drain::CALL_METHOD {
+            return Err(McpError::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method,
+                None,
+            ));
+        }
+        let params = request.params.unwrap_or(Value::Null);
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .and_then(crate::internal_drain_name)
+            .ok_or_else(|| McpError::invalid_params("unknown internal drain operation", None))?;
+        let input = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let enabled = self.internal_drain
+            && params.get("protocol").and_then(Value::as_u64)
+                == Some(crate::INTERNAL_DRAIN_PROTOCOL);
+        let context = self.context_for_tool_call();
+        let host = Arc::clone(&self.host);
+        let result = tokio::task::spawn_blocking(move || {
+            if enabled {
+                host.call_internal_drain(name, input, context)
+            } else {
+                host.refuse_internal_drain(name, input, context)
+            }
+        })
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let result = match result {
+            Ok(value) => mcp_tool_call_result(value),
+            Err(error) => tool_error_result(&error),
+        };
+        Ok(CustomResult(serde_json::to_value(result).map_err(
+            |error| McpError::internal_error(error.to_string(), None),
+        )?))
+    }
+
     fn initialize(
         &self,
         request: InitializeRequestParams,

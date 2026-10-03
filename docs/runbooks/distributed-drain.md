@@ -20,11 +20,16 @@ drain, migrate leftover epic/child/review state, and recover a claimed
 attempt. Installing matching binaries is not a rollout: starting a follower's
 drain is a separate, explicit operator action (step 8).
 
-Since [ORB-13625] the owner serves `orbit.task.pull`, `orbit.drain.claim.bind`
-and `orbit.drain.claim.settle`, and a replica runs `orbit run auto --pull
-<selector>`. Completion approval, revocation and recovery are **not** tools:
-they stay owner-operator actions on the owner's dashboard, and a follower
-never merges.
+The owner serves probe, receipt reconciliation, task admission, bind and
+settlement over a deterministic internal RPC selected by Orbit's runtime SSH
+launch. A replica runs `orbit run auto --pull <selector>` to use it. The five
+operations are absent from public MCP discovery and refused by public
+`tools/call` under both canonical and formerly advertised names. Client names
+and initialize metadata cannot enable internal access. Both endpoints must
+support the internal transport revision; preflight fails closed with no public
+fallback. CLI diagnostics below retain their authority requirements, and
+completion approval, revocation and recovery remain owner-dashboard actions.
+The follower never merges.
 
 ## Prerequisites and safety
 
@@ -214,8 +219,8 @@ owner's `~/.ssh/authorized_keys`. Details:
 
 ### 6. Read-only probe (never a health check for admission)
 
-From a session that can reach the **owner** (federated selector or owner-local
-tool run). Both `orbit.drain.probe` and `orbit.drain.receipt.lookup` require an
+Run the diagnostic CLI on the **owner**, locally or through an operator SSH
+shell. Both `orbit.drain.probe` and `orbit.drain.receipt.lookup` require an
 identified caller (`agent` or `operator`). A non-interactive shell uses an
 agent envelope or `ORBIT_OPERATOR=1`.
 
@@ -233,8 +238,8 @@ owner-resolved ship configuration, and review policy. Declaring version,
 schema, or review policy also reports the **first refusal admission would
 raise**, in admission order. It creates no receipt, reservation, claim, or
 task. A replica destination refuses the tool instead of answering about
-itself, naming its owner and saying to run the tool there or through the owner's
-federated selector. Do not call pull as a health check: a pull is an admission, and an
+itself, naming its owner. Run the diagnostic CLI there; the follower runtime
+uses its internal owner selector. Do not call pull as a health check: a pull is an admission, and an
 admitted claim is real work the owner holds until it settles.
 
 Expected refusals you may see (and must not work around):
