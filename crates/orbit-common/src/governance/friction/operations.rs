@@ -192,7 +192,9 @@ const LIST: FrictionOperation = FrictionOperation {
         },
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    // Agents list frictions through `orbit.search` with `kind: friction` and
+    // no query; this verb backs the CLI listing and the dashboard.
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::RecordTable,
 };
@@ -245,7 +247,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::Update,
     name: "update",
     tool_name: "orbit.friction.update",
-    tool_description: "Update triage metadata for a friction record",
+    tool_description: "Update triage metadata for a friction record. A non-empty `rehome_to` moves the record into that registered workspace after the other edits apply: the owning workspace gets a copy with the original title, reporter, creation time, task, status, and body under a new ID (returned as `rehomed_as`), and this record is resolved with a pointer to it. Set `move` to false to only record the `rehome_to` disposition",
     cli_about: "Update triage metadata for a friction record",
     params: &[
         ParamSpec {
@@ -283,6 +285,16 @@ const UPDATE: FrictionOperation = FrictionOperation {
             cli: Some(CliBinding {
                 kind: flag("rehome-to"),
                 help: REHOME_TO_HELP,
+            }),
+        },
+        ParamSpec {
+            name: "move",
+            param_type: ParamType::Boolean,
+            required: false,
+            mcp_description: Some(MOVE_HELP),
+            cli: Some(CliBinding {
+                kind: flag("move"),
+                help: MOVE_HELP,
             }),
         },
         ParamSpec {
@@ -345,7 +357,9 @@ const REHOME: FrictionOperation = FrictionOperation {
         },
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    // Agents move a record with `orbit.friction.update` `rehome_to`; this verb
+    // remains the CLI spelling of the same move.
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::Record,
 };
@@ -365,7 +379,10 @@ const ADD_TITLE_CLI_HELP: Description = Description::Computed(add_title_cli_help
 const UPDATE_TITLE_HELP: Description = Description::Computed(update_title_description);
 const UPDATE_TITLE_CLI_HELP: Description = Description::Computed(update_title_cli_help);
 const REHOME_TO_HELP: Description = Description::Static(
-    "Optional owning workspace for a friction recorded in the wrong one (the `rehome_required` disposition); an empty string clears it",
+    "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition",
+);
+const MOVE_HELP: Description = Description::Static(
+    "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
 );
 const TO_WORKSPACE_HELP: Description =
     Description::Static("Registered name or ID of the workspace that owns this friction");

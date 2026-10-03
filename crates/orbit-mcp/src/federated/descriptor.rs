@@ -5,10 +5,13 @@
 //! `reachability`, `checkout_health`, and `capabilities`. Those names are
 //! protocol, so reachability and checkout presence stay two separate fields
 //! rather than one merged `health`, and `machine_id` sits on every descriptor
-//! instead of on the envelope the way v1 keys it.
+//! instead of on the envelope the way v1 keys it. A list called with
+//! `include: ["crews"]` adds the destination's own `crews` (or `crews_error`)
+//! to each row it reported.
 
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde::Serialize;
+use serde_json::{Map, Value};
 
 use super::config::{Destination, MachineQualifiedSelector};
 
@@ -66,6 +69,10 @@ pub struct WorkspaceDescriptor {
     reachability: Reachability,
     checkout_health: CheckoutHealth,
     capabilities: Vec<Capability>,
+    /// The `crews` or `crews_error` key the destination attached to this
+    /// workspace, verbatim. Empty unless the caller asked for crews.
+    #[serde(flatten)]
+    crews: Map<String, Value>,
 }
 
 impl WorkspaceDescriptor {
@@ -87,7 +94,14 @@ impl WorkspaceDescriptor {
             checkout_health,
             capabilities,
             workspace: Some(workspace),
+            crews: Map::new(),
         }
+    }
+
+    /// Attach the crew keys the destination reported for this workspace.
+    pub(super) fn with_crews(mut self, crews: Map<String, Value>) -> Self {
+        self.crews = crews;
+        self
     }
 
     /// The placeholder row for a destination that answered nothing.
@@ -104,6 +118,7 @@ impl WorkspaceDescriptor {
             reachability: Reachability::Unreachable,
             checkout_health: CheckoutHealth::Unknown,
             capabilities: Vec::new(),
+            crews: Map::new(),
         }
     }
 
@@ -120,6 +135,7 @@ impl WorkspaceDescriptor {
             reachability: Reachability::Reachable,
             checkout_health: CheckoutHealth::Unknown,
             capabilities: Vec::new(),
+            crews: Map::new(),
         }
     }
 }

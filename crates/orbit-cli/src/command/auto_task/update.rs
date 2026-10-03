@@ -145,6 +145,7 @@ impl Execute for AutoTaskUpdateArgs {
                 schedule,
                 dedupe: self.dedupe,
                 template,
+                enabled: None,
             },
         )?;
 

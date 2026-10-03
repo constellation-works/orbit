@@ -96,7 +96,8 @@ fails config load — deliberately, since the alternative is silently dispatchin
 to the wrong model.
 
 `enabled = false` on a crew keeps it defined and listed (`orbit config show`
-has an `ENABLED` column; `orbit.crew.list` returns `enabled`) but takes it out
+has an `ENABLED` column; `orbit.workspace.list` with `include: ["crews"]`
+returns `enabled` per crew) but takes it out
 of execution. Omitting `enabled` means enabled, so older configs are unchanged.
 A disabled crew is never drawn from a complexity pool; a pool whose members are
 all disabled routes the task to `default_crew`, like an empty pool. A task

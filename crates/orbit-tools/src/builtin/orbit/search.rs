@@ -15,7 +15,7 @@ impl Tool for OrbitSearchTool {
         let mut parameters = vec![
             ToolParam {
                 name: "query".to_string(),
-                description: "Free-text lexical query. Multiple words need not be adjacent."
+                description: "Free-text lexical query. Multiple words need not be adjacent. Optional with `kind: friction`, where omitting it lists frictions."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
@@ -29,7 +29,7 @@ impl Tool for OrbitSearchTool {
             },
             ToolParam {
                 name: "limit".to_string(),
-                description: "Maximum number of results. Default: 10.".to_string(),
+                description: "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.".to_string(),
                 param_type: "integer".to_string(),
                 required: false,
             },
@@ -80,7 +80,7 @@ impl Tool for OrbitSearchTool {
         parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.search".to_string(),
-            description: "Search tasks and frictions using lexical matching.".to_string(),
+            description: "Search tasks and frictions using lexical matching. With `kind: friction` and no `query`, list friction records instead: every status unless a `friction:` status narrows it, filtered by `tag`, ordered by creation time then ID, each hit carrying the full `record`; a note reports a listing cut at `limit`.".to_string(),
             parameters,
             builtin: true,
         }

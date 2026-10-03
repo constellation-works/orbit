@@ -266,35 +266,6 @@ fn auto_task_mint_rechecks_persisted_template_requirements() {
     assert!(runtime.list_tasks().expect("list tasks").is_empty());
 }
 
-#[test]
-fn delete_refuses_an_open_mint_then_forces_and_reports_through_the_tool_surface() {
-    let (_temp, runtime) = with_definition("chore");
-    let minted = runtime.auto_task_mint("chore").expect("mint");
-
-    let refused = invalid_input_message(run_tool_as_operator(
-        &runtime,
-        "orbit.auto_task.delete",
-        json!({ "name": "chore" }),
-    ));
-    assert!(
-        refused.contains(&minted.id),
-        "the refusal names the open task"
-    );
-
-    let deleted = run_tool_as_operator(
-        &runtime,
-        "orbit.auto_task.delete",
-        json!({ "name": "chore", "reason": "retired chore", "force": true }),
-    )
-    .expect("forced delete");
-
-    assert_eq!(deleted["name"], json!("chore"));
-    assert_eq!(deleted["reason"], json!("retired chore"));
-    assert_eq!(deleted["opted_out"], json!(false));
-    assert_eq!(deleted["open_tasks"], json!([minted.id]));
-    assert!(runtime.auto_task_show("chore").expect("show").is_none());
-}
-
 /// Mark a definition as seeded by `plugin:ghost`, a plugin this host never
 /// installed, so its plugin is off on the host.
 fn seed_as_ghost_plugin(runtime: &OrbitRuntime, name: &str) {

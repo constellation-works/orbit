@@ -49,15 +49,11 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_artifact_get"
         | "orbit_task_artifact_put"
         | "orbit_friction_add"
-        | "orbit_friction_list"
         | "orbit_friction_update"
-        | "orbit_friction_rehome"
         | "orbit_auto_task_list"
         | "orbit_auto_task_mint"
         | "orbit_auto_task_add"
         | "orbit_auto_task_update"
-        | "orbit_auto_task_toggle"
-        | "orbit_auto_task_delete"
         | "orbit_search"
         // The internal distributed drain answers for the owner's
         // coordination store — receipts, claims, and the ship contract
@@ -80,13 +76,9 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_routine_control"
         | "orbit_agent_invoke"
         | "orbit_command_exec"
-        // [ORB-13744] Delivery evidence is the run's own checkpoint, held
-        // by the host that executed it, like the run view it narrows.
-        | "orbit_workflow_run_delivery"
         | "orbit_workflow_run_list"
         | "orbit_workflow_run_show"
-        | "orbit_workflow_run_resume"
-        | "orbit_workflow_run_workers" => McpToolClass::Execute,
+        | "orbit_workflow_run_resume" => McpToolClass::Execute,
         _ => McpToolClass::Unclassified,
     }
 }

@@ -90,9 +90,11 @@ impl OrbitRuntime {
             .filter(|tag| !tag.is_empty())
             .collect();
 
-        if query_owned.is_none() && !has_path && tag_filter.is_empty() {
+        let listing = params.is_friction_listing();
+        if query_owned.is_none() && !has_path && tag_filter.is_empty() && !listing {
             return Err(OrbitError::InvalidInput(
-                "search requires a query, --path, or --tag".to_string(),
+                "search requires a query, --path, or --tag; only kind friction lists without one"
+                    .to_string(),
             ));
         }
 
@@ -118,13 +120,19 @@ impl OrbitRuntime {
                 );
                 skipped_kinds.push("friction".to_string());
             } else {
-                branches.push(self.friction_branch(
+                let (hits, truncated) = self.friction_branch(
                     &params,
                     &status_filters,
                     query_owned.as_deref(),
                     &tag_filter,
                     limit,
-                )?);
+                )?;
+                if listing && truncated {
+                    notes.push(format!(
+                        "friction listing truncated at {limit} records; narrow it with a `friction:` status or a tag"
+                    ));
+                }
+                branches.push(hits);
             }
         }
 
@@ -217,6 +225,10 @@ impl OrbitRuntime {
         Ok(page.items.into_iter().map(|row| row.task).collect())
     }
 
+    /// Friction hits the filters admit, and whether more matched than
+    /// `limit`. A listing spans every status unless a `friction:` status
+    /// narrows it and carries each full record; a query defaults to open
+    /// records unless `all` widens it.
     fn friction_branch(
         &self,
         params: &GlobalSearchParams,
@@ -224,10 +236,11 @@ impl OrbitRuntime {
         query: Option<&str>,
         tag_filter: &[String],
         limit: usize,
-    ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
+    ) -> Result<(Vec<GlobalSearchHit>, bool), OrbitError> {
+        let listing = params.is_friction_listing();
         let status = status_filters
             .friction
-            .or((!params.all).then_some(orbit_types::record::FrictionStatus::Open));
+            .or((!params.all && !listing).then_some(orbit_types::record::FrictionStatus::Open));
         let records = crate::runtime::friction::store_for(self)?.list(&FrictionListFilter {
             status,
             q: query.map(str::to_string),
@@ -235,41 +248,51 @@ impl OrbitRuntime {
             ..FrictionListFilter::default()
         })?;
 
-        Ok(records
-            .into_iter()
-            .filter(|stored| {
-                tag_filter.iter().all(|needle| {
-                    stored
-                        .record
-                        .tags
-                        .iter()
-                        .any(|candidate| candidate.eq_ignore_ascii_case(needle))
-                })
+        let mut admitted = records.into_iter().filter(|stored| {
+            tag_filter.iter().all(|needle| {
+                stored
+                    .record
+                    .tags
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(needle))
             })
-            .take(limit)
-            .map(|stored| {
-                let record = stored.record;
-                GlobalSearchHit {
-                    kind: "friction".to_string(),
-                    source: "lexical".to_string(),
-                    id: Some(record.id.clone()),
-                    path: None,
-                    title: Some(orbit_common::governance::friction::effective_title(
-                        record.title.as_deref(),
-                        &record.body,
-                        &record.id,
-                    )),
-                    summary: None,
-                    status: Some(record.status.as_str().to_string()),
-                    best_field: None,
-                    snippet: Some(record.body),
-                    score: None,
-                    score_breakdown: None,
-                    matched_by: None,
-                    workspace: None,
-                }
-            })
-            .collect())
+        });
+        let mut hits = Vec::new();
+        for stored in admitted.by_ref().take(limit) {
+            let record = stored.record;
+            let title = orbit_common::governance::friction::effective_title(
+                record.title.as_deref(),
+                &record.body,
+                &record.id,
+            );
+            let full = if listing {
+                let mut value = serde_json::to_value(&record).map_err(|error| {
+                    OrbitError::Store(format!("serialize friction record: {error}"))
+                })?;
+                value["title"] = serde_json::json!(title);
+                Some(value)
+            } else {
+                None
+            };
+            hits.push(GlobalSearchHit {
+                kind: "friction".to_string(),
+                source: "lexical".to_string(),
+                id: Some(record.id.clone()),
+                path: None,
+                title: Some(title),
+                summary: None,
+                status: Some(record.status.as_str().to_string()),
+                best_field: None,
+                snippet: Some(record.body),
+                score: None,
+                score_breakdown: None,
+                matched_by: None,
+                workspace: None,
+                record: full,
+            });
+        }
+        let truncated = admitted.next().is_some();
+        Ok((hits, truncated))
     }
 
     /// Lexical task candidates, at most `2 × limit`, from two sources in order.

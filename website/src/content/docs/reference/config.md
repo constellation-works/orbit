@@ -97,8 +97,8 @@ A crew table without `enabled` is enabled, so existing configs behave exactly
 as before. A disabled crew:
 
 - stays listed — `orbit config show` (`ENABLED` column), `orbit config get
-  crews.<name>.enabled`, `orbit.crew.list` (`enabled` per crew, schema
-  version 3) and the dashboard all show it;
+  crews.<name>.enabled`, `orbit.workspace.list` with `include: ["crews"]`
+  (`enabled` per crew, schema version 3) and the dashboard all show it;
 - is never drawn from a complexity pool. A pool whose members are all disabled
   behaves like an empty pool and routes the task to `default_crew`;
 - is refused, never substituted, when a task's `crew`, an explicit crew,

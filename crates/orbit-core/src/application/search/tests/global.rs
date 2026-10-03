@@ -241,6 +241,101 @@ fn friction_branch_searches_open_records_and_rejects_learning_kind() {
     assert!(GlobalSearchKind::from_str("learning").is_err());
 }
 
+fn add_friction(runtime: &OrbitRuntime, title: &str) -> String {
+    runtime
+        .execute_tool_command(
+            "orbit.friction.add",
+            serde_json::json!({
+                "title": title,
+                "body": format!("{title}: the observed failure."),
+                "tags": ["tooling"],
+                "model": "codex",
+            }),
+            Some("codex".to_string()),
+            Some("codex".to_string()),
+        )
+        .expect("add friction fixture")["id"]
+        .as_str()
+        .expect("friction id")
+        .to_string()
+}
+
+/// A friction search without a query is the friction listing: every status,
+/// oldest first, each hit carrying the full record a curator works from.
+#[test]
+fn queryless_friction_search_lists_every_status_in_created_order() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let first = add_friction(&runtime, "First recorded failure");
+    let second = add_friction(&runtime, "Second recorded failure");
+    let third = add_friction(&runtime, "Third recorded failure");
+    runtime
+        .execute_tool_command(
+            "orbit.friction.update",
+            serde_json::json!({ "id": second, "status": "resolved" }),
+            None,
+            None,
+        )
+        .expect("resolve the second record");
+
+    let listing = runtime
+        .global_search(GlobalSearchParams {
+            kind: GlobalSearchKind::Friction,
+            ..Default::default()
+        })
+        .expect("list frictions");
+    let ids = listing
+        .results
+        .iter()
+        .map(|hit| hit.id.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![first.clone(), second.clone(), third.clone()]);
+    let record = listing.results[1].record.as_ref().expect("full record");
+    assert_eq!(record["status"], serde_json::json!("resolved"));
+    assert_eq!(
+        record["title"],
+        serde_json::json!("Second recorded failure")
+    );
+    assert!(listing.notes.is_empty(), "{:?}", listing.notes);
+
+    let open = runtime
+        .global_search(GlobalSearchParams {
+            kind: GlobalSearchKind::Friction,
+            status: vec!["friction:open".to_string()],
+            ..Default::default()
+        })
+        .expect("list open frictions");
+    let open_ids = open
+        .results
+        .iter()
+        .map(|hit| hit.id.clone().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(open_ids, vec![first.clone(), third]);
+
+    let page = runtime
+        .global_search(GlobalSearchParams {
+            kind: GlobalSearchKind::Friction,
+            limit: 2,
+            ..Default::default()
+        })
+        .expect("list a page");
+    assert_eq!(page.results.len(), 2);
+    assert_eq!(page.results[0].id.as_deref(), Some(first.as_str()));
+    assert!(
+        page.notes.iter().any(|note| note.contains("truncated")),
+        "a cut listing says so: {:?}",
+        page.notes
+    );
+
+    let queryless_task = runtime.global_search(GlobalSearchParams {
+        kind: GlobalSearchKind::Task,
+        ..Default::default()
+    });
+    assert!(
+        queryless_task.is_err(),
+        "only the friction kind lists without a query"
+    );
+}
+
 #[test]
 fn adr_search_kind_is_rejected() {
     let error = GlobalSearchKind::from_str("adr").expect_err("ADR corpus was retired");

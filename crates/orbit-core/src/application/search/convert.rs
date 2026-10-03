@@ -15,6 +15,7 @@ pub(super) fn lexical_task_hit(task: &orbit_types::task::Task) -> GlobalSearchHi
         score_breakdown: None,
         matched_by: None,
         workspace: None,
+        record: None,
     }
 }
 

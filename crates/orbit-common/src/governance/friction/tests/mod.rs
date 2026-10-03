@@ -109,12 +109,15 @@ fn subcommand_order_is_the_shipped_help_order() {
 #[test]
 fn mcp_exposure_matches_the_shipped_conformance_contract() {
     // docs/design/mcp-bridge/references/conformance-v1.yaml
-    for verb in [FrictionVerb::Add, FrictionVerb::List, FrictionVerb::Update] {
+    for verb in [FrictionVerb::Add, FrictionVerb::Update] {
         assert_eq!(verb.spec().mcp_scope, Some(McpToolScope::WorkspaceRequired));
     }
-    // Reads that `list` already covers, aggregate stats, and operator
-    // resolution stay on the CLI / dashboard surface [ORB-10798].
+    // Listing goes through `orbit.search` and moving through `update`;
+    // single reads, aggregate stats, and operator resolution stay on the
+    // CLI / dashboard surface [ORB-10798].
     for verb in [
+        FrictionVerb::List,
+        FrictionVerb::Rehome,
         FrictionVerb::Show,
         FrictionVerb::Tags,
         FrictionVerb::Stats,

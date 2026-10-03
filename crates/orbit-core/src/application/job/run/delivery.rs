@@ -14,8 +14,11 @@
 //! delivery. Evidence that is missing or does not match is reported as a typed
 //! gap, never filled from a weaker source.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::{
     ActivityV2Spec, CommitObservation, CommitObservationStatus, DeliveryEvidenceGap,
     DeliveryEvidenceProvenance, JobRun, JobRunState, JobV2, JobV2Step, JobV2StepBody,
@@ -146,6 +149,53 @@ impl OrbitRuntime {
             shape.as_ref(),
             &task.id,
         ))
+    }
+}
+
+impl OrbitRuntime {
+    /// Observe what a delivery run committed and landed for one task: the
+    /// named run, or, when none is named, the newest task-delivery run this
+    /// workspace recorded with the task among its submitted `task_ids`.
+    ///
+    /// The run is chosen from the same evidence the observation checks — the
+    /// run's own submitted input and a job that holds task delivery — so the
+    /// default never picks a run the explicit form would refuse.
+    pub fn observe_task_delivery(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
+        if let Some(run_id) = run_id {
+            return self.observe_run_delivery(run_id, task_id);
+        }
+        let task_id = bounded_id(task_id, "task_id")?;
+        let task = self.get_task(task_id)?;
+        let run_id = self.latest_delivery_run_id(&task.id)?;
+        self.observe_run_delivery(&run_id, &task.id)
+    }
+
+    fn latest_delivery_run_id(&self, task_id: &str) -> Result<String, OrbitError> {
+        // Newest first; steps are not needed to choose the run.
+        let runs = self.list_job_runs_filtered_backend(&JobRunQuery {
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+        let mut delivers = HashMap::<String, bool>::new();
+        for run in runs {
+            if !run_task_ids(&run).contains(&task_id) {
+                continue;
+            }
+            let holds_delivery = *delivers.entry(run.job_id.clone()).or_insert_with(|| {
+                self.load_v2_job_asset_by_name(&run.job_id)
+                    .is_ok_and(|(_, job)| job.holds_task_delivery())
+            });
+            if holds_delivery {
+                return Ok(run.run_id);
+            }
+        }
+        Err(OrbitError::InvalidInput(format!(
+            "no task delivery run in this workspace was submitted with task '{task_id}'"
+        )))
     }
 }
 

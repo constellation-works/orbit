@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use chrono::Utc;
-use orbit_common::protocol::tool_schema::tool_input_schema;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::tool::McpToolScope;
 use orbit_types::workspace::{
@@ -11,50 +10,33 @@ use serde_json::json;
 
 use super::super::discovery::{
     discovery_tool_definitions, execute_discovery_tool, execute_federated_workspace_discovery,
+    workspace_list_includes_crews,
 };
 use super::super::surface::canonical_mcp_tool_definitions;
 
 #[test]
 fn mcp_owns_the_exact_global_discovery_definitions() {
     let definitions = discovery_tool_definitions().expect("discovery definitions");
-    assert_eq!(definitions.len(), 2);
     assert_eq!(
         definitions
             .iter()
             .map(|definition| definition.schema.name.as_str())
             .collect::<Vec<_>>(),
-        ["orbit.workspace.list", "orbit.crew.list"]
-    );
-    assert_eq!(
-        definitions[0].schema.description,
-        "List active workspaces with a checkout registered on this machine."
+        ["orbit.workspace.list"]
     );
     let workspace = &definitions[0];
     assert!(workspace.schema.builtin);
-    assert!(workspace.schema.parameters.is_empty());
     assert_eq!(workspace.scope, McpToolScope::Global);
     assert_eq!(
-        tool_input_schema(&workspace.schema),
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": true,
-        })
-        .as_object()
-        .expect("object schema")
-        .clone()
+        workspace
+            .schema
+            .parameters
+            .iter()
+            .map(|param| (param.name.as_str(), param.param_type.as_str()))
+            .collect::<Vec<_>>(),
+        [("include", "string_list")],
+        "crews ride on the list rather than a second discovery tool"
     );
-
-    let crew = &definitions[1];
-    assert_eq!(crew.schema.name, "orbit.crew.list");
-    assert_eq!(
-        crew.schema.description,
-        "List the effective configured crews for a selected workspace on this machine."
-    );
-    assert!(crew.schema.builtin);
-    assert_eq!(crew.scope, McpToolScope::WorkspaceRequired);
-    assert_eq!(crew.schema.parameters.len(), 1);
-    assert_eq!(crew.schema.parameters[0].name, "workspace");
 
     let canonical = canonical_mcp_tool_definitions().expect("canonical definitions");
     assert_eq!(
@@ -140,4 +122,14 @@ fn discovery_projects_active_workspaces_with_a_local_checkout() {
             ..
         })
     ));
+}
+
+#[test]
+fn include_accepts_crews_and_refuses_anything_else() {
+    assert!(!workspace_list_includes_crews(&json!({})).expect("absent"));
+    assert!(workspace_list_includes_crews(&json!({ "include": ["crews"] })).expect("array"));
+    assert!(workspace_list_includes_crews(&json!({ "include": "crews" })).expect("string"));
+    let error = workspace_list_includes_crews(&json!({ "include": ["crew"] }))
+        .expect_err("a typo must not read as no crews");
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
 }

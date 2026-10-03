@@ -7,7 +7,7 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::workflow::{JobRun, JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 
-use crate::application::job::{DrainWorkerLimitRequest, JobRunListParams};
+use crate::application::job::JobRunListParams;
 use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunProviderProcess,
     RunRecoveryAttempts,
@@ -71,17 +71,6 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let mut value = run_json_with_lineage(runtime, &run)?;
     value["execution_progress"] = execution_progress_json(runtime, &run.run_id);
     Ok(value)
-}
-
-/// [ORB-13744] The bounded public delivery observation: typed host evidence
-/// only, so it carries nothing to redact and nothing an agent wrote.
-pub(super) fn delivery(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let run_id =
-        orbit_common::protocol::tool_input::required_string(&input, &["run_id"], "run_id")?;
-    let task_id =
-        orbit_common::protocol::tool_input::required_string(&input, &["task_id"], "task_id")?;
-    let observation = runtime.observe_run_delivery(&run_id, &task_id)?;
-    serde_json::to_value(observation).map_err(serialize_error("serialize run delivery"))
 }
 
 /// [ORB-11752] What the run is doing right now, for the reader that asked
@@ -221,62 +210,11 @@ pub(super) fn resume(
     }))
 }
 
-/// [ORB-11253] Move a live drain's worker ceiling without replacing its run.
-pub(super) fn workers(
-    runtime: &OrbitRuntime,
-    input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-) -> Result<Value, OrbitError> {
-    let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
-    let concurrency = required_u32(&input, "concurrency")?;
-    let expected_revision = optional_u32(&input, "if_revision")?;
-    let reason = optional_string(&input, "reason")?;
-    let claim_token = optional_string(&input, "claim_token")?;
-    let actor = actor(runtime, agent.as_deref(), model.as_deref());
-    let change = runtime.set_drain_worker_limit(DrainWorkerLimitRequest {
-        run_id: &id,
-        max_active_leaf_runs: concurrency,
-        expected_revision,
-        reason: reason.as_deref(),
-        actor: &actor,
-        source: "tool",
-        claim_token: claim_token.as_deref(),
-    })?;
-    Ok(json!({
-        "run_id": change.run_id,
-        "job_id": change.job_id,
-        "outcome": change.outcome,
-        "previous_concurrency": change.previous_max_active_leaf_runs,
-        "concurrency": change.max_active_leaf_runs,
-        "revision": change.revision,
-        "hard_limit": change.hard_limit,
-    }))
-}
-
-fn required_u32(input: &Value, field: &str) -> Result<u32, OrbitError> {
-    optional_u32(input, field)?
-        .ok_or_else(|| OrbitError::InvalidInput(format!("`{field}` is required")))
-}
-
-fn optional_u32(input: &Value, field: &str) -> Result<Option<u32>, OrbitError> {
-    match input.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .map(Some)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!("`{field}` must be a non-negative integer"))
-            }),
-    }
-}
-
 fn optional_string(input: &Value, field: &str) -> Result<Option<String>, OrbitError> {
     orbit_common::protocol::tool_input::optional_string(input, field)
 }
 
-fn actor(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
+pub(super) fn actor(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
     normalize_optional_attribution_label(model.or(agent), model)
         .unwrap_or_else(|| runtime.actor_label().to_string())
 }

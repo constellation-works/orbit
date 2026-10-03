@@ -24,6 +24,7 @@ fn destinations() -> Vec<super::super::config::Destination> {
 
 fn owner_snapshot() -> DestinationSnapshot {
     DestinationSnapshot {
+        crews: Default::default(),
         machine_id: OWNER_MACHINE.to_string(),
         workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
     }
@@ -31,6 +32,7 @@ fn owner_snapshot() -> DestinationSnapshot {
 
 fn replica_snapshot() -> DestinationSnapshot {
     DestinationSnapshot {
+        crews: Default::default(),
         machine_id: REPLICA_MACHINE.to_string(),
         workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
     }
@@ -69,7 +71,7 @@ fn unknown_selectors_fail_before_any_destination() {
     let (host, log) = routed_mux();
 
     for selector in ["ws_orbit", "orbit-linux/ws_orbit", "hm_unknown/ws_orbit"] {
-        let error = call_err(&host, "orbit.crew.list", selector);
+        let error = call_err(&host, "orbit.workflow.run.list", selector);
         assert!(
             matches!(error, OrbitError::UnknownSelector(_)),
             "{selector}: {error}"
@@ -101,7 +103,7 @@ fn a_down_destination_is_unreachable_not_capability_or_stale() {
 fn a_missing_workspace_on_a_live_host_is_a_stale_route() {
     let (host, log) = routed_mux();
 
-    let error = call_err(&host, "orbit.crew.list", "hm_owner/ws_missing");
+    let error = call_err(&host, "orbit.workflow.run.list", "hm_owner/ws_missing");
     assert!(matches!(error, OrbitError::StaleRoute(_)), "{error}");
     assert!(log.calls().is_empty(), "stale routes are not delivered");
 }
@@ -113,6 +115,7 @@ fn a_missing_repo_root_is_an_unhealthy_checkout() {
     let probe = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: OWNER_MACHINE.to_string(),
             workspaces: vec![broken],
         },
@@ -123,7 +126,7 @@ fn a_missing_repo_root_is_an_unhealthy_checkout() {
         Arc::new(probe),
     );
 
-    let error = call_err(&host, "orbit.crew.list", "hm_owner/ws_broken");
+    let error = call_err(&host, "orbit.workflow.run.list", "hm_owner/ws_broken");
     assert!(matches!(error, OrbitError::UnhealthyCheckout(_)), "{error}");
     assert!(
         log.calls().is_empty(),
@@ -133,8 +136,10 @@ fn a_missing_repo_root_is_an_unhealthy_checkout() {
 
 #[test]
 fn a_tool_missing_from_the_destination_surface_is_not_on_this_host() {
-    let probe = three_destination_probe()
-        .advertising(OWNER_MACHINE, &["orbit_workspace_list", "orbit_crew_list"]);
+    let probe = three_destination_probe().advertising(
+        OWNER_MACHINE,
+        &["orbit_workspace_list", "orbit_workflow_run_list"],
+    );
     let log = probe.call_log();
     let host = FederatedMcpHost::new(destinations(), Arc::new(probe));
 
@@ -202,7 +207,8 @@ fn a_dispatched_call_whose_answer_is_lost_is_outcome_unknown_not_unreachable() {
 fn a_copied_selector_round_trips_to_the_encoded_host() {
     let (host, log) = routed_mux();
 
-    let owner = call(&host, "orbit.crew.list", "hm_owner/ws_orbit").expect("owner crew.list");
+    let owner = call(&host, "orbit.workflow.run.list", "hm_owner/ws_orbit")
+        .expect("owner workflow.run.list");
     assert_eq!(owner["workspace"], "ws_orbit");
 
     let shown = call(&host, "orbit.task.show", "hm_replica/ws_orbit").expect("replica task.show");
@@ -215,7 +221,7 @@ fn a_copied_selector_round_trips_to_the_encoded_host() {
             .map(|call| (call.machine_id.as_str(), call.tool.as_str()))
             .collect::<Vec<_>>(),
         [
-            (OWNER_MACHINE, "orbit.crew.list"),
+            (OWNER_MACHINE, "orbit.workflow.run.list"),
             (REPLICA_MACHINE, "orbit.task.show"),
         ]
     );
@@ -241,6 +247,7 @@ fn routing_does_not_reuse_list_health() {
         .route_snapshot(
             OWNER_MACHINE,
             DestinationSnapshot {
+                crews: Default::default(),
                 machine_id: OWNER_MACHINE.to_string(),
                 workspaces: Vec::new(),
             },
@@ -263,7 +270,7 @@ fn routing_does_not_reuse_list_health() {
         "the list still shows the workspace"
     );
 
-    let error = call_err(&host, "orbit.crew.list", "hm_owner/ws_orbit");
+    let error = call_err(&host, "orbit.workflow.run.list", "hm_owner/ws_orbit");
     assert!(
         matches!(error, OrbitError::StaleRoute(_)),
         "live delivery, not cached list health: {error}"
@@ -279,7 +286,7 @@ fn a_session_announced_selector_routes_like_a_call_argument() {
     };
 
     let result = host
-        .call_tool("orbit.crew.list", json!({}), context)
+        .call_tool("orbit.workflow.run.list", json!({}), context)
         .expect("session selector");
     assert_eq!(result["workspace"], "ws_orbit");
     assert_eq!(log.calls()[0].machine_id, OWNER_MACHINE);
@@ -294,7 +301,7 @@ fn a_session_defaulted_bare_workspace_id_is_unknown_before_forwarding() {
     };
 
     let error = host
-        .call_tool("orbit.crew.list", json!({}), context)
+        .call_tool("orbit.workflow.run.list", json!({}), context)
         .expect_err("bare session default must not route");
     assert!(
         matches!(error, OrbitError::UnknownSelector(_)),
@@ -341,6 +348,7 @@ fn an_identity_mismatch_on_the_live_route_is_unreachable() {
         .route_snapshot(
             OWNER_MACHINE,
             DestinationSnapshot {
+                crews: Default::default(),
                 machine_id: "hm_impostor".to_string(),
                 workspaces: vec![workspace("ws_orbit", Some("hm_impostor"))],
             },
@@ -351,7 +359,7 @@ fn an_identity_mismatch_on_the_live_route_is_unreachable() {
         Arc::new(probe),
     );
 
-    let error = call_err(&host, "orbit.crew.list", "hm_owner/ws_orbit");
+    let error = call_err(&host, "orbit.workflow.run.list", "hm_owner/ws_orbit");
     assert!(
         matches!(error, OrbitError::UnreachableDestination(_)),
         "{error}"

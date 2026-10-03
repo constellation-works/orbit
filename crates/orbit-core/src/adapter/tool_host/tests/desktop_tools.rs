@@ -98,6 +98,90 @@ fn desktop_create_and_comment_retry_through_tool_boundary_have_one_effect() {
     );
 }
 
+/// A live auto drain with checkpointed state — the shape a resize addresses.
+fn live_auto_drain(runtime: &crate::OrbitRuntime) -> String {
+    let jobs = runtime.stores().jobs();
+    let run = jobs
+        .insert_job_run(
+            "workspace_auto_pipeline",
+            1,
+            chrono::Utc::now(),
+            Some(json!({"max_active_leaf_runs": 2})),
+            None,
+        )
+        .expect("insert drain run");
+    jobs.mark_job_run_running(&run.run_id, chrono::Utc::now(), std::process::id())
+        .expect("start drain run");
+    let state = orbit_types::workflow::PipelineState::new(
+        run.run_id.clone(),
+        "workspace_auto_pipeline".to_string(),
+        json!({"max_active_leaf_runs": 2}),
+    );
+    jobs.write_run_state(&run.run_id, &state)
+        .expect("write drain state");
+    run.run_id
+}
+
+/// `resize` retunes the one live drain in place; it refuses to guess when
+/// there is none or several, and its inputs are refused on other actions.
+#[test]
+fn desktop_drain_resize_targets_the_one_live_drain_without_replacing_it() {
+    if !isolated("desktop_drain_resize_targets_the_one_live_drain_without_replacing_it") {
+        return;
+    }
+    let _guard = unmanaged_tool_env_guard();
+    let (_root, runtime, repo) = test_runtime();
+    let resize = |fields: serde_json::Value| {
+        let mut input = fields;
+        input["workspace"] = json!(repo);
+        input["action"] = json!("resize");
+        run_tool_as_operator(&runtime, "orbit.workflow.auto", input)
+    };
+
+    let none_live = resize(json!({"concurrency": 1}));
+    assert!(
+        matches!(none_live, Err(OrbitError::InvalidInput(_))),
+        "{none_live:?}"
+    );
+    let misplaced = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.auto",
+        json!({"workspace":repo,"action":"stop","if_revision":0}),
+    );
+    assert!(
+        matches!(misplaced, Err(OrbitError::InvalidInput(_))),
+        "{misplaced:?}"
+    );
+
+    let drain = live_auto_drain(&runtime);
+    let missing = resize(json!({}));
+    assert!(
+        matches!(missing, Err(OrbitError::InvalidInput(_))),
+        "{missing:?}"
+    );
+    let resized = resize(json!({"concurrency": 1, "reason": "Free a worker"})).expect("resize");
+    assert_eq!(resized["action"], "resize");
+    assert_eq!(resized["run_id"], json!(drain));
+    assert_eq!(resized["outcome"], "updated");
+    assert_eq!(resized["previous_concurrency"], 2);
+    assert_eq!(resized["concurrency"], 1);
+    let run = runtime.show_job_run(&drain).expect("drain run");
+    assert_eq!(
+        run.state,
+        orbit_types::workflow::JobRunState::Running,
+        "a resize keeps the run it retunes"
+    );
+
+    let second = live_auto_drain(&runtime);
+    let ambiguous = resize(json!({"concurrency": 2}));
+    assert!(
+        matches!(ambiguous, Err(OrbitError::InvalidInput(_))),
+        "{ambiguous:?}"
+    );
+    let named = resize(json!({"id": second, "concurrency": 1})).expect("resize a named drain");
+    assert_eq!(named["run_id"], json!(second));
+}
+
 fn isolated(name: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_DESKTOP_TOOL_CHILD";
     let module = module_path!()
@@ -325,8 +409,25 @@ fn domain_automation_scopes_definitions_checks_conflicts_and_mints_without_dispa
     );
     let toggle =
         json!({"workspace":repo,"name":"desktop-chore","expected_enabled":true,"enabled":false});
-    run_tool_as_operator(&runtime, "orbit.auto_task.toggle", toggle.clone()).unwrap();
-    assert!(run_tool_as_operator(&runtime, "orbit.auto_task.toggle", toggle).is_err());
+    let mut mixed = toggle.clone();
+    mixed["description"] = json!("edited alongside the toggle");
+    assert!(
+        run_tool_as_operator(&runtime, "orbit.auto_task.update", mixed).is_err(),
+        "a checked toggle carries no other edit"
+    );
+    assert!(
+        runtime
+            .auto_task_show("desktop-chore")
+            .unwrap()
+            .unwrap()
+            .enabled,
+        "the refused mixed call changed nothing"
+    );
+    run_tool_as_operator(&runtime, "orbit.auto_task.update", toggle.clone()).unwrap();
+    assert!(
+        run_tool_as_operator(&runtime, "orbit.auto_task.update", toggle).is_err(),
+        "stale checked toggle refused"
+    );
     let mut mint =
         json!({"workspace":repo,"name":"desktop-chore","acknowledge_unconditional":false});
     assert!(run_tool_as_operator(&runtime, "orbit.auto_task.mint", mint.clone()).is_err());
@@ -377,7 +478,7 @@ fn domain_automation_scopes_definitions_checks_conflicts_and_mints_without_dispa
     assert!(
         run_tool_as_operator(
             &replica,
-            "orbit.auto_task.toggle",
+            "orbit.auto_task.update",
             json!({"workspace":repo,"name":"desktop-chore","expected_enabled":false,"enabled":true})
         )
         .is_err()
@@ -499,7 +600,7 @@ fn domain_extensions_preserve_operator_authority_and_explicit_workspace_requirem
             json!({"workspace":repo,"action":"list"}),
         ),
         (
-            "orbit.auto_task.toggle",
+            "orbit.auto_task.update",
             json!({"workspace":repo,"name":"none","enabled":false,"expected_enabled":true}),
         ),
         (

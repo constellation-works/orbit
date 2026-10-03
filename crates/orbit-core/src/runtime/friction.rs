@@ -4,7 +4,10 @@ use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
 use orbit_store::compose::workspace_friction_store;
-use orbit_store::contracts::{FrictionRehomeOutcome, FrictionRehomeParams, FrictionStoreBackend};
+use orbit_store::contracts::{
+    FrictionRehomeOutcome, FrictionRehomeParams, FrictionStoreBackend, FrictionUpdateParams,
+};
+use orbit_types::record::FrictionStatus;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -57,17 +60,49 @@ impl OrbitRuntime {
         }
     }
 
-    /// Move friction `id` into the registered workspace `to_workspace` names.
+    /// Move friction `id` into the registered workspace `to_workspace` names,
+    /// first applying `edits` so the copy carries them.
     ///
     /// The target resolves through the same catalog `--workspace` selectors
     /// use, and both sides must accept coordination writes here: a replica
     /// checkout of the owning workspace cannot receive the record any more
-    /// than it could receive a task.
+    /// than it could receive a task. Every refusal the move can make is
+    /// checked before the edits land, so a refused move leaves the record as
+    /// it was.
     pub(crate) fn rehome_friction(
         &self,
         id: &str,
         to_workspace: &str,
+        edits: Option<FrictionUpdateParams>,
     ) -> Result<FrictionRehomeOutcome, OrbitError> {
+        let params = self.friction_rehome_target(to_workspace)?;
+        let store = store_for(self)?;
+        if let Some(edits) = edits {
+            if edits.status == Some(FrictionStatus::Resolved) {
+                return Err(OrbitError::InvalidInput(
+                    "moving a friction resolves it with a pointer to the copy; drop `status: resolved`"
+                        .to_string(),
+                ));
+            }
+            let current = store
+                .show(id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Friction, id.to_string()))?;
+            if current.record.status == FrictionStatus::Resolved {
+                return Err(OrbitError::InvalidInput(format!(
+                    "friction {id} is already resolved; there is nothing to re-home"
+                )));
+            }
+            store.update(id, edits)?;
+        }
+        store.rehome(id, params)
+    }
+
+    /// Resolve the workspace a friction moves into, refusing a target this
+    /// runtime cannot write to.
+    fn friction_rehome_target(
+        &self,
+        to_workspace: &str,
+    ) -> Result<FrictionRehomeParams, OrbitError> {
         let catalog = self.workspace_catalog().ok_or_else(|| {
             OrbitError::WorkspaceError(
                 "friction re-homing needs the workspace registry; run it from a registered workspace"
@@ -89,15 +124,12 @@ impl OrbitRuntime {
             Some(binding) => binding.logical_workspace_id.clone(),
             None => self.workspace_id()?,
         };
-        store_for(self)?.rehome(
-            id,
-            FrictionRehomeParams {
-                target_workspace_id: owner.workspace_id()?,
-                target_files_root: files_root(&owner),
-                target_label: target.workspace_id,
-                source_label,
-                rehomed_at: Utc::now(),
-            },
-        )
+        Ok(FrictionRehomeParams {
+            target_workspace_id: owner.workspace_id()?,
+            target_files_root: files_root(&owner),
+            target_label: target.workspace_id,
+            source_label,
+            rehomed_at: Utc::now(),
+        })
     }
 }

@@ -412,12 +412,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "resuming a workflow creates another managed run",
     },
     GovernedOperation {
-        id: "orbit.workflow.run.workers",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "retuning a live drain's worker ceiling changes how much work the workspace starts",
-    },
-    GovernedOperation {
         id: "orbit.agent.invoke",
         surface: OperationSurface::Tool,
         // Deliberately not `Runner`. Every other run-reachable operation lists

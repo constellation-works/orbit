@@ -45,7 +45,11 @@ fn domain_operator_modes_never_dispatch_from_a_managed_run() {
             json!({"workspace":"ws_fixture","action":"toggle","name":"routine","target":"job:maintenance","expected_enabled":true,"enabled":false}),
         ),
         (
-            Box::new(super::super::auto_task::toggle::OrbitAutoTaskToggleTool),
+            Box::new(super::super::domain_control::WorkflowAutoTool),
+            json!({"workspace":"ws_fixture","action":"resize","concurrency":2}),
+        ),
+        (
+            Box::new(super::super::auto_task::update::OrbitAutoTaskUpdateTool),
             json!({"workspace":"ws_fixture","name":"routine","expected_enabled":true,"enabled":false}),
         ),
         (

@@ -38,9 +38,10 @@ pub use internal_drain::{INTERNAL_DRAIN_PROTOCOL, internal_drain_name};
 pub use listener::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure, McpListener};
 pub use remote::{
     FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, McpServerIdentity, McpSessionAuthority,
-    RemoteProxyArgs, canonical_mcp_tool_definitions, execute_discovery_tool,
-    execute_federated_workspace_discovery, ignored_caller_authorization_paths, mcp_server_identity,
-    safe_mcp_tool_names, serve_mcp_remote_proxy, warn_ignored_caller_authorization,
+    RemoteProxyArgs, WORKSPACE_LIST_INCLUDE_CREWS, canonical_mcp_tool_definitions,
+    execute_discovery_tool, execute_federated_workspace_discovery,
+    ignored_caller_authorization_paths, mcp_server_identity, safe_mcp_tool_names,
+    serve_mcp_remote_proxy, warn_ignored_caller_authorization, workspace_list_includes_crews,
 };
 pub use stdio_session::{RESUME_ENV, StdioExit};
 

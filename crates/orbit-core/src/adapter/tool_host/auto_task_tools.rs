@@ -10,7 +10,6 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::ListedAutoTask;
 use crate::application::auto_tasks::crud::{AutoTaskAddParams, AutoTaskUpdateParams};
-use crate::application::auto_tasks::delete::AutoTaskDeleteParams;
 
 pub(super) fn add(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let name = required_str(&input, "name")?;
@@ -117,6 +116,7 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         schedule: parse_field(&input, "schedule", false)?,
         dedupe: parse_field(&input, "dedupe", false)?,
         template: parse_field(&input, "template", false)?,
+        enabled: parse_field(&input, "enabled", false)?,
     };
     let definition = runtime.auto_task_update(&name, params)?;
     let mut response = to_json(&definition)?;
@@ -127,26 +127,6 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         object.insert("warnings".to_string(), json!(warnings));
     }
     Ok(response)
-}
-
-pub(super) fn toggle(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let name = required_str(&input, "name")?;
-    let enabled = input
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| OrbitError::InvalidInput("missing boolean `enabled`".to_string()))?;
-    let definition = runtime.auto_task_toggle(&name, enabled)?;
-    to_json(&definition)
-}
-
-pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    let report = runtime.auto_task_delete(AutoTaskDeleteParams {
-        name: required_str(&input, "name")?,
-        reason: optional_str(&input, "reason"),
-        force: input.get("force").and_then(Value::as_bool).unwrap_or(false),
-    })?;
-    serde_json::to_value(&report)
-        .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}")))
 }
 
 fn required_str(input: &Value, field: &str) -> Result<String, OrbitError> {

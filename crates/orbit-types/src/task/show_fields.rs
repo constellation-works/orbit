@@ -117,6 +117,11 @@ pub const TASK_SHOW_DERIVED_RESPONSE_FIELDS: &[(&str, &str)] = &[(
 /// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
 pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str = crate::task_show_projection_fields_csv!();
 
+/// The `orbit.task.show` selector that answers with the task's delivery
+/// observation instead of a record projection. It is not a task field: it
+/// reads the run that delivered the task and combines with no other field.
+pub const TASK_SHOW_DELIVERY_FIELD: &str = "delivery";
+
 /// Whether `name` is in the canonical show-projection vocabulary.
 pub fn is_task_show_projection_field(name: &str) -> bool {
     TASK_SHOW_PROJECTION_FIELDS.contains(&name)

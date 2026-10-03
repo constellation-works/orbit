@@ -40,13 +40,17 @@ impl FederatedMcpHost {
     /// `machine_id` is on each descriptor, not the envelope: one response now
     /// spans many machines, so a single envelope-level identity would be a lie
     /// about all but one of them.
-    fn list_workspaces(&self) -> Value {
-        json!({ "workspaces": self.probe_all_destinations() })
+    /// With `include: ["crews"]` each reachable row also carries the crews its
+    /// own destination resolved, so a remote workspace never borrows the
+    /// accepting machine's crew configuration.
+    fn list_workspaces(&self, input: &Value) -> Result<Value, OrbitError> {
+        let include_crews = crate::workspace_list_includes_crews(input)?;
+        Ok(json!({ "workspaces": self.probe_all_destinations(include_crews) }))
     }
 
     /// Probe every destination concurrently, so the list costs the slowest
     /// destination rather than the sum of all of them.
-    fn probe_all_destinations(&self) -> Vec<WorkspaceDescriptor> {
+    fn probe_all_destinations(&self, include_crews: bool) -> Vec<WorkspaceDescriptor> {
         std::thread::scope(|scope| {
             let probes = self
                 .destinations
@@ -54,7 +58,7 @@ impl FederatedMcpHost {
                 .map(|destination| {
                     (
                         destination,
-                        scope.spawn(move || self.describe_destination(destination)),
+                        scope.spawn(move || self.describe_destination(destination, include_crews)),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -75,8 +79,17 @@ impl FederatedMcpHost {
 
     /// One destination's rows. Never empty: a configured destination the caller
     /// cannot see is worse than one it can see is down.
-    fn describe_destination(&self, destination: &Destination) -> Vec<WorkspaceDescriptor> {
-        let snapshot = match self.probe.probe(destination) {
+    fn describe_destination(
+        &self,
+        destination: &Destination,
+        include_crews: bool,
+    ) -> Vec<WorkspaceDescriptor> {
+        let probed = if include_crews {
+            self.probe.probe_with_crews(destination)
+        } else {
+            self.probe.probe(destination)
+        };
+        let mut snapshot = match probed {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 tracing::warn!(
@@ -100,10 +113,13 @@ impl FederatedMcpHost {
         if snapshot.workspaces.is_empty() {
             return vec![WorkspaceDescriptor::workspaceless(destination)];
         }
-        snapshot
-            .workspaces
+        let workspaces = std::mem::take(&mut snapshot.workspaces);
+        workspaces
             .into_iter()
-            .map(|workspace| WorkspaceDescriptor::reachable(destination, workspace))
+            .map(|workspace| {
+                let crews = snapshot.crews.remove(&workspace.id).unwrap_or_default();
+                WorkspaceDescriptor::reachable(destination, workspace).with_crews(crews)
+            })
             .collect()
     }
 
@@ -271,7 +287,7 @@ impl crate::McpHost for FederatedMcpHost {
             return self.refuse_internal_drain(canonical, input, session_context);
         }
         if name == FEDERATED_WORKSPACE_LIST_TOOL {
-            return Ok(self.list_workspaces());
+            return self.list_workspaces(&input);
         }
         self.route_workspace_call(name, input, session_context, false)
     }
@@ -319,9 +335,10 @@ fn federated_workspace_list_definition() -> McpToolDefinition {
             description: "List the accepting machine's workspaces together with every configured \
                           remote destination's workspaces as live descriptors, including remotes \
                           that are unreachable right now. Copy a row's `selector` to address that \
-                          workspace; do not parse or construct it."
+                          workspace; do not parse or construct it. Pass `include: [\"crews\"]` \
+                          for each workspace's crews as its own machine configures them."
                 .to_string(),
-            parameters: Vec::new(),
+            parameters: vec![crate::remote::workspace_list_include_param()],
             builtin: true,
         },
         McpToolScope::Global,

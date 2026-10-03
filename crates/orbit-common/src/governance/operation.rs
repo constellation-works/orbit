@@ -43,6 +43,8 @@ pub enum ParamType {
     StringList,
     /// A non-negative integer.
     Integer,
+    /// A boolean; on the CLI an explicit `--flag true|false` value.
+    Boolean,
 }
 
 impl ParamType {
@@ -52,6 +54,7 @@ impl ParamType {
             ParamType::String => "string",
             ParamType::StringList => "string_list",
             ParamType::Integer => "integer",
+            ParamType::Boolean => "boolean",
         }
     }
 }

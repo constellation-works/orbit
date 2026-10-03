@@ -56,7 +56,6 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.workflow.run.list", Placement::Advertised),
     ("orbit.workflow.run.resume", Placement::Advertised),
     ("orbit.workflow.run.show", Placement::Advertised),
-    ("orbit.workflow.run.workers", Placement::Advertised),
     ("orbit.workflow.ship", Placement::Advertised),
     ("orbit.workflow.auto", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
@@ -314,14 +313,23 @@ fn the_public_delivery_read_stays_ungoverned_while_the_run_view_stays_operator_o
     // relaxing the run view would hand out prompts and step outputs.
     use orbit_common::governance::authorization::governed_tool;
 
+    // The projection is `orbit.task.show` with `field: "delivery"`.
     assert!(
-        governed_tool("orbit.workflow.run.delivery").is_none(),
-        "the delivery projection became governed, which refuses ordinary workspace and plugin \
-         callers the read it exists to give them"
+        governed_tool("orbit.task.show").is_none(),
+        "the task read carrying the delivery projection became governed, which refuses \
+         ordinary workspace and plugin callers the read it exists to give them"
     );
+    let registry = builtin_registry();
     assert!(
-        advertised_tool_names(&builtin_registry()).contains("orbit.workflow.run.delivery"),
+        advertised_tool_names(&registry).contains("orbit.task.show"),
         "the delivery projection must stay on the workspace MCP surface"
+    );
+    let show = registry
+        .get_active_schema("orbit.task.show")
+        .expect("task.show is registered");
+    assert!(
+        show.parameters.iter().any(|param| param.name == "run_id"),
+        "the delivery projection must keep its run selector"
     );
     let run_show =
         governed_tool("orbit.workflow.run.show").expect("the full run view must stay governed");

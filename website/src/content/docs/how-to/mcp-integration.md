@@ -134,8 +134,9 @@ decide what to auto-approve. Read-only tools (`orbit_task_list`,
 `orbit_task_show`, `orbit_search`, `orbit_workspace_list`, and the other list
 and show tools) carry `readOnlyHint: true`; mutating tools carry
 `readOnlyHint: false` together with `destructiveHint`, `idempotentHint` and
-`openWorldHint`. Tools that delete or overwrite data (`orbit_auto_task_delete`,
-`orbit_friction_rehome`, `orbit_task_artifact_put`) are destructive, and tools
+`openWorldHint`. Tools that can remove or overwrite data (`orbit_friction_update`,
+whose `rehome_to` moves and resolves the record, and `orbit_task_artifact_put`)
+are destructive, and tools
 that start an agent or a process (`orbit_agent_invoke`, `orbit_command_exec`,
 `orbit_workflow_ship`, `orbit_workflow_run_resume`) are open-world. A plugin tool
 advertises only `readOnlyHint`, taken from its manifest's execution kind. The

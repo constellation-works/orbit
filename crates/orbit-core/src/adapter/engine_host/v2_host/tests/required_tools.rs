@@ -85,16 +85,12 @@ fn activity_tools_are_the_deterministic_union_of_baseline_and_task_requirements(
     let definition_id = add_task(
         &runtime,
         "Edit host definitions",
-        &[
-            "orbit.auto_task.add",
-            "orbit.auto_task.update",
-            "orbit.auto_task.toggle",
-        ],
+        &["orbit.auto_task.add", "orbit.auto_task.update"],
     );
     let definition_tools =
         RuntimeHost::resolve_activity_tools(&runtime, &[definition_id], &baseline)
             .expect("managed definition tools are admitted by exact name");
-    assert_eq!(definition_tools.requested_tools.len(), 3);
+    assert_eq!(definition_tools.requested_tools.len(), 2);
 }
 
 #[test]

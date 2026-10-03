@@ -513,7 +513,7 @@ fn product_and_owner() -> (tempfile::TempDir, OrbitRuntime, OrbitRuntime) {
 }
 
 #[test]
-fn update_records_and_clears_the_rehome_disposition() {
+fn update_with_move_false_records_and_clears_the_rehome_disposition() {
     let (_temp, runtime, _repo) = test_runtime();
     let seeded = run_tool_as_operator(
         &runtime,
@@ -526,7 +526,7 @@ fn update_records_and_clears_the_rehome_disposition() {
     let recorded = run_tool_as_operator(
         &runtime,
         "orbit.friction.update",
-        json!({ "id": id, "rehome_to": " ws_orbit " }),
+        json!({ "id": id, "rehome_to": " ws_orbit ", "move": false }),
     )
     .expect("record the owning workspace");
     assert_eq!(recorded["rehome_to"], json!("ws_orbit"));
@@ -542,7 +542,7 @@ fn update_records_and_clears_the_rehome_disposition() {
 }
 
 #[test]
-fn rehome_moves_a_friction_into_the_registered_owner() {
+fn update_rehome_to_moves_a_friction_into_the_registered_owner() {
     let (_temp, product, owner) = product_and_owner();
     let seeded = run_tool_as_operator(
         &product,
@@ -560,8 +560,8 @@ fn rehome_moves_a_friction_into_the_registered_owner() {
 
     let moved = run_tool_as_operator(
         &product,
-        "orbit.friction.rehome",
-        json!({ "id": id, "to_workspace": "platform" }),
+        "orbit.friction.update",
+        json!({ "id": id, "rehome_to": "platform" }),
     )
     .expect("rehome");
 
@@ -592,7 +592,7 @@ fn rehome_moves_a_friction_into_the_registered_owner() {
 }
 
 #[test]
-fn rehome_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
+fn update_rehome_to_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
     let (_temp, product, _owner) = product_and_owner();
     let seeded = run_tool_as_operator(
         &product,
@@ -604,8 +604,8 @@ fn rehome_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
 
     run_tool_as_operator(
         &product,
-        "orbit.friction.rehome",
-        json!({ "id": id, "to_workspace": "nowhere" }),
+        "orbit.friction.update",
+        json!({ "id": id, "rehome_to": "nowhere" }),
     )
     .expect_err("an unknown workspace is refused");
 
@@ -618,8 +618,8 @@ fn rehome_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
     .expect("seed bare record");
     let error = run_tool_as_operator(
         &bare,
-        "orbit.friction.rehome",
-        json!({ "id": bare_seed["id"], "to_workspace": "platform" }),
+        "orbit.friction.update",
+        json!({ "id": bare_seed["id"], "rehome_to": "platform" }),
     )
     .expect_err("a standalone runtime has no registry to resolve against");
     assert!(matches!(error, OrbitError::WorkspaceError(_)), "{error:?}");
@@ -628,6 +628,72 @@ fn rehome_refuses_an_unregistered_target_and_a_runtime_without_a_registry() {
         run_tool_as_operator(&product, "orbit.friction.list", json!({ "status": "open" }))
             .expect("list product");
     assert_eq!(untouched.as_array().map(Vec::len), Some(1));
+}
+
+/// Edits sent with a move land on the source before it is copied, so the
+/// owner receives the triaged record and the source keeps the edit too.
+#[test]
+fn update_applies_its_edits_before_the_move() {
+    let (_temp, product, owner) = product_and_owner();
+    let seeded = run_tool_as_operator(
+        &product,
+        "orbit.friction.add",
+        json!({ "body": SECTIONED_BODY, "model": TEST_CODEX_MODEL }),
+    )
+    .expect("seed record");
+    let id = seeded["id"].as_str().expect("record id");
+
+    let moved = run_tool_as_operator(
+        &product,
+        "orbit.friction.update",
+        json!({ "id": id, "rehome_to": "platform", "title": "Retitled before the move" }),
+    )
+    .expect("edit and move");
+    assert_eq!(moved["status"], json!("resolved"));
+    assert_eq!(moved["title"], json!("Retitled before the move"));
+
+    let owned = run_tool_as_operator(&owner, "orbit.friction.list", json!({ "status": "open" }))
+        .expect("list owner");
+    assert_eq!(
+        owned[0]["title"],
+        json!("Retitled before the move"),
+        "{owned}"
+    );
+}
+
+/// A move resolves the source itself, and `move` only qualifies a
+/// `rehome_to`; each contradiction is refused before anything is written.
+#[test]
+fn update_refuses_a_move_that_contradicts_itself() {
+    let (_temp, product, owner) = product_and_owner();
+    let seeded = run_tool_as_operator(
+        &product,
+        "orbit.friction.add",
+        json!({ "body": SECTIONED_BODY, "model": TEST_CODEX_MODEL }),
+    )
+    .expect("seed record");
+    let id = seeded["id"].as_str().expect("record id");
+
+    for input in [
+        json!({ "id": id, "rehome_to": "platform", "status": "resolved" }),
+        json!({ "id": id, "move": true }),
+        json!({ "id": id, "move": false, "title": "No disposition to record" }),
+        json!({ "id": id, "rehome_to": "platform", "move": "yes" }),
+    ] {
+        let error = run_tool_as_operator(&product, "orbit.friction.update", input.clone())
+            .expect_err("contradictory move");
+        assert!(
+            matches!(error, OrbitError::InvalidInput(_)),
+            "{input}: {error:?}"
+        );
+    }
+
+    let untouched = run_tool_as_operator(&product, "orbit.friction.show", json!({ "id": id }))
+        .expect("show source");
+    assert_eq!(untouched["status"], json!("open"));
+    assert_eq!(untouched["title"], seeded["title"]);
+    let owned = run_tool_as_operator(&owner, "orbit.friction.list", json!({})).expect("list owner");
+    assert_eq!(owned.as_array().map(Vec::len), Some(0), "{owned}");
 }
 
 /// A missing record is a not-found error, as a missing task is — not a
@@ -723,12 +789,13 @@ fn resolve_of_a_missing_record_is_not_found_and_malformed_id_is_invalid_input() 
 
 #[test]
 fn rehome_of_a_missing_record_is_not_found_and_malformed_id_is_invalid_input() {
+    // Both the public `update` move and the CLI `rehome` verb report the same.
     let (_temp, product, _owner) = product_and_owner();
 
     let missing = run_tool_as_operator(
         &product,
-        "orbit.friction.rehome",
-        json!({ "id": "F2099-01-001", "to_workspace": "platform" }),
+        "orbit.friction.update",
+        json!({ "id": "F2099-01-001", "rehome_to": "platform" }),
     )
     .expect_err("no such record");
     assert!(

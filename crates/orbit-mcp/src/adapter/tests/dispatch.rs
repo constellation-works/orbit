@@ -139,7 +139,7 @@ fn invalid_canonical_names_fail_the_surface_before_dispatch() {
 
 #[tokio::test]
 async fn array_results_are_object_shaped_for_strict_mcp_clients() {
-    let affected_tools = ["orbit.task.list", "orbit.friction.list"];
+    let affected_tools = ["orbit.task.list", "orbit.workflow.run.list"];
     let host = Arc::new(EchoArrayHost {
         schemas: affected_tools
             .iter()

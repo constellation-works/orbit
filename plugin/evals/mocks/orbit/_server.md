@@ -7,12 +7,10 @@ tools:
   - orbit_task_update
   - orbit_search
   - orbit_friction_add
-  - orbit_friction_list
   - orbit_friction_update
   - orbit_workflow_ship
   - orbit_workflow_run_show
   - orbit_workflow_run_list
-  - orbit_workflow_run_workers
   - orbit_workflow_run_resume
   - orbit_agent_invoke
 abort_when: |
@@ -132,6 +130,7 @@ Return `{"results":[...],"total":N,"query":"<query>"}` where each result is
 - Queries about openpty / PTY / pseudo-terminal → no results.
 - Queries about friction.resolve → ORB-12250.
 - Queries about cargo registry / sandbox denial (`kind: friction` or `all`) → F2026-09-012.
+- `kind: "friction"` with no `query` lists frictions instead: every friction below in creation order, narrowed by a `status` token such as `friction:open` and by `tag`, each result also carrying the full friction `record`.
 - Anything else → `{"results":[],"total":0,"query":"<query>"}`.
 
 ## Frictions (ws_orbit)
@@ -142,7 +141,6 @@ Return `{"results":[...],"total":N,"query":"<query>"}` where each result is
 `orbit_friction_add` requires `body` and `model`; allocate the next ID
 **F2026-09-013** and return `{"id":"F2026-09-013","title":...,"status":"open","tags":[...],"during_task":...,"created_by":"<model>","created_at":"now"}`. Only `automation, build, docs, history-diverged, lifecycle, naming, other, policy, skill-guidance, tooling` are valid tags; any other tag → `isError {"error":"invalid_tag","tag":"<value>"}`.
 `orbit_friction_update` returns the updated record; `status` must be open|triaged|resolved.
-`orbit_friction_list` returns `{"frictions":[...]}` filtered by `status` if given.
 
 ## Job runs (ws_orbit)
 
@@ -152,7 +150,6 @@ Return `{"results":[...],"total":N,"query":"<query>"}` where each result is
 
 `orbit_workflow_run_show` returns `{id, job, task_ids, state, started_at, finished_at, steps:[{id, activity, state, exit_code, error, stderr_ref}], workers:[{crew, pid, state}], parent_run_id, report}`.
 `orbit_workflow_run_list` returns `{"runs":[...]}` with the runs above (summaries).
-`orbit_workflow_run_workers` returns `{"workers":[...]}` for the run.
 `orbit_workflow_run_resume` returns `isError {"error":"not_resumable","id":"<id>","reason":"validate step has no recovery policy"}` for jrun-8f3a2c.
 
 ## orbit_workflow_ship

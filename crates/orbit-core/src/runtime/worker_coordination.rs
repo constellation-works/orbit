@@ -180,13 +180,7 @@ pub(crate) fn decode_owner_read<T: serde::de::DeserializeOwned>(
 pub(crate) fn is_coordination_tool(name: &str) -> bool {
     name.starts_with("orbit.task.")
         || name.starts_with("orbit.friction.")
-        || matches!(
-            name,
-            "orbit.auto_task.add"
-                | "orbit.auto_task.update"
-                | "orbit.auto_task.toggle"
-                | "orbit.auto_task.delete"
-        )
+        || matches!(name, "orbit.auto_task.add" | "orbit.auto_task.update")
 }
 
 /// A required child can start before the parent has recorded its PID. Wait

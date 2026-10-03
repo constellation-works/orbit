@@ -98,15 +98,17 @@ actual model-context delivery still requires the desktop host.
 
 `orbit_workflow_auto` observes readiness with `action: "status"`, starts a
 bounded window with `action: "start"` (1–604800 seconds and optional positive
-u32 concurrency), or stops admissions with `action: "stop"`. It uses the same
+u32 concurrency), stops admissions with `action: "stop"`, or changes a live
+drain's worker ceiling with `action: "resize"` (`concurrency`, optional `id`,
+`if_revision` and `reason`) without cancelling anything. It uses the same
 runtime as CLI/dashboard. Completion defaults to review. Selecting **Complete
 automatically** explicitly authorizes completion of every task admitted during the
 window. Stopping preserves admitted workers. Readiness samples up to 50 tasks;
 eligibility may change immediately.
 
 `orbit_routine_control` lists workspace routine status or toggles a definition
-using its observed enabled state and target. Existing `orbit_auto_task_toggle`
-accepts an optional `expected_enabled` for an atomic checked toggle, and
+using its observed enabled state and target. `orbit_auto_task_update` with
+`enabled` accepts an optional `expected_enabled` for an atomic checked toggle, and
 `orbit_auto_task_mint` accepts `acknowledge_unconditional: true` for an operator
 acknowledgement that schedule, enabled and dedupe are ignored. Mint creates a task
 without dispatch. The guarded modes require explicit workspace and trusted

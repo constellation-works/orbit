@@ -217,10 +217,8 @@ fn workflow_critical_tools_remain_registered() {
         "orbit.search",
         "orbit.workflow.ship",
         "orbit.workflow.run.show",
-        "orbit.workflow.run.delivery",
         "orbit.workflow.run.list",
         "orbit.workflow.run.resume",
-        "orbit.workflow.run.workers",
         // Destructive administrative operations are inactive on the agent
         // surface; its inactive-classification is covered by
         // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above.
@@ -302,11 +300,7 @@ fn friction_surface_supports_artifact_triage() {
         .map(|schema| schema.name)
         .collect();
 
-    for retained in [
-        "orbit.friction.add",
-        "orbit.friction.list",
-        "orbit.friction.update",
-    ] {
+    for retained in ["orbit.friction.add", "orbit.friction.update"] {
         assert!(
             active.contains(retained),
             "agent-facing friction tool missing from active surface: {retained}"
@@ -320,9 +314,12 @@ fn friction_surface_supports_artifact_triage() {
         );
     }
 
-    // Single-record reads `list` already covers, the tag taxonomy, destructive
-    // resolution, and aggregate stats remain CLI / dashboard only [ORB-10798].
+    // Listing (agents use `orbit.search` with `kind: friction`), single-record
+    // reads, the tag taxonomy, destructive resolution, aggregate stats, and the
+    // CLI spelling of a move remain CLI / dashboard only [ORB-10798].
     for cli_only in [
+        "orbit.friction.list",
+        "orbit.friction.rehome",
         "orbit.friction.show",
         "orbit.friction.tags",
         "orbit.friction.resolve",
@@ -358,10 +355,8 @@ fn auto_task_surface_exposes_host_brokered_definition_writes() {
         auto_task,
         BTreeSet::from([
             "orbit.auto_task.add",
-            "orbit.auto_task.delete",
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
-            "orbit.auto_task.toggle",
             "orbit.auto_task.update",
         ])
     );
@@ -585,4 +580,62 @@ fn advertised_tool_text_uses_only_placeholder_artifact_ids() {
             );
         }
     }
+}
+
+/// The tools folded into a sibling are gone from every surface, and each
+/// sibling carries the inputs that absorbed them.
+#[test]
+fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let all: BTreeSet<String> = registry
+        .all_schemas()
+        .into_iter()
+        .map(|schema| schema.name)
+        .collect();
+    for folded in [
+        "orbit.auto_task.toggle",
+        "orbit.auto_task.delete",
+        "orbit.workflow.run.workers",
+        "orbit.workflow.run.delivery",
+        "orbit.crew.list",
+    ] {
+        assert!(!all.contains(folded), "{folded} must not be registered");
+    }
+    let advertised: BTreeSet<String> = registry
+        .mcp_tool_definitions()
+        .expect("valid MCP definitions")
+        .into_iter()
+        .map(|definition| definition.schema.name)
+        .collect();
+    for cli_only in ["orbit.friction.list", "orbit.friction.rehome"] {
+        assert!(!advertised.contains(cli_only), "{cli_only} is CLI-only");
+    }
+
+    let params = |tool: &str| {
+        registry
+            .get_active_schema(tool)
+            .unwrap_or_else(|| panic!("{tool} is active"))
+            .parameters
+            .into_iter()
+            .map(|param| (param.name, param.param_type, param.required))
+            .collect::<Vec<_>>()
+    };
+    let has = |tool: &str, name: &str, param_type: &str| {
+        assert!(
+            params(tool)
+                .iter()
+                .any(|(n, t, required)| n == name && t == param_type && !required),
+            "{tool} must take optional {param_type} `{name}`"
+        );
+    };
+    has("orbit.friction.update", "rehome_to", "string");
+    has("orbit.friction.update", "move", "boolean");
+    has("orbit.search", "query", "string");
+    has("orbit.auto_task.update", "enabled", "boolean");
+    has("orbit.auto_task.update", "expected_enabled", "boolean");
+    has("orbit.workflow.auto", "id", "string");
+    has("orbit.workflow.auto", "if_revision", "integer");
+    has("orbit.workflow.auto", "reason", "string");
+    has("orbit.task.show", "run_id", "string");
 }

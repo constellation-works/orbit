@@ -66,8 +66,8 @@ the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
 ID issued from a cwd that is **not** a Git-linked worktree of that workspace
 still opens the registered primary checkout. Direct CLI calls from a Git-linked
 worktree still use that worktree's `local_root` for candidate inspection and
-local definition edits. A managed job run's `orbit.auto_task.add`,
-`orbit.auto_task.update`, and `orbit.auto_task.toggle` tool calls are instead
+local definition edits. A managed job run's `orbit.auto_task.add` and
+`orbit.auto_task.update` (including an `enabled` change) tool calls are instead
 brokered to the owning host process. The host checks the worker's workspace
 binding and runs CRUD with its registered checkout as `local_root`. Before
 writing, CRUD rejects loader errors, including a file stem/name mismatch. The
@@ -251,7 +251,8 @@ job, activity, or job run is created, and fires do not appear on
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
 add/list/show/update/toggle`) and the registry tools (`orbit.auto_task.*`). Add
-rejects duplicate names; update patches present fields; toggle flips `enabled`
+rejects duplicate names; update patches present fields; toggle (the CLI command,
+or `orbit.auto_task.update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
 toggle re-read the definition and write it while holding the cursor sidecar
 lock (without loading the cursor, so a malformed cursor cannot block the
@@ -263,7 +264,7 @@ persisted. Successful writes replace the target atomically; a staging or rename
 failure leaves the previous definition bytes intact. In a primary checkout the
 local and shared roots are identical, preserving the operator-facing path.
 
-`delete.rs` owns removal (`orbit auto-task delete`, `orbit.auto_task.delete`).
+`delete.rs` owns removal (`orbit auto-task delete`; there is no MCP delete).
 Delete refuses while a minted task is open unless forced. It removes the
 definition and its cursor under the cursor lock, tears a delivery consumer down
 through the audited reset, and writes an audit event. Deleting a shipped
@@ -353,12 +354,12 @@ scheduler pass and defers that fire, exactly as an open fired instance does. The
 cursor does not advance, so the deferred occurrence fires once when the queue
 drains. This is the behavior the hand-copy workaround could not provide.
 
-Advertisement follows who does the work [ORB-10798]. Authoring a Git-versioned
-definition (`add`, `show`, `update`, `toggle`) is human/admin work: those tools
-are `register_inactive`, reachable through their `orbit auto-task` subcommands
-but absent from MCP `tools/list`. Reading the definitions (`list`) and minting
-one on demand (`orbit.auto_task.mint`) are what an executing agent needs, so
-both are registered at `McpToolScope::WorkspaceRequired`. The MCP tool is a thin
+Advertisement follows who does the work [ORB-10798]. Reading the definitions
+(`list`), minting one on demand (`orbit.auto_task.mint`), and host-brokered
+edits (`add`, and `update`, which also enables or disables a definition) are
+registered at `McpToolScope::WorkspaceRequired`. `show` is `register_inactive`,
+reachable through `orbit auto-task show` but absent from MCP `tools/list`;
+`toggle`, `delete`, and `restore` are CLI subcommands with no registered tool. The MCP tool is a thin
 adapter over the same `auto_task_mint`, so the mint stays unconditional and
 cursor-neutral on every surface.
 
@@ -376,9 +377,9 @@ theoretical slot is labeled hypothetical), delivery rows show
 waiting-for-deliveries, a missing cursor is never observed, and inspect
 failures are unavailable. Last scheduler evaluation is the host-local
 cursor; last minted task is the newest tagged instance and is labeled a
-manual mint when the two ids differ. Enable/disable writes `enabled` through `auto_task_toggle`
-with `expected_enabled` compare-and-swap, operator authorization
-(`auto_task.toggle`), and a dashboard-operations audit row. `Mint now` calls
+manual mint when the two ids differ. Enable/disable writes `enabled` through the runtime's `auto_task_toggle`
+with `expected_enabled` compare-and-swap, the governed dashboard operation
+`auto_task.toggle`, and a dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning
 (`acknowledge_unconditional: true`); the request is refused without that
 disclosure. All-workspace and inactive/unknown workspace selections stay

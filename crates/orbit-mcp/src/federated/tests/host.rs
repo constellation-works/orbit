@@ -31,6 +31,7 @@ fn three_destination_mux() -> FederatedMcpHost {
         .answering(
             OWNER_MACHINE,
             DestinationSnapshot {
+                crews: Default::default(),
                 machine_id: OWNER_MACHINE.to_string(),
                 workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
             },
@@ -38,6 +39,7 @@ fn three_destination_mux() -> FederatedMcpHost {
         .answering(
             REPLICA_MACHINE,
             DestinationSnapshot {
+                crews: Default::default(),
                 // The replica holds a checkout of a workspace another machine
                 // owns, which is exactly what makes it execute-only.
                 machine_id: REPLICA_MACHINE.to_string(),
@@ -87,6 +89,96 @@ impl DestinationProbe for RegistryBackedProbe {
     }
 }
 
+/// A destination that, like a real one, attaches its own crews to its rows
+/// only when the private discovery call asks for them.
+struct CrewReportingProbe;
+
+impl CrewReportingProbe {
+    fn discovery(destination: &Destination, include_crews: bool) -> Value {
+        let mut owned = serde_json::to_value(workspace("ws_orbit", Some(OWNER_MACHINE)))
+            .expect("workspace row");
+        let mut broken = serde_json::to_value(workspace("ws_broken", Some(OWNER_MACHINE)))
+            .expect("workspace row");
+        if include_crews {
+            owned["crews"] = serde_json::json!({
+                "workspace_id": "ws_orbit",
+                "default_crew": format!("crew-of-{}", destination.machine_id),
+            });
+            broken["crews_error"] = serde_json::json!("config unreadable");
+        }
+        serde_json::json!({
+            "machine_id": destination.machine_id,
+            "workspaces": [owned, broken],
+        })
+    }
+}
+
+impl DestinationProbe for CrewReportingProbe {
+    fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
+        snapshot_from_discovery_content(destination, &Self::discovery(destination, false))
+    }
+
+    fn probe_with_crews(
+        &self,
+        destination: &Destination,
+    ) -> Result<DestinationSnapshot, OrbitError> {
+        snapshot_from_discovery_content(destination, &Self::discovery(destination, true))
+    }
+
+    fn open_route(&self, _destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        Err(OrbitError::Execution(
+            "crew-reporting fixture does not route tools".to_string(),
+        ))
+    }
+}
+
+#[test]
+fn each_row_carries_the_crews_its_own_destination_resolved() {
+    let host = FederatedMcpHost::new(
+        vec![
+            destination("orbit-owner", OWNER_MACHINE),
+            destination("operator@orbit-replica", REPLICA_MACHINE),
+        ],
+        Arc::new(CrewReportingProbe),
+    );
+
+    let listed = host
+        .call_tool(
+            FEDERATED_WORKSPACE_LIST_TOOL,
+            serde_json::json!({ "include": ["crews"] }),
+            ToolSessionContext::default(),
+        )
+        .expect("federated list with crews");
+    let rows = listed["workspaces"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4);
+    for (row, machine) in [(&rows[0], OWNER_MACHINE), (&rows[2], REPLICA_MACHINE)] {
+        assert_eq!(row["id"], "ws_orbit");
+        assert_eq!(
+            row["crews"]["default_crew"],
+            format!("crew-of-{machine}"),
+            "a remote row must not borrow another machine's crews: {row}"
+        );
+    }
+    assert_eq!(rows[1]["crews_error"], "config unreadable");
+    assert!(rows[1].get("crews").is_none());
+
+    let plain = list(&host);
+    assert!(
+        plain
+            .iter()
+            .all(|row| row.get("crews").is_none() && row.get("crews_error").is_none()),
+        "crews are opt-in: {plain:?}"
+    );
+    let refused = host
+        .call_tool(
+            FEDERATED_WORKSPACE_LIST_TOOL,
+            serde_json::json!({ "include": ["crew"] }),
+            ToolSessionContext::default(),
+        )
+        .expect_err("unknown include value");
+    assert!(matches!(refused, OrbitError::InvalidInput(_)), "{refused}");
+}
+
 #[test]
 fn the_mux_advertises_the_canonical_surface() {
     let host = three_destination_mux();
@@ -110,8 +202,16 @@ fn the_mux_advertises_the_canonical_surface() {
         .find(|definition| definition.schema.name == FEDERATED_WORKSPACE_LIST_TOOL)
         .expect("federated list");
     // Session-unbound: no workspace parameter, and global scope so the kernel
-    // never demands a selector for it.
-    assert!(listing.schema.parameters.is_empty());
+    // never demands a selector for it. `include` is its only input.
+    assert_eq!(
+        listing
+            .schema
+            .parameters
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>(),
+        ["include"]
+    );
     assert_eq!(listing.scope, McpToolScope::Global);
     assert_ne!(
         listing.schema.description,
@@ -226,6 +326,7 @@ fn a_destination_answering_under_another_identity_is_unreachable() {
     let probe = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: "hm_impostor".to_string(),
             workspaces: vec![workspace("ws_orbit", Some("hm_impostor"))],
         },
@@ -246,6 +347,7 @@ fn a_reachable_destination_with_no_workspaces_still_appears() {
     let probe = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: OWNER_MACHINE.to_string(),
             workspaces: Vec::new(),
         },
@@ -267,6 +369,7 @@ fn an_inactive_workspace_is_listed_rather_than_filtered_out() {
     let probe = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: OWNER_MACHINE.to_string(),
             workspaces: vec![invalid],
         },
@@ -362,6 +465,7 @@ fn each_call_reprobes_rather_than_reusing_the_last_answer() {
     let probe = ScriptedProbe::new().answering(
         OWNER_MACHINE,
         DestinationSnapshot {
+            crews: Default::default(),
             machine_id: OWNER_MACHINE.to_string(),
             workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
         },

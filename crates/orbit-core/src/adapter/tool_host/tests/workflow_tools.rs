@@ -1414,17 +1414,28 @@ fn mcp_run_list_keeps_per_run_recovery_attribution_with_uneven_histories() {
     );
 }
 
-/// [ORB-13744] The public delivery read is judged on its own inputs, not on
-/// operator authority: an agent session reaches the domain answer, while the
-/// run view it would otherwise need stays denied.
+/// [ORB-13744] The public delivery read — `orbit.task.show` with
+/// `field: "delivery"` — is judged on its own inputs, not on operator
+/// authority: an agent session reaches the domain answer, while the run view
+/// it would otherwise need stays denied.
 #[test]
-fn an_agent_session_reaches_the_delivery_read_but_not_the_run_view() {
+fn an_agent_session_reaches_the_task_delivery_read_but_not_the_run_view() {
     let (_root, runtime, _repo_root) = test_runtime();
     let run = runtime
         .stores()
         .jobs()
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
         .expect("insert run");
+    let task_id = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Deliver a change".to_string(),
+            description: "Exercise the delivery read.".to_string(),
+            acceptance_criteria: vec!["The change is delivered.".to_string()],
+            ..Default::default()
+        })
+        .expect("add task")
+        .id
+        .to_string();
     let agent = || ToolContext {
         session_context: ToolSessionContext {
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
@@ -1432,27 +1443,31 @@ fn an_agent_session_reaches_the_delivery_read_but_not_the_run_view() {
         },
         ..ToolContext::default()
     };
+    let show = |input: Value| {
+        runtime.run_tool_with_context_and_role("orbit.task.show", input, Role::Admin, agent())
+    };
 
-    let unknown_task = runtime.run_tool_with_context_and_role(
-        "orbit.workflow.run.delivery",
-        json!({"run_id": run.run_id, "task_id": "TST-00404"}),
-        Role::Admin,
-        agent(),
-    );
+    let unknown_task = show(json!({"id": "TST-00404", "field": "delivery", "run_id": run.run_id}));
     assert!(
         matches!(unknown_task, Err(OrbitError::NotFound { .. })),
         "{unknown_task:?}"
     );
 
-    let missing_task = runtime.run_tool_with_context_and_role(
-        "orbit.workflow.run.delivery",
-        json!({"run_id": run.run_id}),
-        Role::Admin,
-        agent(),
-    );
+    let undelivered = show(json!({"id": task_id, "field": "delivery"}));
     assert!(
-        matches!(missing_task, Err(OrbitError::InvalidInput(_))),
-        "{missing_task:?}"
+        matches!(undelivered, Err(OrbitError::InvalidInput(_))),
+        "no delivery run carried this task: {undelivered:?}"
+    );
+
+    let mixed = show(json!({"id": task_id, "fields": ["delivery", "title"]}));
+    assert!(
+        matches!(mixed, Err(OrbitError::InvalidInput(_))),
+        "delivery is not a record field and combines with none: {mixed:?}"
+    );
+    let stray_run = show(json!({"id": task_id, "run_id": run.run_id}));
+    assert!(
+        matches!(stray_run, Err(OrbitError::InvalidInput(_))),
+        "run_id selects a delivery run only: {stray_run:?}"
     );
 
     let run_view = runtime.run_tool_with_context_and_role(

@@ -118,6 +118,7 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
                 ParamType::String => arg,
                 ParamType::StringList => arg.action(ArgAction::Append).value_delimiter(delimiter),
                 ParamType::Integer => arg.value_parser(clap::value_parser!(usize)),
+                ParamType::Boolean => arg.value_parser(clap::value_parser!(bool)),
             }
         }
     }
@@ -170,6 +171,11 @@ fn input_from_matches<V: 'static>(spec: &'static OperationSpec<V>, matches: &Arg
             ParamType::Integer => {
                 if let Some(value) = matches.get_one::<usize>(param.name) {
                     input.insert(param.name.to_string(), Value::from(*value));
+                }
+            }
+            ParamType::Boolean => {
+                if let Some(value) = matches.get_one::<bool>(param.name) {
+                    input.insert(param.name.to_string(), Value::Bool(*value));
                 }
             }
         }

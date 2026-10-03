@@ -6,6 +6,7 @@
 //! the destination, and delivers that single `tools/call`. The client speaks
 //! MCP over the same non-PTY SSH argv the v1 proxy uses.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_types::tool::{ToolSessionContext, mcp_advertised_tool_name};
 use orbit_types::workspace::Workspace;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::config::Destination;
 use crate::remote::McpSessionAuthority;
@@ -74,12 +75,15 @@ pub const DEFAULT_ROUTED_DELIVERY_TIMEOUT: Duration = Duration::from_secs(900);
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// What one destination reported for this call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DestinationSnapshot {
     /// The `machine_id` the destination put on its own v1 envelope. The mux
     /// compares this against the operator's config pin.
     pub machine_id: String,
     pub workspaces: Vec<Workspace>,
+    /// Per workspace ID, the crew keys (`crews` or `crews_error`) the
+    /// destination attached when asked to include crews. Empty otherwise.
+    pub crews: BTreeMap<String, Map<String, Value>>,
 }
 
 /// One destination's live answer.
@@ -89,6 +93,15 @@ pub struct DestinationSnapshot {
 /// without a reachable host.
 pub trait DestinationProbe: Send + Sync {
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError>;
+
+    /// [`Self::probe`], asking the destination to attach each workspace's
+    /// crews. A destination that predates the request answers without them.
+    fn probe_with_crews(
+        &self,
+        destination: &Destination,
+    ) -> Result<DestinationSnapshot, OrbitError> {
+        self.probe(destination)
+    }
 
     /// One short-lived session for a single routed `tools/call`.
     ///
@@ -228,7 +241,15 @@ impl DestinationProbe for SshDestinationProbe {
 
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
         let mut session = self.start_session(destination)?;
-        session.discover_workspaces()
+        session.discover_workspaces(json!({}))
+    }
+
+    fn probe_with_crews(
+        &self,
+        destination: &Destination,
+    ) -> Result<DestinationSnapshot, OrbitError> {
+        let mut session = self.start_session(destination)?;
+        session.discover_workspaces(crews_arguments())
     }
 
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
@@ -256,6 +277,26 @@ impl InProcessDestinationProbe {
     }
 }
 
+impl InProcessDestinationProbe {
+    fn discover(
+        &self,
+        destination: &Destination,
+        arguments: Value,
+    ) -> Result<DestinationSnapshot, OrbitError> {
+        let content = self.inner.call_tool(
+            crate::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL,
+            arguments,
+            self.session_context.clone(),
+        )?;
+        snapshot_from_discovery_content(destination, &content)
+    }
+}
+
+/// Private discovery arguments that ask a destination for crews.
+fn crews_arguments() -> Value {
+    json!({ "include": [crate::WORKSPACE_LIST_INCLUDE_CREWS] })
+}
+
 impl DestinationProbe for InProcessDestinationProbe {
     fn open_internal_drain_route(
         &self,
@@ -276,12 +317,14 @@ impl DestinationProbe for InProcessDestinationProbe {
         self.inner.refuse_internal_drain(name, input, context)
     }
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
-        let content = self.inner.call_tool(
-            crate::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL,
-            json!({}),
-            self.session_context.clone(),
-        )?;
-        snapshot_from_discovery_content(destination, &content)
+        self.discover(destination, json!({}))
+    }
+
+    fn probe_with_crews(
+        &self,
+        destination: &Destination,
+    ) -> Result<DestinationSnapshot, OrbitError> {
+        self.discover(destination, crews_arguments())
     }
 
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
@@ -422,6 +465,13 @@ impl DestinationProbe for CompositeDestinationProbe {
         self.probe_for(destination).probe(destination)
     }
 
+    fn probe_with_crews(
+        &self,
+        destination: &Destination,
+    ) -> Result<DestinationSnapshot, OrbitError> {
+        self.probe_for(destination).probe_with_crews(destination)
+    }
+
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
         self.probe_for(destination).open_route(destination)
     }
@@ -504,7 +554,7 @@ impl RoutedSession for SshRoutedSession {
         if let Some(snapshot) = &self.snapshot {
             return Ok(snapshot.clone());
         }
-        let snapshot = self.session.discover_workspaces()?;
+        let snapshot = self.session.discover_workspaces(json!({}))?;
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -742,12 +792,15 @@ impl DestinationSession {
 
     /// Call the destination's private federated discovery path and return its
     /// envelope. The public v1 list intentionally filters Invalid workspaces.
-    pub(super) fn discover_workspaces(&mut self) -> Result<DestinationSnapshot, OrbitError> {
+    pub(super) fn discover_workspaces(
+        &mut self,
+        arguments: Value,
+    ) -> Result<DestinationSnapshot, OrbitError> {
         let response = self.request_probe(
             "tools/call",
             json!({
                 "name": crate::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL,
-                "arguments": {},
+                "arguments": arguments,
             }),
         )?;
         let result = &response["result"];
@@ -1108,16 +1161,31 @@ pub(crate) fn snapshot_from_discovery_content(
             )
         })?
         .to_string();
-    let workspaces: Vec<Workspace> = serde_json::from_value(content["workspaces"].clone())
-        .map_err(|error| {
-            unreachable(
-                destination,
-                format!("discovery answer was not a workspace list: {error}"),
-            )
-        })?;
+    // Crew keys ride on the rows but are not workspace record fields, which
+    // refuse unknown keys; lift them out before the rows are read.
+    let mut rows = content["workspaces"].clone();
+    let mut crews = BTreeMap::new();
+    if let Some(rows) = rows.as_array_mut() {
+        for row in rows.iter_mut().filter_map(Value::as_object_mut) {
+            let lifted = ["crews", "crews_error"]
+                .into_iter()
+                .filter_map(|key| row.remove(key).map(|value| (key.to_string(), value)))
+                .collect::<Map<_, _>>();
+            if let (false, Some(id)) = (lifted.is_empty(), row.get("id").and_then(Value::as_str)) {
+                crews.insert(id.to_string(), lifted);
+            }
+        }
+    }
+    let workspaces: Vec<Workspace> = serde_json::from_value(rows).map_err(|error| {
+        unreachable(
+            destination,
+            format!("discovery answer was not a workspace list: {error}"),
+        )
+    })?;
     Ok(DestinationSnapshot {
         machine_id,
         workspaces,
+        crews,
     })
 }
 

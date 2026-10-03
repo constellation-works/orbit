@@ -44,7 +44,7 @@ function tools(name,args){
  if(name==='orbit_workflow_auto')return (args.action==='status'?read:drain)({...args,scope:'drain'});
  if(name==='orbit_routine_control')return (args.action==='list'?read:automate)({...args,scope:'routines',kind:'routine'});
  if(name==='orbit_auto_task_list')return read({...args,scope:'auto_tasks'});
- if(name==='orbit_auto_task_toggle'||name==='orbit_auto_task_mint')return automate({...args,kind:'auto_task',action:name==='orbit_auto_task_toggle'?'toggle':'mint'});
+ if(name==='orbit_auto_task_update'||name==='orbit_auto_task_mint')return automate({...args,kind:'auto_task',action:name==='orbit_auto_task_update'?'toggle':'mint'});
  if(name==='orbit_pipeline_invoke')return automate({...args,name:args.job_name,kind:'job',action:'run'});
  if(name==='orbit_task_add'||name==='orbit_task_update')return {mutation_applied:false,refusal:{message:'This preview does not persist task writes.'}};
 

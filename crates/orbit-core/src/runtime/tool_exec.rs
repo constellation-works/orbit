@@ -61,7 +61,7 @@ impl OrbitRuntime {
         }
         if (name == "orbit.pipeline.invoke"
             && input.get("default_input") == Some(&Value::Bool(true)))
-            || (name == "orbit.auto_task.toggle" && input.get("expected_enabled").is_some())
+            || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
             || (name == "orbit.auto_task.mint" && input.get("acknowledge_unconditional").is_some())
         {
             self.authorize_tool_operation(

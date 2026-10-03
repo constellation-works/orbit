@@ -46,8 +46,9 @@ pub struct AutoTaskAddParams {
     pub dedupe: DedupePolicy,
 }
 
-/// Present-field patch for updating a definition. Absent fields are unchanged;
-/// `enabled` is patched through [`OrbitRuntime::auto_task_toggle`].
+/// Present-field patch for updating a definition. Absent fields are unchanged.
+/// A checked `enabled` change goes through
+/// [`OrbitRuntime::auto_task_toggle_checked`] instead.
 #[derive(Debug, Clone, Default)]
 pub struct AutoTaskUpdateParams {
     pub waive_batch: Option<orbit_types::workflow::automation::WaiveBatchRequest>,
@@ -55,6 +56,7 @@ pub struct AutoTaskUpdateParams {
     pub schedule: Option<AutoTaskSchedule>,
     pub dedupe: Option<DedupePolicy>,
     pub template: Option<AutoTaskTemplate>,
+    pub enabled: Option<bool>,
 }
 
 /// A lookup may name only one definition stem. Absolute paths, `..`, and
@@ -191,6 +193,7 @@ impl OrbitRuntime {
                 || params.schedule.is_some()
                 || params.dedupe.is_some()
                 || params.template.is_some()
+                || params.enabled.is_some()
             {
                 return Err(OrbitError::InvalidInput(
                     "waive_batch cannot be combined with a definition edit".into(),
@@ -222,6 +225,9 @@ impl OrbitRuntime {
             if let Some(mut template) = params.template {
                 template.required_tools = normalize_required_tools(template.required_tools);
                 definition.template = template;
+            }
+            if let Some(enabled) = params.enabled {
+                definition.enabled = enabled;
             }
         })
     }
