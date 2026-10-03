@@ -3,7 +3,7 @@ use tempfile::TempDir;
 
 use super::super::SqliteJobRunStore;
 use super::super::backend::KEYED_RUN_WINDOW_SQL;
-use super::super::queries::job_run_list_sql;
+use super::super::queries::{job_run_list_sql, latest_job_runs_sql};
 use crate::Store;
 use crate::contracts::{JobRunQuery, JobRunStoreBackend};
 
@@ -100,6 +100,14 @@ fn per_job_newest_first_listings_use_the_job_created_index() {
         );
         assert!(!plan.contains("TEMP B-TREE"), "{query:?}\n{plan}");
     }
+}
+
+#[test]
+fn latest_job_runs_probes_each_job_index_without_scanning_history() {
+    let plan = plan_of(&latest_job_runs_sql(2), &[&"ws", &"job-a", &"job-b"]);
+    assert!(plan.contains("idx_job_runs_ws_job_created"), "{plan}");
+    assert!(!plan.contains("SCAN job_runs"), "{plan}");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
 }
 
 /// The keyed-submission window reads one job's newest runs on every keyed

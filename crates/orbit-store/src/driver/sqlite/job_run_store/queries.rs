@@ -16,7 +16,50 @@ use crate::{Store, parse_timestamp};
 /// Run ids per `IN (...)` list, under SQLite's bound-parameter cap.
 pub(super) const STEP_RUN_ID_CHUNK: usize = 500;
 
+/// Job ids per latest-run lookup, also below SQLite's bound-parameter cap.
+pub(super) const LATEST_JOB_ID_CHUNK: usize = 500;
+
 impl Store {
+    pub(super) fn latest_job_runs_for_workspace(
+        &self,
+        workspace_id: &str,
+        job_ids: &[String],
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        if job_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut ids = job_ids.iter().collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        let conn = self.read()?;
+        let mut runs = Vec::new();
+        for chunk in ids.chunks(LATEST_JOB_ID_CHUNK) {
+            let sql = latest_job_runs_sql(chunk.len());
+            let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&workspace_id];
+            params.extend(chunk.iter().map(|id| *id as &dyn rusqlite::types::ToSql));
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            let rows = stmt
+                .query_map(params.as_slice(), row_to_job_run)
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+            runs.extend(
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| OrbitError::Store(e.to_string()))?,
+            );
+        }
+        let run_ids = runs
+            .iter()
+            .map(|run| run.run_id.clone())
+            .collect::<Vec<_>>();
+        let mut steps = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
+        for run in &mut runs {
+            run.steps = steps.remove(&run.run_id).unwrap_or_default();
+        }
+        runs.sort_by(|a, b| a.job_id.cmp(&b.job_id));
+        Ok(runs)
+    }
+
     pub fn upsert_job_run_for_workspace(
         &self,
         workspace_id: &str,
@@ -374,6 +417,24 @@ pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, schedu
      started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
      retry_source_run_id, knowledge_metrics_json, resolved_crew, \
      COALESCE(crew_model, implementer_model), executed_on_json";
+
+/// Probe the existing per-job created index once per requested ID, then
+/// hydrate only that run. A window over all history would scan old runs to
+/// answer a catalog refresh; the correlated LIMIT stops at its first match.
+pub(super) fn latest_job_runs_sql(job_count: usize) -> String {
+    let values = (2..job_count + 2)
+        .map(|index| format!("(?{index})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "WITH requested(requested_id) AS (VALUES {values}) \
+         SELECT {JOB_RUN_COLUMNS} FROM requested CROSS JOIN job_runs \
+         WHERE workspace_id = ?1 AND run_id = (\
+             SELECT run_id FROM job_runs WHERE workspace_id = ?1 \
+             AND job_id = requested.requested_id \
+             ORDER BY created_at DESC, run_id ASC LIMIT 1)"
+    )
+}
 
 /// `WHERE` clause and bound parameters for a [`JobRunQuery`] on `job_runs`,
 /// shared by the list, count, and duration reads so the three cannot drift.

@@ -193,8 +193,6 @@ impl OrbitRuntime {
         include_disabled: bool,
         filter: JobCatalogFilter,
     ) -> Result<Vec<(JobCatalogEntry, Option<JobRun>)>, OrbitError> {
-        use orbit_store::contracts::JobRunQuery;
-
         let v2_jobs = self.load_v2_job_assets()?;
         let mut result = Vec::new();
 
@@ -205,27 +203,29 @@ impl OrbitRuntime {
             if !matches_job_filter(spec.kind, filter) {
                 continue;
             }
-            let last_run = self
-                .stores()
-                .jobs()
-                .list_job_runs_filtered(&JobRunQuery {
-                    job_id: Some(job_id.to_string()),
-                    state: None,
-                    terminal_only: false,
-                    created_since: None,
-                    limit: Some(1),
-                    ..Default::default()
-                })?
-                .into_iter()
-                .next();
             result.push((
                 JobCatalogEntry {
                     job_id: job_id.to_string(),
                     path: path.to_path_buf(),
                     spec: spec.clone(),
                 },
-                last_run,
+                None,
             ));
+        }
+
+        let job_ids = result
+            .iter()
+            .map(|(entry, _)| entry.job_id.clone())
+            .collect::<Vec<_>>();
+        let mut latest = self
+            .stores()
+            .jobs()
+            .latest_job_runs(&job_ids)?
+            .into_iter()
+            .map(|run| (run.job_id.clone(), run))
+            .collect::<std::collections::HashMap<_, _>>();
+        for (entry, last_run) in &mut result {
+            *last_run = latest.remove(&entry.job_id);
         }
 
         result.sort_by(|left, right| left.0.job_id.cmp(&right.0.job_id));

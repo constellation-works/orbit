@@ -116,6 +116,30 @@ pub trait JobRunStoreBackend: Send + Sync {
 
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
+    /// Latest created run, including steps, for each distinct requested job.
+    /// Missing jobs are omitted; results are ordered by job ID. Ties use the
+    /// same run-ID ordering as a default `JobRunQuery`. Backends may batch the
+    /// lookups without decoding any older run history.
+    fn latest_job_runs(&self, job_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        let mut ids = job_ids.to_vec();
+        ids.sort();
+        ids.dedup();
+        let mut runs = Vec::new();
+        for job_id in ids {
+            if let Some(run) = self
+                .list_job_runs_filtered(&JobRunQuery {
+                    job_id: Some(job_id),
+                    limit: Some(1),
+                    ..Default::default()
+                })?
+                .into_iter()
+                .next()
+            {
+                runs.push(run);
+            }
+        }
+        Ok(runs)
+    }
     /// Number of runs matching `query`, ignoring its `limit`.
     fn count_job_runs_filtered(&self, query: &JobRunQuery) -> Result<u64, OrbitError>;
     /// Every recorded `duration_ms` among runs matching `query`, ignoring
