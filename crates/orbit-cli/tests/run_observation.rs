@@ -15,6 +15,7 @@
 //! run, so an unreadable record is not reported as nonexistent.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
@@ -197,13 +198,15 @@ impl Fixture {
             String::from_utf8_lossy(&output.stderr)
         );
         if std::env::var_os("ORBIT_QA_TRACE_CLI").is_some() {
-            eprintln!(
+            writeln!(
+                std::io::stderr(),
                 "QA_CLI {}",
                 serde_json::json!({
                     "test": std::thread::current().name(), "argv": args,
                     "exit_code": output.status.code(),
                 })
-            );
+            )
+            .expect("write opt-in CLI evidence");
         }
         serde_json::from_slice(&output.stdout).expect("json output")
     }
