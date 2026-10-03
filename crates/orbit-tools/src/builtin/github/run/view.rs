@@ -11,13 +11,17 @@ pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec![
         "run".to_string(),
         "view".to_string(),
-        super::require_numeric_id(input, "run")?,
+        super::super::require_numeric_id(input, "run")?,
     ];
-    super::push_repo_flag(&mut args, input)?;
+    super::super::push_repo_flag(&mut args, input)?;
     args.push("--json".to_string());
     args.push(RUN_VIEW_FIELDS.to_string());
 
-    Ok(super::gh_exec_request(args, None, TIMEOUT_DEFAULT_MS))
+    Ok(super::super::gh_exec_request(
+        args,
+        None,
+        TIMEOUT_DEFAULT_MS,
+    ))
 }
 
 fn project_step(step: &Value) -> Value {
@@ -63,7 +67,7 @@ fn project_job(job: &Value, run_url: &Value) -> Value {
 /// `cancelled` and `timed_out` count: a run that never produced a verdict is
 /// not a green run, and treating it as one is how a red pipeline gets reported
 /// as clean.
-pub(super) fn is_unsuccessful(conclusion: &Value) -> bool {
+pub(in crate::builtin::github) fn is_unsuccessful(conclusion: &Value) -> bool {
     matches!(
         conclusion.as_str(),
         Some("failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure")
@@ -129,21 +133,21 @@ pub fn project_run_view(run: &Value) -> Value {
     })
 }
 
-super::gh_tool! {
+super::super::gh_tool! {
     pub struct GithubRunViewTool;
     name: "github.run.view";
     description: "Inspect one GitHub Actions workflow run: its reported head SHA, event, branch, and every job with its URL, steps, and conclusions. Unsuccessful jobs and steps are also collected separately.";
     parameters: [
-        super::tool_param("run", "Numeric workflow-run ID", "string", true),
-        super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
+        super::super::tool_param("run", "Numeric workflow-run ID", "string", true),
+        super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
     ];
     request: |ctx, input| {
-        build_exec_request(input).map(|request| super::in_tool_workspace(request, ctx))
+        build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
     }
     response: |_ctx, _input, result| {
         check_exec_result(result, "gh run view")?;
 
-        let run = super::parse_gh_json(&result.stdout, "gh run view")?;
+        let run = super::super::parse_gh_json(&result.stdout, "gh run view")?;
         Ok(project_run_view(&run))
     }
 }

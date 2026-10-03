@@ -12,7 +12,8 @@ use tempfile::TempDir;
 
 use super::log_fallback::{set_executable, wait_until_executable};
 use crate::ToolContext;
-use crate::builtin::github::{dependabot_alerts, logs, pr_list, run_list, run_view};
+use crate::builtin::github::run::{list as run_list, view as run_view};
+use crate::builtin::github::{dependabot_alerts, logs, pr_list};
 
 #[test]
 fn dependabot_alert_request_is_bounded_and_projects_compact_evidence() {

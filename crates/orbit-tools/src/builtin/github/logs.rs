@@ -135,7 +135,7 @@ impl RunLogRequests {
         };
         Ok(Self {
             run_log: run_log_request(input)?,
-            run_view: super::run_view::build_exec_request(input)?,
+            run_view: super::run::view::build_exec_request(input)?,
             run_id: super::require_numeric_id(input, "run")?,
             job,
             scope: LogScope::from_input(input)?,
@@ -420,7 +420,7 @@ fn fallback_jobs(
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
             check_exec_result(&result, "gh run view").map_err(|error| error.to_string())?;
             owned = super::parse_gh_json(&result.stdout, "gh run view")
-                .map(|parsed| super::run_view::project_run_view(&parsed))
+                .map(|parsed| super::run::view::project_run_view(&parsed))
                 .map_err(|error| error.to_string())?;
             &owned
         }
@@ -497,7 +497,7 @@ fn collect_jobs(
         // A running job's API can serve a partial stream. Only a completed
         // job is evidence complete enough to diagnose or file from.
         .filter(|job| job.get("status").and_then(Value::as_str) == Some("completed"))
-        .filter(|job| super::run_view::is_unsuccessful(&job["conclusion"]) == unsuccessful)
+        .filter(|job| super::run::view::is_unsuccessful(&job["conclusion"]) == unsuccessful)
         .filter_map(|job| {
             let id = job.get("job_id").and_then(Value::as_u64)?;
             if requests

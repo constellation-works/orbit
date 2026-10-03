@@ -12,17 +12,21 @@ const MAX_LIMIT: u64 = 100;
 
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec!["run".to_string(), "list".to_string()];
-    super::push_optional_flag(&mut args, input, "branch", "--branch")?;
-    super::push_optional_flag(&mut args, input, "workflow", "--workflow")?;
-    super::push_optional_flag(&mut args, input, "status", "--status")?;
-    super::push_optional_flag(&mut args, input, "event", "--event")?;
-    super::push_repo_flag(&mut args, input)?;
+    super::super::push_optional_flag(&mut args, input, "branch", "--branch")?;
+    super::super::push_optional_flag(&mut args, input, "workflow", "--workflow")?;
+    super::super::push_optional_flag(&mut args, input, "status", "--status")?;
+    super::super::push_optional_flag(&mut args, input, "event", "--event")?;
+    super::super::push_repo_flag(&mut args, input)?;
     args.push("--limit".to_string());
-    args.push(super::bounded_limit(input, "limit", DEFAULT_LIMIT, MAX_LIMIT)?.to_string());
+    args.push(super::super::bounded_limit(input, "limit", DEFAULT_LIMIT, MAX_LIMIT)?.to_string());
     args.push("--json".to_string());
     args.push(RUN_LIST_FIELDS.to_string());
 
-    Ok(super::gh_exec_request(args, None, TIMEOUT_DEFAULT_MS))
+    Ok(super::super::gh_exec_request(
+        args,
+        None,
+        TIMEOUT_DEFAULT_MS,
+    ))
 }
 
 /// Reshape one `gh run list` entry into the tool's own field names.
@@ -48,25 +52,25 @@ pub fn project_run(run: &Value) -> Value {
     })
 }
 
-super::gh_tool! {
+super::super::gh_tool! {
     pub struct GithubRunListTool;
     name: "github.run.list";
     description: "List recent GitHub Actions workflow runs with each run's reported head SHA. Filter by branch, workflow, status/conclusion, and event.";
     parameters: [
-        super::tool_param("branch", "Restrict to runs for one branch", "string", false),
-        super::tool_param("workflow", "Restrict to one workflow by name, file name, or ID", "string", false),
-        super::tool_param("status", "Restrict to one run status or conclusion (queued, in_progress, completed, failure, success, cancelled, timed_out, action_required)", "string", false),
-        super::tool_param("event", "Restrict to one triggering event (push, pull_request, schedule)", "string", false),
-        super::tool_param("limit", "Maximum runs to return (default 20, capped at 100)", "integer", false),
-        super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
+        super::super::tool_param("branch", "Restrict to runs for one branch", "string", false),
+        super::super::tool_param("workflow", "Restrict to one workflow by name, file name, or ID", "string", false),
+        super::super::tool_param("status", "Restrict to one run status or conclusion (queued, in_progress, completed, failure, success, cancelled, timed_out, action_required)", "string", false),
+        super::super::tool_param("event", "Restrict to one triggering event (push, pull_request, schedule)", "string", false),
+        super::super::tool_param("limit", "Maximum runs to return (default 20, capped at 100)", "integer", false),
+        super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
     ];
     request: |ctx, input| {
-        build_exec_request(input).map(|request| super::in_tool_workspace(request, ctx))
+        build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
     }
     response: |_ctx, _input, result| {
         check_exec_result(result, "gh run list")?;
 
-        let runs = super::parse_gh_json(&result.stdout, "gh run list")?;
+        let runs = super::super::parse_gh_json(&result.stdout, "gh run list")?;
         let runs: Vec<Value> = runs
             .as_array()
             .map(|entries| entries.iter().map(project_run).collect())

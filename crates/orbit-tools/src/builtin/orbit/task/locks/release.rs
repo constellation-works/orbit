@@ -14,7 +14,7 @@ impl Tool for OrbitTaskLocksReleaseTool {
             param_type: "string".to_string(),
             required: true,
         }];
-        parameters.extend(super::super::identity_params());
+        parameters.extend(super::super::super::identity_params());
 
         ToolSchema {
             name: "orbit.task.locks.release".to_string(),
@@ -25,6 +25,6 @@ impl Tool for OrbitTaskLocksReleaseTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskLocksRelease)
+        super::super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskLocksRelease)
     }
 }

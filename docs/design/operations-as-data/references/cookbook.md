@@ -50,7 +50,7 @@ For a noun with verbs `v₁…vₙ`, find:
 | What | Where (friction example) |
 |------|--------------------------|
 | MCP `Tool` impls | `crates/orbit-tools/src/builtin/orbit/<noun>/*.rs` |
-| MCP registration + workspace scope | `crates/orbit-tools/src/builtin/orbit/mod.rs` |
+| MCP registration + workspace scope | `crates/orbit-tools/src/builtin/orbit/register.rs` |
 | Action enum variants | `crates/orbit-tools/src/lib.rs` (`OrbitBuiltinAction`) |
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
 | Handlers | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |

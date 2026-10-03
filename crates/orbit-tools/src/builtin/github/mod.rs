@@ -24,9 +24,7 @@ pub use diagnostic::strip_ansi_sequences;
 pub mod logs;
 pub mod pr_list;
 pub mod repo;
-pub mod run_list;
-pub mod run_logs;
-pub mod run_view;
+pub mod run;
 
 pub(crate) mod landing;
 #[cfg(test)]

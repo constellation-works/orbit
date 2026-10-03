@@ -86,7 +86,7 @@ macro_rules! gh_tool {
 
         impl crate::Tool for $name {
             fn schema(&self) -> orbit_types::tool::ToolSchema {
-                super::gh_schema($tool_name, $description, vec![$($param),*])
+                crate::builtin::github::gh_schema($tool_name, $description, vec![$($param),*])
             }
 
             fn execute(
@@ -114,7 +114,7 @@ macro_rules! gh_tool {
 
         impl crate::Tool for $name {
             fn schema(&self) -> orbit_types::tool::ToolSchema {
-                super::gh_schema($tool_name, $description, vec![$($param),*])
+                crate::builtin::github::gh_schema($tool_name, $description, vec![$($param),*])
             }
 
             fn execute(
@@ -144,9 +144,9 @@ pub(super) use gh_tool;
 pub fn register(registry: &mut ToolRegistry) {
     registry.register(auth::GithubAuthStatusTool);
     registry.register(pr_list::GithubPrListTool);
-    registry.register(run_list::GithubRunListTool);
-    registry.register(run_logs::GithubRunLogsTool);
-    registry.register(run_view::GithubRunViewTool);
+    registry.register(run::list::GithubRunListTool);
+    registry.register(run::logs::GithubRunLogsTool);
+    registry.register(run::view::GithubRunViewTool);
 }
 
 /// Extract a required numeric GitHub identifier (a workflow-run or job ID).
