@@ -407,12 +407,128 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Operator-only automation actions in one selected workspace. Toggle uses the observed enabled state; routine toggles also require the observed target. Mint ignores schedule and dedupe and needs explicit acknowledgement. Run submits a no-input catalog job; delivery jobs require auto-drain. Never replay after a lost response; inspect authoritative state first.",
+    "enabled": true,
+    "name": "orbit.desktop.automation",
+    "parameters": [
+      {
+        "description": "toggle, mint or run",
+        "name": "action",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "routine, auto_task or job",
+        "name": "kind",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Exact definition or job name from the desktop projection",
+        "name": "name",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Required for toggle: observed enabled flag",
+        "name": "expected_enabled",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Required for toggle: desired enabled flag",
+        "name": "enabled",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Required for routine toggle: observed target",
+        "name": "target",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Required true for mint: ignores enabled, schedule and dedupe, creates a task without dispatch",
+        "name": "acknowledge_unconditional",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Start a bounded auto-drain window or stop admissions and deliver recorded settlements in one workspace. Requires an existing operator session. Stop preserves admitted workers. Start is not retry-safe: after a lost reply inspect drain readiness and runs before another submission. Never retries automatically.",
+    "enabled": true,
+    "name": "orbit.desktop.drain",
+    "parameters": [
+      {
+        "description": "start or stop",
+        "name": "action",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Required for start: window length in seconds, 1 through 604800",
+        "name": "for_seconds",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Optional start worker limit, positive u32; omitted uses runtime default",
+        "name": "concurrency",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+        "name": "complete",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
+        "description": "Workspace claim token when held by another operator",
+        "name": "claim_token",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "name": "workspace",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "Read a bounded desktop view in one explicit workspace. Task search matches public key/title only; history search uses orbit.search. Run reads require the same operator authority as workflow run observation. This never reconciles or starts execution.",
     "enabled": true,
     "name": "orbit.desktop.read",
     "parameters": [
       {
-        "description": "tasks, task, runs or run",
+        "description": "tasks, task, runs, run, drain, routines, auto_tasks or jobs",
         "name": "scope",
         "param_type": "string",
         "required": true

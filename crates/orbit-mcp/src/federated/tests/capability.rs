@@ -21,6 +21,8 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.auto_task.update", McpToolClass::ControlPlane),
     ("orbit.command.exec", McpToolClass::Execute),
     ("orbit.desktop.read", McpToolClass::ControlPlane),
+    ("orbit.desktop.drain", McpToolClass::Execute),
+    ("orbit.desktop.automation", McpToolClass::Execute),
     ("orbit.desktop.task.snapshot", McpToolClass::ControlPlane),
     ("orbit.desktop.task.write", McpToolClass::ControlPlane),
     ("orbit.crew.list", McpToolClass::Unclassified),

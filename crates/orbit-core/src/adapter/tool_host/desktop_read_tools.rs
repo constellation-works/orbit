@@ -34,8 +34,19 @@ pub(super) fn read(
         "tasks" => tasks(runtime, &input, limit)?,
         "task" => task(runtime, session, &input, limit)?,
         "runs" => runs(runtime, &input, limit)?,
+        "drain" => super::desktop_drain_tools::readiness(runtime)?,
+        "routines" | "auto_tasks" | "jobs" => super::desktop_automation_tools::read(
+            runtime,
+            &scope,
+            number(&input, "offset", 0)?,
+            limit,
+        )?,
         "run" => run(runtime, &input, limit)?,
-        _ => return Err(invalid("scope must be tasks, task, runs, or run")),
+        _ => {
+            return Err(invalid(
+                "scope must be tasks, task, runs, run, drain, routines, auto_tasks or jobs",
+            ));
+        }
     };
     result["schema_version"] = json!(1);
     result["workspace"] = json!(workspace);
@@ -274,7 +285,7 @@ fn excerpt(raw: &str) -> (String, bool) {
     bounded_text(raw, LOG_BYTES)
 }
 
-fn bounded_text(raw: &str, max_bytes: usize) -> (String, bool) {
+pub(super) fn bounded_text(raw: &str, max_bytes: usize) -> (String, bool) {
     let mut text = redact_all(raw);
     if text.len() <= max_bytes {
         return (text, false);

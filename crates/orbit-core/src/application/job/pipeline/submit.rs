@@ -446,6 +446,24 @@ impl OrbitRuntime {
         self.record_submission_audit(&job_name, &input, actor, &result)?;
         result
     }
+    /// Submit an operator UI's no-input catalog action through the shared dispatcher.
+    pub fn submit_no_input_catalog_job_run(
+        &self,
+        job_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let entry = self.show_job_catalog_entry(job_id)?;
+        if entry.kind() != orbit_types::workflow::JobKind::Subroutine
+            && !entry.supports_no_input_submission()
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "job '{job_id}' requires task input or a delivery window, or is disabled/subroutine; use Ship or Drain for delivery"
+            )));
+        }
+        self.submit_catalog_job_run(job_id, json!({}), actor, trigger)
+    }
+
     /// Submit a catalog job by id. This entry point never interprets the id as
     /// a path, so request surfaces can reject direct files while preserving the
     /// same catalog validation and subroutine refusal as the CLI. `trigger` is

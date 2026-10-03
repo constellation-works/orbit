@@ -78,7 +78,9 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].
-        "orbit_agent_invoke"
+        "orbit_desktop_automation"
+        | "orbit_desktop_drain"
+        | "orbit_agent_invoke"
         | "orbit_command_exec"
         // [ORB-13744] Delivery evidence is the run's own checkpoint, held
         // by the host that executed it, like the run view it narrows.

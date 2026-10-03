@@ -11,7 +11,8 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 ## MCP Apps compatibility prototype
 
 See [the isolated reproduction and native desktop probe](mcp-apps-probe.md)
-for the versioned read-only task panel, routing boundaries and evidence template.
+for the versioned Control Center, operator controls, isolated rendered preview,
+routing boundaries and evidence template.
 Automated protocol/bridge results and native desktop results are recorded separately.
 
 ## Safe Mutable CLI Fixtures

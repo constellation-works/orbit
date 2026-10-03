@@ -2,6 +2,8 @@ mod agent_tools;
 mod artifact_redaction;
 mod auto_task_tools;
 mod command_tools;
+mod desktop_automation_tools;
+mod desktop_drain_tools;
 mod desktop_read_tools;
 mod desktop_tools;
 mod dispatch;

@@ -9,6 +9,8 @@ use crate::ToolRegistry;
 pub fn register(registry: &mut ToolRegistry) {
     for tool in [
         desktop::DesktopTool::Read,
+        desktop::DesktopTool::Drain,
+        desktop::DesktopTool::Automation,
         desktop::DesktopTool::Snapshot,
         desktop::DesktopTool::Write,
     ] {

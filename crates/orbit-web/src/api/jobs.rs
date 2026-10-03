@@ -41,17 +41,8 @@ pub(super) async fn run_job_action(
         Err(message) => return bad_request(message),
     };
     match blocking("run job", move || {
-        if (id.starts_with("task_") && id != "task_pilot_pipeline")
-            || id.starts_with("workspace_")
-            || id.starts_with("epic_")
-        {
-            return Err(orbit_core::OrbitError::InvalidInput(format!(
-                "job '{id}' requires task input or a delivery window; use Ship or Drain"
-            )));
-        }
-        runtime.submit_catalog_job_run(
+        runtime.submit_no_input_catalog_job_run(
             &id,
-            json!({}),
             Some("dashboard"),
             orbit_types::workflow::JobRunTrigger::dashboard(),
         )

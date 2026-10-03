@@ -166,7 +166,8 @@ pub(super) async fn toggle_auto_task(
         let runtime = runtime.clone();
         let name = body.name.clone();
         let enabled = body.enabled;
-        move || Ok(runtime.auto_task_toggle(&name, enabled))
+        let expected_enabled = body.expected_enabled;
+        move || Ok(runtime.auto_task_toggle_checked(&name, expected_enabled, enabled))
     })
     .await
     {

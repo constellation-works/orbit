@@ -8,6 +8,8 @@ type InputField = (&'static str, &'static str, bool, &'static str);
 
 pub enum DesktopTool {
     Read,
+    Drain,
+    Automation,
     Snapshot,
     Write,
 }
@@ -15,7 +17,7 @@ pub enum DesktopTool {
 impl Tool for DesktopTool {
     fn execution_kind(&self) -> ToolExecutionKind {
         match self {
-            Self::Write => ToolExecutionKind::Mutating,
+            Self::Write | Self::Drain | Self::Automation => ToolExecutionKind::Mutating,
             _ => ToolExecutionKind::ReadOnly,
         }
     }
@@ -25,7 +27,12 @@ impl Tool for DesktopTool {
                 "orbit.desktop.read",
                 "Read a bounded desktop view in one explicit workspace. Task search matches public key/title only; history search uses orbit.search. Run reads require the same operator authority as workflow run observation. This never reconciles or starts execution.",
                 &[
-                    ("scope", "string", true, "tasks, task, runs or run"),
+                    (
+                        "scope",
+                        "string",
+                        true,
+                        "tasks, task, runs, run, drain, routines, auto_tasks or jobs",
+                    ),
                     (
                         "id",
                         "string",
@@ -66,6 +73,75 @@ impl Tool for DesktopTool {
                         "Artifact metadata page offset",
                     ),
                     ("log_offset", "integer", false, "Run log record offset"),
+                ],
+            ),
+            Self::Drain => (
+                "orbit.desktop.drain",
+                "Start a bounded auto-drain window or stop admissions and deliver recorded settlements in one workspace. Requires an existing operator session. Stop preserves admitted workers. Start is not retry-safe: after a lost reply inspect drain readiness and runs before another submission. Never retries automatically.",
+                &[
+                    ("action", "string", true, "start or stop"),
+                    (
+                        "for_seconds",
+                        "integer",
+                        false,
+                        "Required for start: window length in seconds, 1 through 604800",
+                    ),
+                    (
+                        "concurrency",
+                        "integer",
+                        false,
+                        "Optional start worker limit, positive u32; omitted uses runtime default",
+                    ),
+                    (
+                        "complete",
+                        "boolean",
+                        false,
+                        "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review",
+                    ),
+                    (
+                        "claim_token",
+                        "string",
+                        false,
+                        "Workspace claim token when held by another operator",
+                    ),
+                ],
+            ),
+            Self::Automation => (
+                "orbit.desktop.automation",
+                "Operator-only automation actions in one selected workspace. Toggle uses the observed enabled state; routine toggles also require the observed target. Mint ignores schedule and dedupe and needs explicit acknowledgement. Run submits a no-input catalog job; delivery jobs require auto-drain. Never replay after a lost response; inspect authoritative state first.",
+                &[
+                    ("action", "string", true, "toggle, mint or run"),
+                    ("kind", "string", true, "routine, auto_task or job"),
+                    (
+                        "name",
+                        "string",
+                        true,
+                        "Exact definition or job name from the desktop projection",
+                    ),
+                    (
+                        "expected_enabled",
+                        "boolean",
+                        false,
+                        "Required for toggle: observed enabled flag",
+                    ),
+                    (
+                        "enabled",
+                        "boolean",
+                        false,
+                        "Required for toggle: desired enabled flag",
+                    ),
+                    (
+                        "target",
+                        "string",
+                        false,
+                        "Required for routine toggle: observed target",
+                    ),
+                    (
+                        "acknowledge_unconditional",
+                        "boolean",
+                        false,
+                        "Required true for mint: ignores enabled, schedule and dedupe, creates a task without dispatch",
+                    ),
                 ],
             ),
             Self::Snapshot => (
@@ -145,11 +221,23 @@ impl Tool for DesktopTool {
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
         super::reject_unknown_tool_arguments(&input, &self.schema())?;
         orbit_common::protocol::tool_input::required_string(&input, &["workspace"], "workspace")?;
+        if matches!(self, Self::Drain | Self::Automation)
+            && ctx
+                .orbit_host
+                .as_ref()
+                .is_some_and(|host| host.task_scope().run_id.is_some())
+        {
+            return Err(OrbitError::CapabilityDenied(
+                "managed runs cannot control desktop automation".into(),
+            ));
+        }
         super::execute_host_action(
             ctx,
             input,
             match self {
                 Self::Read => OrbitBuiltinAction::DesktopRead,
+                Self::Drain => OrbitBuiltinAction::DesktopDrain,
+                Self::Automation => OrbitBuiltinAction::DesktopAutomation,
                 Self::Snapshot => OrbitBuiltinAction::DesktopTaskSnapshot,
                 Self::Write => OrbitBuiltinAction::DesktopTaskWrite,
             },

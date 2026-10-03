@@ -370,6 +370,18 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
+        id: "orbit.desktop.automation",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "automation controls change recurring execution or submit work; UI discovery grants no authority",
+    },
+    GovernedOperation {
+        id: "orbit.desktop.drain",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "auto-drain starts unattended work or stops workspace admissions; UI discovery grants no authority",
+    },
+    GovernedOperation {
         id: "orbit.workflow.ship",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

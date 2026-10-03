@@ -308,6 +308,8 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::AutoTaskShow
         | OrbitBuiltinAction::AutoTaskToggle
         | OrbitBuiltinAction::DesktopRead
+        | OrbitBuiltinAction::DesktopDrain
+        | OrbitBuiltinAction::DesktopAutomation
         | OrbitBuiltinAction::DesktopTaskSnapshot
         // Desktop writes redact at their transactional persistence boundary.
         | OrbitBuiltinAction::DesktopTaskWrite
