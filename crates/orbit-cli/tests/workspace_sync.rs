@@ -21,6 +21,7 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
         .env("HOME", home)
         .env("USERPROFILE", home)
         .env_remove("ORBIT_HOME");
+    command.timeout(std::time::Duration::from_secs(30));
     command
 }
 
@@ -40,6 +41,186 @@ fn read(path: impl Into<PathBuf>) -> Vec<u8> {
 
 fn read_optional(path: impl Into<PathBuf>) -> Option<Vec<u8>> {
     std::fs::read(path.into()).ok()
+}
+
+/// Upgrade actual previous-release bytes, rather than deriving a legacy fixture
+/// from today's templates. Guards managed materialization provenance [DANI-10392].
+#[test]
+fn workspace_sync_upgrades_previous_release_automation_with_provenance_intact() {
+    use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
+    use orbit_common::security::release::sha256_hex;
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/automation-v0.24.0");
+    for operator_edit in [false, true] {
+        let home = tempdir().expect("isolated migration home");
+        let repo = home.path().join("upgraded-workspace");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        write_machine_identity(home.path());
+        orbit(&repo, home.path())
+            .args(["workspace", "init", "--name", "upgraded-workspace"])
+            .assert()
+            .success();
+        let root = repo.join(".orbit");
+        for (directory, definition) in [
+            ("routines", "task_pilot.yaml"),
+            ("auto_tasks", "friction-curation.yaml"),
+            ("auto_tasks", "delivery-qa.yaml"),
+        ] {
+            for name in [definition, ".orbit-managed-assets.json"] {
+                std::fs::copy(
+                    fixture.join(directory).join(name),
+                    root.join(directory).join(name),
+                )
+                .unwrap();
+            }
+        }
+        let routine = root.join("routines/task_pilot.yaml");
+        let auto_task = root.join("auto_tasks/friction-curation.yaml");
+        let unchanged_auto_task = root.join("auto_tasks/delivery-qa.yaml");
+        let routine_manifest = root.join("routines/.orbit-managed-assets.json");
+        let auto_manifest = root.join("auto_tasks/.orbit-managed-assets.json");
+        let old_routine: Value = serde_json::from_slice(&read(&routine_manifest)).unwrap();
+        let old_auto: Value = serde_json::from_slice(&read(&auto_manifest)).unwrap();
+        assert_eq!(
+            old_routine["assets"]["task_pilot"],
+            sha256_hex(&read(&routine))
+        );
+        assert_eq!(
+            old_auto["assets"]["friction-curation"],
+            sha256_hex(&read(&auto_task))
+        );
+        if operator_edit {
+            // Routine opt-in is a supported lifecycle edit. An auto-task's
+            // handwritten schedule is preserved against the old managed digest.
+            let opted_in = std::fs::read_to_string(&routine)
+                .unwrap()
+                .replace("enabled: false", "enabled: true");
+            std::fs::write(&routine, opted_in).unwrap();
+            let edited = std::fs::read_to_string(&auto_task)
+                .unwrap()
+                .replace("cron: 15 7 * * *", "cron: 45 7 * * *");
+            std::fs::write(&auto_task, edited).unwrap();
+        }
+        let auto_before = read(&auto_task);
+        let unchanged_auto_before = read(&unchanged_auto_task);
+        let output = orbit(&repo, home.path())
+            .args(["workspace", "sync", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: Value = serde_json::from_slice(&output).unwrap();
+        let actions = report["actions"].as_array().unwrap();
+        assert!(
+            actions.iter().any(|a| a["kind"] == "routine"
+                && a["name"] == "task_pilot"
+                && (a["outcome"] == "refreshed" || (operator_edit && a["outcome"] == "migrated"))),
+            "a previous template must converge, including an operator's opt-in: {report}"
+        );
+        let definition = parse_routine_yaml(&std::fs::read_to_string(&routine).unwrap()).unwrap();
+        assert_eq!(
+            definition.name,
+            old_routine["routineProvenance"]["task_pilot"]["binding"]["name"]
+                .as_str()
+                .unwrap()
+        );
+        assert_eq!(
+            definition.enabled, operator_edit,
+            "migration preserves the operator's lifecycle choice"
+        );
+        let state = definition.trigger.state.unwrap();
+        let binding = &old_routine["routineProvenance"]["task_pilot"]["binding"];
+        assert_eq!(
+            state.owner_machine,
+            binding["ownerMachine"].as_str().unwrap()
+        );
+        assert_eq!(state.branch, binding["branch"].as_str().unwrap());
+        let migrated: Value = serde_json::from_slice(&read(&routine_manifest)).unwrap();
+        let provenance = &migrated["routineProvenance"]["task_pilot"];
+        assert_eq!(
+            provenance["binding"], *binding,
+            "registered workspace renaming must preserve the recorded binding"
+        );
+        assert_ne!(
+            provenance["templateDigest"],
+            old_routine["routineProvenance"]["task_pilot"]["templateDigest"],
+            "upgrade records the new template provenance"
+        );
+        assert_eq!(provenance["renderedDigest"], sha256_hex(&read(&routine)));
+        assert_eq!(
+            migrated["assets"]["task_pilot"],
+            provenance["renderedDigest"]
+        );
+
+        let migrated_auto: Value = serde_json::from_slice(&read(&auto_manifest)).unwrap();
+        let definition =
+            parse_auto_task_yaml(&std::fs::read_to_string(&auto_task).unwrap()).unwrap();
+        assert_eq!(definition.name, "friction-curation");
+        if operator_edit {
+            assert_eq!(
+                read(&auto_task),
+                auto_before,
+                "a handwritten schedule survives materialization"
+            );
+            assert_eq!(
+                migrated_auto["assets"]["friction-curation"],
+                old_auto["assets"]["friction-curation"],
+                "preservation retains the digest Orbit actually wrote"
+            );
+            assert!(
+                actions.iter().any(|a| a["kind"] == "auto_task"
+                    && a["name"] == "friction-curation"
+                    && a["outcome"] == "preserved"),
+                "{report}"
+            );
+        } else {
+            assert!(
+                actions.iter().any(|a| a["kind"] == "auto_task"
+                    && a["name"] == "friction-curation"
+                    && a["outcome"] == "refreshed"),
+                "{report}"
+            );
+            assert_ne!(
+                read(&auto_task),
+                auto_before,
+                "an unchanged previous-release definition receives current material"
+            );
+            assert_eq!(
+                migrated_auto["assets"]["friction-curation"],
+                sha256_hex(&read(&auto_task))
+            );
+        }
+        assert_eq!(
+            read(&unchanged_auto_task),
+            unchanged_auto_before,
+            "an unchanged previous-release template remains intact"
+        );
+        assert_eq!(
+            migrated_auto["assets"]["delivery-qa"],
+            old_auto["assets"]["delivery-qa"]
+        );
+        let paths = [
+            &routine,
+            &routine_manifest,
+            &auto_task,
+            &auto_manifest,
+            &unchanged_auto_task,
+        ];
+        let snapshot: Vec<_> = paths.iter().map(|p| read(*p)).collect();
+        orbit(&repo, home.path())
+            .args(["workspace", "sync", "--json"])
+            .assert()
+            .success();
+        for (path, expected) in paths.iter().zip(snapshot) {
+            assert_eq!(
+                read(*path),
+                expected,
+                "repeat materialization is inert at {}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]
