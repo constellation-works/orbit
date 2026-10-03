@@ -471,3 +471,51 @@ fn explicit_run_lookup_preserves_store_errors() {
         );
     }
 }
+
+/// The public `job run` alias executes locally, and its completed audit tree
+/// remains readable after the worker exits. Cancelling this terminal fixture
+/// cannot signal a process or replace its successful outcome.
+#[test]
+fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
+    let fixture = Fixture::init();
+    let jobs = fixture.home.join(".orbit/resources/jobs");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("alias_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: alias_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
+    let completed = fixture.json(&["job", "run", "alias_fixture", "--wait", "--json"]);
+    assert_eq!(completed["state"], "success");
+    let run_id = completed["run_id"].as_str().unwrap();
+    let shown = fixture.json(&["run", "show", run_id, "--no-reconcile", "--json"]);
+    assert_eq!(shown["run"]["state"], "success");
+    let trace = fixture.json(&["run", "trace", run_id, "--json"]);
+    assert_eq!(trace["run_id"], run_id);
+    assert_eq!(trace["job_id"], "alias_fixture");
+    let roots = trace["roots"].as_array().unwrap();
+    assert!(
+        !roots.is_empty(),
+        "completed run has an audit tree: {trace}"
+    );
+    assert!(
+        roots
+            .iter()
+            .all(|node| node["event"].is_object() && node["children"].is_array())
+    );
+    fn contains_step(node: &Value, step: &str) -> bool {
+        node["event"]["step_id"] == step
+            || node["children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|child| contains_step(child, step))
+    }
+    assert!(
+        roots.iter().any(|node| contains_step(node, "nap")),
+        "trace retains the executed step: {trace}"
+    );
+    let cancelled = fixture.json(&["run", "cancel", run_id, "--confirm", "--json"]);
+    assert_eq!(cancelled["outcome"], "already_terminal");
+    assert_eq!(cancelled["previous_state"], "success");
+    assert_eq!(cancelled["final_state"], "success");
+    assert_eq!(cancelled["signal_attempted"], false);
+    assert_eq!(cancelled["provider_processes_stopped"], 0);
+    assert_eq!(fixture.run_state(run_id), "success");
+}
