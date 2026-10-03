@@ -1313,3 +1313,142 @@ fn run_git(cwd: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn workspace_role_cli_reasserts_owner_and_replica_and_preserves_registry_on_refusal() {
+    let temp = tempdir().unwrap();
+    let home = temp.path().join("home");
+    let owner_repo = temp.path().join("owner");
+    let replica_repo = temp.path().join("replica");
+    fs::create_dir_all(&home).unwrap();
+    init_git_repo(&owner_repo);
+    init_git_repo(&replica_repo);
+    run_orbit(
+        &owner_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "roles-host",
+            "--task-prefix",
+            "RL",
+        ],
+    )
+    .success();
+    run_orbit(
+        &owner_repo,
+        &home,
+        &["workspace", "init", "--name", "role-owner"],
+    )
+    .success();
+    run_orbit(
+        &replica_repo,
+        &home,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "role-replica",
+            "--role",
+            "replica",
+            "--owner",
+            "hm_fixture_remote",
+        ],
+    )
+    .success();
+    let owner = run_orbit_json(
+        &owner_repo,
+        &home,
+        &[
+            "workspace",
+            "role",
+            "role-owner",
+            "owner",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(owner["workspace_id"], "ws_role-owner");
+    assert_eq!(owner["role"], "owner");
+    assert!(
+        owner["owner_machine_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("hm_")
+    );
+    let replica = run_orbit_json(
+        &owner_repo,
+        &home,
+        &[
+            "workspace",
+            "role",
+            "ws_role-replica",
+            "replica",
+            "--owner",
+            "hm_fixture_remote",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(replica["workspace_id"], "ws_role-replica");
+    assert_eq!(replica["role"], "replica");
+    assert_eq!(replica["owner_machine_id"], "hm_fixture_remote");
+    for (repo, expected_role, expected_owner) in [
+        (&owner_repo, "owner", owner["owner_machine_id"].clone()),
+        (
+            &replica_repo,
+            "replica",
+            replica["owner_machine_id"].clone(),
+        ),
+    ] {
+        let shown = run_orbit_json(repo, &home, &["workspace", "show", "--format", "json"]);
+        assert_eq!(shown["checkout"]["role"], expected_role);
+        assert_eq!(shown["workspace"]["owner_machine_id"], expected_owner);
+    }
+    let registry = home.join(".orbit/workspaces.json");
+    let before = fs::read(&registry).unwrap();
+    for args in [
+        vec![
+            "workspace",
+            "role",
+            "role-owner",
+            "owner",
+            "--owner",
+            "hm_fixture_remote",
+        ],
+        vec!["workspace", "role", "role-replica", "replica"],
+        vec![
+            "workspace",
+            "role",
+            "role-replica",
+            "replica",
+            "--owner",
+            "not-a-machine",
+        ],
+        vec![
+            "workspace",
+            "role",
+            "role-owner",
+            "replica",
+            "--owner",
+            "hm_fixture_remote",
+        ],
+        vec!["workspace", "role", "missing-role-workspace", "owner"],
+    ] {
+        run_orbit(&owner_repo, &home, &args).failure();
+        assert_eq!(
+            fs::read(&registry).unwrap(),
+            before,
+            "refused {args:?} changed registry"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(owner_repo.join("README.md")).unwrap(),
+        "# repo\n"
+    );
+    assert_eq!(
+        fs::read_to_string(replica_repo.join("README.md")).unwrap(),
+        "# repo\n"
+    );
+}
