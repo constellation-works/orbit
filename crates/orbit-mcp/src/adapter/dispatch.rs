@@ -10,14 +10,15 @@ use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
-    InitializeResult, ListToolsResult, Meta, PaginatedRequestParams, ServerCapabilities,
-    ServerInfo,
+    InitializeResult, ListResourcesResult, ListToolsResult, Meta, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
 
 use super::OrbitToolServer;
 use super::name_map::{advertise_tool_names, advertise_tool_names_in_schema, build_name_map};
+use super::presentation;
 use super::schema::{
     SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, host_owns_plugin_selector,
     schema_to_tool,
@@ -43,6 +44,15 @@ impl OrbitToolServer {
         }
 
         let definitions = self.host.list_mcp_tool_definitions()?;
+        if definitions.iter().any(|definition| {
+            presentation::is_presentation(&super::name_map::sanitize_tool_name(
+                &definition.schema.name,
+            ))
+        }) {
+            return Err(OrbitError::InvalidInput(
+                "host tool collides with an adapter presentation entrypoint".into(),
+            ));
+        }
         if let Some(schema) = definitions
             .iter()
             .map(|definition| &definition.schema)
@@ -139,6 +149,11 @@ impl OrbitToolServer {
         mut result: ListToolsResult,
     ) -> Result<ListToolsResult, McpError> {
         let hidden = self.host.hidden_tool_names(&self.session_context());
+        if hidden.contains("orbit.task.show") {
+            result
+                .tools
+                .retain(|tool| !presentation::is_presentation(tool.name.as_ref()));
+        }
         if hidden.is_empty() {
             return Ok(result);
         }
@@ -227,6 +242,13 @@ impl OrbitToolServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
+        if presentation::is_presentation(request.name.as_ref()) {
+            let result = self.dispatch_presentation(request).await;
+            return Ok(match result {
+                Ok(value) => mcp_tool_call_result(value),
+                Err(error) => tool_error_result(&error),
+            });
+        }
         let mut call_context = self.context_for_tool_call();
         let canonical = self.canonical_name(request.name.as_ref())?;
         let mut input = request
@@ -270,6 +292,45 @@ impl OrbitToolServer {
                 Ok(tool_error_result(&error))
             }
         }
+    }
+
+    async fn dispatch_presentation(
+        &self,
+        request: CallToolRequestParams,
+    ) -> Result<Value, OrbitError> {
+        let definitions = self.load_tool_definitions()?;
+        if !presentation::available(&definitions)
+            || self
+                .host
+                .hidden_tool_names(&self.session_context())
+                .contains("orbit.task.show")
+        {
+            return Err(OrbitError::InvalidInput(
+                "read-only task presentation unavailable on this host".into(),
+            ));
+        }
+        let input = Value::Object(request.arguments.unwrap_or_default());
+        let Some((workspace, id)) = presentation::selection(request.name.as_ref(), &input)? else {
+            return Ok(presentation::empty_panel());
+        };
+        let host = Arc::clone(&self.host);
+        let context = self.context_for_tool_call();
+        let task_key = id.clone();
+        let selector = workspace.clone();
+        // The explicit filter reaches the same host operation, audit and policy
+        // checks as an ordinary data call. Client metadata never enters context.
+        let task = tokio::task::spawn_blocking(move || {
+            host.call_tool(
+                "orbit.task.show",
+                serde_json::json!({
+                    "workspace": selector, "id": task_key, "fields": presentation::TASK_FIELDS
+                }),
+                context,
+            )
+        })
+        .await
+        .map_err(|error| OrbitError::Execution(format!("task read worker failed: {error}")))??;
+        presentation::panel(workspace, &id, task)
     }
 }
 
@@ -341,7 +402,10 @@ impl ServerHandler for OrbitToolServer {
 
     fn get_info(&self) -> ServerInfo {
         let implementation = Implementation::new("orbit-mcp", env!("CARGO_PKG_VERSION"));
-        let capabilities = ServerCapabilities::builder().enable_tools().build();
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .build();
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
             .with_instructions(
@@ -384,7 +448,8 @@ impl ServerHandler for OrbitToolServer {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let tools = definitions
+        let presentation_available = presentation::available(&definitions);
+        let mut tools = definitions
             .into_iter()
             .map(|mut definition| {
                 let mut input_schema = self
@@ -400,11 +465,43 @@ impl ServerHandler for OrbitToolServer {
                 ))
             })
             .collect::<Result<Vec<_>, McpError>>()?;
+        if presentation_available {
+            tools.extend(presentation::tools(
+                self.host.federated_workspace_selectors(),
+            ));
+            tools.sort_by(|left, right| left.name.cmp(&right.name));
+        }
         let result = ListToolsResult::with_all_items(tools);
         if let Ok(mut cache) = self.list_tools_cache.lock() {
             cache.insert(cache_key, Arc::new(result.clone()));
         }
         self.without_hidden_tools(result)
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult::with_all_items(vec![
+            presentation::resource(),
+        ]))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        if request.uri != presentation::RESOURCE_URI {
+            return Err(McpError::resource_not_found(
+                "unknown UI resource",
+                Some(serde_json::json!({ "code": "resource_not_found" })),
+            ));
+        }
+        Ok(ReadResourceResult::new(vec![
+            presentation::resource_content(),
+        ]))
     }
 
     async fn call_tool(

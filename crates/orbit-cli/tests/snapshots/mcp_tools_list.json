@@ -1581,6 +1581,96 @@
     "name": "orbit_task_update"
   },
   {
+    "_meta": {
+      "openai/ui": {
+        "entrypoints": [
+          {
+            "type": "thread"
+          }
+        ]
+      },
+      "ui": {
+        "resourceUri": "ui://orbit/task-panel/v1/index.html"
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Open a read-only task panel. Selected tasks are read through orbit_task_show with an explicit workspace filter; opening grants no authority.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Public task key returned by Orbit.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace",
+        "id"
+      ],
+      "type": "object"
+    },
+    "name": "orbit_ui_inspect",
+    "title": "Inspect Orbit task"
+  },
+  {
+    "_meta": {
+      "openai/ui": {
+        "entrypoints": [
+          {
+            "type": "global"
+          }
+        ]
+      },
+      "ui": {
+        "resourceUri": "ui://orbit/task-panel/v1/index.html"
+      }
+    },
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Open a read-only task panel. Selected tasks are read through orbit_task_show with an explicit workspace filter; opening grants no authority.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "dependentRequired": {
+        "id": [
+          "workspace"
+        ],
+        "workspace": [
+          "id"
+        ]
+      },
+      "properties": {
+        "id": {
+          "description": "Public task key returned by Orbit.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "workspace": {
+          "description": "Explicit registered workspace name, logical workspace ID, or registered absolute checkout path. Never inferred from the session or cwd.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "orbit_ui_open",
+    "title": "Open Orbit task panel"
+  },
+  {
     "annotations": {
       "openWorldHint": false,
       "readOnlyHint": true

@@ -2,6 +2,7 @@
 
 mod dispatch;
 mod name_map;
+mod presentation;
 pub(crate) mod schema;
 mod structured;
 
