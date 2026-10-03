@@ -143,7 +143,7 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 - The injected task envelope is the task. The claim is the authority to work on it, and the owner
   fences stale work when the claim settles (`stale_claim`), so the agent re-reads nothing.
 - The CLI runner denies `orbit.task.show` and `orbit.task.update` on top of the activity's own
-  list (`CLAIMED_MODE_DENIED_TOOLS` in `cli_runner/orchestrator.rs`; an allowlisted activity has
+  list (`CLAIMED_MODE_DENIED_TOOLS` in `cli_runner/orchestrator/policy.rs`; an allowlisted activity has
   them removed instead). The prompt is not the only guard. The runner treats an invocation as
   claimed when the host carries the claim's trusted worker binding, or the step input says
   `claimed: true`. The binding covers every agent the leaf launches, so `step_failure_recovery`

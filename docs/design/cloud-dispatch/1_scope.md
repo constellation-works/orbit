@@ -19,7 +19,7 @@ everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vc
 ## Problem
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
-(`cli_runner/orchestrator.rs:56`, `run_cli_backend`). Throughput is bounded by the host:
+(`cli_runner/orchestrator/dispatch.rs`, `run_cli_backend`). Throughput is bounded by the host:
 about ten concurrent agents on either the Mac or `dk-server-1` before CPU, ports and
 worktrees contend, and larger codebases lower that ceiling. Claude Code cloud sessions run
 in Anthropic-managed VMs, keep running when the host sleeps, and bill against subscription

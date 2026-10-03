@@ -8,7 +8,7 @@ use std::process::Command;
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use serde_json::json;
 
-use super::super::commit_batch_changes;
+use super::super::actions::commit_batch_changes;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
 use crate::executor::automation::vcs::git::{git_output, git_success};
 use crate::executor::automation::vcs::push::push_batch_changes_inner;
