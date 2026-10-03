@@ -50,13 +50,13 @@ fn requested_rights_have_independent_abi_requirements() {
 
 #[test]
 fn plugin_boundary_rejects_abi_two_before_compiling_grants() {
-    let probe = super::super::LandlockProbeOutcome {
+    let probe = super::super::probe::LandlockProbeOutcome {
         available: true,
         abi: 2,
         detail: "Landlock ABI 2".to_string(),
     };
     let boundary = super::super::LandlockBoundary::default();
-    let error = super::super::plugin_scope(&probe, &boundary)
+    let error = super::super::boundary::plugin_scope(&probe, &boundary)
         .expect_err("a plugin boundary must refuse missing truncate confinement");
     assert!(error.to_string().contains("truncate"), "{error}");
     assert!(error.to_string().contains("ABI 3"), "{error}");

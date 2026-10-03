@@ -1,7 +1,9 @@
 //! Platform availability. Enforcement is Linux-only, and a host that cannot
 //! enforce must say so rather than run the child unconfined.
 
-use crate::linux_landlock::{MINIMUM_LANDLOCK_ABI, landlock_unavailable_message, probe_landlock};
+use crate::linux_landlock::probe::{
+    MINIMUM_LANDLOCK_ABI, landlock_unavailable_message, probe_landlock,
+};
 
 #[cfg(not(target_os = "linux"))]
 use {
