@@ -10,7 +10,7 @@ use orbit_types::task::{Task, is_valid_orb_task_id};
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, JobV2, JobV2Step, JobV2StepBody, ProviderSource,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -429,8 +429,28 @@ impl OrbitRuntime {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let task_crew = self.task_crew_from_run_input(input)?;
+        let claimed = claimed_task_from_input(input)?;
+        let task_crew = self.task_crew_from_run_input(input, claimed.as_ref())?;
         self.resolve_crew_for_task(cli_override, task_crew.as_deref())
+            .map_err(|error| {
+                // A crew the owner chose but this host cannot run fails the
+                // leaf by name. Falling back to `default_crew` would ship the
+                // owner's task on a provider nobody selected for it.
+                match claimed.as_ref().zip(task_crew.as_deref()) {
+                    Some((snapshot, crew))
+                        if cli_override.is_none() && snapshot.crew() == Some(crew) =>
+                    {
+                        OrbitError::InvalidInput(format!(
+                            "claimed task {} has crew `{crew}` on its owner, which this host \
+                             cannot run: {error}; configure and enable `{crew}` here or reassign \
+                             the task on the owner (a claimed leaf never falls back to \
+                             workflow.default_crew)",
+                            snapshot.id,
+                        ))
+                    }
+                    _ => error,
+                }
+            })
     }
 
     /// Resolve a crew/role-model projection for `orbit.task.show` consumers.
@@ -622,20 +642,30 @@ impl OrbitRuntime {
         Ok(crew)
     }
 
-    /// Unanimous `task.crew` across every stored task named by the run/activity
-    /// input. Missing fixture ids are skipped so fake implementer ids do not
-    /// fail resolution. Distinct crews — including a mix of set and unset —
-    /// fail closed instead of inheriting `workflow.default_crew`.
-    fn task_crew_from_run_input(&self, input: &Value) -> Result<Option<String>, OrbitError> {
+    /// Unanimous `task.crew` across every task named by the run/activity
+    /// input. A task the input carries a `claimed_task` snapshot for reads its
+    /// crew from that snapshot: a pulled task lives in the owner's store, and a
+    /// same-id local record, if any, is not it. Other ids read the local store;
+    /// missing fixture ids are skipped so fake implementer ids do not fail
+    /// resolution. Distinct crews — including a mix of set and unset — fail
+    /// closed instead of inheriting `workflow.default_crew`.
+    fn task_crew_from_run_input(
+        &self,
+        input: &Value,
+        claimed: Option<&ClaimedTaskSnapshot>,
+    ) -> Result<Option<String>, OrbitError> {
         let mut agreed: Option<Option<String>> = None;
         for task_id in task_ids_for_crew_resolution(input) {
             if !is_valid_orb_task_id(&task_id) {
                 continue;
             }
-            let Some(task) = self.stores().tasks().get_task(&task_id)? else {
-                continue;
+            let crew = match claimed.filter(|snapshot| snapshot.id == task_id) {
+                Some(snapshot) => snapshot.crew().map(ToOwned::to_owned),
+                None => match self.stores().tasks().get_task(&task_id)? {
+                    Some(task) => normalized_task_crew(task.crew.as_deref()),
+                    None => continue,
+                },
             };
-            let crew = normalized_task_crew(task.crew.as_deref());
             match &agreed {
                 None => agreed = Some(crew),
                 Some(existing) if existing == &crew => {}
@@ -697,6 +727,42 @@ fn task_ids_for_crew_resolution(input: &Value) -> Vec<String> {
         }
     }
     ids
+}
+
+/// Run-input key under which a pulled claimed leaf carries the owner's
+/// snapshot of its task. Written when the follower creates the leaf
+/// (`orbit-store` `LocalPullMutation::CreateLeaf`) from the claim receipt.
+const CLAIMED_TASK_INPUT_KEY: &str = "claimed_task";
+
+/// The owner's view of a claimed task, as far as crew resolution needs it.
+#[derive(Debug, Deserialize)]
+struct ClaimedTaskSnapshot {
+    id: String,
+    #[serde(default)]
+    crew: Option<String>,
+}
+
+impl ClaimedTaskSnapshot {
+    fn crew(&self) -> Option<&str> {
+        self.crew.as_deref().and_then(non_empty)
+    }
+}
+
+/// Read the claimed-task snapshot off a run input. Absent or `null` means the
+/// run is not a pulled leaf; a malformed one fails closed rather than quietly
+/// resolving the follower's default crew.
+fn claimed_task_from_input(input: &Value) -> Result<Option<ClaimedTaskSnapshot>, OrbitError> {
+    match input.get(CLAIMED_TASK_INPUT_KEY) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => serde_json::from_value(raw.clone())
+            .map(Some)
+            .map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "`{CLAIMED_TASK_INPUT_KEY}` must be an object with a task `id` and optional \
+                     `crew`: {error}"
+                ))
+            }),
+    }
 }
 
 fn normalized_task_crew(crew: Option<&str>) -> Option<String> {

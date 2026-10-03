@@ -547,3 +547,49 @@ fn failure_streak_decodes_only_the_settled_claims_it_needs() {
         2
     );
 }
+
+/// A pulled task lives in the owner's store, so the leaf carries the owner's
+/// snapshot of it: crew resolution on the follower reads the task's crew from
+/// here instead of falling through to its own `default_crew`.
+#[test]
+fn created_leaf_carries_the_owner_task_snapshot_crew() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::pull::created_leaf_carries_the_owner_task_snapshot_crew",
+    ) {
+        return;
+    }
+    let (_temp, store, destination, request) = pull_fixture();
+    for (id, crew) in [("crewed", Some("sol")), ("crewless", None)] {
+        let named = request_named(&request, id);
+        store
+            .allocate_pull_request(&destination, &named, 10)
+            .expect("allocate")
+            .expect("slot");
+        let mut receipt = claim_receipt(&named);
+        receipt.task.as_mut().expect("task snapshot").crew = crew.map(ToOwned::to_owned);
+        advance(
+            &store,
+            &destination,
+            id,
+            [M::Receive(Box::new(receipt)), M::CreateLeaf],
+        );
+        let leaf = store
+            .local_pull_admissions()
+            .expect("records")
+            .into_iter()
+            .find(|record| record.request.request_id == id)
+            .and_then(|record| record.leaf_run_id)
+            .expect("leaf");
+        let input = store
+            .get_job_run(&leaf)
+            .expect("read")
+            .expect("leaf run")
+            .input
+            .expect("leaf input");
+        assert_eq!(
+            input["claimed_task"],
+            serde_json::json!({ "id": "task", "crew": crew }),
+            "{id}"
+        );
+    }
+}

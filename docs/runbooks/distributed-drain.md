@@ -87,7 +87,10 @@ leaf is not ready for distributed pull.
 Match crews and toolchains the same way you would for a second owner-local
 executor: every participant must resolve the workspace default crew, explicit
 task crews, and required validation commands. Heterogeneous eligibility is not
-supported. Empty `workflow.required_validation_commands` is fail-closed for a
+supported. A follower runs a pulled task on the crew the owner's task names. It
+uses its own `workflow.default_crew` only when the task names no crew. If the
+follower doesn't configure the task's crew, the leaf fails with an error naming
+that crew instead of running the default. Empty `workflow.required_validation_commands` is fail-closed for a
 claimed handoff.
 
 Per-host compiler capacity is independent. Keep the shared build-budget
