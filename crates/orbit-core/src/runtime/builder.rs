@@ -471,12 +471,13 @@ fn compose_task_backends(
     }
     match workspace_coordinated_backends(registry.clone(), workspace_id.clone(), store.clone()) {
         Ok(backends) => Ok(backends),
-        // An existing partition on storage this process cannot write: the
+        // A partition on storage this process cannot write: the
         // setup writes are incidental, and the storage itself refuses any
         // real write, naming its path. Reads stay available, as they were
-        // before the boundary existed. An absent partition still fails a
-        // writer here, since there is nothing to read and every write needs it.
-        Err(error) if partition_exists && error.is_readonly_or_access_failure() => {
+        // before the boundary existed. CLI tool dispatch can open a writable
+        // runtime even for a read, so an absent partition must also open as
+        // empty. A real mutation still fails when it tries to write there.
+        Err(error) if error.is_readonly_or_access_failure() => {
             tracing::warn!(
                 target: "orbit.core.bootstrap",
                 partition_dir = %partition_dir.display(),

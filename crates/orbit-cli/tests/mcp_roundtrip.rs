@@ -120,6 +120,10 @@ impl McpWorkspace {
         let init_args = vec![
             "init",
             "--non-interactive",
+            // This disposable transport fixture does not dispatch sandboxed
+            // work. Host prerequisite probes would prevent its reads from
+            // being exercised inside a managed executor's outer sandbox.
+            "--skip-host-prerequisites",
             "--machine-name",
             "mcp-roundtrip-host",
             "--task-prefix",
@@ -4435,6 +4439,76 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
     drop(registry_holder);
 }
 
+/// CLI tool dispatch may request a writable runtime before it knows the tool
+/// is a read. A denied, absent canonical partition must not refuse that read,
+/// nor may the fallback silently allow a subsequent mutation.
+#[cfg(target_os = "linux")]
+#[test]
+fn absent_unwritable_partition_keeps_cli_tool_reads_observational() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let workspace = McpWorkspace::init();
+    let canonical_root = workspace.home.join(".orbit");
+    let partitions = canonical_root.join("tasks/workspaces");
+    let partition = partitions.join("ws_unbound-data-dir");
+    assert!(
+        !partition.exists(),
+        "fixture must leave the unbound partition absent"
+    );
+    let original = std::fs::metadata(&partitions)
+        .expect("partition parent metadata")
+        .permissions();
+    std::fs::set_permissions(&partitions, std::fs::Permissions::from_mode(0o500))
+        .expect("deny partition creation");
+    if std::fs::create_dir(partitions.join("probe")).is_ok() {
+        // Root can ignore mode bits; the mount regression covers that host.
+        std::fs::set_permissions(&partitions, original).expect("restore partition permissions");
+        return;
+    }
+    let before = snapshot_fixture_state(&[&partitions]);
+    let read = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--root",
+            canonical_root.to_str().expect("utf8 canonical root"),
+            "--input",
+            &json!({ "model": "codex" }).to_string(),
+        ])
+        .output()
+        .expect("read through an absent denied partition");
+    let mutation = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--root",
+            canonical_root.to_str().expect("utf8 canonical root"),
+            "--input",
+            &json!({
+                "title": "Must not persist",
+                "description": "An observational fallback cannot authorize writes",
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ])
+        .output()
+        .expect("attempt denied partition write");
+    let after = snapshot_fixture_state(&[&partitions]);
+    std::fs::set_permissions(&partitions, original).expect("restore partition permissions");
+
+    assert_command_succeeded("read through an absent denied partition", &read);
+    let read: Value = serde_json::from_slice(&read.stdout).expect("parse task list");
+    assert_eq!(read["tasks"], json!([]));
+    assert_readonly_mutation_failed("CLI add", &canonical_root, &mutation);
+    assert_eq!(
+        after, before,
+        "reads and refused writes must create no partition files or directories"
+    );
+}
+
 /// ORB-12097: `readonly_orbit_command` must scrub the managed-run authority a
 /// job worker exports into every process it launches before it ever launches
 /// `bwrap` — otherwise bwrap forwards its own (inherited) environment into the
@@ -4837,7 +4911,7 @@ fn readonly_orbit_command(
 }
 
 #[cfg(target_os = "linux")]
-fn snapshot_fixture_state(roots: &[&Path]) -> BTreeSet<(PathBuf, Vec<u8>)> {
+fn snapshot_fixture_state(roots: &[&Path]) -> BTreeSet<(PathBuf, Option<Vec<u8>>)> {
     let mut state = BTreeSet::new();
 
     for root in roots {
@@ -4848,7 +4922,7 @@ fn snapshot_fixture_state(roots: &[&Path]) -> BTreeSet<(PathBuf, Vec<u8>)> {
 }
 
 #[cfg(target_os = "linux")]
-fn snapshot_fixture_state_at(root: &Path, state: &mut BTreeSet<(PathBuf, Vec<u8>)>) {
+fn snapshot_fixture_state_at(root: &Path, state: &mut BTreeSet<(PathBuf, Option<Vec<u8>>)>) {
     for entry in std::fs::read_dir(root).expect("read protected fixture state directory") {
         let entry = entry.expect("read protected fixture state entry");
         let path = entry.path();
@@ -4857,11 +4931,12 @@ fn snapshot_fixture_state_at(root: &Path, state: &mut BTreeSet<(PathBuf, Vec<u8>
             .expect("read protected fixture state type");
 
         if file_type.is_dir() {
+            state.insert((path.clone(), None));
             snapshot_fixture_state_at(&path, state);
         } else if file_type.is_file() {
             state.insert((
                 path.clone(),
-                std::fs::read(&path).expect("read protected fixture state"),
+                Some(std::fs::read(&path).expect("read protected fixture state")),
             ));
         }
     }
