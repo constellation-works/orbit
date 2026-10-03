@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-09-10
-last_validated: 2026-09-10
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: remote-access
 doc_role: design
@@ -54,7 +54,7 @@ Runtime construction happens outside state locks. Web calls orbit-cmd's Register
 
 Workspace-scoped API handlers use ?workspace=<id>, falling back to the pinned default. Unknown workspaces return not found; inactive workspaces return a client error. Omitting the selector with no default is also an error.
 
-GET /api/workspaces lists current entries. `GET /api/tasks` and `GET /api/tasks/all` share the same task-page query contract. Both accept `status`, `tag` (also `tags`), `type` (also `task_type`), `q` (also `search`), `limit`, and `cursor`. Status and tag values may be repeated or comma-separated; `q` is a case-insensitive task ID/title substring; and `limit` is a positive caller-supplied page size, defaulting to the server default only when omitted. Every predicate is applied before the page bound, so the page contains the newest matching tasks rather than the newest tasks filtered afterward.
+GET /api/workspaces lists current entries. `GET /api/tasks` and `GET /api/tasks/all` share the same task-page query contract. Both accept `status`, `tag` (also `tags`), `type` (also `task_type`), `q` (also `search`), `limit`, and `cursor`. Status and tag values may be repeated or comma-separated; `q` is a case-insensitive task ID/title substring; and `limit` is a positive integer capped at 200, defaulting to the server default only when omitted. Every predicate is applied before the page bound, so the page contains the newest matching tasks rather than the newest tasks filtered afterward.
 
 Both endpoints return `{ items, total, limit, truncated, offset, next_cursor }`. `total` is the count of all matches before the page bound and remains the pre-cursor total on later pages. `truncated` means `total > items.length` against that pre-cursor total; it can therefore remain `true` on a final cursor page. `next_cursor`, not `truncated`, tells a client whether to request another page. `offset` is zero for the first page and records the cursor's position thereafter.
 

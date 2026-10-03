@@ -1,8 +1,8 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-09-24
-last_validated: 2026-09-10
+last_updated: 2026-10-03
+last_validated: 2026-10-03
 status: Accepted
 feature: orbit-core
 doc_role: overview
@@ -45,7 +45,7 @@ owners without externalizing it as new crates.
   reservations, process/tool execution mechanisms, and construction from an
   already-resolved config value.
 - **Application operations** — use-case DTOs and coordinated task, job,
-  workflow, docs, search, semantic, and health behavior. Store-coordinated
+  workflow, search, and health behavior. Store-coordinated
   lifecycle transitions live here; pure invariants live in `orbit-types`.
 - **Adapters** — command audit/dispatch, `orbit.*` tool-host translation, and
   `orbit-engine::RuntimeHost` callback translation. Adapters may use both
