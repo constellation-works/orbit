@@ -158,7 +158,10 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 evidence["stderr"] += "\nsupervisor reap deadline expired; descendant cleanup is unverified"
                 # Reap the known supervisor only as a final bounded fallback.
                 # A refused group sweep remains an unknown cleanup outcome.
-                process.kill()
+                try:
+                    process.kill()
+                except OSError as error:
+                    evidence["stderr"] += f"\nsupervisor direct kill failed: {error}"
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
@@ -1146,9 +1149,11 @@ def process_self_test():
                 raise subprocess.TimeoutExpired(process.args, timeout)
             return original_wait(process, timeout=timeout)
 
-        with mock.patch.object(subprocess.Popen, "wait", expired_first_reap):
+        with (mock.patch.object(subprocess.Popen, "wait", expired_first_reap),
+              mock.patch.object(subprocess.Popen, "kill", side_effect=PermissionError("fixture direct kill refusal"))):
             expired = run([sys.executable, "-c", "print('complete')"], cwd=temp, env=env)
-        if expired["outcome"] != "FAIL" or expired["cleanup_verified"] or any(value is None for value in waits):
+        if (expired["outcome"] != "FAIL" or expired["cleanup_verified"]
+                or any(value is None for value in waits) or "supervisor direct kill failed" not in expired["stderr"]):
             raise AssertionError("reap deadline did not retain a bounded, unverified failure")
         time.sleep(2.1)
         if marker.exists():
